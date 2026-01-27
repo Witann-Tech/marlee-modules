@@ -29,6 +29,17 @@ class AccessControlApi(http.Controller):
         # ---- Business: resolve credential by fingerprintId ----
         data = request.params or payload or {}
         fingerprint_id = data.get('fingerprintId') or data.get('fingerprint_id')
+
+        data = request.params or payload or {}
+        return {
+            "allowed": False,
+            "reason": "debug_keys",
+            "openMs": None,
+            "payload_keys": list((payload or {}).keys()),
+            "params_keys": list((request.params or {}).keys()),
+            "data": data,
+        }
+
         if not fingerprint_id:
             return {"allowed": False, "reason": "missing_fingerprint_id", "openMs": None}
 
