@@ -27,7 +27,7 @@ class AccessControlApi(http.Controller):
             return {"allowed": False, "reason": "invalid_token", "openMs": None}
 
         # ---- Business: resolve credential by fingerprintId ----
-        data = request.jsonrequest or payload or {}
+        data = request.params or payload or {}
         fingerprint_id = data.get('fingerprintId') or data.get('fingerprint_id')
         if not fingerprint_id:
             return {"allowed": False, "reason": "missing_fingerprint_id", "openMs": None}
