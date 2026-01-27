@@ -13,6 +13,7 @@ class AccessControlApi(http.Controller):
         csrf=False
     )
     def validate(self, **payload):
+        # ---- Auth: Bearer token ----
         auth = request.httprequest.headers.get('Authorization', '')
         if not auth.startswith('Bearer '):
             return {"allowed": False, "reason": "missing_token", "openMs": None}
@@ -27,19 +28,10 @@ class AccessControlApi(http.Controller):
             return {"allowed": False, "reason": "invalid_token", "openMs": None}
 
         # ---- Business: resolve credential by fingerprintId ----
+        # Odoo type='json' expects JSON-RPC; payload/params will contain the "params" dict.
         data = request.params or payload or {}
+
         fingerprint_id = data.get('fingerprintId') or data.get('fingerprint_id')
-
-        data = request.params or payload or {}
-        return {
-            "allowed": False,
-            "reason": "debug_keys",
-            "openMs": None,
-            "payload_keys": list((payload or {}).keys()),
-            "params_keys": list((request.params or {}).keys()),
-            "data": data,
-        }
-
         if not fingerprint_id:
             return {"allowed": False, "reason": "missing_fingerprint_id", "openMs": None}
 
