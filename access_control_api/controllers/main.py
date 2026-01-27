@@ -19,8 +19,7 @@ class AccessControlApi(http.Controller):
 
         token = auth.split(' ', 1)[1].strip()
 
-        # TODO: mover a ir.config_parameter
-        expected = "a2cb5d3adff6b21b66445c3b1e9dea7c970538c0"
+        expected = request.env['ir.config_parameter'].sudo().get_param('access_control.api_token')
 
         if token != expected:
             return {"allowed": False, "reason": "invalid_token", "openMs": None}
