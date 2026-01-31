@@ -6,12 +6,9 @@
     "author": "Witann Technologies",
     "license": "LGPL-3",
     "depends": ["base"],
-    "data": [],
+    "data": [
+        "security/ir.model.access.csv",
+    ],
     "installable": True,
     "application": False,
-    "data": [
-    "security/ir.model.access.csv",
-],
-
 }
-

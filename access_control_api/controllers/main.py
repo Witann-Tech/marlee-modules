@@ -45,3 +45,43 @@ class AccessControlApi(http.Controller):
             return {"allowed": False, "reason": "credential_not_found", "openMs": None}
 
         return {"allowed": True, "reason": "credential_ok", "openMs": 500}
+
+    @http.route(
+        '/api/access/sync_users',
+        type='json',
+        auth='public',
+        methods=['POST'],
+        csrf=False
+    )
+    def sync_users(self, **payload):
+        # ---- Auth: Bearer token ----
+        auth = request.httprequest.headers.get('Authorization', '')
+        if not auth.startswith('Bearer '):
+            return {"ok": False, "reason": "missing_token", "users": []}
+
+        token = auth.split(' ', 1)[1].strip()
+
+        expected = request.env['ir.config_parameter'].sudo().get_param('access_control.api_token')
+        if not expected:
+            return {"ok": False, "reason": "server_token_not_configured", "users": []}
+
+        if token != expected:
+            return {"ok": False, "reason": "invalid_token", "users": []}
+
+        # ---- Payload ----
+        data = request.params or payload or {}
+        # Opcional: filtrar por "updated_since" ISO string en el futuro
+        # updated_since = data.get("updated_since")
+
+        Person = request.env['access_control.person'].sudo()
+        persons = Person.search([('active', '=', True)], order='id asc')
+
+        users = []
+        for p in persons:
+            users.append({
+                "userId": p.id,          # <- numérico, perfecto para F18 enrollNumber
+                "name": p.name,
+                "pin": p.pin or "",
+            })
+
+        return {"ok": True, "reason": "ok", "users": users}
