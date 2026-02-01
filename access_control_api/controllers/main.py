@@ -57,22 +57,31 @@ class AccessControlApi(http.Controller):
         # ---- Auth: Bearer token ----
         auth = request.httprequest.headers.get('Authorization', '')
         if not auth.startswith('Bearer '):
-            return {"ok": False, "reason": "missing_token", "users": []}
+            return {"ok": False, "reason": "missing_token", "users": [], "devices": [], "siteCode": None}
 
         token = auth.split(' ', 1)[1].strip()
 
         expected = request.env['ir.config_parameter'].sudo().get_param('access_control.api_token')
         if not expected:
-            return {"ok": False, "reason": "server_token_not_configured", "users": []}
+            return {"ok": False, "reason": "server_token_not_configured", "users": [], "devices": [], "siteCode": None}
 
         if token != expected:
-            return {"ok": False, "reason": "invalid_token", "users": []}
+            return {"ok": False, "reason": "invalid_token", "users": [], "devices": [], "siteCode": None}
 
-        # ---- Payload ----
+        # ---- Payload / Params ----
+        # En type="json", Odoo normalmente recibe JSON-RPC y params vienen en request.jsonrequest["params"].
+        # Pero dejamos compatibilidad con request.params/payload.
         data = request.params or payload or {}
-        # Opcional: filtrar por "updated_since" ISO string en el futuro
-        # updated_since = data.get("updated_since")
+        try:
+            rpc_params = (request.jsonrequest or {}).get("params") or {}
+            if isinstance(rpc_params, dict):
+                data = {**data, **rpc_params}
+        except Exception:
+            pass
 
+        site_code = (data.get("site_code") or "").strip()
+
+        # ---- Users ----
         Person = request.env['access_control.person'].sudo()
         persons = Person.search([('active', '=', True)], order='id asc')
 
@@ -84,4 +93,36 @@ class AccessControlApi(http.Controller):
                 "pin": p.pin or "",
             })
 
-        return {"ok": True, "reason": "ok", "users": users}
+        # ---- Devices (si viene site_code) ----
+        devices = []
+        if site_code:
+            Site = request.env['access_control.site'].sudo()
+            site = Site.search([('code', '=', site_code), ('active', '=', True)], limit=1)
+            if not site:
+                return {
+                    "ok": False,
+                    "reason": "site_not_found",
+                    "siteCode": site_code,
+                    "devices": [],
+                    "users": users
+                }
+
+            Device = request.env['access_control.device'].sudo()
+            devs = Device.search([('site_id', '=', site.id), ('active', '=', True)], order='id asc')
+
+            for d in devs:
+                devices.append({
+                    "deviceCode": d.device_code,
+                    "ip": d.ip,
+                    "port": d.port,
+                    "commPassword": d.comm_password,
+                    "machineNumber": d.machine_number,
+                })
+
+        return {
+            "ok": True,
+            "reason": "ok",
+            "siteCode": site_code or None,
+            "devices": devices,
+            "users": users
+        }
