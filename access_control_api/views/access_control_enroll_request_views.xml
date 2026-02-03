@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+  <data>
+
+    <record id="view_access_control_enroll_request_search" model="ir.ui.view">
+      <field name="name">access_control.enroll_request.search</field>
+      <field name="model">access_control.enroll_request</field>
+      <field name="arch" type="xml">
+        <search string="Enroll Requests">
+          <field name="site_id"/>
+          <field name="partner_id"/>
+          <field name="person_id"/>
+          <field name="status"/>
+        </search>
+      </field>
+    </record>
+
+    <record id="view_access_control_enroll_request_list" model="ir.ui.view">
+      <field name="name">access_control.enroll_request.list</field>
+      <field name="model">access_control.enroll_request</field>
+      <field name="arch" type="xml">
+        <list string="Enroll Requests">
+          <field name="requested_at"/>
+          <field name="site_id"/>
+          <field name="partner_id"/>
+          <field name="person_id"/>
+          <field name="finger_index"/>
+          <field name="status"/>
+          <field name="quality"/>
+          <field name="error_code"/>
+        </list>
+      </field>
+    </record>
+
+    <record id="view_access_control_enroll_request_form" model="ir.ui.view">
+      <field name="name">access_control.enroll_request.form</field>
+      <field name="model">access_control.enroll_request</field>
+      <field name="arch" type="xml">
+        <form string="Enroll Request">
+          <sheet>
+            <group>
+              <field name="site_id" readonly="1"/>
+              <field name="credential_id" readonly="1"/>
+              <field name="partner_id" readonly="1"/>
+              <field name="person_id" readonly="1"/>
+              <field name="finger_index" readonly="1"/>
+              <field name="template_format" readonly="1"/>
+              <field name="status" readonly="1"/>
+              <field name="requested_by" readonly="1"/>
+              <field name="requested_at" readonly="1"/>
+              <field name="enrolled_at" readonly="1"/>
+              <field name="quality" readonly="1"/>
+            </group>
+            <group string="Error" invisible="status != 'error'">
+              <field name="error_code" readonly="1"/>
+              <field name="error_message" readonly="1"/>
+            </group>
+          </sheet>
+        </form>
+      </field>
+    </record>
+
+    <record id="action_access_control_enroll_requests" model="ir.actions.act_window">
+      <field name="name">Enroll Requests</field>
+      <field name="res_model">access_control.enroll_request</field>
+      <field name="view_mode">list,form</field>
+      <field name="search_view_id" ref="view_access_control_enroll_request_search"/>
+    </record>
+
+    <menuitem id="access_control_menu_enroll_requests" name="Enroll Requests"
+              parent="access_control_menu_operations"
+              action="action_access_control_enroll_requests" sequence="30"/>
+
+  </data>
+</odoo>

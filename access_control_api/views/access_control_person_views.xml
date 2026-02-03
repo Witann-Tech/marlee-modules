@@ -45,6 +45,9 @@
                     <field name="pin_value" password="True" invisible="credential_type != 'pin'"/>
 <field name="finger_index" invisible="credential_type != 'fingerprint'"/>
                     <field name="template_format" invisible="credential_type != 'fingerprint'"/>
+                    <field name="enroll_status" invisible="credential_type != 'fingerprint'" readonly="1"/>
+                    <button name="action_request_enroll" type="object" string="Enroll (ZK9500)" class="btn-primary" invisible="credential_type != 'fingerprint' or enroll_status in ('requested','enrolling','active')"/>
+                    <button name="action_cancel_enroll" type="object" string="Cancel" class="btn-secondary" invisible="credential_type != 'fingerprint' or enroll_status not in ('requested','enrolling')"/>
                     <field name="note"/>
                   </list>
                 </field>
