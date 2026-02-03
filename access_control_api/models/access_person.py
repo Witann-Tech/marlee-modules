@@ -21,7 +21,6 @@ class AccessPerson(models.Model):
     f18_user_id = fields.Integer(string="F18 User ID", index=True)
 
     # Legacy / optional (may be removed later in favor of credential model)
-    pin = fields.Char(string="PIN") 
     partner_id = fields.Many2one("res.partner", string="Partner", required=True, index=True)
     credential_ids = fields.One2many("access_control.credential", "person_id", string="Credentials")
 
