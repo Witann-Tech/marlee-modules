@@ -8,7 +8,7 @@ class AccessPerson(models.Model):
     _description = "Access Control Person (to sync to devices)"
     _rec_name = "name"
 
-    active = fields.Boolean(default=True, index=True)
+    active = fields.Boolean(default=False, index=True)
 
     name = fields.Char(required=True, index=True)
 
@@ -40,3 +40,32 @@ class AccessPerson(models.Model):
                 # We keep this as a soft requirement at model level; endpoints may enforce strictly too.
                 # If you prefer to allow active w/o f18_user_id in UI, comment this out.
                 raise ValidationError("Active people must have an F18 User ID (1..500).")
+
+
+    def action_assign_f18_user_id(self):
+        """Assign the lowest available F18 User ID (1..500) within the selected site."""
+        for rec in self:
+            if not rec.site_id:
+                raise ValidationError("Please set a Site before assigning an F18 User ID.")
+            if rec.f18_user_id:
+                continue
+            # Compute used IDs for this site
+            self.env.cr.execute(
+                """
+                SELECT f18_user_id
+                  FROM access_control_person
+                 WHERE site_id = %s
+                   AND f18_user_id IS NOT NULL
+                """,
+                (rec.site_id.id,),
+            )
+            used = {row[0] for row in self.env.cr.fetchall() if row and row[0]}
+            chosen = None
+            for i in range(1, 501):
+                if i not in used:
+                    chosen = i
+                    break
+            if not chosen:
+                raise ValidationError("No available F18 User IDs (1..500) for this Site.")
+            rec.f18_user_id = chosen
+        return True
