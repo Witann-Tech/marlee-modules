@@ -5,7 +5,7 @@
       <field name="name">access_control.device.tree</field>
       <field name="model">access_control.device</field>
       <field name="arch" type="xml">
-        <tree string="Devices">
+        <list string="Devices">
           <field name="active"/>
           <field name="name"/>
           <field name="device_code"/>
@@ -13,7 +13,7 @@
           <field name="ip"/>
           <field name="port"/>
           <field name="machine_number"/>
-        </tree>
+        </list>
       </field>
     </record>
 

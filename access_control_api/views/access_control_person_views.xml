@@ -5,14 +5,14 @@
       <field name="name">access_control.person.tree</field>
       <field name="model">access_control.person</field>
       <field name="arch" type="xml">
-        <tree string="People">
+        <list string="People">
           <field name="active"/>
           <field name="name"/>
           <field name="site_id"/>
           <field name="pin"/>
           <field name="user_id"/>
           <field name="partner_id"/>
-        </tree>
+        </list>
       </field>
     </record>
 

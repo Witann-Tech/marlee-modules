@@ -5,11 +5,11 @@
       <field name="name">access_control.site.tree</field>
       <field name="model">access_control.site</field>
       <field name="arch" type="xml">
-        <tree string="Sites">
+        <list string="Sites">
           <field name="name"/>
           <field name="code"/>
           <field name="active"/>
-        </tree>
+        </list>
       </field>
     </record>
 
@@ -27,13 +27,13 @@
             <notebook>
               <page string="Devices">
                 <field name="device_ids" nolabel="1" context="{'default_site_id': active_id}">
-                  <tree editable="bottom">
+                  <list editable="bottom">
                     <field name="active"/>
                     <field name="name"/>
                     <field name="device_code"/>
                     <field name="ip"/>
                     <field name="port"/>
-                  </tree>
+                  </list>
                 </field>
               </page>
             </notebook>
