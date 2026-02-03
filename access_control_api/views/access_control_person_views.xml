@@ -44,13 +44,11 @@
       <field name="arch" type="xml">
         <search string="People">
           <field name="name"/>
-          <field name="pin"/>
+          <field name="external_ref"/>
+          <field name="f18_user_id"/>
           <field name="site_id"/>
           <filter string="Active" name="active" domain="[('active','=',True)]"/>
           <filter string="Inactive" name="inactive" domain="[('active','=',False)]"/>
-          <group expand="0" string="Group By">
-            <filter string="Site" name="group_site" context="{'group_by':'site_id'}"/>
-          </group>
         </search>
       </field>
     </record>
