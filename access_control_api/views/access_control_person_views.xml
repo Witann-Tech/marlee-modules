@@ -33,8 +33,7 @@
               <field name="external_ref"/>
               <field name="f18_user_id" readonly="active"/>
               <field name="site_id"/>
-              <field name="pin" password="True"/>
-            </group>
+</group>
             <group string="Links">              <field name="note"/>
             </group>
           <notebook>
@@ -43,8 +42,7 @@
                   <list string="Credentials" editable="bottom">
                     <field name="active"/>
                     <field name="credential_type"/>
-                    <field name="pin_value" invisible="credential_type != 'pin'"/>
-                    <field name="finger_index" invisible="credential_type != 'fingerprint'"/>
+<field name="finger_index" invisible="credential_type != 'fingerprint'"/>
                     <field name="template_format" invisible="credential_type != 'fingerprint'"/>
                     <field name="note"/>
                   </list>
