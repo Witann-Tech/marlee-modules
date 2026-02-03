@@ -48,11 +48,8 @@
           <field name="name"/>
           <field name="device_code"/>
           <field name="site_id"/>
-          <filter string="Active" name="active" domain="[('active','=',True)]"/>
-          <filter string="Inactive" name="inactive" domain="[('active','=',False)]"/>
-          <group expand="0" string="Group By">
-            <filter string="Site" name="group_site" context="{'group_by':'site_id'}"/>
-          </group>
+          <field name="ip"/>
+          <field name="active"/>
         </search>
       </field>
     </record>
