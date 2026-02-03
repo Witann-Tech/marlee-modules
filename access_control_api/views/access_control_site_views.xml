@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+  <data>
+    <record id="view_access_control_site_tree" model="ir.ui.view">
+      <field name="name">access_control.site.tree</field>
+      <field name="model">access_control.site</field>
+      <field name="arch" type="xml">
+        <tree string="Sites">
+          <field name="name"/>
+          <field name="code"/>
+          <field name="active"/>
+        </tree>
+      </field>
+    </record>
+
+    <record id="view_access_control_site_form" model="ir.ui.view">
+      <field name="name">access_control.site.form</field>
+      <field name="model">access_control.site</field>
+      <field name="arch" type="xml">
+        <form string="Site">
+          <sheet>
+            <group>
+              <field name="active" widget="boolean_toggle"/>
+              <field name="name"/>
+              <field name="code"/>
+            </group>
+            <notebook>
+              <page string="Devices">
+                <field name="device_ids" nolabel="1" context="{'default_site_id': active_id}">
+                  <tree editable="bottom">
+                    <field name="active"/>
+                    <field name="name"/>
+                    <field name="device_code"/>
+                    <field name="ip"/>
+                    <field name="port"/>
+                  </tree>
+                </field>
+              </page>
+            </notebook>
+          </sheet>
+        </form>
+      </field>
+    </record>
+  </data>
+</odoo>

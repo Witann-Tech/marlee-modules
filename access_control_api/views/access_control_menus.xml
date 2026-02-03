@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+        <!-- Root menu -->
+        <menuitem id="access_control_menu_root" name="Access Control" sequence="10"/>
+
+        <!-- Actions -->
+        <record id="action_access_control_sites" model="ir.actions.act_window">
+            <field name="name">Sites</field>
+            <field name="res_model">access_control.site</field>
+            <field name="view_mode">tree,form</field>
+            <field name="help" type="html">
+                <p class="o_view_nocontent_smiling_face">
+                    Create your first site to group devices and people.
+                </p>
+            </field>
+        </record>
+
+        <record id="action_access_control_devices" model="ir.actions.act_window">
+            <field name="name">Devices</field>
+            <field name="res_model">access_control.device</field>
+            <field name="view_mode">tree,form</field>
+            <field name="help" type="html">
+                <p class="o_view_nocontent_smiling_face">
+                    Register your ZKTeco F18 devices here.
+                </p>
+            </field>
+        </record>
+
+        <record id="action_access_control_people" model="ir.actions.act_window">
+            <field name="name">People</field>
+            <field name="res_model">access_control.person</field>
+            <field name="view_mode">tree,form</field>
+            <field name="help" type="html">
+                <p class="o_view_nocontent_smiling_face">
+                    Create people and assign optional PINs to be synced to devices.
+                </p>
+            </field>
+        </record>
+
+        <record id="action_access_control_credentials" model="ir.actions.act_window">
+            <field name="name">Credentials</field>
+            <field name="res_model">access_control.credential</field>
+            <field name="view_mode">tree,form</field>
+            <field name="help" type="html">
+                <p class="o_view_nocontent_smiling_face">
+                    Manage credentials (fingerprint id, etc.).
+                </p>
+            </field>
+        </record>
+
+        <!-- Submenus -->
+        <menuitem id="access_control_menu_configuration" name="Configuration"
+                  parent="access_control_menu_root" sequence="10"/>
+
+        <menuitem id="access_control_menu_sites" name="Sites"
+                  parent="access_control_menu_configuration"
+                  action="action_access_control_sites" sequence="10"/>
+
+        <menuitem id="access_control_menu_devices" name="Devices"
+                  parent="access_control_menu_configuration"
+                  action="action_access_control_devices" sequence="20"/>
+
+        <menuitem id="access_control_menu_operations" name="Operations"
+                  parent="access_control_menu_root" sequence="20"/>
+
+        <menuitem id="access_control_menu_people" name="People"
+                  parent="access_control_menu_operations"
+                  action="action_access_control_people" sequence="10"/>
+
+        <menuitem id="access_control_menu_credentials" name="Credentials"
+                  parent="access_control_menu_operations"
+                  action="action_access_control_credentials" sequence="20"/>
+
+    </data>
+</odoo>

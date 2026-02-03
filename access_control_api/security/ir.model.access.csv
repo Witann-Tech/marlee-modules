@@ -3,5 +3,3 @@ access_control_credential_user,access_control.credential user,model_access_contr
 access_control_person_user,access.control.person.user,model_access_control_person,base.group_user,1,1,1,0
 access_control_site_user,access.control.site.user,model_access_control_site,base.group_user,1,1,1,0
 access_control_device_user,access.control.device.user,model_access_control_device,base.group_user,1,1,1,0
-access_control_fingerprint_user,access.control.fingerprint.user,model_access_control_fingerprint,base.group_user,1,1,1,0
-access_control_enroll_session_user,access.control.enroll.session.user,model_access_control_enroll_session,base.group_user,1,1,1,0

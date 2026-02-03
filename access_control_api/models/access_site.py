@@ -11,8 +11,7 @@ class AccessControlSite(models.Model):
 
     active = fields.Boolean(default=True)
 
-    # If true, worker should sync regardless of site_version
-    force_sync = fields.Boolean(default=False)
+    device_ids = fields.One2many('access_control.device', 'site_id', string='Devices')
 
     _sql_constraints = [
         ("access_control_site_code_uniq", "unique(code)", "Site code must be unique."),

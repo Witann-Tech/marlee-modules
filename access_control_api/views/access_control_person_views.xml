@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+  <data>
+    <record id="view_access_control_person_tree" model="ir.ui.view">
+      <field name="name">access_control.person.tree</field>
+      <field name="model">access_control.person</field>
+      <field name="arch" type="xml">
+        <tree string="People">
+          <field name="active"/>
+          <field name="name"/>
+          <field name="site_id"/>
+          <field name="pin"/>
+          <field name="user_id"/>
+          <field name="partner_id"/>
+        </tree>
+      </field>
+    </record>
+
+    <record id="view_access_control_person_form" model="ir.ui.view">
+      <field name="name">access_control.person.form</field>
+      <field name="model">access_control.person</field>
+      <field name="arch" type="xml">
+        <form string="Person">
+          <sheet>
+            <group>
+              <field name="active" widget="boolean_toggle"/>
+              <field name="name"/>
+              <field name="site_id"/>
+              <field name="pin" password="True"/>
+            </group>
+            <group string="Links">
+              <field name="user_id"/>
+              <field name="partner_id"/>
+              <field name="note"/>
+            </group>
+          </sheet>
+        </form>
+      </field>
+    </record>
+
+    <record id="view_access_control_person_search" model="ir.ui.view">
+      <field name="name">access_control.person.search</field>
+      <field name="model">access_control.person</field>
+      <field name="arch" type="xml">
+        <search string="People">
+          <field name="name"/>
+          <field name="pin"/>
+          <field name="site_id"/>
+          <filter string="Active" name="active" domain="[('active','=',True)]"/>
+          <filter string="Inactive" name="inactive" domain="[('active','=',False)]"/>
+          <group expand="0" string="Group By">
+            <filter string="Site" name="group_site" context="{'group_by':'site_id'}"/>
+          </group>
+        </search>
+      </field>
+    </record>
+  </data>
+</odoo>
