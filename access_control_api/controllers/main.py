@@ -103,7 +103,7 @@ class AccessControlApi(http.Controller):
             users.append({
                 "userId": p.id,          # <- numérico, perfecto para F18 enrollNumber
                 "name": p.name,
-                "pin": p.pin or "",
+                "pin": (p.credential_ids.filtered(lambda c: c.credential_type == 'pin' and c.active)[:1].pin_value) or "",
             })
 
         # ---- Devices (si viene site_code) ----
