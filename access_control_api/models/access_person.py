@@ -6,11 +6,11 @@ from odoo.exceptions import ValidationError
 class AccessPerson(models.Model):
     _name = "access_control.person"
     _description = "Access Control Person (to sync to devices)"
-    _rec_name = "name"
+    _rec_name = "partner_id"
 
     active = fields.Boolean(default=False, index=True)
 
-    name = fields.Char(required=True, index=True)
+    name = fields.Char(related='partner_id.name', store=True, readonly=True, index=True)
 
     site_id = fields.Many2one("access_control.site", ondelete="set null", index=True)
 
@@ -21,12 +21,18 @@ class AccessPerson(models.Model):
     f18_user_id = fields.Integer(string="F18 User ID", index=True)
 
     # Legacy / optional (may be removed later in favor of credential model)
-    pin = fields.Char(string="PIN")
-
-    user_id = fields.Many2one("res.users", string="User")
-    partner_id = fields.Many2one("res.partner", string="Partner")
+    pin = fields.Char(string="PIN") 
+    partner_id = fields.Many2one("res.partner", string="Partner", required=True, index=True)
 
     note = fields.Char()
+
+
+    @api.onchange("partner_id")
+    def _onchange_partner_id_set_external_ref(self):
+        for rec in self:
+            if rec.partner_id and not rec.external_ref:
+                rec.external_ref = rec.partner_id.ref
+
 
     _sql_constraints = [
         ("uniq_site_f18_user_id", "unique(site_id, f18_user_id)", "F18 User ID must be unique per Site."),

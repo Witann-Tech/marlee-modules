@@ -10,8 +10,8 @@ class AccessCredential(models.Model):
     active = fields.Boolean(default=True)
     fingerprint_id = fields.Char(required=True, index=True)
 
-    # Mixto: puede apuntar a un usuario interno (staff) o a un partner (miembro/cliente)
-    user_id = fields.Many2one("res.users", string="User")
-    partner_id = fields.Many2one("res.partner", string="Partner")
+    # Relacionado a una Persona de control de acceso (que a su vez apunta a res.partner). 
+    person_id = fields.Many2one('access_control.person', string='Person', required=True, index=True, ondelete='cascade')
+    partner_id = fields.Many2one('res.partner', string='Partner', related='person_id.partner_id', store=True, readonly=True, index=True)
 
     note = fields.Char()

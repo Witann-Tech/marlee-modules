@@ -6,15 +6,12 @@
       <field name="model">access_control.person</field>
       <field name="arch" type="xml">
         <list string="People">
-          <field name="active"/>
-          <field name="name"/>
+          <field name="active"/>          <field name="partner_id" required="1"/>
+              <field name="name"/>
           <field name="external_ref"/>
           <field name="f18_user_id" readonly="active"/>
           <field name="site_id"/>
-          <field name="pin"/>
-          <field name="user_id"/>
-          <field name="partner_id"/>
-        </list>
+          <field name="pin"/>        </list>
       </field>
     </record>
 
@@ -37,10 +34,7 @@
               <field name="site_id"/>
               <field name="pin" password="True"/>
             </group>
-            <group string="Links">
-              <field name="user_id"/>
-              <field name="partner_id"/>
-              <field name="note"/>
+            <group string="Links">              <field name="note"/>
             </group>
           </sheet>
         </form>
