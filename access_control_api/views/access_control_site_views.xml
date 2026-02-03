@@ -26,7 +26,7 @@
             </group>
             <notebook>
               <page string="Devices">
-                <field name="device_ids" nolabel="1" context="{'default_site_id': active_id}">
+                <field name="device_ids" nolabel="1">
                   <list editable="bottom">
                     <field name="active"/>
                     <field name="name"/>
