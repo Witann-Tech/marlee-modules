@@ -28,7 +28,8 @@
           <sheet>
             <group>
               <field name="active" widget="boolean_toggle"/>
-              <field name="name"/>
+              <field name="partner_id" required="1"/>
+              <field name="name" readonly="1"/>
               <field name="external_ref"/>
               <field name="f18_user_id" readonly="active"/>
               <field name="site_id"/>
