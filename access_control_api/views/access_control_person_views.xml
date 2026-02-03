@@ -2,12 +2,14 @@
 <odoo>
   <data>
     <record id="view_access_control_person_tree" model="ir.ui.view">
-      <field name="name">access_control.person.tree</field>
+      <field name="name">access_control.person.list</field>
       <field name="model">access_control.person</field>
       <field name="arch" type="xml">
         <list string="People">
           <field name="active"/>
           <field name="name"/>
+          <field name="external_ref"/>
+          <field name="f18_user_id"/>
           <field name="site_id"/>
           <field name="pin"/>
           <field name="user_id"/>
@@ -25,6 +27,8 @@
             <group>
               <field name="active" widget="boolean_toggle"/>
               <field name="name"/>
+              <field name="external_ref"/>
+              <field name="f18_user_id"/>
               <field name="site_id"/>
               <field name="pin" password="True"/>
             </group>
