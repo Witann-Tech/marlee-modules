@@ -24,7 +24,9 @@
       <field name="arch" type="xml">
         <form string="Person">
           <header>
-            <button name="action_assign_f18_user_id" type="object" string="Assign F18 ID" class="btn-primary" invisible="f18_user_id"/>
+            <button name="action_assign_f18_user_id" type="object" string="Assign F18 ID" class="btn-secondary" invisible="f18_user_id"/>
+            <button name="action_activate" type="object" string="Activate" class="btn-primary" invisible="active"/>
+            <button name="action_deactivate" type="object" string="Deactivate" class="btn-secondary" invisible="not active"/>
           </header>
           <sheet>
             <group>

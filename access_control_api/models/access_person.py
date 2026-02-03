@@ -69,3 +69,39 @@ class AccessPerson(models.Model):
                 raise ValidationError("No available F18 User IDs (1..500) for this Site.")
             rec.f18_user_id = chosen
         return True
+
+
+    def _notify(self, title, message, typ="success"):
+        return {
+            "type": "ir.actions.client",
+            "tag": "display_notification",
+            "params": {
+                "title": title,
+                "message": message,
+                "type": typ,
+                "sticky": False,
+            },
+        }
+
+    def action_activate(self):
+        for rec in self:
+            if rec.active:
+                continue
+            if not rec.site_id:
+                raise ValidationError("Please set a Site before activating this person.")
+            if not rec.f18_user_id:
+                raise ValidationError("Please assign an F18 User ID (1..500) before activating this person.")
+            rec.active = True
+            # Nudge the worker to sync
+            rec.site_id.force_sync = True
+        return self._notify("Activated", "Person activated and marked for sync.")
+
+    def action_deactivate(self):
+        for rec in self:
+            if not rec.active:
+                continue
+            rec.active = False
+            if rec.site_id:
+                rec.site_id.force_sync = True
+        return self._notify("Deactivated", "Person deactivated and marked for sync.", typ="warning")
+
