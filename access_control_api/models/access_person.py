@@ -23,6 +23,8 @@ class AccessPerson(models.Model):
     # Legacy / optional (may be removed later in favor of credential model)
     pin = fields.Char(string="PIN") 
     partner_id = fields.Many2one("res.partner", string="Partner", required=True, index=True)
+    credential_ids = fields.One2many("access_control.credential", "person_id", string="Credentials")
+
 
     note = fields.Char()
 
