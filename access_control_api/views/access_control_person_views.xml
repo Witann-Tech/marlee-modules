@@ -9,7 +9,7 @@
           <field name="active"/>
           <field name="name"/>
           <field name="external_ref"/>
-          <field name="f18_user_id" attrs="{'readonly': [('active', '=', True)]}"/>
+          <field name="f18_user_id" readonly="active"/>
           <field name="site_id"/>
           <field name="pin"/>
           <field name="user_id"/>
@@ -24,14 +24,14 @@
       <field name="arch" type="xml">
         <form string="Person">
           <header>
-            <button name="action_assign_f18_user_id" type="object" string="Assign F18 ID" class="btn-primary" attrs="{'invisible': [('f18_user_id', '!=', False)]}"/>
+            <button name="action_assign_f18_user_id" type="object" string="Assign F18 ID" class="btn-primary" invisible="f18_user_id"/>
           </header>
           <sheet>
             <group>
               <field name="active" widget="boolean_toggle"/>
               <field name="name"/>
               <field name="external_ref"/>
-              <field name="f18_user_id" attrs="{'readonly': [('active', '=', True)]}"/>
+              <field name="f18_user_id" readonly="active"/>
               <field name="site_id"/>
               <field name="pin" password="True"/>
             </group>
@@ -52,7 +52,7 @@
         <search string="People">
           <field name="name"/>
           <field name="external_ref"/>
-          <field name="f18_user_id" attrs="{'readonly': [('active', '=', True)]}"/>
+          <field name="f18_user_id"/>
           <field name="site_id"/>
           <filter string="Active" name="active" domain="[('active','=',True)]"/>
           <filter string="Inactive" name="inactive" domain="[('active','=',False)]"/>
