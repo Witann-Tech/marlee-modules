@@ -10,11 +10,20 @@ class AccessCredential(models.Model):
     active = fields.Boolean(default=True)
     fingerprint_id = fields.Char(required=True, index=True)
 
-    # Relacionado a una Persona de control de acceso (que a su vez apunta a res.partner). 
-    person_id = fields.Many2one('access_control.person', string='Person', required=True, index=True, ondelete='cascade')
-    partner_id = fields.Many2one('res.partner', string='Partner', related='person_id.partner_id', store=True, readonly=True, index=True)
+    # Related to Access Person (which points to res.partner)
+    person_id = fields.Many2one(
+        "access_control.person", string="Person", required=True, index=True, ondelete="cascade"
+    )
+    partner_id = fields.Many2one(
+        "res.partner",
+        string="Partner",
+        related="person_id.partner_id",
+        store=True,
+        readonly=True,
+        index=True,
+    )
 
-        # Backward-compat field (legacy views may reference it). Not used in new design.
-    user_id = fields.Many2one('res.users', string='User', index=True)
+    # Backward-compat field (legacy views may reference it). Not used in new design.
+    user_id = fields.Many2one("res.users", string="User", index=True)
 
-note = fields.Char()
+    note = fields.Char(string="Note")
