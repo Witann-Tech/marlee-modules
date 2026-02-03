@@ -8,14 +8,11 @@
         <list string="Sites">
           <field name="name"/>
           <field name="code"/>
-              <field name="force_sync"/>
-              <field name="slots_used" readonly="1"/>
-              <field name="slots_total" readonly="1"/>
-              <field name="slots_percent" widget="progressbar" readonly="1"/>
+          <field name="force_sync"/>
+          <field name="slots_used" readonly="1"/>
+          <field name="slots_total" readonly="1"/>
+          <field name="slots_percent" widget="progressbar" readonly="1"/>
           <field name="active"/>
-          <field name="slots_used"/>
-          <field name="slots_total"/>
-          <field name="slots_percent" widget="progressbar"/>
         </list>
       </field>
     </record>
@@ -40,9 +37,6 @@
                 <field name="device_ids" nolabel="1">
                   <list editable="bottom">
                     <field name="active"/>
-          <field name="slots_used"/>
-          <field name="slots_total"/>
-          <field name="slots_percent" widget="progressbar"/>
                     <field name="name"/>
                     <field name="device_code"/>
                     <field name="ip"/>
