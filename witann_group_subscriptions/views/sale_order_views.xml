@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_sale_order_form_witann_group_subscriptions" model="ir.ui.view">
+        <field name="name">sale.order.form.witann.group.subscriptions</field>
+        <field name="model">sale.order</field>
+        <field name="inherit_id" ref="sale.view_order_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//sheet" position="inside">
+                <field name="subscription_has_recurring_products" invisible="1"/>
+                <field name="subscription_max_participants_total" invisible="1"/>
+            </xpath>
+            <xpath expr="//notebook" position="inside">
+                <page string="Participantes" name="subscription_participants" invisible="not subscription_has_recurring_products">
+                    <group>
+                        <field name="subscription_max_participants_total" readonly="1"/>
+                        <field name="participant_ids" widget="many2many_tags"/>
+                    </group>
+                </page>
+            </xpath>
+        </field>
+    </record>
+</odoo>
