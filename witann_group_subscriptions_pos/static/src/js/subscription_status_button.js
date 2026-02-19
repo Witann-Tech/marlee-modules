@@ -12,8 +12,8 @@ patch(ControlButtons.prototype, {
     },
 
     async onClickSubscriptionStatus() {
-        const order = this.env.pos && this.env.pos.get_order ? this.env.pos.get_order() : null;
-        const partner = order && order.get_partner();
+        const order = this._getCurrentOrder();
+        const partner = this._getCurrentPartner(order);
 
         if (!partner) {
             window.alert(_t("Selecciona un cliente para consultar su vigencia de paquetes."));
@@ -50,5 +50,67 @@ patch(ControlButtons.prototype, {
         }
 
         window.alert(`${_t("Vigencia de paquetes")} - ${partner.name}\n\n${body}`);
+    },
+
+    _getCurrentOrder() {
+        if (this.currentOrder) {
+            return this.currentOrder;
+        }
+        if (this.props && this.props.order) {
+            return this.props.order;
+        }
+        if (this.pos && this.pos.get_order) {
+            return this.pos.get_order();
+        }
+        if (this.env && this.env.pos && this.env.pos.get_order) {
+            return this.env.pos.get_order();
+        }
+        return null;
+    },
+
+    _getCurrentPartner(order) {
+        if (this.props && this.props.partner && this.props.partner.id) {
+            return this.props.partner;
+        }
+
+        if (!order) {
+            return null;
+        }
+
+        if (typeof order.get_partner === "function") {
+            const partner = order.get_partner();
+            if (partner) {
+                return partner;
+            }
+        }
+
+        if (order.partner && order.partner.id) {
+            return order.partner;
+        }
+
+        const partnerField = order.partner_id;
+        let partnerId = null;
+
+        if (Array.isArray(partnerField) && partnerField.length) {
+            partnerId = partnerField[0];
+        } else if (typeof partnerField === "number") {
+            partnerId = partnerField;
+        } else if (partnerField && typeof partnerField === "object" && partnerField.id) {
+            return partnerField;
+        }
+
+        if (!partnerId) {
+            return null;
+        }
+
+        if (this.pos && this.pos.models && this.pos.models["res.partner"] && this.pos.models["res.partner"].get) {
+            return this.pos.models["res.partner"].get(partnerId) || { id: partnerId, name: _t("Cliente") };
+        }
+
+        if (this.pos && this.pos.db && this.pos.db.get_partner_by_id) {
+            return this.pos.db.get_partner_by_id(partnerId) || { id: partnerId, name: _t("Cliente") };
+        }
+
+        return { id: partnerId, name: _t("Cliente") };
     },
 });
