@@ -1,6 +1,8 @@
 /** @odoo-module **/
 
 import { ControlButtons } from "@point_of_sale/app/screens/product_screen/control_buttons/control_buttons";
+import { PaymentScreen } from "@point_of_sale/app/screens/payment_screen/payment_screen";
+import { Orderline } from "@point_of_sale/app/store/models";
 import { _t } from "@web/core/l10n/translation";
 import { useService } from "@web/core/utils/hooks";
 import { patch } from "@web/core/utils/patch";
@@ -8,6 +10,244 @@ import { onWillUnmount } from "@odoo/owl";
 
 const MODAL_ID = "wgs-subscription-status-modal";
 const STYLE_ID = "wgs-subscription-status-style";
+
+function getPos(component) {
+    if (component.pos) {
+        return component.pos;
+    }
+    if (component.env && component.env.pos) {
+        return component.env.pos;
+    }
+    return null;
+}
+
+function getCurrentOrder(component) {
+    const pos = getPos(component);
+    if (component.currentOrder) {
+        return component.currentOrder;
+    }
+    if (component.props && component.props.order) {
+        return component.props.order;
+    }
+    if (pos && typeof pos.get_order === "function") {
+        return pos.get_order();
+    }
+    return null;
+}
+
+function getCurrentPartner(component, order = null) {
+    if (component.props && component.props.partner && component.props.partner.id) {
+        return component.props.partner;
+    }
+
+    const activeOrder = order || getCurrentOrder(component);
+    if (!activeOrder) {
+        return null;
+    }
+
+    if (typeof activeOrder.get_partner === "function") {
+        const partner = activeOrder.get_partner();
+        if (partner) {
+            return partner;
+        }
+    }
+
+    if (activeOrder.partner && activeOrder.partner.id) {
+        return activeOrder.partner;
+    }
+
+    return null;
+}
+
+function getAllPartners(component) {
+    const pos = getPos(component);
+    if (!pos) {
+        return [];
+    }
+
+    if (pos.models && pos.models["res.partner"]) {
+        const partnerModel = pos.models["res.partner"];
+        if (typeof partnerModel.getAll === "function") {
+            return partnerModel.getAll();
+        }
+        if (Array.isArray(partnerModel.records)) {
+            return partnerModel.records;
+        }
+    }
+
+    if (pos.db) {
+        if (typeof pos.db.get_partners_sorted === "function") {
+            return pos.db.get_partners_sorted(100000) || [];
+        }
+        if (pos.db.partner_by_id) {
+            return Object.values(pos.db.partner_by_id);
+        }
+    }
+
+    return [];
+}
+
+function getSelectedOrderline(component, order = null) {
+    const activeOrder = order || getCurrentOrder(component);
+    if (!activeOrder) {
+        return null;
+    }
+
+    if (typeof activeOrder.get_selected_orderline === "function") {
+        return activeOrder.get_selected_orderline();
+    }
+
+    if (activeOrder.selected_orderline) {
+        return activeOrder.selected_orderline;
+    }
+
+    return null;
+}
+
+function getLineProduct(component, line) {
+    if (!line) {
+        return null;
+    }
+
+    if (line.product) {
+        return line.product;
+    }
+
+    if (typeof line.get_product === "function") {
+        const product = line.get_product();
+        if (product) {
+            return product;
+        }
+    }
+
+    const productId = line.product_id || (typeof line.get_product_id === "function" ? line.get_product_id() : null);
+    if (!productId) {
+        return null;
+    }
+
+    const pos = getPos(component);
+    if (pos && pos.db && typeof pos.db.get_product_by_id === "function") {
+        return pos.db.get_product_by_id(productId);
+    }
+
+    return null;
+}
+
+function isSubscriptionProduct(product) {
+    if (!product) {
+        return false;
+    }
+    return !!product.recurring_invoice;
+}
+
+function getLineQuantity(line) {
+    if (!line) {
+        return 0;
+    }
+    if (typeof line.get_quantity === "function") {
+        return Math.abs(Number(line.get_quantity()) || 0);
+    }
+    return Math.abs(Number(line.qty) || 0);
+}
+
+function getLineParticipantIds(line, holderId = null) {
+    const initial = Array.isArray(line && line.wgs_participant_ids) ? [...line.wgs_participant_ids] : [];
+    const cleaned = [];
+
+    for (const value of initial) {
+        const parsed = Number.parseInt(value, 10);
+        if (Number.isInteger(parsed) && parsed > 0 && !cleaned.includes(parsed)) {
+            cleaned.push(parsed);
+        }
+    }
+
+    if (holderId && !cleaned.includes(holderId)) {
+        cleaned.unshift(holderId);
+    }
+
+    return cleaned;
+}
+
+function setLineParticipantIds(line, participantIds) {
+    if (!line) {
+        return;
+    }
+
+    const cleaned = [];
+    for (const value of participantIds || []) {
+        const parsed = Number.parseInt(value, 10);
+        if (Number.isInteger(parsed) && parsed > 0 && !cleaned.includes(parsed)) {
+            cleaned.push(parsed);
+        }
+    }
+
+    line.wgs_participant_ids = cleaned;
+
+    if (line.order && typeof line.order.trigger === "function") {
+        line.order.trigger("change", line.order);
+    }
+}
+
+function getLineParticipantCapacity(product, line) {
+    const maxPerUnit = Number.parseInt(product && product.max_participants_total, 10) || 1;
+    const qty = getLineQuantity(line) || 1;
+    const total = Math.floor(maxPerUnit * qty);
+    return total > 0 ? total : 1;
+}
+
+patch(Orderline.prototype, {
+    export_as_JSON() {
+        const json = super.export_as_JSON(...arguments);
+        json.wgs_participant_ids = getLineParticipantIds(this);
+        return json;
+    },
+
+    init_from_JSON(json) {
+        super.init_from_JSON(...arguments);
+        this.wgs_participant_ids = getLineParticipantIds({ wgs_participant_ids: json && json.wgs_participant_ids });
+    },
+});
+
+patch(PaymentScreen.prototype, {
+    async validateOrder(isForceValidate) {
+        const order = getCurrentOrder(this);
+        if (order && typeof order.get_orderlines === "function") {
+            const partner = getCurrentPartner(this, order);
+            const lines = order
+                .get_orderlines()
+                .filter((line) => isSubscriptionProduct(getLineProduct(this, line)) && getLineQuantity(line) > 0);
+
+            if (lines.length) {
+                if (typeof navigator !== "undefined" && navigator.onLine === false) {
+                    window.alert(_t("No se permite vender suscripciones sin conexión a internet."));
+                    return;
+                }
+
+                if (!partner || !partner.id) {
+                    window.alert(_t("Selecciona un cliente para vender suscripciones."));
+                    return;
+                }
+
+                for (const line of lines) {
+                    const product = getLineProduct(this, line);
+                    const capacity = getLineParticipantCapacity(product, line);
+                    const participantIds = getLineParticipantIds(line, partner.id);
+
+                    if (participantIds.length > capacity) {
+                        window.alert(
+                            _t("Una línea de suscripción excede el máximo de participantes permitidos.")
+                        );
+                        return;
+                    }
+
+                    setLineParticipantIds(line, participantIds);
+                }
+            }
+        }
+
+        return super.validateOrder(...arguments);
+    },
+});
 
 patch(ControlButtons.prototype, {
     setup() {
@@ -23,8 +263,61 @@ patch(ControlButtons.prototype, {
         });
     },
 
+    async onClickSubscriptionParticipants() {
+        if (typeof navigator !== "undefined" && navigator.onLine === false) {
+            this._showSimpleInfoModal(
+                _t("Sin conexión"),
+                _t("No se permite vender suscripciones sin conexión a internet.")
+            );
+            return;
+        }
+
+        const order = getCurrentOrder(this);
+        if (!order) {
+            this._showSimpleInfoModal(_t("Sin orden"), _t("No hay una orden activa en este momento."));
+            return;
+        }
+
+        const partner = getCurrentPartner(this, order);
+        if (!partner || !partner.id) {
+            this._showSimpleInfoModal(
+                _t("Cliente requerido"),
+                _t("Selecciona primero un cliente para configurar participantes de suscripción.")
+            );
+            return;
+        }
+
+        const line = getSelectedOrderline(this, order);
+        if (!line) {
+            this._showSimpleInfoModal(
+                _t("Línea requerida"),
+                _t("Selecciona una línea del ticket para configurar participantes.")
+            );
+            return;
+        }
+
+        const product = getLineProduct(this, line);
+        if (!isSubscriptionProduct(product)) {
+            this._showSimpleInfoModal(
+                _t("Producto no válido"),
+                _t("La línea seleccionada no corresponde a un producto de suscripción.")
+            );
+            return;
+        }
+
+        const capacity = getLineParticipantCapacity(product, line);
+        const participants = getAllPartners(this);
+        this._showParticipantsModal({
+            holder: partner,
+            product,
+            line,
+            participants,
+            capacity,
+        });
+    },
+
     async onClickSubscriptionStatus() {
-        const partners = this._getAllPartners();
+        const partners = getAllPartners(this);
         if (!partners.length) {
             this._showSimpleInfoModal(
                 _t("Sin clientes cargados"),
@@ -50,7 +343,7 @@ patch(ControlButtons.prototype, {
             const status = this._getPartnerStatusEntry(statusMap, partner.id) || {};
             return {
                 id: partner.id,
-                name: partner._wgsBaseName || partner.name || partner.display_name || _t("Sin nombre"),
+                name: partner.name || partner.display_name || _t("Sin nombre"),
                 email: partner.email || "",
                 phone: partner.phone || partner.mobile || "",
                 state: status.state || "none",
@@ -76,6 +369,160 @@ patch(ControlButtons.prototype, {
         }
 
         return statusMap;
+    },
+
+    _showParticipantsModal({ holder, product, line, participants, capacity }) {
+        const previous = document.getElementById(MODAL_ID);
+        if (previous) {
+            previous.remove();
+        }
+
+        const overlay = document.createElement("div");
+        overlay.id = MODAL_ID;
+        overlay.className = "wgs-status-modal-overlay";
+
+        const modal = document.createElement("div");
+        modal.className = "wgs-status-modal";
+
+        const header = document.createElement("div");
+        header.className = "wgs-status-modal-header";
+        header.innerHTML = `
+            <h3>${this._escapeHtml(_t("Participantes de Suscripción"))}</h3>
+            <p class="wgs-subtitle">${this._escapeHtml(product.display_name || "")} | ${this._escapeHtml(_t("Cupo total"))}: ${capacity}</p>
+        `;
+
+        const toolbar = document.createElement("div");
+        toolbar.className = "wgs-status-toolbar";
+        toolbar.innerHTML = `
+            <input type="text" class="wgs-filter-search" placeholder="${_t("Buscar participante")}" />
+            <div class="wgs-inline-note">${_t("El titular siempre está incluido")}: <strong>${this._escapeHtml(holder.name || "")}</strong></div>
+        `;
+
+        const body = document.createElement("div");
+        body.className = "wgs-status-modal-body";
+
+        const list = document.createElement("div");
+        list.className = "wgs-participant-list";
+        body.appendChild(list);
+
+        const footer = document.createElement("div");
+        footer.className = "wgs-status-modal-footer";
+        const counter = document.createElement("span");
+        counter.className = "wgs-inline-note";
+        footer.appendChild(counter);
+
+        const cancelButton = document.createElement("button");
+        cancelButton.type = "button";
+        cancelButton.className = "wgs-status-close-btn wgs-btn-muted";
+        cancelButton.textContent = _t("Cancelar");
+
+        const saveButton = document.createElement("button");
+        saveButton.type = "button";
+        saveButton.className = "wgs-status-close-btn";
+        saveButton.textContent = _t("Guardar participantes");
+
+        footer.appendChild(cancelButton);
+        footer.appendChild(saveButton);
+
+        modal.appendChild(header);
+        modal.appendChild(toolbar);
+        modal.appendChild(body);
+        modal.appendChild(footer);
+        overlay.appendChild(modal);
+
+        const closeModal = () => overlay.remove();
+        cancelButton.addEventListener("click", closeModal);
+        overlay.addEventListener("click", (event) => {
+            if (event.target === overlay) {
+                closeModal();
+            }
+        });
+
+        document.body.appendChild(overlay);
+
+        const searchInput = toolbar.querySelector(".wgs-filter-search");
+        const holderId = holder.id;
+        const selected = new Set(getLineParticipantIds(line, holderId));
+
+        const setCounter = () => {
+            counter.textContent = `${_t("Seleccionados")}: ${selected.size}/${capacity}`;
+        };
+
+        const renderList = () => {
+            const query = (searchInput.value || "").trim().toLowerCase();
+            const rows = participants
+                .filter((partner) => partner && partner.id)
+                .filter((partner) => {
+                    if (!query) {
+                        return true;
+                    }
+                    const haystack = `${partner.name || ""} ${partner.email || ""} ${partner.phone || ""}`.toLowerCase();
+                    return haystack.includes(query);
+                })
+                .sort((a, b) => (a.name || "").localeCompare(b.name || "", "es"));
+
+            list.innerHTML = rows
+                .map((partner) => {
+                    const checked = selected.has(partner.id) ? "checked" : "";
+                    const disabled = partner.id === holderId ? "disabled" : "";
+                    return `
+                        <label class="wgs-participant-row" data-partner-id="${partner.id}">
+                            <input type="checkbox" ${checked} ${disabled} />
+                            <span class="wgs-participant-name">${this._escapeHtml(partner.name || _t("Sin nombre"))}</span>
+                            <span class="wgs-participant-meta">${this._escapeHtml(partner.phone || partner.email || "")}</span>
+                        </label>
+                    `;
+                })
+                .join("");
+
+            list.querySelectorAll(".wgs-participant-row input[type='checkbox']").forEach((checkbox) => {
+                checkbox.addEventListener("change", (event) => {
+                    const row = event.target.closest(".wgs-participant-row");
+                    const partnerId = Number.parseInt(row.getAttribute("data-partner-id"), 10);
+                    if (!partnerId || partnerId === holderId) {
+                        return;
+                    }
+
+                    if (event.target.checked) {
+                        if (selected.size >= capacity) {
+                            event.target.checked = false;
+                            this._showSimpleInfoModal(
+                                _t("Cupo excedido"),
+                                _t("No puedes exceder el máximo de participantes permitido para esta suscripción.")
+                            );
+                            return;
+                        }
+                        selected.add(partnerId);
+                    } else {
+                        selected.delete(partnerId);
+                    }
+                    selected.add(holderId);
+                    setCounter();
+                });
+            });
+        };
+
+        searchInput.addEventListener("input", renderList);
+
+        saveButton.addEventListener("click", () => {
+            selected.add(holderId);
+            if (selected.size > capacity) {
+                this._showSimpleInfoModal(
+                    _t("Cupo excedido"),
+                    _t("No puedes exceder el máximo de participantes permitido para esta suscripción.")
+                );
+                return;
+            }
+            setLineParticipantIds(line, Array.from(selected));
+            closeModal();
+            this._showSimpleInfoModal(
+                _t("Participantes guardados"),
+                _t("La configuración de participantes se aplicará al validar el ticket en POS.")
+            );
+        });
+
+        setCounter();
+        renderList();
     },
 
     _showDirectoryModal(rows) {
@@ -310,7 +757,7 @@ patch(ControlButtons.prototype, {
 
         modal.innerHTML = `
             <div class="wgs-status-modal-header"><h3>${this._escapeHtml(title)}</h3></div>
-            <div class="wgs-status-modal-body"><p>${this._escapeHtml(message)}</p></div>
+            <div class="wgs-status-modal-body"><p class="wgs-simple-message">${this._escapeHtml(message)}</p></div>
             <div class="wgs-status-modal-footer">
                 <button type="button" class="wgs-status-close-btn">${this._escapeHtml(_t("Cerrar"))}</button>
             </div>
@@ -374,12 +821,18 @@ patch(ControlButtons.prototype, {
                 font-size: 1.05rem;
                 color: #111827;
             }
+            .wgs-subtitle {
+                margin: 0.35rem 0 0;
+                color: #475569;
+                font-size: 0.84rem;
+            }
             .wgs-status-toolbar {
                 padding: 0.8rem 1.2rem;
                 display: grid;
                 grid-template-columns: minmax(260px, 1fr) 180px 210px;
                 gap: 0.6rem;
                 border-bottom: 1px solid #e5e7eb;
+                align-items: center;
             }
             .wgs-status-toolbar input,
             .wgs-status-toolbar select {
@@ -390,6 +843,11 @@ patch(ControlButtons.prototype, {
                 font-size: 0.88rem;
                 background: #fff;
                 color: #111827;
+            }
+            .wgs-inline-note {
+                color: #475569;
+                font-size: 0.82rem;
+                white-space: nowrap;
             }
             .wgs-status-summary {
                 padding: 0.55rem 1.2rem;
@@ -427,11 +885,16 @@ patch(ControlButtons.prototype, {
                 overflow: auto;
                 color: #1f2937;
             }
+            .wgs-simple-message {
+                padding: 1rem 1.2rem;
+            }
             .wgs-status-modal-footer {
                 padding: 0.8rem 1.2rem;
                 border-top: 1px solid #e5e7eb;
                 display: flex;
                 justify-content: flex-end;
+                gap: 0.5rem;
+                align-items: center;
             }
             .wgs-status-close-btn {
                 border: none;
@@ -441,6 +904,9 @@ patch(ControlButtons.prototype, {
                 padding: 0.5rem 0.9rem;
                 font-weight: 600;
                 cursor: pointer;
+            }
+            .wgs-btn-muted {
+                background: #64748b;
             }
             .wgs-status-table {
                 width: 100%;
@@ -488,6 +954,33 @@ patch(ControlButtons.prototype, {
                 color: #475569;
                 border: 1px solid #cbd5e1;
             }
+            .wgs-participant-list {
+                padding: 0.75rem 1rem;
+                display: flex;
+                flex-direction: column;
+                gap: 0.35rem;
+                max-height: 58vh;
+                overflow: auto;
+            }
+            .wgs-participant-row {
+                display: grid;
+                grid-template-columns: 24px 1fr auto;
+                gap: 0.6rem;
+                align-items: center;
+                border: 1px solid #e2e8f0;
+                border-radius: 0.55rem;
+                padding: 0.45rem 0.65rem;
+                background: #fff;
+            }
+            .wgs-participant-name {
+                font-size: 0.88rem;
+                color: #111827;
+                font-weight: 600;
+            }
+            .wgs-participant-meta {
+                font-size: 0.8rem;
+                color: #64748b;
+            }
             @media (max-width: 900px) {
                 .wgs-status-toolbar {
                     grid-template-columns: 1fr;
@@ -499,43 +992,5 @@ patch(ControlButtons.prototype, {
 
     _getPartnerStatusEntry(statusMap, partnerId) {
         return statusMap[partnerId] || statusMap[String(partnerId)] || null;
-    },
-
-    _getAllPartners() {
-        const pos = this._getPos();
-        if (!pos) {
-            return [];
-        }
-
-        if (pos.models && pos.models["res.partner"]) {
-            const partnerModel = pos.models["res.partner"];
-            if (typeof partnerModel.getAll === "function") {
-                return partnerModel.getAll();
-            }
-            if (Array.isArray(partnerModel.records)) {
-                return partnerModel.records;
-            }
-        }
-
-        if (pos.db) {
-            if (typeof pos.db.get_partners_sorted === "function") {
-                return pos.db.get_partners_sorted(100000) || [];
-            }
-            if (pos.db.partner_by_id) {
-                return Object.values(pos.db.partner_by_id);
-            }
-        }
-
-        return [];
-    },
-
-    _getPos() {
-        if (this.pos) {
-            return this.pos;
-        }
-        if (this.env && this.env.pos) {
-            return this.env.pos;
-        }
-        return null;
     },
 });
