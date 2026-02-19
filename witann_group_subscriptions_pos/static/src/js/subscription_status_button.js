@@ -1,18 +1,17 @@
 /** @odoo-module **/
 
-import { ProductScreen } from "@point_of_sale/app/screens/product_screen/product_screen";
+import { ControlButtons } from "@point_of_sale/app/screens/product_screen/control_buttons/control_buttons";
 import { _t } from "@web/core/l10n/translation";
 import { useService } from "@web/core/utils/hooks";
-import { Component } from "@odoo/owl";
+import { patch } from "@web/core/utils/patch";
 
-export class SubscriptionStatusButton extends Component {
-    static template = "witann_group_subscriptions_pos.SubscriptionStatusButton";
-
+patch(ControlButtons.prototype, {
     setup() {
+        super.setup(...arguments);
         this.orm = useService("orm");
-    }
+    },
 
-    async onClick() {
+    async onClickSubscriptionStatus() {
         const order = this.env.pos && this.env.pos.get_order ? this.env.pos.get_order() : null;
         const partner = order && order.get_partner();
 
@@ -51,10 +50,5 @@ export class SubscriptionStatusButton extends Component {
         }
 
         window.alert(`${_t("Vigencia de paquetes")} - ${partner.name}\n\n${body}`);
-    }
-}
-
-ProductScreen.addControlButton({
-    component: SubscriptionStatusButton,
-    condition: () => true,
+    },
 });
