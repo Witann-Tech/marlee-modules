@@ -1,7 +1,6 @@
 /** @odoo-module **/
 
 import { ProductScreen } from "@point_of_sale/app/screens/product_screen/product_screen";
-import { usePos } from "@point_of_sale/app/store/pos_hook";
 import { _t } from "@web/core/l10n/translation";
 import { useService } from "@web/core/utils/hooks";
 import { Component } from "@odoo/owl";
@@ -10,12 +9,11 @@ export class SubscriptionStatusButton extends Component {
     static template = "witann_group_subscriptions_pos.SubscriptionStatusButton";
 
     setup() {
-        this.pos = usePos();
         this.orm = useService("orm");
     }
 
     async onClick() {
-        const order = this.pos.get_order();
+        const order = this.env.pos && this.env.pos.get_order ? this.env.pos.get_order() : null;
         const partner = order && order.get_partner();
 
         if (!partner) {
