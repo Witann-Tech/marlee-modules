@@ -56,7 +56,46 @@ function getCurrentPartner(component, order = null) {
         return activeOrder.partner;
     }
 
+    const partnerField = activeOrder.partner_id;
+    if (Array.isArray(partnerField) && partnerField.length) {
+        return getPartnerById(component, partnerField[0]);
+    }
+    if (typeof partnerField === "number") {
+        return getPartnerById(component, partnerField);
+    }
+    if (partnerField && typeof partnerField === "object" && partnerField.id) {
+        return partnerField;
+    }
+
     return null;
+}
+
+function getPartnerById(component, partnerId) {
+    const parsed = Number.parseInt(partnerId, 10);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+        return null;
+    }
+
+    const pos = getPos(component);
+    if (!pos) {
+        return null;
+    }
+
+    if (pos.models && pos.models["res.partner"] && typeof pos.models["res.partner"].get === "function") {
+        const record = pos.models["res.partner"].get(parsed);
+        if (record) {
+            return record;
+        }
+    }
+
+    if (pos.db && typeof pos.db.get_partner_by_id === "function") {
+        const record = pos.db.get_partner_by_id(parsed);
+        if (record) {
+            return record;
+        }
+    }
+
+    return { id: parsed, name: _t("Cliente") };
 }
 
 function getAllPartners(component) {

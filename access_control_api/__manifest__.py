@@ -1,1 +1,19 @@
-{'name': 'Access Control API', 'version': '19.0.2.0.0', 'summary': 'API para validación de accesos (biometría / hardware)', 'category': 'Tools', 'author': 'Witann Technologies', 'license': 'LGPL-3', 'depends': ['base'], 'data': ['security/ir.model.access.csv', 'views/access_control_menus.xml', 'views/access_control_site_views.xml', 'views/access_control_device_views.xml', 'views/access_control_person_views.xml', 'views/access_control_credential_views.xml', 'views/access_control_enroll_request_views.xml'], 'installable': True, 'application': True}
+{
+    'name': 'Witann - Access Control API', 
+    'version': '19.0.2.0.1', 
+    'summary': 'API para validación de accesos (biometría / hardware)', 
+    'category': 'Tools', 
+    'author': 'Witann Technologies', 
+    'license': 'LGPL-3', 
+    'depends': ['base'], 
+    'data': ['security/ir.model.access.csv', 
+             'views/access_control_menus.xml', 
+             'views/access_control_site_views.xml', 
+             'views/access_control_device_views.xml', 
+             'views/access_control_person_views.xml', 
+             'views/access_control_credential_views.xml', 
+             'views/access_control_enroll_request_views.xml',
+    ], 
+    'installable': True, 
+    'application': True,
+}

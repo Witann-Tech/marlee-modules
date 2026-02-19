@@ -83,7 +83,7 @@ class PosOrder(models.Model):
         return {}
 
     @api.model
-    def _process_order(self, order, draft, existing_order):
+    def _process_order(self, order, draft, existing_order=False):
         pos_order_id = super()._process_order(order, draft, existing_order)
         pos_order = self.browse(pos_order_id)
 
@@ -145,6 +145,8 @@ class PosOrder(models.Model):
                 }
             )
 
+        recurring_price_unit = self._wgs_get_recurring_price_unit(product, fallback=line.price_unit)
+
         sale_order_values = {
             'partner_id': self.partner_id.id,
             'origin': self.pos_reference or self.name,
@@ -157,12 +159,14 @@ class PosOrder(models.Model):
                         'name': line.full_product_name or product.display_name,
                         'product_uom_qty': qty,
                         'product_uom': product.uom_id.id,
-                        'price_unit': line.price_unit,
+                        'price_unit': recurring_price_unit,
                         'discount': line.discount,
                     }
                 )
             ],
         }
+        if 'pricelist_id' in self._fields and self.pricelist_id:
+            sale_order_values['pricelist_id'] = self.pricelist_id.id
 
         sale_order = self.env['sale.order'].create(sale_order_values)
         sale_order.write({'participant_ids': [Command.set(participant_ids)]})
@@ -177,6 +181,77 @@ class PosOrder(models.Model):
             line.id,
         )
         return sale_order
+
+    def _wgs_get_recurring_price_unit(self, product, fallback=0.0):
+        product.ensure_one()
+        fallback_price = float(fallback or 0.0)
+
+        candidates = []
+        for source in (product, product.product_tmpl_id):
+            for field_name in ('subscription_pricing_ids', 'recurring_pricing_ids'):
+                if field_name not in source._fields:
+                    continue
+                for pricing in source[field_name]:
+                    price = self._wgs_extract_price_from_pricing(pricing)
+                    if price is None:
+                        continue
+                    candidates.append((self._wgs_extract_pricing_sequence(pricing), pricing.id, price))
+
+        if not candidates:
+            candidates.extend(self._wgs_search_subscription_pricing_records(product))
+
+        if not candidates:
+            return fallback_price
+
+        # Pick the first configured recurring price (ordered by sequence / id).
+        candidates.sort(key=lambda row: (row[0], row[1]))
+        return float(candidates[0][2])
+
+    def _wgs_search_subscription_pricing_records(self, product):
+        pricing_model_name = 'sale.subscription.pricing'
+        if pricing_model_name not in self.env.registry:
+            return []
+
+        pricing_model = self.env[pricing_model_name]
+        fields_map = pricing_model._fields
+        records = pricing_model.browse()
+
+        for field_name in ('product_id', 'product_variant_id'):
+            if field_name in fields_map:
+                records |= pricing_model.search([(field_name, '=', product.id)])
+
+        if not records and 'product_template_id' in fields_map:
+            records |= pricing_model.search([('product_template_id', '=', product.product_tmpl_id.id)])
+
+        seen = set()
+        output = []
+        for pricing in records:
+            if pricing.id in seen:
+                continue
+            seen.add(pricing.id)
+            price = self._wgs_extract_price_from_pricing(pricing)
+            if price is None:
+                continue
+            output.append((self._wgs_extract_pricing_sequence(pricing), pricing.id, price))
+        return output
+
+    def _wgs_extract_price_from_pricing(self, pricing):
+        for field_name in ('fixed_price', 'price', 'recurring_price', 'price_unit'):
+            if field_name not in pricing._fields:
+                continue
+            value = pricing[field_name]
+            if value is not None:
+                return float(value)
+        return None
+
+    def _wgs_extract_pricing_sequence(self, pricing):
+        if 'sequence' in pricing._fields and pricing.sequence is not None:
+            return int(pricing.sequence)
+        if 'plan_id' in pricing._fields and pricing.plan_id and 'sequence' in pricing.plan_id._fields:
+            return int(pricing.plan_id.sequence or 1000)
+        if 'subscription_plan_id' in pricing._fields and pricing.subscription_plan_id and 'sequence' in pricing.subscription_plan_id._fields:
+            return int(pricing.subscription_plan_id.sequence or 1000)
+        return 1000
 
     def _wgs_cancel_subscription_from_refund_line(self, line):
         self.ensure_one()
