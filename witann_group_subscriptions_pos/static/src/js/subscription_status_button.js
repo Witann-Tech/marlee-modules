@@ -143,6 +143,22 @@ function getSelectedOrderline(component, order = null) {
     return null;
 }
 
+function getOrderlines(order) {
+    if (!order) {
+        return [];
+    }
+    if (typeof order.get_orderlines === "function") {
+        return order.get_orderlines() || [];
+    }
+    if (Array.isArray(order.orderlines)) {
+        return order.orderlines;
+    }
+    if (order.orderlines && Array.isArray(order.orderlines.models)) {
+        return order.orderlines.models;
+    }
+    return [];
+}
+
 function getLineProduct(component, line) {
     if (!line) {
         return null;
@@ -234,6 +250,61 @@ function getLineParticipantCapacity(product, line) {
     return total > 0 ? total : 1;
 }
 
+function getLineUnitPrice(line) {
+    if (!line) {
+        return 0;
+    }
+    if (typeof line.get_unit_price === "function") {
+        return Number(line.get_unit_price()) || 0;
+    }
+    return Number(line.price_unit) || Number(line.price) || 0;
+}
+
+function setLineUnitPrice(line, price) {
+    const unitPrice = Number(price) || 0;
+    if (typeof line.set_unit_price === "function") {
+        line.set_unit_price(unitPrice);
+    } else {
+        line.price_unit = unitPrice;
+        line.price = unitPrice;
+    }
+
+    if (line.order && typeof line.order.trigger === "function") {
+        line.order.trigger("change", line.order);
+    }
+}
+
+function getSubscriptionLineForParticipants(component, order = null) {
+    const activeOrder = order || getCurrentOrder(component);
+    if (!activeOrder) {
+        return null;
+    }
+
+    const selected = getSelectedOrderline(component, activeOrder);
+    if (selected) {
+        const selectedProduct = getLineProduct(component, selected);
+        if (isSubscriptionProduct(selectedProduct) && getLineQuantity(selected) > 0) {
+            return selected;
+        }
+    }
+
+    const lines = getOrderlines(activeOrder);
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+        const line = lines[index];
+        const product = getLineProduct(component, line);
+        if (isSubscriptionProduct(product) && getLineQuantity(line) > 0) {
+            if (typeof activeOrder.select_orderline === "function") {
+                activeOrder.select_orderline(line);
+            } else if ("selected_orderline" in activeOrder) {
+                activeOrder.selected_orderline = line;
+            }
+            return line;
+        }
+    }
+
+    return selected || null;
+}
+
 function ensureOrderlineSerializationPatched(component) {
     const order = getCurrentOrder(component);
     if (!order || typeof order.get_orderlines !== "function") {
@@ -275,6 +346,45 @@ function ensureOrderlineSerializationPatched(component) {
 }
 
 patch(PaymentScreen.prototype, {
+    setup() {
+        super.setup(...arguments);
+        this.orm = useService("orm");
+        this._wgsRecurringPriceCache = {};
+    },
+
+    async _wgsApplyRecurringPriceToLine(line) {
+        const product = getLineProduct(this, line);
+        if (!isSubscriptionProduct(product)) {
+            return;
+        }
+
+        const productId = Number(product.id || 0);
+        if (!productId) {
+            return;
+        }
+
+        const cacheKey = String(productId);
+        let cached = this._wgsRecurringPriceCache[cacheKey];
+        if (!cached) {
+            cached = await this.orm.call(
+                "pos.order",
+                "wgs_get_recurring_price_for_pos",
+                [productId, getLineUnitPrice(line)]
+            );
+            this._wgsRecurringPriceCache[cacheKey] = cached || {};
+        }
+
+        const recurringPrice = Number(cached && cached.price);
+        if (!Number.isFinite(recurringPrice) || recurringPrice <= 0) {
+            return;
+        }
+
+        const currentPrice = getLineUnitPrice(line);
+        if (Math.abs(currentPrice - recurringPrice) > 0.0001) {
+            setLineUnitPrice(line, recurringPrice);
+        }
+    },
+
     async validateOrder(isForceValidate) {
         ensureOrderlineSerializationPatched(this);
         const order = getCurrentOrder(this);
@@ -297,6 +407,7 @@ patch(PaymentScreen.prototype, {
 
                 for (const line of lines) {
                     const product = getLineProduct(this, line);
+                    await this._wgsApplyRecurringPriceToLine(line);
                     const capacity = getLineParticipantCapacity(product, line);
                     const participantIds = getLineParticipantIds(line, partner.id);
 
@@ -355,11 +466,11 @@ patch(ControlButtons.prototype, {
             return;
         }
 
-        const line = getSelectedOrderline(this, order);
+        const line = getSubscriptionLineForParticipants(this, order);
         if (!line) {
             this._showSimpleInfoModal(
                 _t("Línea requerida"),
-                _t("Selecciona una línea del ticket para configurar participantes.")
+                _t("Agrega un producto de suscripción al ticket para configurar participantes.")
             );
             return;
         }
@@ -372,6 +483,8 @@ patch(ControlButtons.prototype, {
             );
             return;
         }
+
+        await this._wgsEnsureRecurringPriceOnLine(line, product);
 
         const capacity = getLineParticipantCapacity(product, line);
         const participants = getAllPartners(this);
@@ -420,6 +533,30 @@ patch(ControlButtons.prototype, {
         });
 
         this._showDirectoryModal(rows);
+    },
+
+    async _wgsEnsureRecurringPriceOnLine(line, product = null) {
+        const recurringProduct = product || getLineProduct(this, line);
+        if (!isSubscriptionProduct(recurringProduct)) {
+            return;
+        }
+        const productId = Number(recurringProduct.id || 0);
+        if (!productId) {
+            return;
+        }
+
+        const result = await this.orm.call(
+            "pos.order",
+            "wgs_get_recurring_price_for_pos",
+            [productId, getLineUnitPrice(line)]
+        );
+        const recurringPrice = Number(result && result.price);
+        if (Number.isFinite(recurringPrice) && recurringPrice > 0) {
+            const currentPrice = getLineUnitPrice(line);
+            if (Math.abs(currentPrice - recurringPrice) > 0.0001) {
+                setLineUnitPrice(line, recurringPrice);
+            }
+        }
     },
 
     async _fetchPartnerStatusMap(partnerIds) {

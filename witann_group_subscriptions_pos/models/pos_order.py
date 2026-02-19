@@ -1,6 +1,5 @@
 import json
 import logging
-import inspect
 
 from odoo import _, api, fields, models
 from odoo.fields import Command
@@ -57,6 +56,22 @@ class PosOrder(models.Model):
     _inherit = 'pos.order'
 
     @api.model
+    def wgs_get_recurring_price_for_pos(self, product_id, fallback=0.0):
+        if not self.env.user.has_group('point_of_sale.group_pos_user'):
+            raise UserError(_('No tienes permisos para consultar precios de suscripción desde Punto de Venta.'))
+
+        product = self.env['product.product'].browse(int(product_id)).exists()
+        if not product:
+            raise UserError(_('El producto seleccionado no existe o no está disponible.'))
+
+        choice = self._wgs_get_recurring_pricing_choice(product, fallback=fallback)
+        return {
+            'price': float(choice.get('price') or 0.0),
+            'plan_id': choice.get('plan_id') or False,
+            'pricing_id': choice.get('pricing_id') or False,
+        }
+
+    @api.model
     def _order_line_fields(self, line, session_id=None):
         values = super()._order_line_fields(line, session_id=session_id)
         ui_line = self._wgs_extract_ui_line_payload(line)
@@ -84,13 +99,19 @@ class PosOrder(models.Model):
         return {}
 
     @api.model
-    def _process_order(self, order, draft, existing_order=False):
+    def _process_order(self, order, draft, *args, **kwargs):
+        existing_order = kwargs.get('existing_order', False)
+        if args:
+            existing_order = args[0]
         super_process_order = super()._process_order
-        super_params = inspect.signature(super_process_order).parameters
-        if 'existing_order' in super_params or len(super_params) >= 3:
+        try:
             pos_order_id = super_process_order(order, draft, existing_order)
-        else:
-            pos_order_id = super_process_order(order, draft)
+        except TypeError as error:
+            # Keep compatibility with Odoo variants where _process_order only accepts (order, draft).
+            if '_process_order' in str(error) and 'positional arguments' in str(error):
+                pos_order_id = super_process_order(order, draft)
+            else:
+                raise
         pos_order = self.browse(pos_order_id)
 
         if draft:
@@ -151,28 +172,41 @@ class PosOrder(models.Model):
                 }
             )
 
-        recurring_price_unit = self._wgs_get_recurring_price_unit(product, fallback=line.price_unit)
+        pricing_choice = self._wgs_get_recurring_pricing_choice(product, fallback=line.price_unit)
+        recurring_price_unit = pricing_choice['price']
+        recurring_plan_id = pricing_choice.get('plan_id')
+        recurring_pricing_id = pricing_choice.get('pricing_id')
+
+        line_values = {
+            'product_id': product.id,
+            'name': line.full_product_name or product.display_name,
+            'product_uom_qty': qty,
+            'product_uom': product.uom_id.id,
+            'price_unit': recurring_price_unit,
+            'discount': line.discount,
+        }
+        if recurring_plan_id:
+            for field_name in ('subscription_plan_id', 'plan_id', 'recurring_plan_id'):
+                if field_name in self.env['sale.order.line']._fields:
+                    line_values[field_name] = recurring_plan_id
+        if recurring_pricing_id:
+            for field_name in ('subscription_pricing_id', 'pricing_id', 'recurring_pricing_id'):
+                if field_name in self.env['sale.order.line']._fields:
+                    line_values[field_name] = recurring_pricing_id
 
         sale_order_values = {
             'partner_id': self.partner_id.id,
             'origin': self.pos_reference or self.name,
             'client_order_ref': self.pos_reference or self.name,
             'company_id': self.company_id.id,
-            'order_line': [
-                Command.create(
-                    {
-                        'product_id': product.id,
-                        'name': line.full_product_name or product.display_name,
-                        'product_uom_qty': qty,
-                        'product_uom': product.uom_id.id,
-                        'price_unit': recurring_price_unit,
-                        'discount': line.discount,
-                    }
-                )
-            ],
+            'order_line': [Command.create(line_values)],
         }
         if 'pricelist_id' in self._fields and self.pricelist_id:
             sale_order_values['pricelist_id'] = self.pricelist_id.id
+        if recurring_plan_id:
+            for field_name in ('subscription_plan_id', 'plan_id', 'recurring_plan_id'):
+                if field_name in self.env['sale.order']._fields and field_name not in sale_order_values:
+                    sale_order_values[field_name] = recurring_plan_id
 
         sale_order = self.env['sale.order'].create(sale_order_values)
         sale_order.write({'participant_ids': [Command.set(participant_ids)]})
@@ -188,7 +222,7 @@ class PosOrder(models.Model):
         )
         return sale_order
 
-    def _wgs_get_recurring_price_unit(self, product, fallback=0.0):
+    def _wgs_get_recurring_pricing_choice(self, product, fallback=0.0):
         product.ensure_one()
         fallback_price = float(fallback or 0.0)
 
@@ -201,17 +235,26 @@ class PosOrder(models.Model):
                     price = self._wgs_extract_price_from_pricing(pricing)
                     if price is None:
                         continue
-                    candidates.append((self._wgs_extract_pricing_sequence(pricing), pricing.id, price))
+                    candidates.append({
+                        'sequence': self._wgs_extract_pricing_sequence(pricing),
+                        'pricing_id': pricing.id,
+                        'plan_id': self._wgs_extract_plan_id_from_pricing(pricing),
+                        'price': float(price),
+                    })
 
         if not candidates:
             candidates.extend(self._wgs_search_subscription_pricing_records(product))
 
         if not candidates:
-            return fallback_price
+            return {
+                'price': fallback_price,
+                'plan_id': False,
+                'pricing_id': False,
+            }
 
         # Pick the first configured recurring price (ordered by sequence / id).
-        candidates.sort(key=lambda row: (row[0], row[1]))
-        return float(candidates[0][2])
+        candidates.sort(key=lambda row: (row['sequence'], row.get('pricing_id') or 0))
+        return candidates[0]
 
     def _wgs_search_subscription_pricing_records(self, product):
         pricing_model_name = 'sale.subscription.pricing'
@@ -238,8 +281,19 @@ class PosOrder(models.Model):
             price = self._wgs_extract_price_from_pricing(pricing)
             if price is None:
                 continue
-            output.append((self._wgs_extract_pricing_sequence(pricing), pricing.id, price))
+            output.append({
+                'sequence': self._wgs_extract_pricing_sequence(pricing),
+                'pricing_id': pricing.id,
+                'plan_id': self._wgs_extract_plan_id_from_pricing(pricing),
+                'price': float(price),
+            })
         return output
+
+    def _wgs_extract_plan_id_from_pricing(self, pricing):
+        for field_name in ('plan_id', 'subscription_plan_id', 'recurring_plan_id'):
+            if field_name in pricing._fields and pricing[field_name]:
+                return pricing[field_name].id
+        return False
 
     def _wgs_extract_price_from_pricing(self, pricing):
         for field_name in ('fixed_price', 'price', 'recurring_price', 'price_unit'):

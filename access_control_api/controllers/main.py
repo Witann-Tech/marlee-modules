@@ -20,7 +20,7 @@ class AccessControlApi(http.Controller):
 
     @http.route(
         '/api/access/validate',
-        type='json',
+        type='jsonrpc',
         auth='public',
         methods=['POST'],
         csrf=False
@@ -41,7 +41,7 @@ class AccessControlApi(http.Controller):
             return {"allowed": False, "reason": "invalid_token", "openMs": None}
 
         # ---- Business: resolve credential by fingerprintId ----
-        # Odoo type='json' expects JSON-RPC; payload/params will contain the "params" dict.
+        # Odoo type='jsonrpc' expects JSON-RPC; payload/params will contain the "params" dict.
         data = request.params or payload or {}
 
         fingerprint_id = data.get('fingerprintId') or data.get('fingerprint_id')
@@ -61,7 +61,7 @@ class AccessControlApi(http.Controller):
 
     @http.route(
         '/api/access/sync_users',
-        type='json',
+        type='jsonrpc',
         auth='public',
         methods=['POST'],
         csrf=False
@@ -143,7 +143,7 @@ class AccessControlApi(http.Controller):
 
     @http.route(
         '/api/access/enroll/next',
-        type='json',
+        type='jsonrpc',
         auth='public',
         methods=['POST'],
         csrf=False
@@ -187,7 +187,7 @@ class AccessControlApi(http.Controller):
 
     @http.route(
         '/api/access/enroll/ack',
-        type='json',
+        type='jsonrpc',
         auth='public',
         methods=['POST'],
         csrf=False
@@ -214,7 +214,7 @@ class AccessControlApi(http.Controller):
 
     @http.route(
         '/api/access/enroll/complete',
-        type='json',
+        type='jsonrpc',
         auth='public',
         methods=['POST'],
         csrf=False
