@@ -2,7 +2,6 @@
 
 import { ControlButtons } from "@point_of_sale/app/screens/product_screen/control_buttons/control_buttons";
 import { PaymentScreen } from "@point_of_sale/app/screens/payment_screen/payment_screen";
-import { Orderline } from "@point_of_sale/app/store/models";
 import { _t } from "@web/core/l10n/translation";
 import { useService } from "@web/core/utils/hooks";
 import { patch } from "@web/core/utils/patch";
@@ -10,6 +9,7 @@ import { onWillUnmount } from "@odoo/owl";
 
 const MODAL_ID = "wgs-subscription-status-modal";
 const STYLE_ID = "wgs-subscription-status-style";
+const ORDERLINE_PATCH_FLAG = "__wgsParticipantSerializationPatched";
 
 function getPos(component) {
     if (component.pos) {
@@ -195,21 +195,49 @@ function getLineParticipantCapacity(product, line) {
     return total > 0 ? total : 1;
 }
 
-patch(Orderline.prototype, {
-    export_as_JSON() {
-        const json = super.export_as_JSON(...arguments);
-        json.wgs_participant_ids = getLineParticipantIds(this);
-        return json;
-    },
+function ensureOrderlineSerializationPatched(component) {
+    const order = getCurrentOrder(component);
+    if (!order || typeof order.get_orderlines !== "function") {
+        return;
+    }
 
-    init_from_JSON(json) {
-        super.init_from_JSON(...arguments);
-        this.wgs_participant_ids = getLineParticipantIds({ wgs_participant_ids: json && json.wgs_participant_ids });
-    },
-});
+    const lines = order.get_orderlines() || [];
+    const sample = lines[0] || getSelectedOrderline(component, order);
+    if (!sample || !sample.constructor || !sample.constructor.prototype) {
+        return;
+    }
+
+    const proto = sample.constructor.prototype;
+    if (proto[ORDERLINE_PATCH_FLAG]) {
+        return;
+    }
+
+    const baseExport = proto.export_as_JSON;
+    if (typeof baseExport === "function") {
+        proto.export_as_JSON = function (...args) {
+            const json = baseExport.apply(this, args);
+            json.wgs_participant_ids = getLineParticipantIds(this);
+            return json;
+        };
+    }
+
+    const baseInit = proto.init_from_JSON;
+    if (typeof baseInit === "function") {
+        proto.init_from_JSON = function (...args) {
+            baseInit.apply(this, args);
+            const json = args && args.length ? args[0] : null;
+            this.wgs_participant_ids = getLineParticipantIds({
+                wgs_participant_ids: json && json.wgs_participant_ids,
+            });
+        };
+    }
+
+    proto[ORDERLINE_PATCH_FLAG] = true;
+}
 
 patch(PaymentScreen.prototype, {
     async validateOrder(isForceValidate) {
+        ensureOrderlineSerializationPatched(this);
         const order = getCurrentOrder(this);
         if (order && typeof order.get_orderlines === "function") {
             const partner = getCurrentPartner(this, order);
@@ -254,6 +282,7 @@ patch(ControlButtons.prototype, {
         super.setup(...arguments);
         this.orm = useService("orm");
         this._ensureStatusStyles();
+        ensureOrderlineSerializationPatched(this);
 
         onWillUnmount(() => {
             const modal = document.getElementById(MODAL_ID);
