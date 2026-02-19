@@ -5,8 +5,12 @@
         <field name="model">product.template</field>
         <field name="inherit_id" ref="product.product_template_only_form_view"/>
         <field name="arch" type="xml">
-            <xpath expr="//field[@name='list_price']" position="after">
-                <field name="max_participants_total"/>
+            <xpath expr="//notebook" position="inside">
+                <page string="Suscripción grupal" name="group_subscription_settings" invisible="not recurring_invoice">
+                    <group>
+                        <field name="max_participants_total"/>
+                    </group>
+                </page>
             </xpath>
         </field>
     </record>
