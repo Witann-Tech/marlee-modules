@@ -4,14 +4,24 @@ import { ControlButtons } from "@point_of_sale/app/screens/product_screen/contro
 import { _t } from "@web/core/l10n/translation";
 import { useService } from "@web/core/utils/hooks";
 import { patch } from "@web/core/utils/patch";
+import { onMounted } from "@odoo/owl";
+
+const STATUS_SUFFIX_RE = /\s\[(VIGENTE|SIN VIGENCIA|SIN PAQUETE)\]$/;
 
 patch(ControlButtons.prototype, {
     setup() {
         super.setup(...arguments);
         this.orm = useService("orm");
+        this._wgsStatusLoading = false;
+        onMounted(() => {
+            this._ensurePartnerStatusDecorated().catch((error) => {
+                console.error("No se pudo cargar el estatus de vigencia para la lista de clientes.", error);
+            });
+        });
     },
 
     async onClickSubscriptionStatus() {
+        await this._ensurePartnerStatusDecorated();
         const order = this._getCurrentOrder();
         const partner = this._getCurrentPartner(order);
 
@@ -52,18 +62,129 @@ patch(ControlButtons.prototype, {
         window.alert(`${_t("Vigencia de paquetes")} - ${partner.name}\n\n${body}`);
     },
 
+    async _ensurePartnerStatusDecorated(force = false) {
+        const pos = this._getPos();
+        if (!pos) {
+            return;
+        }
+        if (this._wgsStatusLoading) {
+            return;
+        }
+        if (!force && pos.wgsPartnerStatusLoaded) {
+            return;
+        }
+
+        const partners = this._getAllPartners();
+        const partnerIds = partners.map((partner) => partner.id).filter(Boolean);
+        if (!partnerIds.length) {
+            return;
+        }
+
+        this._wgsStatusLoading = true;
+        try {
+            const statusMap = await this._fetchPartnerStatusMap(partnerIds);
+            pos.wgsPartnerStatusMap = statusMap || {};
+            pos.wgsPartnerStatusLoaded = true;
+            this._applyStatusToPartners(partners, pos.wgsPartnerStatusMap);
+        } catch (error) {
+            console.error("Error al cargar estatus de vigencia para clientes POS.", error);
+        } finally {
+            this._wgsStatusLoading = false;
+        }
+    },
+
+    async _fetchPartnerStatusMap(partnerIds) {
+        const statusMap = {};
+        const chunkSize = 500;
+
+        for (let index = 0; index < partnerIds.length; index += chunkSize) {
+            const chunk = partnerIds.slice(index, index + chunkSize);
+            const partialMap = await this.orm.call(
+                "sale.order",
+                "get_partner_subscription_status_map_for_pos",
+                [chunk]
+            );
+            Object.assign(statusMap, partialMap || {});
+        }
+
+        return statusMap;
+    },
+
+    _applyStatusToPartners(partners, statusMap) {
+        for (const partner of partners) {
+            if (!partner || !partner.id) {
+                continue;
+            }
+            const mapRow = this._getPartnerStatusEntry(statusMap, partner.id);
+            const suffix = mapRow && mapRow.short_label ? mapRow.short_label : "";
+            const currentName = partner.name || partner.display_name || "";
+            const baseName = partner._wgsBaseName || this._stripStatusSuffix(currentName);
+            const decoratedName = suffix ? `${baseName} ${suffix}`.trim() : baseName;
+
+            partner._wgsBaseName = baseName;
+            partner.name = decoratedName;
+            if ("display_name" in partner) {
+                partner.display_name = decoratedName;
+            }
+        }
+    },
+
+    _getPartnerStatusEntry(statusMap, partnerId) {
+        return statusMap[partnerId] || statusMap[String(partnerId)] || null;
+    },
+
+    _stripStatusSuffix(name) {
+        return (name || "").replace(STATUS_SUFFIX_RE, "").trim();
+    },
+
+    _getAllPartners() {
+        const pos = this._getPos();
+        if (!pos) {
+            return [];
+        }
+
+        if (pos.models && pos.models["res.partner"]) {
+            const partnerModel = pos.models["res.partner"];
+            if (typeof partnerModel.getAll === "function") {
+                return partnerModel.getAll();
+            }
+            if (Array.isArray(partnerModel.records)) {
+                return partnerModel.records;
+            }
+        }
+
+        if (pos.db) {
+            if (typeof pos.db.get_partners_sorted === "function") {
+                return pos.db.get_partners_sorted(100000) || [];
+            }
+            if (pos.db.partner_by_id) {
+                return Object.values(pos.db.partner_by_id);
+            }
+        }
+
+        return [];
+    },
+
+    _getPos() {
+        if (this.pos) {
+            return this.pos;
+        }
+        if (this.env && this.env.pos) {
+            return this.env.pos;
+        }
+        return null;
+    },
+
     _getCurrentOrder() {
+        const pos = this._getPos();
         if (this.currentOrder) {
             return this.currentOrder;
         }
         if (this.props && this.props.order) {
             return this.props.order;
         }
-        if (this.pos && this.pos.get_order) {
-            return this.pos.get_order();
-        }
-        if (this.env && this.env.pos && this.env.pos.get_order) {
-            return this.env.pos.get_order();
+        if (pos && pos.get_order) {
+            return pos.get_order();
         }
         return null;
     },
@@ -103,12 +224,13 @@ patch(ControlButtons.prototype, {
             return null;
         }
 
-        if (this.pos && this.pos.models && this.pos.models["res.partner"] && this.pos.models["res.partner"].get) {
-            return this.pos.models["res.partner"].get(partnerId) || { id: partnerId, name: _t("Cliente") };
+        const pos = this._getPos();
+        if (pos && pos.models && pos.models["res.partner"] && pos.models["res.partner"].get) {
+            return pos.models["res.partner"].get(partnerId) || { id: partnerId, name: _t("Cliente") };
         }
 
-        if (this.pos && this.pos.db && this.pos.db.get_partner_by_id) {
-            return this.pos.db.get_partner_by_id(partnerId) || { id: partnerId, name: _t("Cliente") };
+        if (pos && pos.db && pos.db.get_partner_by_id) {
+            return pos.db.get_partner_by_id(partnerId) || { id: partnerId, name: _t("Cliente") };
         }
 
         return { id: partnerId, name: _t("Cliente") };

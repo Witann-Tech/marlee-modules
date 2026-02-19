@@ -59,6 +59,55 @@ class SaleOrder(models.Model):
         }
 
     @api.model
+    def get_partner_subscription_status_map_for_pos(self, partner_ids):
+        if not self.env.user.has_group('point_of_sale.group_pos_user'):
+            raise AccessError(_('No tienes permisos para consultar vigencia desde Punto de Venta.'))
+
+        partner_ids = [int(pid) for pid in (partner_ids or []) if pid]
+        if not partner_ids:
+            return {}
+
+        partners = self.env['res.partner'].browse(partner_ids).exists()
+        if not partners:
+            return {}
+
+        today = fields.Date.context_today(self)
+        subscriptions_by_partner = self._get_pos_subscription_orders_by_partners(partners)
+
+        result = {}
+        for partner in partners:
+            subscriptions = subscriptions_by_partner.get(partner.id, self.browse())
+            items = []
+            for subscription in subscriptions:
+                item = subscription._build_pos_subscription_status_item(today)
+                if item:
+                    items.append(item)
+
+            valid_items = [row for row in items if row['is_valid']]
+            if valid_items:
+                valid_until_values = [row['valid_until'] for row in valid_items if row['valid_until']]
+                nearest_valid_until = min(valid_until_values) if valid_until_values else False
+                result[partner.id] = {
+                    'state': 'valid',
+                    'short_label': '[VIGENTE]',
+                    'valid_until': nearest_valid_until,
+                }
+            elif items:
+                result[partner.id] = {
+                    'state': 'expired',
+                    'short_label': '[SIN VIGENCIA]',
+                    'valid_until': False,
+                }
+            else:
+                result[partner.id] = {
+                    'state': 'none',
+                    'short_label': False,
+                    'valid_until': False,
+                }
+
+        return result
+
+    @api.model
     def _get_pos_subscription_orders(self, partner):
         domain = [
             ('participant_ids', 'in', partner.id),
@@ -69,6 +118,32 @@ class SaleOrder(models.Model):
 
         subscriptions = self.sudo().search(domain, order='id desc')
         return subscriptions.filtered(lambda order: bool(order._get_recurring_lines()))
+
+    @api.model
+    def _get_pos_subscription_orders_by_partners(self, partners):
+        if not partners:
+            return {}
+
+        partner_ids = partners.ids
+        domain = [
+            ('participant_ids', 'in', partner_ids),
+            ('state', 'in', ['sale', 'done']),
+        ]
+        if 'is_subscription' in self._fields:
+            domain.append(('is_subscription', '=', True))
+
+        subscriptions = self.sudo().search(domain, order='id desc')
+        subscriptions = subscriptions.filtered(lambda order: bool(order._get_recurring_lines()))
+
+        subscriptions_by_partner = {partner.id: self.browse() for partner in partners}
+        partner_id_set = set(partner_ids)
+
+        for subscription in subscriptions:
+            shared_partner_ids = partner_id_set.intersection(subscription.participant_ids.ids)
+            for partner_id in shared_partner_ids:
+                subscriptions_by_partner[partner_id] |= subscription
+
+        return subscriptions_by_partner
 
     def _build_pos_subscription_status_item(self, today):
         self.ensure_one()
