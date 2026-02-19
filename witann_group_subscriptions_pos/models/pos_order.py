@@ -1,5 +1,6 @@
 import json
 import logging
+import inspect
 
 from odoo import _, api, fields, models
 from odoo.fields import Command
@@ -84,7 +85,12 @@ class PosOrder(models.Model):
 
     @api.model
     def _process_order(self, order, draft, existing_order=False):
-        pos_order_id = super()._process_order(order, draft, existing_order)
+        super_process_order = super()._process_order
+        super_params = inspect.signature(super_process_order).parameters
+        if 'existing_order' in super_params or len(super_params) >= 3:
+            pos_order_id = super_process_order(order, draft, existing_order)
+        else:
+            pos_order_id = super_process_order(order, draft)
         pos_order = self.browse(pos_order_id)
 
         if draft:
