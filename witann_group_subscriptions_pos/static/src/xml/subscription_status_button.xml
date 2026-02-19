@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <templates id="template" xml:space="preserve">
-    <t t-name="witann_group_subscriptions_pos.SubscriptionStatusButton">
+    <t t-name="witann_group_subscriptions_pos.SubscriptionStatusButton" owl="1">
         <button class="control-button btn btn-light rounded-0 fw-bolder" t-on-click="onClick" type="button">
             <i class="fa fa-id-card me-1"/>
             Vigencia
