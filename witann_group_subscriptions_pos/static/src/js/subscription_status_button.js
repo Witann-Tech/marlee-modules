@@ -4,145 +4,61 @@ import { ControlButtons } from "@point_of_sale/app/screens/product_screen/contro
 import { _t } from "@web/core/l10n/translation";
 import { useService } from "@web/core/utils/hooks";
 import { patch } from "@web/core/utils/patch";
-import { onMounted, onPatched, onWillUnmount } from "@odoo/owl";
+import { onWillUnmount } from "@odoo/owl";
 
-const STATUS_SUFFIX_RE = /\s\[(VIGENTE|SIN VIGENCIA|SIN PAQUETE)\]$/;
 const MODAL_ID = "wgs-subscription-status-modal";
 const STYLE_ID = "wgs-subscription-status-style";
-const BADGE_CLASS = "wgs-subscription-badge";
 
 patch(ControlButtons.prototype, {
     setup() {
         super.setup(...arguments);
         this.orm = useService("orm");
-        this._wgsStatusLoading = false;
-        this._wgsStatusObserver = null;
-        this._wgsRenderTimer = null;
-        this._wgsLastPartnerId = null;
-
         this._ensureStatusStyles();
 
-        onMounted(() => {
-            this._startStatusObserver();
-            this._ensurePartnerStatusDecorated().catch((error) => {
-                console.error("No se pudo cargar estatus de vigencia para clientes POS.", error);
-            });
-            this._refreshCurrentPartnerStatus().catch((error) => {
-                console.error("No se pudo refrescar vigencia del cliente actual.", error);
-            });
-        });
-
-        onPatched(() => {
-            this._scheduleBadgeRender();
-            this._refreshCurrentPartnerStatus().catch((error) => {
-                console.error("No se pudo refrescar vigencia al cambiar cliente.", error);
-            });
-        });
-
         onWillUnmount(() => {
-            this._stopStatusObserver();
-            if (this._wgsRenderTimer) {
-                clearTimeout(this._wgsRenderTimer);
-                this._wgsRenderTimer = null;
+            const modal = document.getElementById(MODAL_ID);
+            if (modal) {
+                modal.remove();
             }
         });
     },
 
     async onClickSubscriptionStatus() {
-        await this._refreshCurrentPartnerStatus();
-
-        const order = this._getCurrentOrder();
-        const partner = this._getCurrentPartner(order);
-
-        if (!partner) {
+        const partners = this._getAllPartners();
+        if (!partners.length) {
             this._showSimpleInfoModal(
-                _t("Cliente no seleccionado"),
-                _t("Selecciona un cliente para consultar su vigencia de paquetes.")
+                _t("Sin clientes cargados"),
+                _t("No hay clientes disponibles en esta sesión de Punto de Venta.")
             );
             return;
         }
 
-        let result;
+        const partnerIds = partners.map((partner) => partner.id).filter(Boolean);
+        let statusMap = {};
         try {
-            result = await this.orm.call(
-                "sale.order",
-                "get_partner_subscription_status_for_pos",
-                [partner.id]
-            );
+            statusMap = await this._fetchPartnerStatusMap(partnerIds);
         } catch (error) {
             this._showSimpleInfoModal(
                 _t("Error al consultar vigencia"),
                 _t("No se pudo consultar la vigencia en este momento.")
             );
-            console.error("Error al consultar vigencia de suscripción en POS", error);
+            console.error("Error al consultar vigencia global en POS", error);
             return;
         }
 
-        this._showSubscriptionStatusModal(partner, result.items || []);
-    },
+        const rows = partners.map((partner) => {
+            const status = this._getPartnerStatusEntry(statusMap, partner.id) || {};
+            return {
+                id: partner.id,
+                name: partner._wgsBaseName || partner.name || partner.display_name || _t("Sin nombre"),
+                email: partner.email || "",
+                phone: partner.phone || partner.mobile || "",
+                state: status.state || "none",
+                valid_until: status.valid_until || "",
+            };
+        });
 
-    async _refreshCurrentPartnerStatus() {
-        const order = this._getCurrentOrder();
-        const partner = this._getCurrentPartner(order);
-        const partnerId = partner && partner.id ? partner.id : null;
-
-        if (!partnerId) {
-            this._wgsLastPartnerId = null;
-            return;
-        }
-
-        const pos = this._getPos();
-        if (!pos) {
-            return;
-        }
-
-        pos.wgsPartnerStatusMap = pos.wgsPartnerStatusMap || {};
-        const existing = this._getPartnerStatusEntry(pos.wgsPartnerStatusMap, partnerId);
-        if (partnerId === this._wgsLastPartnerId && existing) {
-            return;
-        }
-
-        this._wgsLastPartnerId = partnerId;
-
-        const partialMap = await this._fetchPartnerStatusMap([partnerId]);
-        Object.assign(pos.wgsPartnerStatusMap, partialMap || {});
-
-        this._applyStatusToPartners(this._getAllPartners());
-        this._scheduleBadgeRender();
-    },
-
-    async _ensurePartnerStatusDecorated(force = false) {
-        const pos = this._getPos();
-        if (!pos) {
-            return;
-        }
-        if (this._wgsStatusLoading) {
-            return;
-        }
-        if (!force && pos.wgsPartnerStatusLoaded) {
-            this._applyStatusToPartners(this._getAllPartners());
-            this._scheduleBadgeRender();
-            return;
-        }
-
-        const partners = this._getAllPartners();
-        const partnerIds = partners.map((partner) => partner.id).filter(Boolean);
-        if (!partnerIds.length) {
-            return;
-        }
-
-        this._wgsStatusLoading = true;
-        try {
-            const statusMap = await this._fetchPartnerStatusMap(partnerIds);
-            pos.wgsPartnerStatusMap = statusMap || {};
-            pos.wgsPartnerStatusLoaded = true;
-            this._applyStatusToPartners(partners);
-            this._scheduleBadgeRender();
-        } catch (error) {
-            console.error("Error al cargar estatus de vigencia para clientes POS.", error);
-        } finally {
-            this._wgsStatusLoading = false;
-        }
+        this._showDirectoryModal(rows);
     },
 
     async _fetchPartnerStatusMap(partnerIds) {
@@ -162,198 +78,7 @@ patch(ControlButtons.prototype, {
         return statusMap;
     },
 
-    _applyStatusToPartners(partners) {
-        for (const partner of partners) {
-            if (!partner) {
-                continue;
-            }
-            const currentName = partner.name || partner.display_name || "";
-            const baseName = partner._wgsBaseName || this._stripStatusSuffix(currentName);
-            partner._wgsBaseName = baseName;
-
-            if (partner.name !== baseName) {
-                partner.name = baseName;
-            }
-            if ("display_name" in partner && partner.display_name !== baseName) {
-                partner.display_name = baseName;
-            }
-        }
-    },
-
-    _startStatusObserver() {
-        if (this._wgsStatusObserver) {
-            return;
-        }
-
-        this._wgsStatusObserver = new MutationObserver(() => {
-            this._scheduleBadgeRender();
-        });
-
-        this._wgsStatusObserver.observe(document.body, {
-            childList: true,
-            subtree: true,
-        });
-    },
-
-    _stopStatusObserver() {
-        if (this._wgsStatusObserver) {
-            this._wgsStatusObserver.disconnect();
-            this._wgsStatusObserver = null;
-        }
-    },
-
-    _scheduleBadgeRender() {
-        if (this._wgsRenderTimer) {
-            clearTimeout(this._wgsRenderTimer);
-        }
-        this._wgsRenderTimer = setTimeout(() => {
-            this._wgsRenderTimer = null;
-            this._renderPartnerStatusBadges();
-        }, 80);
-    },
-
-    _renderPartnerStatusBadges() {
-        const statusMap = this._getStatusMap();
-        if (!statusMap || !Object.keys(statusMap).length) {
-            return;
-        }
-
-        const rows = this._getPartnerRowsInDom();
-        for (const row of rows) {
-            const partnerId = this._extractPartnerIdFromRow(row);
-            if (!partnerId) {
-                continue;
-            }
-
-            const status = this._getPartnerStatusEntry(statusMap, partnerId);
-            const statusState = status && status.state ? status.state : "none";
-
-            const existingBadge = row.querySelector(`.${BADGE_CLASS}`);
-            if (statusState === "none") {
-                if (existingBadge) {
-                    existingBadge.remove();
-                }
-                continue;
-            }
-
-            const target = this._findRowNameTarget(row);
-            if (!target) {
-                continue;
-            }
-
-            const badge = existingBadge || document.createElement("span");
-            badge.className = `${BADGE_CLASS} ${statusState === "valid" ? "wgs-badge-valid" : "wgs-badge-expired"}`;
-            badge.textContent = statusState === "valid" ? _t("Vigente") : _t("Sin vigencia");
-
-            if (!existingBadge) {
-                target.appendChild(badge);
-            }
-        }
-    },
-
-    _getPartnerRowsInDom() {
-        const selectors = [
-            ".partner-list .partner-line",
-            ".partner-list .partner",
-            ".client-list .partner-line",
-            ".client-list .client-line",
-            ".popup .partner-line",
-            ".partner-list-contents .partner-line",
-            ".partnerlist-screen .partner-line",
-            ".partner-line",
-        ];
-
-        for (const selector of selectors) {
-            const found = Array.from(document.querySelectorAll(selector));
-            if (found.length) {
-                return found;
-            }
-        }
-
-        return [];
-    },
-
-    _extractPartnerIdFromRow(row) {
-        const attrCandidates = [
-            row.getAttribute("data-partner-id"),
-            row.getAttribute("data-res-id"),
-            row.getAttribute("data-id"),
-            row.dataset && row.dataset.partnerId,
-            row.dataset && row.dataset.resId,
-            row.dataset && row.dataset.id,
-        ];
-
-        for (const value of attrCandidates) {
-            const parsed = this._parsePositiveInt(value);
-            if (parsed && this._getPartnerById(parsed)) {
-                return parsed;
-            }
-        }
-
-        const nested = row.querySelector("[data-partner-id],[data-res-id],[data-id]");
-        if (nested) {
-            const nestedCandidates = [
-                nested.getAttribute("data-partner-id"),
-                nested.getAttribute("data-res-id"),
-                nested.getAttribute("data-id"),
-                nested.dataset && nested.dataset.partnerId,
-                nested.dataset && nested.dataset.resId,
-                nested.dataset && nested.dataset.id,
-            ];
-            for (const value of nestedCandidates) {
-                const parsed = this._parsePositiveInt(value);
-                if (parsed && this._getPartnerById(parsed)) {
-                    return parsed;
-                }
-            }
-        }
-
-        return null;
-    },
-
-    _findRowNameTarget(row) {
-        const candidates = [
-            row.querySelector(".partner-name"),
-            row.querySelector(".name"),
-            row.querySelector(".fw-bolder"),
-            row.querySelector("strong"),
-            row.querySelector("h5"),
-            row.querySelector("h6"),
-            row.firstElementChild,
-        ].filter(Boolean);
-
-        if (!candidates.length) {
-            return null;
-        }
-
-        const target = candidates[0];
-        if (!target.classList.contains("wgs-name-target")) {
-            target.classList.add("wgs-name-target");
-        }
-        return target;
-    },
-
-    _parsePositiveInt(value) {
-        if (value === undefined || value === null || value === "") {
-            return null;
-        }
-        const parsed = Number.parseInt(value, 10);
-        return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
-    },
-
-    _showSimpleInfoModal(title, message) {
-        this._showSubscriptionStatusModal({ name: title }, [{
-            status_label: "",
-            package_names: [],
-            period_start: false,
-            valid_until: false,
-            reason: message,
-            is_valid: false,
-            _simple: true,
-        }]);
-    },
-
-    _showSubscriptionStatusModal(partner, items) {
+    _showDirectoryModal(rows) {
         const previous = document.getElementById(MODAL_ID);
         if (previous) {
             previous.remove();
@@ -369,70 +94,49 @@ patch(ControlButtons.prototype, {
         const header = document.createElement("div");
         header.className = "wgs-status-modal-header";
         const title = document.createElement("h3");
-        title.textContent = `${_t("Vigencia de paquetes")} - ${partner && partner.name ? partner.name : _t("Cliente")}`;
+        title.textContent = _t("Directorio de Vigencia de Clientes");
         header.appendChild(title);
+
+        const toolbar = document.createElement("div");
+        toolbar.className = "wgs-status-toolbar";
+        toolbar.innerHTML = `
+            <input type="text" class="wgs-filter-search" placeholder="${_t("Buscar por nombre, teléfono o email")}" />
+            <select class="wgs-filter-state">
+                <option value="all">${_t("Todos")}</option>
+                <option value="valid">${_t("Vigentes")}</option>
+                <option value="expired">${_t("Sin vigencia")}</option>
+                <option value="none">${_t("Sin paquete")}</option>
+            </select>
+            <select class="wgs-sort">
+                <option value="name_asc">${_t("Nombre A-Z")}</option>
+                <option value="name_desc">${_t("Nombre Z-A")}</option>
+                <option value="state">${_t("Estado")}</option>
+                <option value="valid_until_asc">${_t("Vigencia cercana")}</option>
+                <option value="valid_until_desc">${_t("Vigencia lejana")}</option>
+            </select>
+        `;
+
+        const summary = document.createElement("div");
+        summary.className = "wgs-status-summary";
 
         const body = document.createElement("div");
         body.className = "wgs-status-modal-body";
 
-        if (!items.length) {
-            const emptyMessage = document.createElement("p");
-            emptyMessage.textContent = _t("No hay paquetes de suscripción para este participante.");
-            body.appendChild(emptyMessage);
-        } else if (items.length === 1 && items[0]._simple) {
-            const simpleMessage = document.createElement("p");
-            simpleMessage.textContent = items[0].reason;
-            body.appendChild(simpleMessage);
-        } else {
-            const table = document.createElement("table");
-            table.className = "wgs-status-table";
-
-            const thead = document.createElement("thead");
-            thead.innerHTML = `
+        const table = document.createElement("table");
+        table.className = "wgs-status-table";
+        table.innerHTML = `
+            <thead>
                 <tr>
+                    <th>${_t("Cliente")}</th>
                     <th>${_t("Estado")}</th>
-                    <th>${_t("Paquete")}</th>
-                    <th>${_t("Periodo")}</th>
                     <th>${_t("Vigente hasta")}</th>
-                    <th>${_t("Detalle")}</th>
+                    <th>${_t("Teléfono")}</th>
+                    <th>${_t("Email")}</th>
                 </tr>
-            `;
-            table.appendChild(thead);
-
-            const tbody = document.createElement("tbody");
-            for (const item of items) {
-                const row = document.createElement("tr");
-
-                const statusCell = document.createElement("td");
-                const statusBadge = document.createElement("span");
-                statusBadge.className = item.is_valid ? "wgs-badge-valid" : "wgs-badge-expired";
-                statusBadge.textContent = item.status_label || (item.is_valid ? _t("Vigente") : _t("Sin vigencia"));
-                statusCell.appendChild(statusBadge);
-
-                const packageCell = document.createElement("td");
-                packageCell.textContent = (item.package_names || []).join(", ") || item.subscription_name || "-";
-
-                const periodCell = document.createElement("td");
-                const periodStart = item.period_start || _t("N/D");
-                const validUntil = item.valid_until || _t("N/D");
-                periodCell.textContent = `${periodStart} -> ${validUntil}`;
-
-                const untilCell = document.createElement("td");
-                untilCell.textContent = item.valid_until || _t("N/D");
-
-                const detailCell = document.createElement("td");
-                detailCell.textContent = item.reason || "";
-
-                row.appendChild(statusCell);
-                row.appendChild(packageCell);
-                row.appendChild(periodCell);
-                row.appendChild(untilCell);
-                row.appendChild(detailCell);
-                tbody.appendChild(row);
-            }
-            table.appendChild(tbody);
-            body.appendChild(table);
-        }
+            </thead>
+            <tbody></tbody>
+        `;
+        body.appendChild(table);
 
         const footer = document.createElement("div");
         footer.className = "wgs-status-modal-footer";
@@ -443,10 +147,11 @@ patch(ControlButtons.prototype, {
 
         const closeModal = () => overlay.remove();
         closeButton.addEventListener("click", closeModal);
-
         footer.appendChild(closeButton);
 
         modal.appendChild(header);
+        modal.appendChild(toolbar);
+        modal.appendChild(summary);
         modal.appendChild(body);
         modal.appendChild(footer);
         overlay.appendChild(modal);
@@ -458,6 +163,178 @@ patch(ControlButtons.prototype, {
         });
 
         document.body.appendChild(overlay);
+
+        const searchInput = toolbar.querySelector(".wgs-filter-search");
+        const stateSelect = toolbar.querySelector(".wgs-filter-state");
+        const sortSelect = toolbar.querySelector(".wgs-sort");
+        const tbody = table.querySelector("tbody");
+
+        const stateLabel = {
+            valid: _t("Vigente"),
+            expired: _t("Sin vigencia"),
+            none: _t("Sin paquete"),
+        };
+
+        const stateRank = {
+            valid: 0,
+            expired: 1,
+            none: 2,
+        };
+
+        const parseDate = (value) => {
+            if (!value) {
+                return null;
+            }
+            const ts = Date.parse(value);
+            return Number.isNaN(ts) ? null : ts;
+        };
+
+        const render = () => {
+            const query = (searchInput.value || "").trim().toLowerCase();
+            const stateFilter = stateSelect.value;
+            const sortMode = sortSelect.value;
+
+            let filtered = rows.filter((row) => {
+                if (stateFilter !== "all" && row.state !== stateFilter) {
+                    return false;
+                }
+                if (!query) {
+                    return true;
+                }
+                const haystack = `${row.name} ${row.phone} ${row.email}`.toLowerCase();
+                return haystack.includes(query);
+            });
+
+            filtered = filtered.sort((a, b) => {
+                if (sortMode === "name_desc") {
+                    return (b.name || "").localeCompare(a.name || "", "es");
+                }
+                if (sortMode === "state") {
+                    const diff = (stateRank[a.state] ?? 9) - (stateRank[b.state] ?? 9);
+                    if (diff !== 0) {
+                        return diff;
+                    }
+                    return (a.name || "").localeCompare(b.name || "", "es");
+                }
+                if (sortMode === "valid_until_asc") {
+                    const av = parseDate(a.valid_until);
+                    const bv = parseDate(b.valid_until);
+                    if (av === null && bv === null) {
+                        return (a.name || "").localeCompare(b.name || "", "es");
+                    }
+                    if (av === null) {
+                        return 1;
+                    }
+                    if (bv === null) {
+                        return -1;
+                    }
+                    return av - bv;
+                }
+                if (sortMode === "valid_until_desc") {
+                    const av = parseDate(a.valid_until);
+                    const bv = parseDate(b.valid_until);
+                    if (av === null && bv === null) {
+                        return (a.name || "").localeCompare(b.name || "", "es");
+                    }
+                    if (av === null) {
+                        return 1;
+                    }
+                    if (bv === null) {
+                        return -1;
+                    }
+                    return bv - av;
+                }
+                return (a.name || "").localeCompare(b.name || "", "es");
+            });
+
+            const counts = rows.reduce(
+                (acc, row) => {
+                    acc.total += 1;
+                    if (row.state === "valid") acc.valid += 1;
+                    else if (row.state === "expired") acc.expired += 1;
+                    else acc.none += 1;
+                    return acc;
+                },
+                { total: 0, valid: 0, expired: 0, none: 0 }
+            );
+
+            summary.innerHTML = `
+                <span class="wgs-summary-pill">${_t("Total")}: ${counts.total}</span>
+                <span class="wgs-summary-pill wgs-summary-valid">${_t("Vigentes")}: ${counts.valid}</span>
+                <span class="wgs-summary-pill wgs-summary-expired">${_t("Sin vigencia")}: ${counts.expired}</span>
+                <span class="wgs-summary-pill wgs-summary-none">${_t("Sin paquete")}: ${counts.none}</span>
+                <span class="wgs-summary-pill">${_t("Mostrando")}: ${filtered.length}</span>
+            `;
+
+            if (!filtered.length) {
+                tbody.innerHTML = `<tr><td colspan="5">${_t("No hay resultados para el filtro actual.")}</td></tr>`;
+                return;
+            }
+
+            tbody.innerHTML = filtered
+                .map((row) => {
+                    const badgeClass = row.state === "valid" ? "wgs-badge-valid" : row.state === "expired" ? "wgs-badge-expired" : "wgs-badge-none";
+                    const badgeLabel = stateLabel[row.state] || stateLabel.none;
+                    const untilLabel = row.valid_until || _t("N/D");
+                    return `
+                        <tr>
+                            <td>${this._escapeHtml(row.name || "")}</td>
+                            <td><span class="wgs-status-badge ${badgeClass}">${this._escapeHtml(badgeLabel)}</span></td>
+                            <td>${this._escapeHtml(untilLabel)}</td>
+                            <td>${this._escapeHtml(row.phone || "-")}</td>
+                            <td>${this._escapeHtml(row.email || "-")}</td>
+                        </tr>
+                    `;
+                })
+                .join("");
+        };
+
+        searchInput.addEventListener("input", render);
+        stateSelect.addEventListener("change", render);
+        sortSelect.addEventListener("change", render);
+        render();
+    },
+
+    _showSimpleInfoModal(title, message) {
+        const previous = document.getElementById(MODAL_ID);
+        if (previous) {
+            previous.remove();
+        }
+
+        const overlay = document.createElement("div");
+        overlay.id = MODAL_ID;
+        overlay.className = "wgs-status-modal-overlay";
+
+        const modal = document.createElement("div");
+        modal.className = "wgs-status-modal";
+
+        modal.innerHTML = `
+            <div class="wgs-status-modal-header"><h3>${this._escapeHtml(title)}</h3></div>
+            <div class="wgs-status-modal-body"><p>${this._escapeHtml(message)}</p></div>
+            <div class="wgs-status-modal-footer">
+                <button type="button" class="wgs-status-close-btn">${this._escapeHtml(_t("Cerrar"))}</button>
+            </div>
+        `;
+
+        const closeModal = () => overlay.remove();
+        modal.querySelector(".wgs-status-close-btn").addEventListener("click", closeModal);
+        overlay.addEventListener("click", (event) => {
+            if (event.target === overlay) {
+                closeModal();
+            }
+        });
+
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+    },
+
+    _escapeHtml(value) {
+        return String(value)
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;")
+            .replaceAll("'", "&#39;");
     },
 
     _ensureStatusStyles() {
@@ -468,45 +345,6 @@ patch(ControlButtons.prototype, {
         const style = document.createElement("style");
         style.id = STYLE_ID;
         style.textContent = `
-            .wgs-name-target {
-                display: inline-flex;
-                align-items: center;
-                gap: 0.4rem;
-                flex-wrap: wrap;
-            }
-            .${BADGE_CLASS} {
-                font-size: 0.72rem;
-                font-weight: 700;
-                border-radius: 999px;
-                padding: 0.12rem 0.5rem;
-                text-transform: uppercase;
-                letter-spacing: 0.03em;
-                white-space: nowrap;
-            }
-            .wgs-badge-valid {
-                background: #daf5e8;
-                color: #0f7b4b;
-                border: 1px solid #8ad9b5;
-                border-radius: 999px;
-                padding: 0.12rem 0.5rem;
-                font-size: 0.72rem;
-                font-weight: 700;
-                text-transform: uppercase;
-                letter-spacing: 0.03em;
-                white-space: nowrap;
-            }
-            .wgs-badge-expired {
-                background: #ffe4e6;
-                color: #9f1239;
-                border: 1px solid #fda4af;
-                border-radius: 999px;
-                padding: 0.12rem 0.5rem;
-                font-size: 0.72rem;
-                font-weight: 700;
-                text-transform: uppercase;
-                letter-spacing: 0.03em;
-                white-space: nowrap;
-            }
             .wgs-status-modal-overlay {
                 position: fixed;
                 inset: 0;
@@ -518,8 +356,8 @@ patch(ControlButtons.prototype, {
                 padding: 1rem;
             }
             .wgs-status-modal {
-                width: min(980px, 96vw);
-                max-height: 90vh;
+                width: min(1180px, 98vw);
+                max-height: 92vh;
                 overflow: hidden;
                 background: #ffffff;
                 border-radius: 0.75rem;
@@ -536,8 +374,56 @@ patch(ControlButtons.prototype, {
                 font-size: 1.05rem;
                 color: #111827;
             }
+            .wgs-status-toolbar {
+                padding: 0.8rem 1.2rem;
+                display: grid;
+                grid-template-columns: minmax(260px, 1fr) 180px 210px;
+                gap: 0.6rem;
+                border-bottom: 1px solid #e5e7eb;
+            }
+            .wgs-status-toolbar input,
+            .wgs-status-toolbar select {
+                width: 100%;
+                border: 1px solid #d1d5db;
+                border-radius: 0.45rem;
+                padding: 0.45rem 0.55rem;
+                font-size: 0.88rem;
+                background: #fff;
+                color: #111827;
+            }
+            .wgs-status-summary {
+                padding: 0.55rem 1.2rem;
+                border-bottom: 1px solid #e5e7eb;
+                display: flex;
+                gap: 0.5rem;
+                flex-wrap: wrap;
+            }
+            .wgs-summary-pill {
+                border: 1px solid #d1d5db;
+                border-radius: 999px;
+                padding: 0.2rem 0.55rem;
+                font-size: 0.76rem;
+                font-weight: 600;
+                color: #374151;
+                background: #f9fafb;
+            }
+            .wgs-summary-valid {
+                border-color: #8ad9b5;
+                color: #0f7b4b;
+                background: #daf5e8;
+            }
+            .wgs-summary-expired {
+                border-color: #fda4af;
+                color: #9f1239;
+                background: #ffe4e6;
+            }
+            .wgs-summary-none {
+                border-color: #cbd5e1;
+                color: #475569;
+                background: #f1f5f9;
+            }
             .wgs-status-modal-body {
-                padding: 1rem 1.2rem;
+                padding: 0;
                 overflow: auto;
                 color: #1f2937;
             }
@@ -563,32 +449,56 @@ patch(ControlButtons.prototype, {
             .wgs-status-table th,
             .wgs-status-table td {
                 border-bottom: 1px solid #e5e7eb;
-                padding: 0.55rem 0.45rem;
+                padding: 0.55rem 0.6rem;
                 text-align: left;
                 vertical-align: top;
-                font-size: 0.88rem;
+                font-size: 0.86rem;
             }
             .wgs-status-table th {
-                font-size: 0.8rem;
+                position: sticky;
+                top: 0;
+                z-index: 1;
+                background: #f8fafc;
+                font-size: 0.76rem;
                 color: #374151;
                 text-transform: uppercase;
                 letter-spacing: 0.03em;
+            }
+            .wgs-status-badge {
+                border-radius: 999px;
+                padding: 0.12rem 0.5rem;
+                font-size: 0.72rem;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 0.03em;
+                white-space: nowrap;
+            }
+            .wgs-badge-valid {
+                background: #daf5e8;
+                color: #0f7b4b;
+                border: 1px solid #8ad9b5;
+            }
+            .wgs-badge-expired {
+                background: #ffe4e6;
+                color: #9f1239;
+                border: 1px solid #fda4af;
+            }
+            .wgs-badge-none {
+                background: #f1f5f9;
+                color: #475569;
+                border: 1px solid #cbd5e1;
+            }
+            @media (max-width: 900px) {
+                .wgs-status-toolbar {
+                    grid-template-columns: 1fr;
+                }
             }
         `;
         document.head.appendChild(style);
     },
 
-    _getStatusMap() {
-        const pos = this._getPos();
-        return pos ? (pos.wgsPartnerStatusMap || {}) : {};
-    },
-
     _getPartnerStatusEntry(statusMap, partnerId) {
         return statusMap[partnerId] || statusMap[String(partnerId)] || null;
-    },
-
-    _stripStatusSuffix(name) {
-        return (name || "").replace(STATUS_SUFFIX_RE, "").trim();
     },
 
     _getAllPartners() {
@@ -619,26 +529,6 @@ patch(ControlButtons.prototype, {
         return [];
     },
 
-    _getPartnerById(partnerId) {
-        const pos = this._getPos();
-        if (!pos || !partnerId) {
-            return null;
-        }
-
-        if (pos.models && pos.models["res.partner"] && pos.models["res.partner"].get) {
-            const partner = pos.models["res.partner"].get(partnerId);
-            if (partner) {
-                return partner;
-            }
-        }
-
-        if (pos.db && pos.db.get_partner_by_id) {
-            return pos.db.get_partner_by_id(partnerId);
-        }
-
-        return null;
-    },
-
     _getPos() {
         if (this.pos) {
             return this.pos;
@@ -647,57 +537,5 @@ patch(ControlButtons.prototype, {
             return this.env.pos;
         }
         return null;
-    },
-
-    _getCurrentOrder() {
-        const pos = this._getPos();
-        if (this.currentOrder) {
-            return this.currentOrder;
-        }
-        if (this.props && this.props.order) {
-            return this.props.order;
-        }
-        if (pos && pos.get_order) {
-            return pos.get_order();
-        }
-        return null;
-    },
-
-    _getCurrentPartner(order) {
-        if (this.props && this.props.partner && this.props.partner.id) {
-            return this.props.partner;
-        }
-
-        if (!order) {
-            return null;
-        }
-
-        if (typeof order.get_partner === "function") {
-            const partner = order.get_partner();
-            if (partner) {
-                return partner;
-            }
-        }
-
-        if (order.partner && order.partner.id) {
-            return order.partner;
-        }
-
-        const partnerField = order.partner_id;
-        let partnerId = null;
-
-        if (Array.isArray(partnerField) && partnerField.length) {
-            partnerId = partnerField[0];
-        } else if (typeof partnerField === "number") {
-            partnerId = partnerField;
-        } else if (partnerField && typeof partnerField === "object" && partnerField.id) {
-            return partnerField;
-        }
-
-        if (!partnerId) {
-            return null;
-        }
-
-        return this._getPartnerById(partnerId) || { id: partnerId, name: _t("Cliente") };
     },
 });
