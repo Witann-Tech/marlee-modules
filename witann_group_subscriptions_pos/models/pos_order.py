@@ -243,6 +243,13 @@ class PosOrder(models.Model):
         recurring_plan_id = pricing_choice.get('plan_id')
         recurring_pricing_id = pricing_choice.get('pricing_id')
 
+        if recurring_pricing_id and not recurring_plan_id:
+            pricing_record = self.env['sale.subscription.pricing'].browse(int(recurring_pricing_id)).exists()
+            if pricing_record:
+                recurring_plan_id = self._wgs_extract_plan_id_from_pricing(pricing_record)
+        if not recurring_plan_id:
+            recurring_plan_id = self._wgs_extract_plan_id_from_product(product)
+
         sale_order_line_fields = self.env['sale.order.line']._fields
         line_values = {'product_id': product.id}
         if 'name' in sale_order_line_fields:
@@ -279,10 +286,24 @@ class PosOrder(models.Model):
             for field_name in ('subscription_plan_id', 'plan_id', 'recurring_plan_id'):
                 if field_name in sale_order_line_fields:
                     line_values[field_name] = recurring_plan_id
+            self._wgs_assign_many2one_value(
+                values=line_values,
+                fields_map=sale_order_line_fields,
+                value_id=recurring_plan_id,
+                preferred_field_names=('subscription_plan_id', 'plan_id', 'recurring_plan_id'),
+                comodel_checker=self._wgs_is_plan_model_name,
+            )
         if recurring_pricing_id:
             for field_name in ('subscription_pricing_id', 'pricing_id', 'recurring_pricing_id'):
                 if field_name in sale_order_line_fields:
                     line_values[field_name] = recurring_pricing_id
+            self._wgs_assign_many2one_value(
+                values=line_values,
+                fields_map=sale_order_line_fields,
+                value_id=recurring_pricing_id,
+                preferred_field_names=('subscription_pricing_id', 'pricing_id', 'recurring_pricing_id'),
+                comodel_checker=self._wgs_is_pricing_model_name,
+            )
 
         sale_order_values = {
             'partner_id': self.partner_id.id,
@@ -297,6 +318,13 @@ class PosOrder(models.Model):
             for field_name in ('subscription_plan_id', 'plan_id', 'recurring_plan_id'):
                 if field_name in self.env['sale.order']._fields and field_name not in sale_order_values:
                     sale_order_values[field_name] = recurring_plan_id
+            self._wgs_assign_many2one_value(
+                values=sale_order_values,
+                fields_map=self.env['sale.order']._fields,
+                value_id=recurring_plan_id,
+                preferred_field_names=('subscription_plan_id', 'plan_id', 'recurring_plan_id'),
+                comodel_checker=self._wgs_is_plan_model_name,
+            )
 
         sale_order = self.env['sale.order'].create(sale_order_values)
         sale_order.write({'participant_ids': [Command.set(participant_ids)]})
@@ -311,6 +339,54 @@ class PosOrder(models.Model):
             line.id,
         )
         return sale_order
+
+    def _wgs_assign_many2one_value(self, values, fields_map, value_id, preferred_field_names=(), comodel_checker=None):
+        value_id = int(value_id or 0)
+        if value_id <= 0:
+            return
+
+        for field_name in preferred_field_names:
+            field = fields_map.get(field_name)
+            if field and field.type == 'many2one':
+                values[field_name] = value_id
+                return
+
+        if not comodel_checker:
+            return
+        for field_name, field in fields_map.items():
+            if field_name in values or field.type != 'many2one':
+                continue
+            if comodel_checker(getattr(field, 'comodel_name', '')):
+                values[field_name] = value_id
+                return
+
+    def _wgs_is_plan_model_name(self, model_name):
+        model_name = (model_name or '').lower()
+        return bool(model_name and ('subscription.plan' in model_name or 'recurring.plan' in model_name))
+
+    def _wgs_is_pricing_model_name(self, model_name):
+        model_name = (model_name or '').lower()
+        return bool(model_name and ('subscription.pricing' in model_name or 'recurring.pricing' in model_name))
+
+    def _wgs_extract_plan_id_from_product(self, product):
+        product.ensure_one()
+
+        # Common explicit names first.
+        for source in (product, product.product_tmpl_id):
+            for field_name in ('plan_id', 'subscription_plan_id', 'recurring_plan_id'):
+                if field_name in source._fields and source[field_name]:
+                    return source[field_name].id
+
+        # Generic fallback: many2one to a plan-like model.
+        for source in (product, product.product_tmpl_id):
+            for field_name, field in source._fields.items():
+                if field.type != 'many2one':
+                    continue
+                if not self._wgs_is_plan_model_name(getattr(field, 'comodel_name', '')):
+                    continue
+                if source[field_name]:
+                    return source[field_name].id
+        return False
 
     def _wgs_get_recurring_pricing_choice(self, product, fallback=0.0, preferred_plan_id=False, preferred_pricing_id=False):
         product.ensure_one()
@@ -440,23 +516,19 @@ class PosOrder(models.Model):
         return output
 
     def _wgs_extract_plan_id_from_pricing(self, pricing):
-        for field_name in ('plan_id', 'subscription_plan_id', 'recurring_plan_id'):
-            if field_name in pricing._fields and pricing[field_name]:
-                return pricing[field_name].id
+        plan = self._wgs_extract_plan_record_from_pricing(pricing)
+        if plan:
+            return plan.id
         return False
 
     def _wgs_extract_plan_name_from_pricing(self, pricing):
-        for field_name in ('plan_id', 'subscription_plan_id', 'recurring_plan_id'):
-            if field_name in pricing._fields and pricing[field_name]:
-                return pricing[field_name].display_name
+        plan = self._wgs_extract_plan_record_from_pricing(pricing)
+        if plan:
+            return plan.display_name
         return False
 
     def _wgs_extract_plan_interval_label_from_pricing(self, pricing):
-        plan = False
-        for field_name in ('plan_id', 'subscription_plan_id', 'recurring_plan_id'):
-            if field_name in pricing._fields and pricing[field_name]:
-                plan = pricing[field_name]
-                break
+        plan = self._wgs_extract_plan_record_from_pricing(pricing)
         if not plan:
             return ''
 
@@ -471,9 +543,45 @@ class PosOrder(models.Model):
 
         return f'{interval_value} {interval_unit}'
 
+    def _wgs_extract_plan_record_from_pricing(self, pricing):
+        for field_name in ('plan_id', 'subscription_plan_id', 'recurring_plan_id'):
+            if field_name in pricing._fields and pricing[field_name]:
+                return pricing[field_name]
+
+        for field_name, field in pricing._fields.items():
+            if field.type != 'many2one':
+                continue
+            if not self._wgs_is_plan_model_name(getattr(field, 'comodel_name', '')):
+                continue
+            if pricing[field_name]:
+                return pricing[field_name]
+        return False
+
     def _wgs_extract_price_from_pricing(self, pricing):
-        for field_name in ('fixed_price', 'price', 'recurring_price', 'price_unit'):
+        known_price_fields = (
+            'fixed_price',
+            'price',
+            'recurring_price',
+            'price_unit',
+            'unit_price',
+            'list_price',
+            'amount',
+        )
+        for field_name in known_price_fields:
             if field_name not in pricing._fields:
+                continue
+            value = pricing[field_name]
+            if value is not None:
+                return float(value)
+
+        # Generic fallback: any numeric field that looks like a price.
+        for field_name, field in pricing._fields.items():
+            if field_name in known_price_fields:
+                continue
+            if field.type not in ('float', 'monetary'):
+                continue
+            normalized_name = field_name.lower()
+            if 'price' not in normalized_name and 'amount' not in normalized_name:
                 continue
             value = pricing[field_name]
             if value is not None:
@@ -483,10 +591,9 @@ class PosOrder(models.Model):
     def _wgs_extract_pricing_sequence(self, pricing):
         if 'sequence' in pricing._fields and pricing.sequence is not None:
             return int(pricing.sequence)
-        if 'plan_id' in pricing._fields and pricing.plan_id and 'sequence' in pricing.plan_id._fields:
-            return int(pricing.plan_id.sequence or 1000)
-        if 'subscription_plan_id' in pricing._fields and pricing.subscription_plan_id and 'sequence' in pricing.subscription_plan_id._fields:
-            return int(pricing.subscription_plan_id.sequence or 1000)
+        plan = self._wgs_extract_plan_record_from_pricing(pricing)
+        if plan and 'sequence' in plan._fields:
+            return int(plan.sequence or 1000)
         return 1000
 
     def _wgs_cancel_subscription_from_refund_line(self, line):
