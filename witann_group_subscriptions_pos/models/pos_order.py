@@ -139,8 +139,9 @@ class PosOrder(models.Model):
     def _order_line_fields(self, line, session_id=None):
         values = super()._order_line_fields(line, session_id=session_id)
         ui_line = self._wgs_extract_ui_line_payload(line)
+        config_payload = self._wgs_extract_subscription_config_payload(ui_line)
 
-        participant_ids = ui_line.get('wgs_participant_ids')
+        participant_ids = config_payload.get('participant_ids')
         if isinstance(participant_ids, list):
             cleaned = []
             for value in participant_ids:
@@ -153,7 +154,10 @@ class PosOrder(models.Model):
             values['wgs_participant_ids_json'] = json.dumps(list(dict.fromkeys(cleaned)))
 
         for field_name in ('wgs_subscription_plan_id', 'wgs_subscription_pricing_id'):
-            value = ui_line.get(field_name)
+            if field_name == 'wgs_subscription_plan_id':
+                value = config_payload.get('plan_id')
+            else:
+                value = config_payload.get('pricing_id')
             try:
                 int_value = int(value)
             except (TypeError, ValueError):
@@ -161,7 +165,7 @@ class PosOrder(models.Model):
             if int_value > 0:
                 values[field_name] = int_value
 
-        raw_end_date = ui_line.get('wgs_subscription_end_date')
+        raw_end_date = config_payload.get('end_date')
         if raw_end_date:
             end_date = fields.Date.to_date(raw_end_date)
             if end_date:
@@ -171,11 +175,80 @@ class PosOrder(models.Model):
 
     @api.model
     def _wgs_extract_ui_line_payload(self, line):
-        if isinstance(line, dict):
-            return line
-        if isinstance(line, (list, tuple)) and len(line) >= 3 and isinstance(line[2], dict):
-            return line[2]
-        return {}
+        payload = {}
+
+        def _collect(node, depth=0):
+            if depth > 5:
+                return
+            if isinstance(node, dict):
+                payload.update(node)
+                for value in node.values():
+                    _collect(value, depth + 1)
+            elif isinstance(node, (list, tuple)):
+                for value in node:
+                    _collect(value, depth + 1)
+
+        _collect(line)
+        return payload
+
+    @api.model
+    def _wgs_extract_subscription_config_payload(self, ui_line):
+        data = {
+            'participant_ids': [],
+            'plan_id': False,
+            'pricing_id': False,
+            'end_date': False,
+        }
+        if not isinstance(ui_line, dict):
+            return data
+
+        raw_config = ui_line.get('wgs_subscription_config')
+        if isinstance(raw_config, str):
+            try:
+                raw_config = json.loads(raw_config)
+            except (TypeError, ValueError):
+                raw_config = {}
+        if not isinstance(raw_config, dict):
+            raw_config = {}
+
+        participant_raw = (
+            ui_line.get('wgs_participant_ids')
+            or ui_line.get('wgsParticipantIds')
+            or raw_config.get('participant_ids')
+            or raw_config.get('participantIds')
+            or []
+        )
+        if isinstance(participant_raw, str):
+            try:
+                participant_raw = json.loads(participant_raw)
+            except (TypeError, ValueError):
+                participant_raw = []
+        if isinstance(participant_raw, list):
+            data['participant_ids'] = participant_raw
+
+        data['plan_id'] = (
+            ui_line.get('wgs_subscription_plan_id')
+            or ui_line.get('wgsSubscriptionPlanId')
+            or raw_config.get('plan_id')
+            or raw_config.get('planId')
+            or False
+        )
+        data['pricing_id'] = (
+            ui_line.get('wgs_subscription_pricing_id')
+            or ui_line.get('wgsSubscriptionPricingId')
+            or raw_config.get('pricing_id')
+            or raw_config.get('pricingId')
+            or False
+        )
+        data['end_date'] = (
+            ui_line.get('wgs_subscription_end_date')
+            or ui_line.get('wgsSubscriptionEndDate')
+            or raw_config.get('end_date')
+            or raw_config.get('endDate')
+            or False
+        )
+
+        return data
 
     @api.model
     def _process_order(self, order, draft, *args, **kwargs):
@@ -400,6 +473,11 @@ class PosOrder(models.Model):
 
         # Confirm immediately: POS payment is considered the paid period trigger.
         sale_order.action_confirm()
+        self._wgs_sync_subscription_metadata(
+            sale_order=sale_order,
+            participant_ids=participant_ids,
+            subscription_end_date=subscription_end_date,
+        )
 
         _logger.info(
             'Created sale subscription order %s from POS order %s line %s',
@@ -408,6 +486,85 @@ class PosOrder(models.Model):
             line.id,
         )
         return sale_order
+
+    def _wgs_sync_subscription_metadata(self, sale_order, participant_ids, subscription_end_date=False):
+        target_orders = self._wgs_get_subscription_orders_from_base(sale_order)
+        for target_order in target_orders:
+            values = {}
+            participant_field = self._wgs_find_partner_multi_field(target_order)
+            if participant_field:
+                values[participant_field] = [Command.set(participant_ids)]
+            if subscription_end_date:
+                end_field = self._wgs_find_subscription_end_date_field(target_order)
+                if end_field:
+                    values[end_field] = subscription_end_date
+            if values:
+                target_order.write(values)
+                _logger.info(
+                    'WGS POS: synced metadata on subscription order %s (participants=%s end_date=%s)',
+                    target_order.name,
+                    participant_ids,
+                    subscription_end_date or False,
+                )
+
+    def _wgs_get_subscription_orders_from_base(self, sale_order):
+        orders = sale_order
+        fields_map = sale_order._fields
+
+        for field_name, field in fields_map.items():
+            if getattr(field, 'comodel_name', '') != 'sale.order':
+                continue
+            normalized_name = (field_name or '').lower()
+            if 'subscription' not in normalized_name and 'recurr' not in normalized_name:
+                continue
+            value = sale_order[field_name]
+            if field.type == 'many2one' and value:
+                orders |= value
+            elif field.type in ('one2many', 'many2many'):
+                orders |= value
+
+        recurring_orders = orders.filtered(
+            lambda order: bool(
+                order.order_line.filtered(
+                    lambda line: line.product_id and line.product_id.product_tmpl_id.recurring_invoice
+                )
+            )
+        )
+        return recurring_orders or sale_order
+
+    def _wgs_find_partner_multi_field(self, sale_order):
+        fields_map = sale_order._fields
+        field = fields_map.get('participant_ids')
+        if field and field.type in ('many2many', 'one2many') and getattr(field, 'comodel_name', '') == 'res.partner':
+            return 'participant_ids'
+
+        for field_name, field in fields_map.items():
+            if field.type not in ('many2many', 'one2many'):
+                continue
+            if getattr(field, 'comodel_name', '') != 'res.partner':
+                continue
+            normalized_name = (field_name or '').lower()
+            if any(token in normalized_name for token in ('participant', 'member', 'attendee')):
+                return field_name
+        return False
+
+    def _wgs_find_subscription_end_date_field(self, sale_order):
+        fields_map = sale_order._fields
+        preferred = ('end_date', 'date_end', 'subscription_end_date', 'recurring_end_date')
+        for field_name in preferred:
+            field = fields_map.get(field_name)
+            if field and field.type in ('date', 'datetime'):
+                return field_name
+
+        for field_name, field in fields_map.items():
+            if field.type not in ('date', 'datetime'):
+                continue
+            normalized_name = (field_name or '').lower()
+            if any(token in normalized_name for token in ('end', 'until', 'close')) and any(
+                token in normalized_name for token in ('subscription', 'recurr', 'period')
+            ):
+                return field_name
+        return False
 
     def _wgs_assign_many2one_value(self, values, fields_map, value_id, preferred_field_names=(), comodel_checker=None):
         value_id = int(value_id or 0)

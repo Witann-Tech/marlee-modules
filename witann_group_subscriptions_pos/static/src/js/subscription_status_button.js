@@ -530,11 +530,23 @@ function ensureOrderlineSerializationPatched(component) {
         if (!payload || typeof payload !== "object") {
             return payload;
         }
-        payload.wgs_participant_ids = getLineParticipantIds(line);
+        const participantIds = getLineParticipantIds(line);
         const selection = getLineSubscriptionSelection(line);
+        const endDate = getLineSubscriptionEndDate(line) || false;
+        payload.wgs_participant_ids = participantIds;
+        payload.wgsParticipantIds = participantIds;
         payload.wgs_subscription_plan_id = selection.planId || false;
+        payload.wgsSubscriptionPlanId = selection.planId || false;
         payload.wgs_subscription_pricing_id = selection.pricingId || false;
-        payload.wgs_subscription_end_date = getLineSubscriptionEndDate(line) || false;
+        payload.wgsSubscriptionPricingId = selection.pricingId || false;
+        payload.wgs_subscription_end_date = endDate;
+        payload.wgsSubscriptionEndDate = endDate;
+        payload.wgs_subscription_config = {
+            participant_ids: participantIds,
+            plan_id: selection.planId || false,
+            pricing_id: selection.pricingId || false,
+            end_date: endDate,
+        };
         return payload;
     };
 
@@ -559,15 +571,21 @@ function ensureOrderlineSerializationPatched(component) {
         proto.init_from_JSON = function (...args) {
             baseInit.apply(this, args);
             const json = args && args.length ? args[0] : null;
+            const cfg = (json && json.wgs_subscription_config && typeof json.wgs_subscription_config === "object")
+                ? json.wgs_subscription_config
+                : {};
             this.wgs_participant_ids = getLineParticipantIds({
-                wgs_participant_ids: json && json.wgs_participant_ids,
+                wgs_participant_ids: (json && (json.wgs_participant_ids || json.wgsParticipantIds)) || cfg.participant_ids,
             });
             setLineSubscriptionSelection(
                 this,
-                json && json.wgs_subscription_plan_id,
-                json && json.wgs_subscription_pricing_id
+                (json && (json.wgs_subscription_plan_id || json.wgsSubscriptionPlanId)) || cfg.plan_id,
+                (json && (json.wgs_subscription_pricing_id || json.wgsSubscriptionPricingId)) || cfg.pricing_id
             );
-            setLineSubscriptionEndDate(this, json && json.wgs_subscription_end_date);
+            setLineSubscriptionEndDate(
+                this,
+                (json && (json.wgs_subscription_end_date || json.wgsSubscriptionEndDate)) || cfg.end_date
+            );
         };
     }
 
@@ -602,10 +620,22 @@ function ensureOrderSerializationPatched(component) {
                 return;
             }
             const selection = getLineSubscriptionSelection(line);
-            linePayload.wgs_participant_ids = getLineParticipantIds(line);
+            const participantIds = getLineParticipantIds(line);
+            const endDate = getLineSubscriptionEndDate(line) || false;
+            linePayload.wgs_participant_ids = participantIds;
+            linePayload.wgsParticipantIds = participantIds;
             linePayload.wgs_subscription_plan_id = selection.planId || false;
+            linePayload.wgsSubscriptionPlanId = selection.planId || false;
             linePayload.wgs_subscription_pricing_id = selection.pricingId || false;
-            linePayload.wgs_subscription_end_date = getLineSubscriptionEndDate(line) || false;
+            linePayload.wgsSubscriptionPricingId = selection.pricingId || false;
+            linePayload.wgs_subscription_end_date = endDate;
+            linePayload.wgsSubscriptionEndDate = endDate;
+            linePayload.wgs_subscription_config = {
+                participant_ids: participantIds,
+                plan_id: selection.planId || false,
+                pricing_id: selection.pricingId || false,
+                end_date: endDate,
+            };
         });
         return jsonPayload;
     };
@@ -1512,7 +1542,7 @@ patch(ControlButtons.prototype, {
             .wgs-status-toolbar {
                 padding: 0.8rem 1.2rem;
                 display: grid;
-                grid-template-columns: minmax(220px, 1fr) 220px 180px minmax(260px, 1fr);
+                grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
                 gap: 0.6rem;
                 border-bottom: 1px solid #e5e7eb;
                 align-items: center;
