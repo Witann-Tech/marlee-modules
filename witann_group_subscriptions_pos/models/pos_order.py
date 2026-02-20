@@ -243,21 +243,45 @@ class PosOrder(models.Model):
         recurring_plan_id = pricing_choice.get('plan_id')
         recurring_pricing_id = pricing_choice.get('pricing_id')
 
-        line_values = {
-            'product_id': product.id,
-            'name': line.full_product_name or product.display_name,
-            'product_uom_qty': qty,
-            'product_uom': product.uom_id.id,
-            'price_unit': recurring_price_unit,
-            'discount': line.discount,
-        }
+        sale_order_line_fields = self.env['sale.order.line']._fields
+        line_values = {'product_id': product.id}
+        if 'name' in sale_order_line_fields:
+            line_values['name'] = line.full_product_name or product.display_name
+
+        qty_field_name = next(
+            (
+                field_name
+                for field_name in ('product_uom_qty', 'quantity', 'qty')
+                if field_name in sale_order_line_fields
+            ),
+            False,
+        )
+        if qty_field_name:
+            line_values[qty_field_name] = qty
+
+        uom_field_name = next(
+            (
+                field_name
+                for field_name in ('product_uom_id', 'product_uom', 'uom_id')
+                if field_name in sale_order_line_fields
+            ),
+            False,
+        )
+        if uom_field_name and product.uom_id:
+            line_values[uom_field_name] = product.uom_id.id
+
+        if 'price_unit' in sale_order_line_fields:
+            line_values['price_unit'] = recurring_price_unit
+        if 'discount' in sale_order_line_fields:
+            line_values['discount'] = line.discount
+
         if recurring_plan_id:
             for field_name in ('subscription_plan_id', 'plan_id', 'recurring_plan_id'):
-                if field_name in self.env['sale.order.line']._fields:
+                if field_name in sale_order_line_fields:
                     line_values[field_name] = recurring_plan_id
         if recurring_pricing_id:
             for field_name in ('subscription_pricing_id', 'pricing_id', 'recurring_pricing_id'):
-                if field_name in self.env['sale.order.line']._fields:
+                if field_name in sale_order_line_fields:
                     line_values[field_name] = recurring_pricing_id
 
         sale_order_values = {
@@ -382,8 +406,19 @@ class PosOrder(models.Model):
             if field_name in fields_map:
                 records |= pricing_model.search([(field_name, '=', product.id)])
 
-        if not records and 'product_template_id' in fields_map:
-            records |= pricing_model.search([('product_template_id', '=', product.product_tmpl_id.id)])
+        for field_name in ('product_template_id', 'product_tmpl_id'):
+            if field_name in fields_map:
+                records |= pricing_model.search([(field_name, '=', product.product_tmpl_id.id)])
+
+        # Generic fallback for custom field names in sale.subscription.pricing.
+        for field_name, field in fields_map.items():
+            if field.type != 'many2one':
+                continue
+            comodel_name = getattr(field, 'comodel_name', False)
+            if comodel_name == 'product.product':
+                records |= pricing_model.search([(field_name, '=', product.id)])
+            elif comodel_name == 'product.template':
+                records |= pricing_model.search([(field_name, '=', product.product_tmpl_id.id)])
 
         seen = set()
         output = []
