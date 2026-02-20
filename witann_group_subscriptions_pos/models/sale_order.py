@@ -110,7 +110,9 @@ class SaleOrder(models.Model):
     @api.model
     def _get_pos_subscription_orders(self, partner):
         domain = [
+            '|',
             ('participant_ids', 'in', partner.id),
+            ('partner_id', '=', partner.id),
             ('state', 'in', ['sale', 'done']),
         ]
         if 'is_subscription' in self._fields:
@@ -126,7 +128,9 @@ class SaleOrder(models.Model):
 
         partner_ids = partners.ids
         domain = [
+            '|',
             ('participant_ids', 'in', partner_ids),
+            ('partner_id', 'in', partner_ids),
             ('state', 'in', ['sale', 'done']),
         ]
         if 'is_subscription' in self._fields:
@@ -139,7 +143,9 @@ class SaleOrder(models.Model):
         partner_id_set = set(partner_ids)
 
         for subscription in subscriptions:
-            shared_partner_ids = partner_id_set.intersection(subscription.participant_ids.ids)
+            shared_partner_ids = set(partner_id_set.intersection(subscription.participant_ids.ids))
+            if subscription.partner_id and subscription.partner_id.id in partner_id_set:
+                shared_partner_ids.add(subscription.partner_id.id)
             for partner_id in shared_partner_ids:
                 subscriptions_by_partner[partner_id] |= subscription
 

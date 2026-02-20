@@ -269,8 +269,155 @@ class PosOrder(models.Model):
         if draft:
             return pos_order_id
 
+        pos_order._wgs_apply_ui_subscription_line_config(order)
         pos_order._wgs_sync_subscription_sales()
         return pos_order_id
+
+    def _wgs_apply_ui_subscription_line_config(self, ui_order):
+        self.ensure_one()
+        ui_configs = self._wgs_extract_ui_subscription_line_configs(ui_order)
+        if not ui_configs:
+            return
+
+        candidate_lines = self.lines.filtered(
+            lambda line: line.qty > 0 and line.product_id and line.product_id.product_tmpl_id.recurring_invoice
+        ).sorted(key=lambda line: line.id)
+        if not candidate_lines:
+            return
+
+        unmatched_lines = candidate_lines
+        for config in ui_configs:
+            target_line = self._wgs_match_pos_line_for_ui_config(unmatched_lines, config)
+            if not target_line:
+                continue
+            write_values = {}
+
+            participant_ids = config.get('participant_ids') or []
+            if isinstance(participant_ids, list):
+                cleaned = []
+                for value in participant_ids:
+                    try:
+                        participant_id = int(value)
+                    except (TypeError, ValueError):
+                        continue
+                    if participant_id > 0:
+                        cleaned.append(participant_id)
+                if cleaned:
+                    write_values['wgs_participant_ids_json'] = json.dumps(list(dict.fromkeys(cleaned)))
+
+            for field_name, key_name in (
+                ('wgs_subscription_plan_id', 'plan_id'),
+                ('wgs_subscription_pricing_id', 'pricing_id'),
+            ):
+                try:
+                    numeric = int(config.get(key_name) or 0)
+                except (TypeError, ValueError):
+                    numeric = 0
+                if numeric > 0:
+                    write_values[field_name] = numeric
+
+            raw_end_date = config.get('end_date')
+            if raw_end_date:
+                end_date = fields.Date.to_date(raw_end_date)
+                if end_date:
+                    write_values['wgs_subscription_end_date'] = end_date
+
+            if write_values:
+                target_line.write(write_values)
+                _logger.info(
+                    'WGS POS: applied UI config to pos.order.line %s -> %s',
+                    target_line.id,
+                    write_values,
+                )
+            unmatched_lines -= target_line
+
+    @api.model
+    def _wgs_extract_ui_subscription_line_configs(self, ui_order):
+        output = []
+        if not isinstance(ui_order, dict):
+            return output
+        raw_lines = ui_order.get('lines')
+        if not isinstance(raw_lines, list):
+            return output
+
+        for raw_line in raw_lines:
+            payload = self._wgs_find_best_payload_dict(raw_line)
+            if not isinstance(payload, dict):
+                continue
+            config = self._wgs_extract_subscription_config_payload(payload)
+            if not (
+                config.get('participant_ids')
+                or config.get('plan_id')
+                or config.get('pricing_id')
+                or config.get('end_date')
+            ):
+                continue
+
+            product_id = payload.get('product_id') or payload.get('productId')
+            if isinstance(product_id, (list, tuple)) and product_id:
+                product_id = product_id[0]
+            try:
+                product_id = int(product_id or 0)
+            except (TypeError, ValueError):
+                product_id = 0
+
+            quantity = payload.get('qty') or payload.get('quantity') or payload.get('qty_ordered')
+            try:
+                quantity = abs(float(quantity or 0.0))
+            except (TypeError, ValueError):
+                quantity = 0.0
+
+            config['product_id'] = product_id
+            config['quantity'] = quantity
+            output.append(config)
+        return output
+
+    @api.model
+    def _wgs_find_best_payload_dict(self, raw_line):
+        best = {}
+
+        def _walk(node, depth=0):
+            nonlocal best
+            if depth > 6:
+                return
+            if isinstance(node, dict):
+                score = 0
+                if any(key in node for key in ('product_id', 'productId')):
+                    score += 3
+                if any(key in node for key in ('qty', 'quantity', 'qty_ordered')):
+                    score += 2
+                if any(key in node for key in ('wgs_subscription_config', 'wgs_participant_ids', 'wgsParticipantIds')):
+                    score += 4
+                if score > best.get('__score__', -1):
+                    best = dict(node)
+                    best['__score__'] = score
+                for value in node.values():
+                    _walk(value, depth + 1)
+            elif isinstance(node, (list, tuple)):
+                for value in node:
+                    _walk(value, depth + 1)
+
+        _walk(raw_line)
+        best.pop('__score__', None)
+        return best
+
+    @api.model
+    def _wgs_match_pos_line_for_ui_config(self, lines, config):
+        if not lines:
+            return self.env['pos.order.line']
+
+        product_id = int(config.get('product_id') or 0)
+        quantity = float(config.get('quantity') or 0.0)
+        candidates = lines
+        if product_id > 0:
+            filtered = lines.filtered(lambda line: line.product_id.id == product_id)
+            if filtered:
+                candidates = filtered
+        if quantity > 0:
+            filtered = candidates.filtered(lambda line: abs(abs(line.qty) - quantity) < 0.0001)
+            if filtered:
+                candidates = filtered
+        return candidates[:1]
 
     def _wgs_sync_subscription_sales(self):
         for pos_order in self:
