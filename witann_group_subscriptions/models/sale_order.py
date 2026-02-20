@@ -25,8 +25,8 @@ class SaleOrder(models.Model):
     )
 
     @api.depends(
+        'order_line',
         'order_line.product_id',
-        'order_line.product_uom_qty',
         'order_line.product_id.product_tmpl_id.recurring_invoice',
         'order_line.product_id.product_tmpl_id.max_participants_total',
     )
@@ -38,10 +38,16 @@ class SaleOrder(models.Model):
             order.subscription_has_recurring_products = bool(recurring_lines)
             order.subscription_max_participants_total = int(
                 sum(
-                    line.product_uom_qty * line.product_id.product_tmpl_id.max_participants_total
+                    order._get_subscription_line_qty(line) * line.product_id.product_tmpl_id.max_participants_total
                     for line in recurring_lines
                 )
             )
+
+    def _get_subscription_line_qty(self, line):
+        for field_name in ('product_uom_qty', 'quantity', 'qty'):
+            if field_name in line._fields:
+                return float(line[field_name] or 0.0)
+        return 0.0
 
     def _ensure_subscription_owner_is_participant(self):
         for order in self:
@@ -79,11 +85,11 @@ class SaleOrder(models.Model):
                 data['participant_ids'] = [Command.set(order.participant_ids.ids)]
         return copied_data
 
-    @api.onchange('partner_id', 'order_line', 'order_line.product_id', 'order_line.product_uom_qty')
+    @api.onchange('partner_id', 'order_line', 'order_line.product_id')
     def _onchange_subscription_participants(self):
         self._ensure_subscription_owner_is_participant()
 
-    @api.constrains('participant_ids', 'partner_id', 'order_line', 'order_line.product_uom_qty')
+    @api.constrains('participant_ids', 'partner_id', 'order_line')
     def _check_subscription_participants(self):
         for order in self:
             if not order.subscription_has_recurring_products:
