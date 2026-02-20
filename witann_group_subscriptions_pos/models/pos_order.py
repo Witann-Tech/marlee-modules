@@ -1,5 +1,8 @@
 import json
 import logging
+from datetime import timedelta
+
+from dateutil.relativedelta import relativedelta
 
 from odoo import _, api, fields, models
 from odoo.fields import Command
@@ -29,6 +32,7 @@ class PosOrderLine(models.Model):
     wgs_sale_order_id = fields.Many2one('sale.order', string='Suscripción generada', copy=False)
     wgs_subscription_plan_id = fields.Integer(string='Plan de suscripción (POS)', copy=False)
     wgs_subscription_pricing_id = fields.Integer(string='Tarifa de suscripción (POS)', copy=False)
+    wgs_subscription_end_date = fields.Date(string='Fecha fin de suscripción (POS)', copy=False)
 
     def wgs_get_participant_ids(self):
         self.ensure_one()
@@ -52,6 +56,12 @@ class PosOrderLine(models.Model):
 
         # preserve order and uniqueness
         return list(dict.fromkeys(participant_ids))
+
+    def wgs_get_subscription_end_date(self):
+        self.ensure_one()
+        if not self.wgs_subscription_end_date:
+            return False
+        return fields.Date.to_date(self.wgs_subscription_end_date)
 
 
 class PosOrder(models.Model):
@@ -118,6 +128,8 @@ class PosOrder(models.Model):
                     'pricing_id': row.get('pricing_id') or False,
                     'price': float(row.get('price') or 0.0),
                     'interval_label': row.get('interval_label') or '',
+                    'interval_value': int(row.get('interval_value') or 1),
+                    'interval_unit': row.get('interval_unit') or 'month',
                 }
                 for row in candidates
             ],
@@ -148,6 +160,12 @@ class PosOrder(models.Model):
                 int_value = 0
             if int_value > 0:
                 values[field_name] = int_value
+
+        raw_end_date = ui_line.get('wgs_subscription_end_date')
+        if raw_end_date:
+            end_date = fields.Date.to_date(raw_end_date)
+            if end_date:
+                values['wgs_subscription_end_date'] = end_date
 
         return values
 
@@ -257,6 +275,29 @@ class PosOrder(models.Model):
                 recurring_pricing_id,
                 pricing_choice,
             )
+        plan_record = self._wgs_resolve_plan_record(
+            product=product,
+            plan_id=recurring_plan_id,
+            pricing_id=recurring_pricing_id,
+        )
+        subscription_end_date = line.wgs_get_subscription_end_date()
+        sale_start_date = fields.Date.context_today(self)
+        if subscription_end_date:
+            if not plan_record:
+                raise UserError(
+                    _('No se pudo validar la fecha de finalización porque el plan recurrente no está definido.')
+                )
+            min_threshold_date = self._wgs_get_plan_min_end_threshold(plan_record, sale_start_date)
+            if subscription_end_date <= min_threshold_date:
+                raise UserError(
+                    _(
+                        'La fecha de finalización debe ser posterior a %(date)s para el plan %(plan)s.'
+                    )
+                    % {
+                        'date': fields.Date.to_string(min_threshold_date),
+                        'plan': plan_record.display_name,
+                    }
+                )
 
         sale_order_line_fields = self.env['sale.order.line']._fields
         line_values = {'product_id': product.id}
@@ -313,6 +354,7 @@ class PosOrder(models.Model):
                 comodel_checker=self._wgs_is_pricing_model_name,
             )
 
+        sale_order_fields = self.env['sale.order']._fields
         sale_order_values = {
             'partner_id': self.partner_id.id,
             'origin': self.pos_reference or self.name,
@@ -322,20 +364,39 @@ class PosOrder(models.Model):
         }
         if 'pricelist_id' in self._fields and self.pricelist_id:
             sale_order_values['pricelist_id'] = self.pricelist_id.id
+        self._wgs_assign_date_field(
+            values=sale_order_values,
+            fields_map=sale_order_fields,
+            date_value=sale_start_date,
+            preferred_field_names=('start_date', 'date_start', 'subscription_start_date'),
+        )
+        if subscription_end_date:
+            self._wgs_assign_date_field(
+                values=sale_order_values,
+                fields_map=sale_order_fields,
+                date_value=subscription_end_date,
+                preferred_field_names=('end_date', 'date_end', 'subscription_end_date', 'recurring_end_date'),
+            )
         if recurring_plan_id:
             for field_name in ('subscription_plan_id', 'plan_id', 'recurring_plan_id'):
-                if field_name in self.env['sale.order']._fields and field_name not in sale_order_values:
+                if field_name in sale_order_fields and field_name not in sale_order_values:
                     sale_order_values[field_name] = recurring_plan_id
             self._wgs_assign_many2one_value(
                 values=sale_order_values,
-                fields_map=self.env['sale.order']._fields,
+                fields_map=sale_order_fields,
                 value_id=recurring_plan_id,
                 preferred_field_names=('subscription_plan_id', 'plan_id', 'recurring_plan_id'),
                 comodel_checker=self._wgs_is_plan_model_name,
             )
 
         sale_order = self.env['sale.order'].create(sale_order_values)
-        sale_order.write({'participant_ids': [Command.set(participant_ids)]})
+        if 'participant_ids' in sale_order._fields:
+            sale_order.write({'participant_ids': [Command.set(participant_ids)]})
+            _logger.info(
+                'WGS POS: participant_ids synced on sale order %s -> %s',
+                sale_order.name,
+                participant_ids,
+            )
 
         # Confirm immediately: POS payment is considered the paid period trigger.
         sale_order.action_confirm()
@@ -374,6 +435,93 @@ class PosOrder(models.Model):
                 values[field_name] = value_id
                 return
 
+    def _wgs_assign_date_field(self, values, fields_map, date_value, preferred_field_names=()):
+        if not date_value:
+            return
+        for field_name in preferred_field_names:
+            if field_name in fields_map:
+                values[field_name] = date_value
+                return
+
+    def _wgs_resolve_plan_record(self, product, plan_id=False, pricing_id=False):
+        product.ensure_one()
+        resolved_plan = False
+        if pricing_id and 'sale.subscription.pricing' in self.env.registry:
+            pricing = self.env['sale.subscription.pricing'].browse(int(pricing_id)).exists()
+            if pricing:
+                resolved_plan = self._wgs_extract_plan_record_from_pricing(pricing)
+        if not resolved_plan and plan_id:
+            resolved_plan = self._wgs_find_plan_record_by_id(int(plan_id))
+        if not resolved_plan:
+            resolved_plan = self._wgs_extract_plan_record_from_product(product)
+        return resolved_plan
+
+    def _wgs_find_plan_record_by_id(self, plan_id):
+        if not plan_id:
+            return False
+        candidate_model_names = set()
+
+        for model_name in ('sale.order', 'sale.order.line', 'product.product', 'product.template'):
+            if model_name not in self.env.registry:
+                continue
+            for field in self.env[model_name]._fields.values():
+                if field.type != 'many2one':
+                    continue
+                comodel_name = getattr(field, 'comodel_name', '')
+                if self._wgs_is_plan_model_name(comodel_name):
+                    candidate_model_names.add(comodel_name)
+
+        for model_name in sorted(candidate_model_names):
+            if model_name not in self.env.registry:
+                continue
+            record = self.env[model_name].browse(plan_id).exists()
+            if record:
+                return record
+        return False
+
+    def _wgs_get_plan_min_end_threshold(self, plan, start_date):
+        start_date = fields.Date.to_date(start_date) or fields.Date.context_today(self)
+        interval_value, interval_unit = self._wgs_extract_interval_from_plan(plan)
+        if interval_unit == 'day':
+            return start_date + timedelta(days=interval_value)
+        if interval_unit == 'week':
+            return start_date + relativedelta(weeks=interval_value)
+        if interval_unit == 'year':
+            return start_date + relativedelta(years=interval_value)
+        # month by default
+        return start_date + relativedelta(months=interval_value)
+
+    def _wgs_extract_interval_from_plan(self, plan):
+        interval_value = 1
+        interval_unit = 'month'
+        if not plan:
+            return interval_value, interval_unit
+
+        if {'recurring_interval', 'recurring_rule_type'}.issubset(plan._fields):
+            interval_value = int(plan.recurring_interval or 1)
+            interval_unit = plan.recurring_rule_type or 'month'
+        elif {'billing_period_value', 'billing_period_unit'}.issubset(plan._fields):
+            interval_value = int(plan.billing_period_value or 1)
+            interval_unit = plan.billing_period_unit or 'month'
+        elif {'interval_number', 'interval_type'}.issubset(plan._fields):
+            interval_value = int(plan.interval_number or 1)
+            interval_unit = plan.interval_type or 'month'
+        elif {'duration', 'duration_unit'}.issubset(plan._fields):
+            interval_value = int(plan.duration or 1)
+            interval_unit = plan.duration_unit or 'month'
+
+        interval_value = max(1, int(interval_value or 1))
+        interval_unit = (interval_unit or 'month').lower()
+        if 'day' in interval_unit:
+            return interval_value, 'day'
+        if 'quinc' in interval_unit:
+            return interval_value * 2, 'week'
+        if 'week' in interval_unit:
+            return interval_value, 'week'
+        if 'year' in interval_unit or 'annual' in interval_unit:
+            return interval_value, 'year'
+        return interval_value, 'month'
+
     def _wgs_is_plan_model_name(self, model_name):
         model_name = (model_name or '').lower()
         if not model_name:
@@ -395,18 +543,22 @@ class PosOrder(models.Model):
         return 'subscription' in model_name and 'price' in model_name
 
     def _wgs_extract_plan_id_from_product(self, product):
+        plan = self._wgs_extract_plan_record_from_product(product)
+        return plan.id if plan else False
+
+    def _wgs_extract_plan_record_from_product(self, product):
         product.ensure_one()
 
         if self._wgs_is_plan_model_name(product._name):
-            return product.id
+            return product
         if self._wgs_is_plan_model_name(product.product_tmpl_id._name):
-            return product.product_tmpl_id.id
+            return product.product_tmpl_id
 
         # Common explicit names first.
         for source in (product, product.product_tmpl_id):
             for field_name in ('plan_id', 'subscription_plan_id', 'recurring_plan_id'):
                 if field_name in source._fields and source[field_name]:
-                    return source[field_name].id
+                    return source[field_name]
 
         # Generic fallback: relational field to a plan-like model.
         for source in (product, product.product_tmpl_id):
@@ -426,8 +578,8 @@ class PosOrder(models.Model):
                 if not value:
                     continue
                 if field.type == 'many2one':
-                    return value.id
-                return value[:1].id
+                    return value
+                return value[:1]
         return False
 
     def _wgs_get_recurring_pricing_choice(self, product, fallback=0.0, preferred_plan_id=False, preferred_pricing_id=False):
@@ -541,6 +693,7 @@ class PosOrder(models.Model):
             price = self._wgs_extract_price_from_pricing(record)
             if price is None:
                 continue
+            interval_value, interval_unit = self._wgs_extract_interval_from_plan(plan)
 
             output.append({
                 'sequence': self._wgs_extract_pricing_sequence(record),
@@ -549,20 +702,26 @@ class PosOrder(models.Model):
                 'plan_id': plan.id,
                 'plan_name': plan.display_name,
                 'interval_label': self._wgs_extract_plan_interval_label_from_pricing(record),
+                'interval_value': interval_value,
+                'interval_unit': interval_unit,
                 'price': float(price),
             })
         return output
 
     def _wgs_build_pricing_candidate(self, pricing):
+        plan = self._wgs_extract_plan_record_from_pricing(pricing)
         price = self._wgs_extract_price_from_pricing(pricing)
         if price is None:
             return False
+        interval_value, interval_unit = self._wgs_extract_interval_from_plan(plan)
         return {
             'sequence': self._wgs_extract_pricing_sequence(pricing),
             'pricing_id': pricing.id,
-            'plan_id': self._wgs_extract_plan_id_from_pricing(pricing),
-            'plan_name': self._wgs_extract_plan_name_from_pricing(pricing),
+            'plan_id': plan.id if plan else False,
+            'plan_name': plan.display_name if plan else False,
             'interval_label': self._wgs_extract_plan_interval_label_from_pricing(pricing),
+            'interval_value': interval_value,
+            'interval_unit': interval_unit,
             'price': float(price),
         }
 
@@ -599,15 +758,19 @@ class PosOrder(models.Model):
             if pricing.id in seen:
                 continue
             seen.add(pricing.id)
+            plan = self._wgs_extract_plan_record_from_pricing(pricing)
             price = self._wgs_extract_price_from_pricing(pricing)
             if price is None:
                 continue
+            interval_value, interval_unit = self._wgs_extract_interval_from_plan(plan)
             output.append({
                 'sequence': self._wgs_extract_pricing_sequence(pricing),
                 'pricing_id': pricing.id,
-                'plan_id': self._wgs_extract_plan_id_from_pricing(pricing),
-                'plan_name': self._wgs_extract_plan_name_from_pricing(pricing),
+                'plan_id': plan.id if plan else False,
+                'plan_name': plan.display_name if plan else False,
                 'interval_label': self._wgs_extract_plan_interval_label_from_pricing(pricing),
+                'interval_value': interval_value,
+                'interval_unit': interval_unit,
                 'price': float(price),
             })
         return output
@@ -628,16 +791,7 @@ class PosOrder(models.Model):
         plan = self._wgs_extract_plan_record_from_pricing(pricing)
         if not plan:
             return ''
-
-        interval_value = 1
-        interval_unit = 'month'
-        if {'recurring_interval', 'recurring_rule_type'}.issubset(plan._fields):
-            interval_value = plan.recurring_interval or 1
-            interval_unit = plan.recurring_rule_type or 'month'
-        elif {'billing_period_value', 'billing_period_unit'}.issubset(plan._fields):
-            interval_value = plan.billing_period_value or 1
-            interval_unit = plan.billing_period_unit or 'month'
-
+        interval_value, interval_unit = self._wgs_extract_interval_from_plan(plan)
         return f'{interval_value} {interval_unit}'
 
     def _wgs_extract_plan_record_from_pricing(self, pricing):

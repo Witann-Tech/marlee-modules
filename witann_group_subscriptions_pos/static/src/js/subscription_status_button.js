@@ -10,6 +10,7 @@ import { onWillUnmount } from "@odoo/owl";
 const MODAL_ID = "wgs-subscription-status-modal";
 const STYLE_ID = "wgs-subscription-status-style";
 const ORDERLINE_PATCH_FLAG = "__wgsParticipantSerializationPatched";
+const ORDER_PATCH_FLAG = "__wgsOrderSerializationPatched";
 
 function getPos(component) {
     if (component.pos) {
@@ -348,6 +349,93 @@ function setLineSubscriptionSelection(line, planId = false, pricingId = false) {
     line.wgs_subscription_pricing_id = Number.isInteger(parsedPricingId) && parsedPricingId > 0 ? parsedPricingId : false;
 }
 
+function getLineSubscriptionEndDate(line) {
+    if (!line || !line.wgs_subscription_end_date) {
+        return "";
+    }
+    return String(line.wgs_subscription_end_date);
+}
+
+function setLineSubscriptionEndDate(line, endDateValue = "") {
+    if (!line) {
+        return;
+    }
+    const normalized = String(endDateValue || "").trim();
+    line.wgs_subscription_end_date = normalized || false;
+
+    if (line.order && typeof line.order.trigger === "function") {
+        line.order.trigger("change", line.order);
+    }
+}
+
+function parseISODate(value) {
+    if (!value || typeof value !== "string") {
+        return null;
+    }
+    const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) {
+        return null;
+    }
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    if (
+        date.getUTCFullYear() !== year
+        || (date.getUTCMonth() + 1) !== month
+        || date.getUTCDate() !== day
+    ) {
+        return null;
+    }
+    return date;
+}
+
+function formatISODate(date) {
+    if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
+        return "";
+    }
+    const year = date.getUTCFullYear();
+    const month = `${date.getUTCMonth() + 1}`.padStart(2, "0");
+    const day = `${date.getUTCDate()}`.padStart(2, "0");
+    return `${year}-${month}-${day}`;
+}
+
+function addIntervalToDate(baseDate, intervalValue = 1, intervalUnit = "month") {
+    const date = new Date(baseDate.getTime());
+    const value = Math.max(1, Number.parseInt(intervalValue, 10) || 1);
+    const normalizedUnit = String(intervalUnit || "month").toLowerCase();
+    if (normalizedUnit === "day") {
+        date.setUTCDate(date.getUTCDate() + value);
+        return date;
+    }
+    if (normalizedUnit === "week") {
+        date.setUTCDate(date.getUTCDate() + (7 * value));
+        return date;
+    }
+    if (normalizedUnit === "year") {
+        date.setUTCFullYear(date.getUTCFullYear() + value);
+        return date;
+    }
+    date.setUTCMonth(date.getUTCMonth() + value);
+    return date;
+}
+
+function getPlanMinEndDate(plan) {
+    if (!plan) {
+        return null;
+    }
+    const baseDate = new Date();
+    const utcStart = new Date(Date.UTC(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate()));
+    const threshold = addIntervalToDate(
+        utcStart,
+        plan.interval_value || 1,
+        plan.interval_unit || "month"
+    );
+    // Rule is strictly greater than one full period.
+    threshold.setUTCDate(threshold.getUTCDate() + 1);
+    return threshold;
+}
+
 function getLineUnitPrice(line) {
     if (!line) {
         return 0;
@@ -438,15 +526,31 @@ function ensureOrderlineSerializationPatched(component) {
         return;
     }
 
+    const patchLinePayload = (payload, line) => {
+        if (!payload || typeof payload !== "object") {
+            return payload;
+        }
+        payload.wgs_participant_ids = getLineParticipantIds(line);
+        const selection = getLineSubscriptionSelection(line);
+        payload.wgs_subscription_plan_id = selection.planId || false;
+        payload.wgs_subscription_pricing_id = selection.pricingId || false;
+        payload.wgs_subscription_end_date = getLineSubscriptionEndDate(line) || false;
+        return payload;
+    };
+
     const baseExport = proto.export_as_JSON;
     if (typeof baseExport === "function") {
         proto.export_as_JSON = function (...args) {
             const json = baseExport.apply(this, args);
-            json.wgs_participant_ids = getLineParticipantIds(this);
-            const selection = getLineSubscriptionSelection(this);
-            json.wgs_subscription_plan_id = selection.planId || false;
-            json.wgs_subscription_pricing_id = selection.pricingId || false;
-            return json;
+            return patchLinePayload(json, this);
+        };
+    }
+
+    const baseSerialize = proto.serialize;
+    if (typeof baseSerialize === "function") {
+        proto.serialize = function (...args) {
+            const data = baseSerialize.apply(this, args);
+            return patchLinePayload(data, this);
         };
     }
 
@@ -463,10 +567,74 @@ function ensureOrderlineSerializationPatched(component) {
                 json && json.wgs_subscription_plan_id,
                 json && json.wgs_subscription_pricing_id
             );
+            setLineSubscriptionEndDate(this, json && json.wgs_subscription_end_date);
         };
     }
 
     proto[ORDERLINE_PATCH_FLAG] = true;
+}
+
+function ensureOrderSerializationPatched(component) {
+    const order = getCurrentOrder(component);
+    if (!order || !order.constructor || !order.constructor.prototype) {
+        return;
+    }
+    const proto = order.constructor.prototype;
+    if (proto[ORDER_PATCH_FLAG]) {
+        return;
+    }
+
+    const patchExportPayload = function (jsonPayload, currentOrder) {
+        if (!jsonPayload || !Array.isArray(jsonPayload.lines)) {
+            return jsonPayload;
+        }
+        const lines = getOrderlines(currentOrder);
+        jsonPayload.lines.forEach((uiLine, index) => {
+            const line = lines[index];
+            if (!line) {
+                return;
+            }
+            let linePayload = uiLine;
+            if (Array.isArray(uiLine) && uiLine.length >= 3 && typeof uiLine[2] === "object") {
+                linePayload = uiLine[2];
+            }
+            if (!linePayload || typeof linePayload !== "object") {
+                return;
+            }
+            const selection = getLineSubscriptionSelection(line);
+            linePayload.wgs_participant_ids = getLineParticipantIds(line);
+            linePayload.wgs_subscription_plan_id = selection.planId || false;
+            linePayload.wgs_subscription_pricing_id = selection.pricingId || false;
+            linePayload.wgs_subscription_end_date = getLineSubscriptionEndDate(line) || false;
+        });
+        return jsonPayload;
+    };
+
+    const baseExport = proto.export_as_JSON;
+    if (typeof baseExport === "function") {
+        proto.export_as_JSON = function (...args) {
+            const json = baseExport.apply(this, args);
+            return patchExportPayload(json, this);
+        };
+    }
+
+    const baseExportCamel = proto.exportAsJSON;
+    if (typeof baseExportCamel === "function") {
+        proto.exportAsJSON = function (...args) {
+            const json = baseExportCamel.apply(this, args);
+            return patchExportPayload(json, this);
+        };
+    }
+
+    const baseSerialize = proto.serialize;
+    if (typeof baseSerialize === "function") {
+        proto.serialize = function (...args) {
+            const json = baseSerialize.apply(this, args);
+            return patchExportPayload(json, this);
+        };
+    }
+
+    proto[ORDER_PATCH_FLAG] = true;
 }
 
 async function getSubscriptionContext(component, product, fallbackPrice = 0) {
@@ -546,6 +714,7 @@ patch(PaymentScreen.prototype, {
 
     async validateOrder(isForceValidate) {
         ensureOrderlineSerializationPatched(this);
+        ensureOrderSerializationPatched(this);
         const order = getCurrentOrder(this);
         if (order) {
             const partner = getCurrentPartner(this, order);
@@ -609,6 +778,7 @@ patch(ControlButtons.prototype, {
         this.orm = useService("orm");
         this._ensureStatusStyles();
         ensureOrderlineSerializationPatched(this);
+        ensureOrderSerializationPatched(this);
 
         onWillUnmount(() => {
             const modal = document.getElementById(MODAL_ID);
@@ -620,6 +790,7 @@ patch(ControlButtons.prototype, {
 
     async onClickSubscriptionParticipants() {
         ensureOrderlineSerializationPatched(this);
+        ensureOrderSerializationPatched(this);
 
         if (typeof navigator !== "undefined" && navigator.onLine === false) {
             this._showSimpleInfoModal(
@@ -639,7 +810,7 @@ patch(ControlButtons.prototype, {
         if (!partner || !partner.id) {
             this._showSimpleInfoModal(
                 _t("Cliente requerido"),
-                _t("Selecciona primero un cliente para configurar participantes de suscripción.")
+                _t("Selecciona primero un cliente para configurar la suscripción.")
             );
             return;
         }
@@ -648,7 +819,7 @@ patch(ControlButtons.prototype, {
         if (!line) {
             this._showSimpleInfoModal(
                 _t("Línea requerida"),
-                _t("Agrega un producto de suscripción al ticket para configurar participantes.")
+                _t("Agrega un producto de suscripción al ticket para configurarlo.")
             );
             return;
         }
@@ -789,7 +960,7 @@ patch(ControlButtons.prototype, {
         const header = document.createElement("div");
         header.className = "wgs-status-modal-header";
         header.innerHTML = `
-            <h3>${this._escapeHtml(_t("Participantes de Suscripción"))}</h3>
+            <h3>${this._escapeHtml(_t("Configuración de Suscripción"))}</h3>
             <p class="wgs-subtitle">${this._escapeHtml(product.display_name || "")} | ${this._escapeHtml(_t("Cupo total"))}: ${capacity}</p>
         `;
 
@@ -814,14 +985,16 @@ patch(ControlButtons.prototype, {
                         labelParts.push(`(${plan.interval_label})`);
                     }
                     labelParts.push(`$${Number(plan.price || 0).toFixed(2)}`);
-                    return `<option value="${planId || 0}" data-pricing-id="${pricingId || 0}" data-price="${Number(plan.price || 0)}" ${selected}>${this._escapeHtml(labelParts.join(" "))}</option>`;
+                    return `<option value="${planId || 0}" data-pricing-id="${pricingId || 0}" data-price="${Number(plan.price || 0)}" data-interval-value="${Number(plan.interval_value || 1)}" data-interval-unit="${this._escapeHtml(plan.interval_unit || "month")}" ${selected}>${this._escapeHtml(labelParts.join(" "))}</option>`;
                 })
                 .join("")
             : `<option value="0">${this._escapeHtml(_t("Sin planes configurados"))}</option>`;
 
+        const currentEndDateValue = getLineSubscriptionEndDate(line);
         toolbar.innerHTML = `
             <input type="text" class="wgs-filter-search" placeholder="${_t("Buscar participante")}" />
             <select class="wgs-plan-select">${planOptions}</select>
+            <input type="date" class="wgs-end-date-input" value="${this._escapeHtml(currentEndDateValue)}" />
             <div class="wgs-inline-note">${_t("El titular siempre está incluido")}: <strong>${this._escapeHtml(holder.name || "")}</strong></div>
         `;
 
@@ -846,7 +1019,7 @@ patch(ControlButtons.prototype, {
         const saveButton = document.createElement("button");
         saveButton.type = "button";
         saveButton.className = "wgs-status-close-btn";
-        saveButton.textContent = _t("Guardar participantes");
+        saveButton.textContent = _t("Guardar configuración");
 
         footer.appendChild(cancelButton);
         footer.appendChild(saveButton);
@@ -869,24 +1042,55 @@ patch(ControlButtons.prototype, {
 
         const searchInput = toolbar.querySelector(".wgs-filter-search");
         const planSelect = toolbar.querySelector(".wgs-plan-select");
+        const endDateInput = toolbar.querySelector(".wgs-end-date-input");
         const holderId = holder.id;
         const selected = new Set(getLineParticipantIds(line, holderId));
 
-        const syncPlanSelection = () => {
+        const getSelectedPlanData = () => {
             if (!planSelect) {
-                return;
+                return null;
             }
             const selectedOption = planSelect.options[planSelect.selectedIndex];
+            if (!selectedOption) {
+                return null;
+            }
             const planId = Number.parseInt(planSelect.value, 10) || false;
-            const pricingId = Number.parseInt((selectedOption && selectedOption.dataset && selectedOption.dataset.pricingId) || 0, 10) || false;
-            const price = Number.parseFloat((selectedOption && selectedOption.dataset && selectedOption.dataset.price) || "0");
-            setLineSubscriptionSelection(line, planId, pricingId);
-            if (Number.isFinite(price) && price > 0) {
+            const pricingId = Number.parseInt((selectedOption.dataset && selectedOption.dataset.pricingId) || 0, 10) || false;
+            const price = Number.parseFloat((selectedOption.dataset && selectedOption.dataset.price) || "0");
+            const intervalValue = Number.parseInt((selectedOption.dataset && selectedOption.dataset.intervalValue) || "1", 10) || 1;
+            const intervalUnit = (selectedOption.dataset && selectedOption.dataset.intervalUnit) || "month";
+            return { planId, pricingId, price, intervalValue, intervalUnit };
+        };
+
+        const syncEndDateConstraint = () => {
+            if (!endDateInput) {
+                return;
+            }
+            const planData = getSelectedPlanData();
+            if (!planData) {
+                endDateInput.min = "";
+                return;
+            }
+            const minDate = getPlanMinEndDate({
+                interval_value: planData.intervalValue,
+                interval_unit: planData.intervalUnit,
+            });
+            endDateInput.min = minDate ? formatISODate(minDate) : "";
+        };
+
+        const syncPlanSelection = () => {
+            const planData = getSelectedPlanData();
+            if (!planData) {
+                return;
+            }
+            setLineSubscriptionSelection(line, planData.planId, planData.pricingId);
+            if (Number.isFinite(planData.price) && planData.price > 0) {
                 const currentPrice = getLineUnitPrice(line);
-                if (Math.abs(currentPrice - price) > 0.0001) {
-                    setLineUnitPrice(line, price);
+                if (Math.abs(currentPrice - planData.price) > 0.0001) {
+                    setLineUnitPrice(line, planData.price);
                 }
             }
+            syncEndDateConstraint();
         };
 
         syncPlanSelection();
@@ -966,11 +1170,37 @@ patch(ControlButtons.prototype, {
                 );
                 return;
             }
+            const endDateValue = String((endDateInput && endDateInput.value) || "").trim();
+            if (endDateValue) {
+                const parsedEndDate = parseISODate(endDateValue);
+                if (!parsedEndDate) {
+                    this._showSimpleInfoModal(
+                        _t("Fecha inválida"),
+                        _t("La fecha de finalización no tiene un formato válido.")
+                    );
+                    return;
+                }
+                const planData = getSelectedPlanData();
+                if (planData) {
+                    const minEndDate = getPlanMinEndDate({
+                        interval_value: planData.intervalValue,
+                        interval_unit: planData.intervalUnit,
+                    });
+                    if (minEndDate && parsedEndDate.getTime() < minEndDate.getTime()) {
+                        this._showSimpleInfoModal(
+                            _t("Fecha de finalización inválida"),
+                            _t("La fecha final debe ser posterior a un período completo del plan seleccionado.")
+                        );
+                        return;
+                    }
+                }
+            }
             setLineParticipantIds(line, Array.from(selected));
+            setLineSubscriptionEndDate(line, endDateValue || false);
             closeModal();
             this._showSimpleInfoModal(
-                _t("Participantes guardados"),
-                _t("La configuración de participantes se aplicará al validar el ticket en POS.")
+                _t("Configuración guardada"),
+                _t("La configuración de suscripción se aplicará al validar el ticket en POS.")
             );
         });
 
@@ -1282,7 +1512,7 @@ patch(ControlButtons.prototype, {
             .wgs-status-toolbar {
                 padding: 0.8rem 1.2rem;
                 display: grid;
-                grid-template-columns: minmax(260px, 1fr) 180px 210px;
+                grid-template-columns: minmax(220px, 1fr) 220px 180px minmax(260px, 1fr);
                 gap: 0.6rem;
                 border-bottom: 1px solid #e5e7eb;
                 align-items: center;

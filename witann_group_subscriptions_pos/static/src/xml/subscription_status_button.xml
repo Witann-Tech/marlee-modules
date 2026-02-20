@@ -7,7 +7,7 @@
         <xpath expr="//SelectPartnerButton" position="after">
             <button class="btn btn-light rounded-0 fw-bolder" t-on-click="onClickSubscriptionParticipants" type="button">
                 <i class="fa fa-users me-1"/>
-                Participantes
+                Configuración
             </button>
             <button class="btn btn-light rounded-0 fw-bolder" t-on-click="onClickSubscriptionStatus" type="button">
                 <i class="fa fa-id-card me-1"/>
