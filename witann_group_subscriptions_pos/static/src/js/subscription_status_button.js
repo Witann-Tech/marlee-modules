@@ -32,6 +32,12 @@ function getCurrentOrder(component) {
     if (pos && typeof pos.get_order === "function") {
         return pos.get_order();
     }
+    if (pos && typeof pos.getOrder === "function") {
+        return pos.getOrder();
+    }
+    if (pos && pos.selectedOrder) {
+        return pos.selectedOrder;
+    }
     return null;
 }
 
@@ -51,6 +57,12 @@ function getCurrentPartner(component, order = null) {
             return partner;
         }
     }
+    if (typeof activeOrder.getPartner === "function") {
+        const partner = activeOrder.getPartner();
+        if (partner) {
+            return partner;
+        }
+    }
 
     if (activeOrder.partner && activeOrder.partner.id) {
         return activeOrder.partner;
@@ -65,6 +77,16 @@ function getCurrentPartner(component, order = null) {
     }
     if (partnerField && typeof partnerField === "object" && partnerField.id) {
         return partnerField;
+    }
+    const camelPartnerField = activeOrder.partnerId;
+    if (Array.isArray(camelPartnerField) && camelPartnerField.length) {
+        return getPartnerById(component, camelPartnerField[0]);
+    }
+    if (typeof camelPartnerField === "number") {
+        return getPartnerById(component, camelPartnerField);
+    }
+    if (camelPartnerField && typeof camelPartnerField === "object" && camelPartnerField.id) {
+        return camelPartnerField;
     }
 
     return null;
@@ -135,9 +157,21 @@ function getSelectedOrderline(component, order = null) {
     if (typeof activeOrder.get_selected_orderline === "function") {
         return activeOrder.get_selected_orderline();
     }
+    if (typeof activeOrder.getSelectedOrderline === "function") {
+        return activeOrder.getSelectedOrderline();
+    }
+    if (typeof activeOrder.getSelectedOrderLine === "function") {
+        return activeOrder.getSelectedOrderLine();
+    }
 
     if (activeOrder.selected_orderline) {
         return activeOrder.selected_orderline;
+    }
+    if (activeOrder.selectedOrderline) {
+        return activeOrder.selectedOrderline;
+    }
+    if (activeOrder.selectedOrderLine) {
+        return activeOrder.selectedOrderLine;
     }
 
     return null;
@@ -149,6 +183,21 @@ function getOrderlines(order) {
     }
     if (typeof order.get_orderlines === "function") {
         return order.get_orderlines() || [];
+    }
+    if (typeof order.getOrderlines === "function") {
+        return order.getOrderlines() || [];
+    }
+    if (Array.isArray(order.lines)) {
+        return order.lines;
+    }
+    if (order.lines && Array.isArray(order.lines.models)) {
+        return order.lines.models;
+    }
+    if (order.lines && typeof order.lines.toArray === "function") {
+        const values = order.lines.toArray();
+        if (Array.isArray(values)) {
+            return values;
+        }
     }
     if (Array.isArray(order.orderlines)) {
         return order.orderlines;
@@ -174,8 +223,24 @@ function getLineProduct(component, line) {
             return product;
         }
     }
+    if (typeof line.getProduct === "function") {
+        const product = line.getProduct();
+        if (product) {
+            return product;
+        }
+    }
 
-    const productId = line.product_id || (typeof line.get_product_id === "function" ? line.get_product_id() : null);
+    let productId = line.product_id || (typeof line.get_product_id === "function" ? line.get_product_id() : null);
+    if (Array.isArray(productId)) {
+        productId = productId[0];
+    }
+    if (typeof productId === "object" && productId && productId.id) {
+        productId = productId.id;
+    }
+    const parsedProductId = Number.parseInt(productId, 10);
+    if (Number.isInteger(parsedProductId) && parsedProductId > 0) {
+        productId = parsedProductId;
+    }
     if (!productId) {
         return null;
     }
@@ -192,7 +257,12 @@ function isSubscriptionProduct(product) {
     if (!product) {
         return false;
     }
-    return !!product.recurring_invoice;
+    return !!(
+        product.recurring_invoice
+        || product.is_subscription
+        || product.subscription_ok
+        || (product.product_tmpl_id && product.product_tmpl_id.recurring_invoice)
+    );
 }
 
 function getLineQuantity(line) {
@@ -201,6 +271,12 @@ function getLineQuantity(line) {
     }
     if (typeof line.get_quantity === "function") {
         return Math.abs(Number(line.get_quantity()) || 0);
+    }
+    if (typeof line.getQuantity === "function") {
+        return Math.abs(Number(line.getQuantity()) || 0);
+    }
+    if ("quantity" in line) {
+        return Math.abs(Number(line.quantity) || 0);
     }
     return Math.abs(Number(line.qty) || 0);
 }
@@ -250,12 +326,37 @@ function getLineParticipantCapacity(product, line) {
     return total > 0 ? total : 1;
 }
 
+function getLineSubscriptionSelection(line) {
+    if (!line) {
+        return { planId: false, pricingId: false };
+    }
+    const planId = Number.parseInt(line.wgs_subscription_plan_id, 10);
+    const pricingId = Number.parseInt(line.wgs_subscription_pricing_id, 10);
+    return {
+        planId: Number.isInteger(planId) && planId > 0 ? planId : false,
+        pricingId: Number.isInteger(pricingId) && pricingId > 0 ? pricingId : false,
+    };
+}
+
+function setLineSubscriptionSelection(line, planId = false, pricingId = false) {
+    if (!line) {
+        return;
+    }
+    const parsedPlanId = Number.parseInt(planId, 10);
+    const parsedPricingId = Number.parseInt(pricingId, 10);
+    line.wgs_subscription_plan_id = Number.isInteger(parsedPlanId) && parsedPlanId > 0 ? parsedPlanId : false;
+    line.wgs_subscription_pricing_id = Number.isInteger(parsedPricingId) && parsedPricingId > 0 ? parsedPricingId : false;
+}
+
 function getLineUnitPrice(line) {
     if (!line) {
         return 0;
     }
     if (typeof line.get_unit_price === "function") {
         return Number(line.get_unit_price()) || 0;
+    }
+    if (typeof line.getUnitPrice === "function") {
+        return Number(line.getUnitPrice()) || 0;
     }
     return Number(line.price_unit) || Number(line.price) || 0;
 }
@@ -264,9 +365,12 @@ function setLineUnitPrice(line, price) {
     const unitPrice = Number(price) || 0;
     if (typeof line.set_unit_price === "function") {
         line.set_unit_price(unitPrice);
+    } else if (typeof line.setUnitPrice === "function") {
+        line.setUnitPrice(unitPrice);
     } else {
         line.price_unit = unitPrice;
         line.price = unitPrice;
+        line.priceUnit = unitPrice;
     }
 
     if (line.order && typeof line.order.trigger === "function") {
@@ -281,37 +385,49 @@ function getSubscriptionLineForParticipants(component, order = null) {
     }
 
     const selected = getSelectedOrderline(component, activeOrder);
-    if (selected) {
-        const selectedProduct = getLineProduct(component, selected);
-        if (isSubscriptionProduct(selectedProduct) && getLineQuantity(selected) > 0) {
-            return selected;
-        }
+    if (selected && getLineQuantity(selected) > 0 && isSubscriptionProduct(getLineProduct(component, selected))) {
+        return selected;
     }
 
     const lines = getOrderlines(activeOrder);
     for (let index = lines.length - 1; index >= 0; index -= 1) {
         const line = lines[index];
-        const product = getLineProduct(component, line);
-        if (isSubscriptionProduct(product) && getLineQuantity(line) > 0) {
+        if (getLineQuantity(line) > 0 && isSubscriptionProduct(getLineProduct(component, line))) {
             if (typeof activeOrder.select_orderline === "function") {
                 activeOrder.select_orderline(line);
+            } else if (typeof activeOrder.selectOrderline === "function") {
+                activeOrder.selectOrderline(line);
+            } else if (typeof activeOrder.selectOrderLine === "function") {
+                activeOrder.selectOrderLine(line);
             } else if ("selected_orderline" in activeOrder) {
                 activeOrder.selected_orderline = line;
+            } else if ("selectedOrderline" in activeOrder) {
+                activeOrder.selectedOrderline = line;
             }
             return line;
         }
     }
 
-    return selected || null;
+    if (selected && getLineQuantity(selected) > 0) {
+        return selected;
+    }
+
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+        if (getLineQuantity(lines[index]) > 0) {
+            return lines[index];
+        }
+    }
+
+    return null;
 }
 
 function ensureOrderlineSerializationPatched(component) {
     const order = getCurrentOrder(component);
-    if (!order || typeof order.get_orderlines !== "function") {
+    if (!order) {
         return;
     }
 
-    const lines = order.get_orderlines() || [];
+    const lines = getOrderlines(order);
     const sample = lines[0] || getSelectedOrderline(component, order);
     if (!sample || !sample.constructor || !sample.constructor.prototype) {
         return;
@@ -327,6 +443,9 @@ function ensureOrderlineSerializationPatched(component) {
         proto.export_as_JSON = function (...args) {
             const json = baseExport.apply(this, args);
             json.wgs_participant_ids = getLineParticipantIds(this);
+            const selection = getLineSubscriptionSelection(this);
+            json.wgs_subscription_plan_id = selection.planId || false;
+            json.wgs_subscription_pricing_id = selection.pricingId || false;
             return json;
         };
     }
@@ -339,10 +458,39 @@ function ensureOrderlineSerializationPatched(component) {
             this.wgs_participant_ids = getLineParticipantIds({
                 wgs_participant_ids: json && json.wgs_participant_ids,
             });
+            setLineSubscriptionSelection(
+                this,
+                json && json.wgs_subscription_plan_id,
+                json && json.wgs_subscription_pricing_id
+            );
         };
     }
 
     proto[ORDERLINE_PATCH_FLAG] = true;
+}
+
+async function getSubscriptionContext(component, product, fallbackPrice = 0) {
+    if (!product || !product.id || !component.orm) {
+        return { is_subscription: false, max_participants_total: 1, plans: [] };
+    }
+
+    const pos = getPos(component);
+    const cache = pos
+        ? (pos.wgsSubscriptionContextCache = pos.wgsSubscriptionContextCache || {})
+        : (component._wgsSubscriptionContextCache = component._wgsSubscriptionContextCache || {});
+
+    const cacheKey = String(product.id);
+    if (cache[cacheKey]) {
+        return cache[cacheKey];
+    }
+
+    const context = await component.orm.call(
+        "pos.order",
+        "wgs_get_subscription_product_context_for_pos",
+        [product.id, fallbackPrice]
+    );
+    cache[cacheKey] = context || { is_subscription: false, max_participants_total: 1, plans: [] };
+    return cache[cacheKey];
 }
 
 patch(PaymentScreen.prototype, {
@@ -350,26 +498,29 @@ patch(PaymentScreen.prototype, {
         super.setup(...arguments);
         this.orm = useService("orm");
         this._wgsRecurringPriceCache = {};
+        this._wgsSubscriptionContextCache = {};
     },
 
     async _wgsApplyRecurringPriceToLine(line) {
         const product = getLineProduct(this, line);
-        if (!isSubscriptionProduct(product)) {
+        if (!product) {
+            return;
+        }
+
+        const selection = getLineSubscriptionSelection(line);
+        const context = await getSubscriptionContext(this, product, getLineUnitPrice(line));
+        if (!context || !context.is_subscription) {
             return;
         }
 
         const productId = Number(product.id || 0);
-        if (!productId) {
-            return;
-        }
-
-        const cacheKey = String(productId);
+        const cacheKey = `${productId}:${selection.planId || 0}:${selection.pricingId || 0}`;
         let cached = this._wgsRecurringPriceCache[cacheKey];
         if (!cached) {
             cached = await this.orm.call(
                 "pos.order",
                 "wgs_get_recurring_price_for_pos",
-                [productId, getLineUnitPrice(line)]
+                [productId, getLineUnitPrice(line), selection.planId || false, selection.pricingId || false]
             );
             this._wgsRecurringPriceCache[cacheKey] = cached || {};
         }
@@ -383,16 +534,35 @@ patch(PaymentScreen.prototype, {
         if (Math.abs(currentPrice - recurringPrice) > 0.0001) {
             setLineUnitPrice(line, recurringPrice);
         }
+
+        const resolvedPlanId = Number.parseInt(cached && cached.plan_id, 10);
+        const resolvedPricingId = Number.parseInt(cached && cached.pricing_id, 10);
+        setLineSubscriptionSelection(
+            line,
+            Number.isInteger(resolvedPlanId) && resolvedPlanId > 0 ? resolvedPlanId : selection.planId,
+            Number.isInteger(resolvedPricingId) && resolvedPricingId > 0 ? resolvedPricingId : selection.pricingId
+        );
     },
 
     async validateOrder(isForceValidate) {
         ensureOrderlineSerializationPatched(this);
         const order = getCurrentOrder(this);
-        if (order && typeof order.get_orderlines === "function") {
+        if (order) {
             const partner = getCurrentPartner(this, order);
-            const lines = order
-                .get_orderlines()
-                .filter((line) => isSubscriptionProduct(getLineProduct(this, line)) && getLineQuantity(line) > 0);
+            const lines = [];
+            for (const line of getOrderlines(order)) {
+                if (getLineQuantity(line) <= 0) {
+                    continue;
+                }
+                const product = getLineProduct(this, line);
+                if (!product) {
+                    continue;
+                }
+                const context = await getSubscriptionContext(this, product, getLineUnitPrice(line));
+                if (context && context.is_subscription) {
+                    lines.push({ line, product, context });
+                }
+            }
 
             if (lines.length) {
                 if (typeof navigator !== "undefined" && navigator.onLine === false) {
@@ -405,10 +575,16 @@ patch(PaymentScreen.prototype, {
                     return;
                 }
 
-                for (const line of lines) {
-                    const product = getLineProduct(this, line);
+                for (const row of lines) {
+                    const line = row.line;
+                    const product = row.product;
+                    const context = row.context;
                     await this._wgsApplyRecurringPriceToLine(line);
-                    const capacity = getLineParticipantCapacity(product, line);
+                    const maxPerUnit = Number.parseInt(context.max_participants_total, 10) || product.max_participants_total || 1;
+                    const capacity = getLineParticipantCapacity(
+                        { ...product, max_participants_total: maxPerUnit },
+                        line
+                    );
                     const participantIds = getLineParticipantIds(line, partner.id);
 
                     if (participantIds.length > capacity) {
@@ -443,6 +619,8 @@ patch(ControlButtons.prototype, {
     },
 
     async onClickSubscriptionParticipants() {
+        ensureOrderlineSerializationPatched(this);
+
         if (typeof navigator !== "undefined" && navigator.onLine === false) {
             this._showSimpleInfoModal(
                 _t("Sin conexión"),
@@ -476,7 +654,8 @@ patch(ControlButtons.prototype, {
         }
 
         const product = getLineProduct(this, line);
-        if (!isSubscriptionProduct(product)) {
+        const context = await getSubscriptionContext(this, product, getLineUnitPrice(line));
+        if (!context || !context.is_subscription) {
             this._showSimpleInfoModal(
                 _t("Producto no válido"),
                 _t("La línea seleccionada no corresponde a un producto de suscripción.")
@@ -484,9 +663,13 @@ patch(ControlButtons.prototype, {
             return;
         }
 
-        await this._wgsEnsureRecurringPriceOnLine(line, product);
+        await this._wgsEnsureRecurringPriceOnLine(line, product, context);
 
-        const capacity = getLineParticipantCapacity(product, line);
+        const maxPerUnit = Number.parseInt(context.max_participants_total, 10) || product.max_participants_total || 1;
+        const capacity = getLineParticipantCapacity(
+            { ...product, max_participants_total: maxPerUnit },
+            line
+        );
         const participants = getAllPartners(this);
         this._showParticipantsModal({
             holder: partner,
@@ -494,6 +677,7 @@ patch(ControlButtons.prototype, {
             line,
             participants,
             capacity,
+            subscriptionContext: context,
         });
     },
 
@@ -535,9 +719,13 @@ patch(ControlButtons.prototype, {
         this._showDirectoryModal(rows);
     },
 
-    async _wgsEnsureRecurringPriceOnLine(line, product = null) {
+    async _wgsEnsureRecurringPriceOnLine(line, product = null, providedContext = null) {
         const recurringProduct = product || getLineProduct(this, line);
-        if (!isSubscriptionProduct(recurringProduct)) {
+        if (!recurringProduct) {
+            return;
+        }
+        const context = providedContext || await getSubscriptionContext(this, recurringProduct, getLineUnitPrice(line));
+        if (!context || !context.is_subscription) {
             return;
         }
         const productId = Number(recurringProduct.id || 0);
@@ -545,10 +733,13 @@ patch(ControlButtons.prototype, {
             return;
         }
 
+        const selection = getLineSubscriptionSelection(line);
+        const preferredPlanId = selection.planId || context.default_plan_id || false;
+        const preferredPricingId = selection.pricingId || context.default_pricing_id || false;
         const result = await this.orm.call(
             "pos.order",
             "wgs_get_recurring_price_for_pos",
-            [productId, getLineUnitPrice(line)]
+            [productId, getLineUnitPrice(line), preferredPlanId, preferredPricingId]
         );
         const recurringPrice = Number(result && result.price);
         if (Number.isFinite(recurringPrice) && recurringPrice > 0) {
@@ -557,6 +748,12 @@ patch(ControlButtons.prototype, {
                 setLineUnitPrice(line, recurringPrice);
             }
         }
+
+        setLineSubscriptionSelection(
+            line,
+            result && result.plan_id ? result.plan_id : preferredPlanId,
+            result && result.pricing_id ? result.pricing_id : preferredPricingId
+        );
     },
 
     async _fetchPartnerStatusMap(partnerIds) {
@@ -576,7 +773,7 @@ patch(ControlButtons.prototype, {
         return statusMap;
     },
 
-    _showParticipantsModal({ holder, product, line, participants, capacity }) {
+    _showParticipantsModal({ holder, product, line, participants, capacity, subscriptionContext }) {
         const previous = document.getElementById(MODAL_ID);
         if (previous) {
             previous.remove();
@@ -598,8 +795,33 @@ patch(ControlButtons.prototype, {
 
         const toolbar = document.createElement("div");
         toolbar.className = "wgs-status-toolbar";
+        const plans = Array.isArray(subscriptionContext && subscriptionContext.plans) ? subscriptionContext.plans : [];
+        const selection = getLineSubscriptionSelection(line);
+        const defaultPlanId = selection.planId || (subscriptionContext && subscriptionContext.default_plan_id) || (plans[0] && plans[0].plan_id) || false;
+        const defaultPricingId = selection.pricingId || (subscriptionContext && subscriptionContext.default_pricing_id) || (plans[0] && plans[0].pricing_id) || false;
+
+        const planOptions = plans.length
+            ? plans
+                .map((plan) => {
+                    const planId = Number(plan.plan_id || 0);
+                    const pricingId = Number(plan.pricing_id || 0);
+                    const selected = (
+                        (defaultPricingId && pricingId === Number(defaultPricingId))
+                        || (!defaultPricingId && defaultPlanId && planId === Number(defaultPlanId))
+                    ) ? "selected" : "";
+                    const labelParts = [plan.plan_name || _t("Plan recurrente")];
+                    if (plan.interval_label) {
+                        labelParts.push(`(${plan.interval_label})`);
+                    }
+                    labelParts.push(`$${Number(plan.price || 0).toFixed(2)}`);
+                    return `<option value="${planId || 0}" data-pricing-id="${pricingId || 0}" data-price="${Number(plan.price || 0)}" ${selected}>${this._escapeHtml(labelParts.join(" "))}</option>`;
+                })
+                .join("")
+            : `<option value="0">${this._escapeHtml(_t("Sin planes configurados"))}</option>`;
+
         toolbar.innerHTML = `
             <input type="text" class="wgs-filter-search" placeholder="${_t("Buscar participante")}" />
+            <select class="wgs-plan-select">${planOptions}</select>
             <div class="wgs-inline-note">${_t("El titular siempre está incluido")}: <strong>${this._escapeHtml(holder.name || "")}</strong></div>
         `;
 
@@ -646,8 +868,33 @@ patch(ControlButtons.prototype, {
         document.body.appendChild(overlay);
 
         const searchInput = toolbar.querySelector(".wgs-filter-search");
+        const planSelect = toolbar.querySelector(".wgs-plan-select");
         const holderId = holder.id;
         const selected = new Set(getLineParticipantIds(line, holderId));
+
+        const syncPlanSelection = () => {
+            if (!planSelect) {
+                return;
+            }
+            const selectedOption = planSelect.options[planSelect.selectedIndex];
+            const planId = Number.parseInt(planSelect.value, 10) || false;
+            const pricingId = Number.parseInt((selectedOption && selectedOption.dataset && selectedOption.dataset.pricingId) || 0, 10) || false;
+            const price = Number.parseFloat((selectedOption && selectedOption.dataset && selectedOption.dataset.price) || "0");
+            setLineSubscriptionSelection(line, planId, pricingId);
+            if (Number.isFinite(price) && price > 0) {
+                const currentPrice = getLineUnitPrice(line);
+                if (Math.abs(currentPrice - price) > 0.0001) {
+                    setLineUnitPrice(line, price);
+                }
+            }
+        };
+
+        syncPlanSelection();
+        if (planSelect) {
+            planSelect.addEventListener("change", () => {
+                syncPlanSelection();
+            });
+        }
 
         const setCounter = () => {
             counter.textContent = `${_t("Seleccionados")}: ${selected.size}/${capacity}`;
@@ -710,6 +957,7 @@ patch(ControlButtons.prototype, {
         searchInput.addEventListener("input", renderList);
 
         saveButton.addEventListener("click", () => {
+            syncPlanSelection();
             selected.add(holderId);
             if (selected.size > capacity) {
                 this._showSimpleInfoModal(
