@@ -493,10 +493,65 @@ class PosOrder(models.Model):
                         seen_pricing_ids.add(pricing.id)
                         candidates.append(candidate)
 
+        candidates.extend(self._wgs_search_product_pricelist_item_records(product))
+
         if not candidates:
             candidates.extend(self._wgs_search_subscription_pricing_records(product))
 
+        if not candidates:
+            _logger.warning(
+                'WGS POS: No recurring pricing candidates for product %s (id=%s). recurring_invoice=%s',
+                product.display_name,
+                product.id,
+                bool(getattr(product.product_tmpl_id, 'recurring_invoice', False)),
+            )
+
         return candidates
+
+    def _wgs_search_product_pricelist_item_records(self, product):
+        model_name = 'product.pricelist.item'
+        if model_name not in self.env.registry:
+            return []
+
+        pricelist_item_model = self.env[model_name]
+        fields_map = pricelist_item_model._fields
+        records = pricelist_item_model.browse()
+
+        # Search any many2one field that points to product/product.template.
+        for field_name, field in fields_map.items():
+            if field.type != 'many2one':
+                continue
+            comodel_name = getattr(field, 'comodel_name', False)
+            if comodel_name == 'product.product':
+                records |= pricelist_item_model.search([(field_name, '=', product.id)])
+            elif comodel_name == 'product.template':
+                records |= pricelist_item_model.search([(field_name, '=', product.product_tmpl_id.id)])
+
+        output = []
+        seen = set()
+        for record in records:
+            if record.id in seen:
+                continue
+            seen.add(record.id)
+
+            plan = self._wgs_extract_plan_record_from_pricing(record)
+            if not plan:
+                continue
+
+            price = self._wgs_extract_price_from_pricing(record)
+            if price is None:
+                continue
+
+            output.append({
+                'sequence': self._wgs_extract_pricing_sequence(record),
+                # Keep False so preferred_pricing_id matching is only used for sale.subscription.pricing ids.
+                'pricing_id': False,
+                'plan_id': plan.id,
+                'plan_name': plan.display_name,
+                'interval_label': self._wgs_extract_plan_interval_label_from_pricing(record),
+                'price': float(price),
+            })
+        return output
 
     def _wgs_build_pricing_candidate(self, pricing):
         price = self._wgs_extract_price_from_pricing(pricing)
