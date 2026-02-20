@@ -254,6 +254,36 @@ function getLineProduct(component, line) {
     return null;
 }
 
+function getLineProductId(line) {
+    if (!line) {
+        return 0;
+    }
+    if (line.product && line.product.id) {
+        return Number.parseInt(line.product.id, 10) || 0;
+    }
+    if (typeof line.get_product === "function") {
+        const product = line.get_product();
+        if (product && product.id) {
+            return Number.parseInt(product.id, 10) || 0;
+        }
+    }
+    if (typeof line.getProduct === "function") {
+        const product = line.getProduct();
+        if (product && product.id) {
+            return Number.parseInt(product.id, 10) || 0;
+        }
+    }
+    let productId = line.product_id || (typeof line.get_product_id === "function" ? line.get_product_id() : null);
+    if (Array.isArray(productId) && productId.length) {
+        productId = productId[0];
+    }
+    if (typeof productId === "object" && productId && productId.id) {
+        productId = productId.id;
+    }
+    const parsed = Number.parseInt(productId, 10);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : 0;
+}
+
 function isSubscriptionProduct(product) {
     if (!product) {
         return false;
@@ -603,40 +633,87 @@ function ensureOrderSerializationPatched(component) {
     }
 
     const patchExportPayload = function (jsonPayload, currentOrder) {
-        if (!jsonPayload || !Array.isArray(jsonPayload.lines)) {
+        if (!jsonPayload) {
             return jsonPayload;
         }
         const lines = getOrderlines(currentOrder);
-        jsonPayload.lines.forEach((uiLine, index) => {
-            const line = lines[index];
-            if (!line) {
-                return;
-            }
-            let linePayload = uiLine;
-            if (Array.isArray(uiLine) && uiLine.length >= 3 && typeof uiLine[2] === "object") {
-                linePayload = uiLine[2];
-            }
-            if (!linePayload || typeof linePayload !== "object") {
-                return;
-            }
+        const configs = [];
+
+        if (Array.isArray(jsonPayload.lines)) {
+            jsonPayload.lines.forEach((uiLine, index) => {
+                const line = lines[index];
+                if (!line) {
+                    return;
+                }
+                let linePayload = uiLine;
+                if (Array.isArray(uiLine) && uiLine.length >= 3 && typeof uiLine[2] === "object") {
+                    linePayload = uiLine[2];
+                }
+                if (!linePayload || typeof linePayload !== "object") {
+                    return;
+                }
+                const selection = getLineSubscriptionSelection(line);
+                const participantIds = getLineParticipantIds(line);
+                const endDate = getLineSubscriptionEndDate(line) || false;
+                const productId = getLineProductId(line);
+                const quantity = getLineQuantity(line);
+
+                linePayload.wgs_participant_ids = participantIds;
+                linePayload.wgsParticipantIds = participantIds;
+                linePayload.wgs_subscription_plan_id = selection.planId || false;
+                linePayload.wgsSubscriptionPlanId = selection.planId || false;
+                linePayload.wgs_subscription_pricing_id = selection.pricingId || false;
+                linePayload.wgsSubscriptionPricingId = selection.pricingId || false;
+                linePayload.wgs_subscription_end_date = endDate;
+                linePayload.wgsSubscriptionEndDate = endDate;
+                linePayload.wgs_subscription_config = {
+                    participant_ids: participantIds,
+                    plan_id: selection.planId || false,
+                    pricing_id: selection.pricingId || false,
+                    end_date: endDate,
+                    product_id: productId || false,
+                    quantity: quantity || 0,
+                    line_index: index,
+                };
+
+                configs.push({
+                    participant_ids: participantIds,
+                    plan_id: selection.planId || false,
+                    pricing_id: selection.pricingId || false,
+                    end_date: endDate,
+                    product_id: productId || false,
+                    quantity: quantity || 0,
+                    line_index: index,
+                });
+            });
+        }
+
+        // Root-level fallback payload consumed by backend parser for Odoo variants.
+        jsonPayload.wgs_subscription_configs = configs;
+        lines.forEach((line, index) => {
             const selection = getLineSubscriptionSelection(line);
             const participantIds = getLineParticipantIds(line);
             const endDate = getLineSubscriptionEndDate(line) || false;
-            linePayload.wgs_participant_ids = participantIds;
-            linePayload.wgsParticipantIds = participantIds;
-            linePayload.wgs_subscription_plan_id = selection.planId || false;
-            linePayload.wgsSubscriptionPlanId = selection.planId || false;
-            linePayload.wgs_subscription_pricing_id = selection.pricingId || false;
-            linePayload.wgsSubscriptionPricingId = selection.pricingId || false;
-            linePayload.wgs_subscription_end_date = endDate;
-            linePayload.wgsSubscriptionEndDate = endDate;
-            linePayload.wgs_subscription_config = {
+            const productId = getLineProductId(line);
+            const quantity = getLineQuantity(line);
+            if (!participantIds.length && !selection.planId && !selection.pricingId && !endDate) {
+                return;
+            }
+            if (configs.find((row) => row.line_index === index)) {
+                return;
+            }
+            configs.push({
                 participant_ids: participantIds,
                 plan_id: selection.planId || false,
                 pricing_id: selection.pricingId || false,
                 end_date: endDate,
-            };
+                product_id: productId || false,
+                quantity: quantity || 0,
+                line_index: index,
+            });
         });
+        jsonPayload.wgs_subscription_configs = configs;
+
         return jsonPayload;
     };
 

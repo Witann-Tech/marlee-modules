@@ -336,6 +336,25 @@ class PosOrder(models.Model):
         output = []
         if not isinstance(ui_order, dict):
             return output
+
+        raw_root_configs = ui_order.get('wgs_subscription_configs')
+        if isinstance(raw_root_configs, str):
+            try:
+                raw_root_configs = json.loads(raw_root_configs)
+            except (TypeError, ValueError):
+                raw_root_configs = []
+        if isinstance(raw_root_configs, list):
+            for item in raw_root_configs:
+                if not isinstance(item, dict):
+                    continue
+                config = self._wgs_extract_subscription_config_payload(item)
+                config['product_id'] = self._wgs_to_int(item.get('product_id') or item.get('productId'))
+                config['quantity'] = self._wgs_to_float(item.get('quantity') or item.get('qty'))
+                output.append(config)
+            if output:
+                _logger.info('WGS POS: extracted %s root subscription configs from UI order.', len(output))
+                return output
+
         raw_lines = ui_order.get('lines')
         if not isinstance(raw_lines, list):
             return output
@@ -353,24 +372,26 @@ class PosOrder(models.Model):
             ):
                 continue
 
-            product_id = payload.get('product_id') or payload.get('productId')
-            if isinstance(product_id, (list, tuple)) and product_id:
-                product_id = product_id[0]
-            try:
-                product_id = int(product_id or 0)
-            except (TypeError, ValueError):
-                product_id = 0
-
-            quantity = payload.get('qty') or payload.get('quantity') or payload.get('qty_ordered')
-            try:
-                quantity = abs(float(quantity or 0.0))
-            except (TypeError, ValueError):
-                quantity = 0.0
-
-            config['product_id'] = product_id
-            config['quantity'] = quantity
+            config['product_id'] = self._wgs_to_int(payload.get('product_id') or payload.get('productId'))
+            config['quantity'] = self._wgs_to_float(payload.get('qty') or payload.get('quantity') or payload.get('qty_ordered'))
             output.append(config)
         return output
+
+    @api.model
+    def _wgs_to_int(self, value):
+        if isinstance(value, (list, tuple)) and value:
+            value = value[0]
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    @api.model
+    def _wgs_to_float(self, value):
+        try:
+            return abs(float(value or 0.0))
+        except (TypeError, ValueError):
+            return 0.0
 
     @api.model
     def _wgs_find_best_payload_dict(self, raw_line):

@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_product_template_change_request_tree" model="ir.ui.view">
+        <field name="name">product.template.change.request.tree</field>
+        <field name="model">product.template.change.request</field>
+        <field name="arch" type="xml">
+            <list string="Solicitudes de cambios de productos" create="false" delete="false">
+                <field name="name"/>
+                <field name="product_tmpl_id"/>
+                <field name="change_type"/>
+                <field name="state"/>
+                <field name="requested_by_id"/>
+                <field name="requested_on"/>
+                <field name="approved_by_id"/>
+                <field name="approved_on"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_product_template_change_request_form" model="ir.ui.view">
+        <field name="name">product.template.change.request.form</field>
+        <field name="model">product.template.change.request</field>
+        <field name="arch" type="xml">
+            <form string="Solicitud de cambio de producto" create="false" delete="false" edit="false">
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="name"/>
+                            <field name="product_tmpl_id"/>
+                            <field name="change_type"/>
+                            <field name="state"/>
+                        </group>
+                        <group>
+                            <field name="requested_by_id"/>
+                            <field name="requested_on"/>
+                            <field name="approved_by_id"/>
+                            <field name="approved_on"/>
+                            <field name="rejected_by_id"/>
+                            <field name="rejected_on"/>
+                        </group>
+                    </group>
+                    <group>
+                        <field name="payload"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_product_template_change_request" model="ir.actions.act_window">
+        <field name="name">Solicitudes de cambios</field>
+        <field name="res_model">product.template.change.request</field>
+        <field name="view_mode">list,form</field>
+        <field name="domain">[("state", "=", "pending")]</field>
+    </record>
+</odoo>
