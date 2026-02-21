@@ -68,6 +68,26 @@ class PosOrder(models.Model):
     _inherit = 'pos.order'
 
     @api.model
+    def wgs_stage_subscription_config_for_uuid(self, order_uuid, configs):
+        if not self.env.user.has_group('point_of_sale.group_pos_user'):
+            raise UserError(_('No tienes permisos para guardar configuración de suscripción desde Punto de Venta.'))
+
+        order_uuid = (order_uuid or '').strip()
+        if not order_uuid:
+            return {'ok': False, 'reason': 'missing_uuid'}
+
+        if not isinstance(configs, list):
+            configs = []
+        payload_json = json.dumps(configs)
+        buffer_model = self.env['wgs.pos.subscription.buffer'].sudo()
+        existing = buffer_model.search([('order_uuid', '=', order_uuid)], limit=1, order='id desc')
+        if existing:
+            existing.write({'payload_json': payload_json})
+        else:
+            buffer_model.create({'order_uuid': order_uuid, 'payload_json': payload_json})
+        return {'ok': True}
+
+    @api.model
     def wgs_get_recurring_price_for_pos(self, product_id, fallback=0.0, preferred_plan_id=False, preferred_pricing_id=False):
         if not self.env.user.has_group('point_of_sale.group_pos_user'):
             raise UserError(_('No tienes permisos para consultar precios de suscripción desde Punto de Venta.'))
@@ -269,13 +289,55 @@ class PosOrder(models.Model):
         if draft:
             return pos_order_id
 
-        pos_order._wgs_apply_ui_subscription_line_config(order)
+        order_uuid = self._wgs_extract_order_uuid(order)
+        ui_configs = pos_order._wgs_extract_ui_subscription_line_configs(order)
+        if not ui_configs and order_uuid:
+            ui_configs = pos_order._wgs_get_buffered_subscription_configs(order_uuid)
+
+        if ui_configs:
+            pos_order._wgs_apply_subscription_line_configs(ui_configs)
+        else:
+            pos_order._wgs_apply_ui_subscription_line_config(order)
         pos_order._wgs_sync_subscription_sales()
         return pos_order_id
+
+    @api.model
+    def _wgs_extract_order_uuid(self, ui_order):
+        if not isinstance(ui_order, dict):
+            return False
+        for key in ('uuid', 'uid', 'order_uuid', 'orderUid'):
+            value = ui_order.get(key)
+            if value:
+                return str(value).strip()
+        return False
+
+    def _wgs_get_buffered_subscription_configs(self, order_uuid):
+        order_uuid = (order_uuid or '').strip()
+        if not order_uuid:
+            return []
+        buffer_model = self.env['wgs.pos.subscription.buffer'].sudo()
+        buffer_record = buffer_model.search([('order_uuid', '=', order_uuid)], limit=1, order='id desc')
+        if not buffer_record:
+            return []
+        try:
+            payload = json.loads(buffer_record.payload_json or '[]')
+        except (TypeError, ValueError):
+            payload = []
+        buffer_record.unlink()
+        if not isinstance(payload, list):
+            return []
+        _logger.info('WGS POS: recovered %s buffered subscription configs for uuid=%s', len(payload), order_uuid)
+        return payload
 
     def _wgs_apply_ui_subscription_line_config(self, ui_order):
         self.ensure_one()
         ui_configs = self._wgs_extract_ui_subscription_line_configs(ui_order)
+        if not ui_configs:
+            return
+        self._wgs_apply_subscription_line_configs(ui_configs)
+
+    def _wgs_apply_subscription_line_configs(self, ui_configs):
+        self.ensure_one()
         if not ui_configs:
             return
 

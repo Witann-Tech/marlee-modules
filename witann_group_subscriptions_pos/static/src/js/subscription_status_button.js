@@ -42,6 +42,31 @@ function getCurrentOrder(component) {
     return null;
 }
 
+function getOrderUUID(order) {
+    if (!order) {
+        return "";
+    }
+    const candidates = [order.uuid, order.uid, order.order_uuid, order.orderUid];
+    for (const value of candidates) {
+        if (value) {
+            return String(value);
+        }
+    }
+    if (typeof order.get_uid === "function") {
+        const value = order.get_uid();
+        if (value) {
+            return String(value);
+        }
+    }
+    if (typeof order.getUID === "function") {
+        const value = order.getUID();
+        if (value) {
+            return String(value);
+        }
+    }
+    return "";
+}
+
 function getCurrentPartner(component, order = null) {
     if (component.props && component.props.partner && component.props.partner.id) {
         return component.props.partner;
@@ -744,6 +769,33 @@ function ensureOrderSerializationPatched(component) {
     proto[ORDER_PATCH_FLAG] = true;
 }
 
+function collectOrderSubscriptionConfigs(order) {
+    const lines = getOrderlines(order);
+    const configs = [];
+    lines.forEach((line, index) => {
+        if (getLineQuantity(line) <= 0) {
+            return;
+        }
+        const productId = getLineProductId(line);
+        const selection = getLineSubscriptionSelection(line);
+        const participantIds = getLineParticipantIds(line);
+        const endDate = getLineSubscriptionEndDate(line) || false;
+        if (!participantIds.length && !selection.planId && !selection.pricingId && !endDate) {
+            return;
+        }
+        configs.push({
+            participant_ids: participantIds,
+            plan_id: selection.planId || false,
+            pricing_id: selection.pricingId || false,
+            end_date: endDate,
+            product_id: productId || false,
+            quantity: getLineQuantity(line) || 0,
+            line_index: index,
+        });
+    });
+    return configs;
+}
+
 async function getSubscriptionContext(component, product, fallbackPrice = 0) {
     if (!product || !product.id || !component.orm) {
         return { is_subscription: false, max_participants_total: 1, plans: [] };
@@ -823,6 +875,21 @@ patch(PaymentScreen.prototype, {
         ensureOrderlineSerializationPatched(this);
         ensureOrderSerializationPatched(this);
         const order = getCurrentOrder(this);
+        if (order && this.orm) {
+            const orderUUID = getOrderUUID(order);
+            const configs = collectOrderSubscriptionConfigs(order);
+            if (orderUUID && configs.length) {
+                try {
+                    await this.orm.call(
+                        "pos.order",
+                        "wgs_stage_subscription_config_for_uuid",
+                        [orderUUID, configs]
+                    );
+                } catch (error) {
+                    console.warn("No se pudo guardar buffer de configuración de suscripción POS", error);
+                }
+            }
+        }
         if (order) {
             const partner = getCurrentPartner(this, order);
             const lines = [];

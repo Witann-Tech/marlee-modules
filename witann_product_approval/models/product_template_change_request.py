@@ -1,4 +1,4 @@
-from odoo import fields, models
+from odoo import api, fields, models
 
 
 class ProductTemplateChangeRequest(models.Model):
@@ -77,7 +77,7 @@ class ProductTemplateChangeRequest(models.Model):
         index=True,
     )
 
-    @fields.depends('change_type', 'product_tmpl_id.display_name', 'create_date')
+    @api.depends('change_type', 'product_tmpl_id.display_name', 'create_date')
     def _compute_name(self):
         for record in self:
             label = 'Alta' if record.change_type == 'create' else 'Cambio'
