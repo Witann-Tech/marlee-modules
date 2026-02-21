@@ -10,8 +10,6 @@ _INTERNAL_APPROVAL_FIELDS = {
     'approval_requested_on',
     'approval_approved_by_id',
     'approval_approved_on',
-    'pending_sale_ok',
-    'pending_available_in_pos',
     'last_change_request_id',
 }
 
@@ -22,56 +20,97 @@ class ProductTemplate(models.Model):
     approval_state = fields.Selection(
         [('pending', 'Pendiente'), ('approved', 'Aprobado'), ('rejected', 'Rechazado')],
         string='Estado de autorización',
-        required=True,
-        default='approved',
-        copy=False,
-        index=True,
+        compute='_compute_approval_snapshot',
+        readonly=True,
     )
     approval_requested_by_id = fields.Many2one(
         'res.users',
         string='Solicitado por',
-        copy=False,
+        compute='_compute_approval_snapshot',
         readonly=True,
     )
     approval_requested_on = fields.Datetime(
         string='Fecha solicitud',
-        copy=False,
+        compute='_compute_approval_snapshot',
         readonly=True,
     )
     approval_approved_by_id = fields.Many2one(
         'res.users',
         string='Aprobado por',
-        copy=False,
+        compute='_compute_approval_snapshot',
         readonly=True,
     )
     approval_approved_on = fields.Datetime(
         string='Fecha aprobación',
-        copy=False,
+        compute='_compute_approval_snapshot',
         readonly=True,
-    )
-    pending_sale_ok = fields.Boolean(
-        string='Venta al aprobar',
-        copy=False,
-        help='Valor de venta que se aplicará al aprobar una alta pendiente.',
-    )
-    pending_available_in_pos = fields.Boolean(
-        string='PdV al aprobar',
-        copy=False,
-        help='Valor de PdV que se aplicará al aprobar una alta pendiente.',
     )
     last_change_request_id = fields.Many2one(
         'product.template.change.request',
         string='Última solicitud',
-        copy=False,
+        compute='_compute_approval_snapshot',
         readonly=True,
     )
 
+    @api.depends_context('uid')
+    def _compute_approval_snapshot(self):
+        request_model = self.env['product.template.change.request']
+        latest_by_product = {}
+
+        if self.ids:
+            requests = request_model.search(
+                [('product_tmpl_id', 'in', self.ids)],
+                order='id desc',
+            )
+            for req in requests:
+                product_id = req.product_tmpl_id.id
+                if product_id not in latest_by_product:
+                    latest_by_product[product_id] = req
+
+        for product in self:
+            latest = latest_by_product.get(product.id)
+            if not latest:
+                product.approval_state = 'approved'
+                product.approval_requested_by_id = False
+                product.approval_requested_on = False
+                product.approval_approved_by_id = False
+                product.approval_approved_on = False
+                product.last_change_request_id = False
+                continue
+
+            product.approval_state = latest.state
+            product.approval_requested_by_id = latest.requested_by_id
+            product.approval_requested_on = latest.requested_on
+            product.last_change_request_id = latest
+
+            if latest.state == 'approved':
+                product.approval_approved_by_id = latest.approved_by_id
+                product.approval_approved_on = latest.approved_on
+            else:
+                product.approval_approved_by_id = False
+                product.approval_approved_on = False
+
     @api.model_create_multi
     def create(self, vals_list):
-        if self.env.context.get('skip_product_approval') or self._is_approval_admin():
-            records = super().create(vals_list)
-            if not self.env.context.get('skip_product_approval'):
-                records.with_context(skip_product_approval=True)._mark_as_approved()
+        if self.env.context.get('skip_product_approval'):
+            return super().create(vals_list)
+        if self._is_approval_admin():
+            records = super(ProductTemplate, self.with_context(skip_product_approval=True)).create(vals_list)
+            now = fields.Datetime.now()
+            request_model = self.env['product.template.change.request']
+            for record, vals in zip(records, vals_list):
+                request_model.create(
+                    {
+                        'product_tmpl_id': record.id,
+                        'change_type': 'create',
+                        'payload': self._sanitize_payload(vals),
+                        'state': 'approved',
+                        'requested_by_id': self.env.user.id,
+                        'requested_on': now,
+                        'approved_by_id': self.env.user.id,
+                        'approved_on': now,
+                    }
+                )
             return records
 
         now = fields.Datetime.now()
@@ -79,31 +118,22 @@ class ProductTemplate(models.Model):
         payloads = []
 
         for vals in vals_list:
-            payloads.append(self._sanitize_payload(vals))
-            prepared_vals = dict(vals)
-            prepared_vals['pending_sale_ok'] = bool(prepared_vals.get('sale_ok', True))
-            prepared_vals['sale_ok'] = False
+            payload = self._sanitize_payload(vals)
+            payloads.append(payload)
 
-            if 'available_in_pos' in self._fields:
-                prepared_vals['pending_available_in_pos'] = bool(prepared_vals.get('available_in_pos', False))
+            prepared_vals = dict(vals)
+            if bool(prepared_vals.get('sale_ok', True)):
+                prepared_vals['sale_ok'] = False
+            if 'available_in_pos' in self._fields and bool(prepared_vals.get('available_in_pos', False)):
                 prepared_vals['available_in_pos'] = False
 
-            prepared_vals.update(
-                {
-                    'approval_state': 'pending',
-                    'approval_requested_by_id': self.env.user.id,
-                    'approval_requested_on': now,
-                    'approval_approved_by_id': False,
-                    'approval_approved_on': False,
-                }
-            )
             prepared_vals_list.append(prepared_vals)
 
-        records = super().create(prepared_vals_list)
+        records = super(ProductTemplate, self.with_context(skip_product_approval=True)).create(prepared_vals_list)
         request_model = self.env['product.template.change.request']
 
         for record, payload in zip(records, payloads):
-            request = request_model.create(
+            request_model.create(
                 {
                     'product_tmpl_id': record.id,
                     'change_type': 'create',
@@ -113,7 +143,6 @@ class ProductTemplate(models.Model):
                     'requested_on': now,
                 }
             )
-            record.with_context(skip_product_approval=True).write({'last_change_request_id': request.id})
 
         return records
 
@@ -122,13 +151,29 @@ class ProductTemplate(models.Model):
             return super().write(vals)
 
         if self._is_approval_admin():
-            result = super().write(vals)
-            if self._has_approval_relevant_changes(vals):
-                self.with_context(skip_product_approval=True)._mark_as_approved()
+            result = super(ProductTemplate, self.with_context(skip_product_approval=True)).write(vals)
+            payload = self._sanitize_payload(vals)
+            if payload:
+                request_model = self.env['product.template.change.request']
+                now = fields.Datetime.now()
+                for product in self:
+                    request_model.create(
+                        {
+                            'product_tmpl_id': product.id,
+                            'change_type': 'update',
+                            'payload': payload,
+                            'state': 'approved',
+                            'requested_by_id': self.env.user.id,
+                            'requested_on': now,
+                            'approved_by_id': self.env.user.id,
+                            'approved_on': now,
+                        }
+                    )
             return result
 
-        if not self._has_approval_relevant_changes(vals):
-            return super().write(vals)
+        payload = self._sanitize_payload(vals)
+        if not payload:
+            return super(ProductTemplate, self.with_context(skip_product_approval=True)).write(vals)
 
         self.check_access_rights('write')
         self.check_access_rule('write')
@@ -137,8 +182,7 @@ class ProductTemplate(models.Model):
         now = fields.Datetime.now()
 
         for product in self:
-            payload = product._sanitize_payload(vals)
-            request = request_model.create(
+            request_model.create(
                 {
                     'product_tmpl_id': product.id,
                     'change_type': 'update',
@@ -148,22 +192,6 @@ class ProductTemplate(models.Model):
                     'requested_on': now,
                 }
             )
-
-            workflow_vals = {
-                'approval_state': 'pending',
-                'approval_requested_by_id': self.env.user.id,
-                'approval_requested_on': now,
-                'approval_approved_by_id': False,
-                'approval_approved_on': False,
-                'last_change_request_id': request.id,
-            }
-
-            if 'sale_ok' in payload:
-                workflow_vals['pending_sale_ok'] = bool(payload['sale_ok'])
-            if 'available_in_pos' in payload and 'available_in_pos' in product._fields:
-                workflow_vals['pending_available_in_pos'] = bool(payload['available_in_pos'])
-
-            super(ProductTemplate, product.with_context(skip_product_approval=True)).write(workflow_vals)
 
         return True
 
@@ -179,13 +207,12 @@ class ProductTemplate(models.Model):
                 [('product_tmpl_id', '=', product.id), ('state', '=', 'pending')],
                 order='id asc',
             )
-            restore_pending_sale_ok = any(req.change_type == 'create' for req in pending_requests)
-            restore_pending_pos_ok = any(req.change_type == 'create' for req in pending_requests)
 
             for request in pending_requests:
                 write_vals = product._prepare_payload_for_write(request.payload or {})
                 if write_vals:
                     super(ProductTemplate, product.with_context(skip_product_approval=True)).write(write_vals)
+
                 request.write(
                     {
                         'state': 'approved',
@@ -193,23 +220,6 @@ class ProductTemplate(models.Model):
                         'approved_on': now,
                     }
                 )
-
-            approval_vals = {
-                'approval_state': 'approved',
-                'approval_requested_by_id': False,
-                'approval_requested_on': False,
-                'approval_approved_by_id': self.env.user.id,
-                'approval_approved_on': now,
-                'pending_sale_ok': False,
-                'pending_available_in_pos': False,
-            }
-
-            if restore_pending_sale_ok:
-                approval_vals['sale_ok'] = product.pending_sale_ok
-            if restore_pending_pos_ok and 'available_in_pos' in product._fields:
-                approval_vals['available_in_pos'] = product.pending_available_in_pos
-
-            super(ProductTemplate, product.with_context(skip_product_approval=True)).write(approval_vals)
 
         return True
 
@@ -231,21 +241,11 @@ class ProductTemplate(models.Model):
                     'rejected_on': now,
                 }
             )
-            super(ProductTemplate, product.with_context(skip_product_approval=True)).write(
-                {
-                    'approval_state': 'rejected',
-                    'approval_approved_by_id': False,
-                    'approval_approved_on': False,
-                }
-            )
 
         return True
 
     def _is_approval_admin(self):
         return self.env.is_superuser() or self.env.user.has_group('product.group_product_manager')
-
-    def _has_approval_relevant_changes(self, vals):
-        return any(field_name not in _INTERNAL_APPROVAL_FIELDS for field_name in vals)
 
     def _sanitize_payload(self, vals):
         payload = {}
@@ -277,17 +277,3 @@ class ProductTemplate(models.Model):
         if isinstance(value, tuple):
             return [self._serialize_payload_value(item) for item in value]
         return value
-
-    def _mark_as_approved(self):
-        now = fields.Datetime.now()
-        for product in self:
-            vals = {
-                'approval_state': 'approved',
-                'approval_requested_by_id': False,
-                'approval_requested_on': False,
-                'approval_approved_by_id': self.env.user.id,
-                'approval_approved_on': now,
-                'pending_sale_ok': False,
-                'pending_available_in_pos': False,
-            }
-            super(ProductTemplate, product).write(vals)

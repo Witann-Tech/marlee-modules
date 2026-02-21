@@ -68,6 +68,26 @@ class PosOrder(models.Model):
     _inherit = 'pos.order'
 
     @api.model
+    def _wgs_is_subscription_buffer_ready(self):
+        model_name = 'wgs.pos.subscription.buffer'
+        if model_name not in self.env.registry:
+            return False
+
+        # Avoid hard failures when code is deployed before module upgrade creates the SQL table.
+        table_name = self.env[model_name]._table
+        try:
+            self.env.cr.execute("SELECT to_regclass(%s)", (table_name,))
+            row = self.env.cr.fetchone()
+        except Exception as error:
+            _logger.warning(
+                'WGS POS: subscription buffer readiness check failed for table %s (%s)',
+                table_name,
+                error,
+            )
+            return False
+        return bool(row and row[0])
+
+    @api.model
     def wgs_stage_subscription_config_for_uuid(self, order_uuid, configs):
         if not self.env.user.has_group('point_of_sale.group_pos_user'):
             raise UserError(_('No tienes permisos para guardar configuración de suscripción desde Punto de Venta.'))
@@ -79,12 +99,27 @@ class PosOrder(models.Model):
         if not isinstance(configs, list):
             configs = []
         payload_json = json.dumps(configs)
-        buffer_model = self.env['wgs.pos.subscription.buffer'].sudo()
-        existing = buffer_model.search([('order_uuid', '=', order_uuid)], limit=1, order='id desc')
-        if existing:
-            existing.write({'payload_json': payload_json})
-        else:
-            buffer_model.create({'order_uuid': order_uuid, 'payload_json': payload_json})
+        if not self._wgs_is_subscription_buffer_ready():
+            _logger.warning(
+                'WGS POS: subscription buffer table is not ready yet. Skipping stage for uuid=%s',
+                order_uuid,
+            )
+            return {'ok': False, 'reason': 'buffer_not_ready'}
+
+        try:
+            buffer_model = self.env['wgs.pos.subscription.buffer'].sudo()
+            existing = buffer_model.search([('order_uuid', '=', order_uuid)], limit=1, order='id desc')
+            if existing:
+                existing.write({'payload_json': payload_json})
+            else:
+                buffer_model.create({'order_uuid': order_uuid, 'payload_json': payload_json})
+        except Exception as error:
+            _logger.warning(
+                'WGS POS: could not stage subscription buffer for uuid=%s (%s)',
+                order_uuid,
+                error,
+            )
+            return {'ok': False, 'reason': 'buffer_error'}
         return {'ok': True}
 
     @api.model
@@ -315,15 +350,27 @@ class PosOrder(models.Model):
         order_uuid = (order_uuid or '').strip()
         if not order_uuid:
             return []
-        buffer_model = self.env['wgs.pos.subscription.buffer'].sudo()
-        buffer_record = buffer_model.search([('order_uuid', '=', order_uuid)], limit=1, order='id desc')
-        if not buffer_record:
+        if not self._wgs_is_subscription_buffer_ready():
             return []
+
         try:
-            payload = json.loads(buffer_record.payload_json or '[]')
-        except (TypeError, ValueError):
-            payload = []
-        buffer_record.unlink()
+            buffer_model = self.env['wgs.pos.subscription.buffer'].sudo()
+            buffer_record = buffer_model.search([('order_uuid', '=', order_uuid)], limit=1, order='id desc')
+            if not buffer_record:
+                return []
+            try:
+                payload = json.loads(buffer_record.payload_json or '[]')
+            except (TypeError, ValueError):
+                payload = []
+            buffer_record.unlink()
+        except Exception as error:
+            _logger.warning(
+                'WGS POS: could not recover subscription buffer for uuid=%s (%s)',
+                order_uuid,
+                error,
+            )
+            return []
+
         if not isinstance(payload, list):
             return []
         _logger.info('WGS POS: recovered %s buffered subscription configs for uuid=%s', len(payload), order_uuid)

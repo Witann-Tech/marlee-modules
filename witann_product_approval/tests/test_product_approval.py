@@ -42,13 +42,8 @@ class TestProductApproval(common.TransactionCase):
                 'requested_on': fields.Datetime.now(),
             }
         )
-        self.product.with_context(skip_product_approval=True).write(
-            {
-                'approval_state': 'pending',
-                'last_change_request_id': request.id,
-            }
-        )
 
         self.product.action_reject_pending_changes()
+        request = self.env['product.template.change.request'].browse(request.id)
         self.assertEqual(self.product.approval_state, 'rejected')
         self.assertEqual(request.state, 'rejected')
