@@ -115,8 +115,6 @@ class SaleOrder(models.Model):
             ('partner_id', '=', partner.id),
             ('state', 'in', ['sale', 'done']),
         ]
-        if 'is_subscription' in self._fields:
-            domain.append(('is_subscription', '=', True))
 
         subscriptions = self.sudo().search(domain, order='id desc')
         return subscriptions.filtered(lambda order: bool(order._get_recurring_lines()))
@@ -133,8 +131,6 @@ class SaleOrder(models.Model):
             ('partner_id', 'in', partner_ids),
             ('state', 'in', ['sale', 'done']),
         ]
-        if 'is_subscription' in self._fields:
-            domain.append(('is_subscription', '=', True))
 
         subscriptions = self.sudo().search(domain, order='id desc')
         subscriptions = subscriptions.filtered(lambda order: bool(order._get_recurring_lines()))
