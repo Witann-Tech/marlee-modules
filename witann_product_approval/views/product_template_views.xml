@@ -5,26 +5,10 @@
         <field name="model">product.template</field>
         <field name="inherit_id" ref="product.product_template_only_form_view"/>
         <field name="arch" type="xml">
-            <xpath expr="//header" position="inside">
-                <button name="action_approve_pending_changes"
-                        type="object"
-                        string="Aprobar"
-                        class="btn-primary"
-                        groups="product.group_product_manager"
-                        invisible="approval_state != 'pending'"/>
-                <button name="action_reject_pending_changes"
-                        type="object"
-                        string="Rechazar"
-                        groups="product.group_product_manager"
-                        invisible="approval_state != 'pending'"/>
-                <field name="approval_state"
-                       widget="statusbar"
-                       statusbar_visible="pending,approved,rejected"/>
-            </xpath>
-
-            <xpath expr="//sheet//group[1]" position="after">
+            <xpath expr="//sheet" position="inside">
                 <group string="Autorización de producto">
                     <group>
+                        <field name="approval_state" readonly="1"/>
                         <field name="approval_requested_by_id" readonly="1"/>
                         <field name="approval_requested_on" readonly="1"/>
                     </group>
@@ -34,6 +18,17 @@
                     </group>
                     <group>
                         <field name="last_change_request_id" readonly="1"/>
+                    </group>
+                    <group groups="product.group_product_manager">
+                        <button name="action_approve_pending_changes"
+                                type="object"
+                                string="Aprobar pendientes"
+                                class="btn-primary"
+                                invisible="approval_state != 'pending'"/>
+                        <button name="action_reject_pending_changes"
+                                type="object"
+                                string="Rechazar pendientes"
+                                invisible="approval_state != 'pending'"/>
                     </group>
                 </group>
             </xpath>

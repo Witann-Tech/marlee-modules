@@ -1,6 +1,6 @@
 {
     'name': 'Witann Group Subscriptions POS',
-    'version': '19.0.1.3.5',
+    'version': '19.0.1.3.7',
     'summary': 'Consulta de vigencia de paquetes de suscripción en Punto de Venta',
     'category': 'Point of Sale',
     'author': 'Witann Technologies',

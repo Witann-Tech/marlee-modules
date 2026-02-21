@@ -739,6 +739,10 @@ class PosOrder(models.Model):
                 comodel_checker=self._wgs_is_plan_model_name,
             )
 
+        next_billing_date = False
+        if plan_record:
+            next_billing_date = self._wgs_get_plan_min_end_threshold(plan_record, sale_start_date)
+
         sale_order = self.env['sale.order'].create(sale_order_values)
         if 'participant_ids' in sale_order._fields:
             sale_order.write({'participant_ids': [Command.set(participant_ids)]})
@@ -754,6 +758,7 @@ class PosOrder(models.Model):
             sale_order=sale_order,
             participant_ids=participant_ids,
             subscription_end_date=subscription_end_date,
+            next_billing_date=next_billing_date,
         )
 
         _logger.info(
@@ -764,7 +769,13 @@ class PosOrder(models.Model):
         )
         return sale_order
 
-    def _wgs_sync_subscription_metadata(self, sale_order, participant_ids, subscription_end_date=False):
+    def _wgs_sync_subscription_metadata(
+        self,
+        sale_order,
+        participant_ids,
+        subscription_end_date=False,
+        next_billing_date=False,
+    ):
         target_orders = self._wgs_get_subscription_orders_from_base(sale_order)
         for target_order in target_orders:
             values = {}
@@ -775,13 +786,18 @@ class PosOrder(models.Model):
                 end_field = self._wgs_find_subscription_end_date_field(target_order)
                 if end_field:
                     values[end_field] = subscription_end_date
+            if next_billing_date:
+                next_field = self._wgs_find_subscription_next_invoice_date_field(target_order)
+                if next_field:
+                    values[next_field] = next_billing_date
             if values:
                 target_order.write(values)
                 _logger.info(
-                    'WGS POS: synced metadata on subscription order %s (participants=%s end_date=%s)',
+                    'WGS POS: synced metadata on subscription order %s (participants=%s end_date=%s next=%s)',
                     target_order.name,
                     participant_ids,
                     subscription_end_date or False,
+                    next_billing_date or False,
                 )
 
     def _wgs_get_subscription_orders_from_base(self, sale_order):
@@ -839,6 +855,24 @@ class PosOrder(models.Model):
             normalized_name = (field_name or '').lower()
             if any(token in normalized_name for token in ('end', 'until', 'close')) and any(
                 token in normalized_name for token in ('subscription', 'recurr', 'period')
+            ):
+                return field_name
+        return False
+
+    def _wgs_find_subscription_next_invoice_date_field(self, sale_order):
+        fields_map = sale_order._fields
+        preferred = ('recurring_next_date', 'next_invoice_date', 'recurring_next_invoice_date')
+        for field_name in preferred:
+            field = fields_map.get(field_name)
+            if field and field.type in ('date', 'datetime'):
+                return field_name
+
+        for field_name, field in fields_map.items():
+            if field.type not in ('date', 'datetime'):
+                continue
+            normalized_name = (field_name or '').lower()
+            if all(token in normalized_name for token in ('next', 'date')) and any(
+                token in normalized_name for token in ('invoice', 'recurr', 'subscription')
             ):
                 return field_name
         return False

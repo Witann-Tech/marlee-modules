@@ -167,11 +167,16 @@ class SaleOrder(models.Model):
         next_invoice_date = self._get_first_available_date(('recurring_next_date', 'next_invoice_date'))
         hard_end_date = self._get_first_available_date(('date_end', 'end_date'))
 
+        recurrence_delta = self._get_recurrence_delta()
+        # POS flow treats the first period as paid at checkout. When Odoo still has
+        # next invoice unset (or equal to start date), infer the next cycle boundary.
+        if start_date and (not next_invoice_date or next_invoice_date <= start_date):
+            next_invoice_date = start_date + recurrence_delta
+
         period_start = False
         valid_until = False
 
         if next_invoice_date:
-            recurrence_delta = self._get_recurrence_delta()
             period_start = next_invoice_date - recurrence_delta
             valid_until = next_invoice_date - relativedelta(days=1)
 
