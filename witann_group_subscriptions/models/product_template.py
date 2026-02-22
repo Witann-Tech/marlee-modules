@@ -97,45 +97,11 @@ class ProductTemplate(models.Model):
         return etree.tostring(doc, encoding='unicode')
 
     @api.model
-    def _wgs_inject_min_term_in_recurring_price_subviews(self, arch):
-        if not arch:
-            return arch
-        if 'product.pricelist.item' not in self.env.registry:
-            return arch
-        if 'wgs_minimum_term_periods' not in self.env['product.pricelist.item']._fields:
-            return arch
-
-        is_element = isinstance(arch, etree._Element)
-        doc = arch if is_element else etree.XML(arch)
-
-        one2many_nodes = doc.xpath("//field[@name='subscription_pricing_ids' or @name='recurring_pricing_ids']")
-        if not one2many_nodes:
-            return arch
-
-        for node in one2many_nodes:
-            for subview_tag in ('list', 'tree', 'form'):
-                subviews = node.xpath(f'./{subview_tag}')
-                for subview in subviews:
-                    if subview.xpath(".//field[@name='wgs_minimum_term_periods']"):
-                        continue
-                    new_field = etree.Element('field', name='wgs_minimum_term_periods')
-                    anchors = subview.xpath(".//field[@name='min_quantity' or @name='price' or @name='fixed_price']")
-                    if anchors:
-                        anchors[-1].addnext(new_field)
-                    else:
-                        subview.append(new_field)
-
-        if is_element:
-            return doc
-        return etree.tostring(doc, encoding='unicode')
-
-    @api.model
     def fields_view_get(self, view_id=None, view_type='form', toolbar=False, submenu=False):
         result = super().fields_view_get(view_id=view_id, view_type=view_type, toolbar=toolbar, submenu=submenu)
         if view_type != 'form' or not result.get('arch'):
             return result
         result['arch'] = self._wgs_strip_min_term_if_missing_runtime_field(result['arch'])
-        result['arch'] = self._wgs_inject_min_term_in_recurring_price_subviews(result['arch'])
         return result
 
     @api.model
@@ -144,5 +110,4 @@ class ProductTemplate(models.Model):
         if view_type != 'form' or not result.get('arch'):
             return result
         result['arch'] = self._wgs_strip_min_term_if_missing_runtime_field(result['arch'])
-        result['arch'] = self._wgs_inject_min_term_in_recurring_price_subviews(result['arch'])
         return result
