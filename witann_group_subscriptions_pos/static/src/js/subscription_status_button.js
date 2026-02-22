@@ -515,8 +515,7 @@ function getPlanMinEndDate(plan, startDateValue = "", minTermPeriods = 1) {
         intervalValue,
         plan.interval_unit || "month"
     );
-    // Rule is strictly greater than the configured minimum term.
-    threshold.setUTCDate(threshold.getUTCDate() + 1);
+    // Rule is inclusive: at least the configured minimum term.
     return threshold;
 }
 
@@ -1188,6 +1187,7 @@ patch(ControlButtons.prototype, {
         toolbar.className = "wgs-status-toolbar";
         const plans = Array.isArray(subscriptionContext && subscriptionContext.plans) ? subscriptionContext.plans : [];
         const minimumTermPeriods = Math.max(0, Number.parseInt(subscriptionContext && subscriptionContext.min_term_periods, 10) || 0);
+        const requiredTermPeriods = Math.max(1, minimumTermPeriods);
         const selection = getLineSubscriptionSelection(line);
         const defaultPlanId = selection.planId || (subscriptionContext && subscriptionContext.default_plan_id) || (plans[0] && plans[0].plan_id) || false;
         const defaultPricingId = selection.pricingId || (subscriptionContext && subscriptionContext.default_pricing_id) || (plans[0] && plans[0].pricing_id) || false;
@@ -1302,8 +1302,14 @@ patch(ControlButtons.prototype, {
             const minDate = getPlanMinEndDate({
                 interval_value: planData.intervalValue,
                 interval_unit: planData.intervalUnit,
-            }, (startDateInput && startDateInput.value) || "", minimumTermPeriods);
+            }, (startDateInput && startDateInput.value) || "", requiredTermPeriods);
             endDateInput.min = minDate ? formatISODate(minDate) : "";
+            if (minimumTermPeriods > 0 && minDate) {
+                const currentEnd = parseISODate(String(endDateInput.value || "").trim());
+                if (!currentEnd || currentEnd.getTime() < minDate.getTime()) {
+                    endDateInput.value = formatISODate(minDate);
+                }
+            }
         };
 
         const syncPlanSelection = () => {
@@ -1420,7 +1426,26 @@ patch(ControlButtons.prototype, {
                 );
                 return;
             }
-            const endDateValue = String((endDateInput && endDateInput.value) || "").trim();
+            let endDateValue = String((endDateInput && endDateInput.value) || "").trim();
+            if (!endDateValue && minimumTermPeriods > 0) {
+                const planData = getSelectedPlanData();
+                const minEndDate = planData
+                    ? getPlanMinEndDate(
+                        {
+                            interval_value: planData.intervalValue,
+                            interval_unit: planData.intervalUnit,
+                        },
+                        startDateValue,
+                        requiredTermPeriods
+                    )
+                    : null;
+                if (minEndDate) {
+                    endDateValue = formatISODate(minEndDate);
+                    if (endDateInput) {
+                        endDateInput.value = endDateValue;
+                    }
+                }
+            }
             if (endDateValue) {
                 const parsedEndDate = parseISODate(endDateValue);
                 if (!parsedEndDate) {
@@ -1431,15 +1456,15 @@ patch(ControlButtons.prototype, {
                     return;
                 }
                 const planData = getSelectedPlanData();
-                if (planData && minimumTermPeriods > 0) {
+                if (planData) {
                     const minEndDate = getPlanMinEndDate({
                         interval_value: planData.intervalValue,
                         interval_unit: planData.intervalUnit,
-                    }, startDateValue, minimumTermPeriods);
+                    }, startDateValue, requiredTermPeriods);
                     if (minEndDate && parsedEndDate.getTime() < minEndDate.getTime()) {
                         this._showSimpleInfoModal(
                             _t("Fecha de finalización inválida"),
-                            _t("La fecha final debe ser posterior al plazo mínimo configurado para este paquete.")
+                            _t("La fecha final debe ser igual o posterior al mínimo permitido por este paquete.")
                         );
                         return;
                     }

@@ -676,7 +676,8 @@ class PosOrder(models.Model):
                 )
                 % {'date': fields.Date.to_string(today)}
             )
-        if subscription_end_date and minimum_term_periods > 0:
+        required_periods = max(1, minimum_term_periods)
+        if subscription_end_date or minimum_term_periods > 0:
             if not plan_record:
                 raise UserError(
                     _('No se pudo validar la fecha de finalización porque el plan recurrente no está definido.')
@@ -684,18 +685,20 @@ class PosOrder(models.Model):
             min_threshold_date = self._wgs_get_plan_min_end_threshold(
                 plan_record,
                 sale_start_date,
-                periods_count=minimum_term_periods,
+                periods_count=required_periods,
             )
-            if subscription_end_date <= min_threshold_date:
+            if not subscription_end_date and minimum_term_periods > 0:
+                subscription_end_date = min_threshold_date
+            elif subscription_end_date and subscription_end_date < min_threshold_date:
                 raise UserError(
                     _(
-                        'La fecha de finalización debe ser posterior a %(date)s para el plan %(plan)s '
-                        '(plazo mínimo: %(periods)s periodos).'
+                        'La fecha de finalización debe ser igual o posterior a %(date)s para el plan %(plan)s '
+                        '(plazo mínimo aplicado: %(periods)s periodos).'
                     )
                     % {
                         'date': fields.Date.to_string(min_threshold_date),
                         'plan': plan_record.display_name,
-                        'periods': minimum_term_periods,
+                        'periods': required_periods,
                     }
                 )
 
