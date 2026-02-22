@@ -1,6 +1,6 @@
 import json
 import logging
-from datetime import timedelta
+from datetime import timedelta, date, datetime
 
 from dateutil.relativedelta import relativedelta
 
@@ -161,6 +161,52 @@ class PosOrder(models.Model):
             'price': float(choice.get('price') or 0.0),
             'plan_id': choice.get('plan_id') or False,
             'pricing_id': choice.get('pricing_id') or False,
+        }
+
+    @api.model
+    def wgs_get_subscription_charge_for_pos(
+        self,
+        partner_id,
+        product_id,
+        fallback=0.0,
+        preferred_plan_id=False,
+        preferred_pricing_id=False,
+    ):
+        if not self.env.user.has_group('point_of_sale.group_pos_user'):
+            raise UserError(_('No tienes permisos para consultar cobro de suscripción desde Punto de Venta.'))
+
+        product = self.env['product.product'].browse(int(product_id)).exists()
+        if not product:
+            raise UserError(_('El producto seleccionado no existe o no está disponible.'))
+
+        choice = self._wgs_get_recurring_pricing_choice(
+            product,
+            fallback=fallback,
+            preferred_plan_id=preferred_plan_id,
+            preferred_pricing_id=preferred_pricing_id,
+        )
+        recurring_price = float(choice.get('price') or 0.0)
+        plan_id = choice.get('plan_id') or False
+        pricing_id = choice.get('pricing_id') or False
+
+        partner = self.env['res.partner'].browse(int(partner_id or 0)).exists()
+        source_order = False
+        credit_amount = 0.0
+        if partner:
+            source_order = self._wgs_find_active_subscription_for_partner(partner, company=self.env.company)
+            if source_order:
+                credit_amount = self._wgs_compute_upgrade_credit_amount(source_order)
+
+        charge_now = max(recurring_price - credit_amount, 0.0)
+        return {
+            'charge_now': float(charge_now),
+            'credit_amount': float(credit_amount),
+            'recurring_price': float(recurring_price),
+            'plan_id': plan_id,
+            'pricing_id': pricing_id,
+            'is_upgrade': bool(source_order),
+            'source_subscription_id': source_order.id if source_order else False,
+            'source_subscription_name': source_order.name if source_order else False,
         }
 
     @api.model
@@ -692,6 +738,9 @@ class PosOrder(models.Model):
                 raise UserError(
                     _('No se pudo validar la fecha de finalización porque el plan recurrente no está definido.')
                 )
+        next_billing_date = False
+        if plan_record:
+            next_billing_date = self._wgs_get_plan_min_end_threshold(plan_record, sale_start_date)
             min_threshold_date = self._wgs_get_plan_min_end_threshold(
                 plan_record,
                 sale_start_date,
@@ -770,9 +819,13 @@ class PosOrder(models.Model):
         contract_date = fields.Date.context_today(self)
         upsell_source_order = self._wgs_find_partner_active_subscription_for_upsell()
         if upsell_source_order:
+            recurring_total = max(0.0, float(recurring_price_unit or 0.0) * float(qty or 0.0))
+            paid_total = max(0.0, float(line.price_unit or 0.0) * float(qty or 0.0))
+            credit_from_pos = max(0.0, recurring_total - paid_total)
             upsell_order = self._wgs_create_subscription_upsell_sale_order_from_line(
                 source_order=upsell_source_order,
                 line_values=dict(line_values),
+                credit_amount=credit_from_pos,
             )
             sale_order_line = upsell_order.order_line.filtered(lambda so_line: so_line.product_id == product)[:1]
             if not sale_order_line:
@@ -790,18 +843,25 @@ class PosOrder(models.Model):
             self._wgs_sync_subscription_metadata(
                 sale_order=upsell_order,
                 participant_ids=participant_ids,
-                contract_date=False,
-                subscription_start_date=False,
+                contract_date=contract_date,
+                subscription_start_date=sale_start_date,
                 subscription_end_date=subscription_end_date,
-                next_billing_date=False,
+                next_billing_date=next_billing_date,
+            )
+            self._wgs_close_source_subscription_after_upgrade(
+                source_order=upsell_source_order,
+                new_subscription_start_date=sale_start_date,
             )
 
             _logger.info(
-                'Created subscription upsell order %s from POS order %s line %s (source=%s)',
+                'Created subscription upsell order %s from POS order %s line %s (source=%s, recurring_total=%s, paid=%s, credit=%s)',
                 upsell_order.name,
                 self.pos_reference,
                 line.id,
                 upsell_source_order.name,
+                recurring_total,
+                paid_total,
+                credit_from_pos,
             )
             return upsell_order
 
@@ -851,10 +911,6 @@ class PosOrder(models.Model):
                 comodel_checker=self._wgs_is_plan_model_name,
             )
 
-        next_billing_date = False
-        if plan_record:
-            next_billing_date = self._wgs_get_plan_min_end_threshold(plan_record, sale_start_date)
-
         sale_order = self.env['sale.order'].create(sale_order_values)
         if 'participant_ids' in sale_order._fields:
             sale_order.write({'participant_ids': [Command.set(participant_ids)]})
@@ -892,17 +948,14 @@ class PosOrder(models.Model):
         )
         return sale_order
 
-    def _wgs_find_partner_active_subscription_for_upsell(self):
-        self.ensure_one()
-        if not self.partner_id:
-            return False
-
+    def _wgs_find_active_subscription_for_partner(self, partner, company=False):
+        partner.ensure_one()
         domain = [
-            ('partner_id', '=', self.partner_id.id),
+            ('partner_id', '=', partner.id),
             ('state', 'in', ['sale', 'done']),
         ]
-        if 'company_id' in self._fields and self.company_id:
-            domain.append(('company_id', '=', self.company_id.id))
+        if company and 'company_id' in self.env['sale.order']._fields:
+            domain.append(('company_id', '=', company.id))
 
         candidates = self.env['sale.order'].search(domain, order='id desc', limit=25)
         candidates = candidates.filtered(
@@ -913,16 +966,35 @@ class PosOrder(models.Model):
                 and self._wgs_is_subscription_order_active_for_upsell(order)
             )
         )
-        if not candidates:
+        return candidates[:1]
+
+    def _wgs_find_partner_active_subscription_for_upsell(self):
+        self.ensure_one()
+        if not self.partner_id:
+            return False
+        candidate = self._wgs_find_active_subscription_for_partner(self.partner_id, company=self.company_id)
+        if not candidate:
             return False
 
-        if len(candidates) > 1:
+        all_candidates = self.env['sale.order'].search(
+            [('partner_id', '=', self.partner_id.id), ('state', 'in', ['sale', 'done'])],
+            order='id desc',
+            limit=25,
+        ).filtered(
+            lambda order: (
+                bool(order.order_line.filtered(
+                    lambda so_line: so_line.product_id and so_line.product_id.product_tmpl_id.recurring_invoice
+                ))
+                and self._wgs_is_subscription_order_active_for_upsell(order)
+            )
+        )
+        if len(all_candidates) > 1:
             _logger.warning(
                 'WGS POS: multiple active subscriptions for partner %s. Using most recent %s',
                 self.partner_id.id,
-                candidates[0].name,
+                candidate.name,
             )
-        return candidates[0]
+        return candidate
 
     def _wgs_is_subscription_order_active_for_upsell(self, sale_order):
         sale_order.ensure_one()
@@ -933,7 +1005,7 @@ class PosOrder(models.Model):
             return True
         return not any(token in state_value for token in self._WGS_INVALID_SUBSCRIPTION_STATE_TOKENS)
 
-    def _wgs_create_subscription_upsell_sale_order_from_line(self, source_order, line_values):
+    def _wgs_create_subscription_upsell_sale_order_from_line(self, source_order, line_values, credit_amount=0.0):
         self.ensure_one()
         source_order.ensure_one()
 
@@ -964,9 +1036,78 @@ class PosOrder(models.Model):
         # Replace default lines generated by upsell action with POS-selected target package.
         if upsell_order.order_line:
             upsell_order.order_line.unlink()
-        upsell_order.write({'order_line': [Command.create(line_values)]})
+
+        line_commands = [Command.create(line_values)]
+        bonus_line_values = self._wgs_build_upgrade_bonus_line_values(credit_amount=credit_amount)
+        if bonus_line_values:
+            line_commands.append(Command.create(bonus_line_values))
+        upsell_order.write({'order_line': line_commands})
 
         return upsell_order
+
+    def _wgs_build_upgrade_bonus_line_values(self, credit_amount=0.0):
+        credit_amount = float(credit_amount or 0.0)
+        if credit_amount <= 0.0:
+            return False
+
+        product = self._wgs_get_upgrade_credit_product()
+        if not product:
+            return False
+
+        line_fields = self.env['sale.order.line']._fields
+        values = {'product_id': product.id}
+        if 'name' in line_fields:
+            values['name'] = _('Bonificación upgrade de plan')
+
+        qty_field_name = next(
+            (
+                field_name
+                for field_name in ('product_uom_qty', 'quantity', 'qty')
+                if field_name in line_fields
+            ),
+            False,
+        )
+        if qty_field_name:
+            values[qty_field_name] = 1
+
+        uom_field_name = next(
+            (
+                field_name
+                for field_name in ('product_uom_id', 'product_uom', 'uom_id')
+                if field_name in line_fields
+            ),
+            False,
+        )
+        if uom_field_name and product.uom_id:
+            values[uom_field_name] = product.uom_id.id
+
+        if 'price_unit' in line_fields:
+            values['price_unit'] = -abs(credit_amount)
+        if 'discount' in line_fields:
+            values['discount'] = 0
+        return values
+
+    def _wgs_get_upgrade_credit_product(self):
+        product_model = self.env['product.product'].sudo()
+        default_code = 'WGS_UPGRADE_CREDIT'
+        product = product_model.search([('default_code', '=', default_code)], limit=1)
+        if product:
+            return product
+
+        values = {
+            'name': 'Bonificación Upgrade WGS',
+            'default_code': default_code,
+            'sale_ok': True,
+            'purchase_ok': False,
+            'list_price': 0.0,
+        }
+        if 'detailed_type' in product_model._fields:
+            values['detailed_type'] = 'service'
+        elif 'type' in product_model._fields:
+            values['type'] = 'service'
+        if 'recurring_invoice' in product_model._fields:
+            values['recurring_invoice'] = False
+        return product_model.create(values)
 
     def _wgs_get_or_create_subscription_upsell_order(self, source_order):
         source_order.ensure_one()
@@ -1066,6 +1207,166 @@ class PosOrder(models.Model):
                 return upsell_order
 
         return sale_order_model.browse()
+
+    def _wgs_compute_upgrade_credit_amount(self, source_order, today=False):
+        source_order.ensure_one()
+
+        recurring_total = self._wgs_get_order_recurring_total_amount(source_order)
+        if recurring_total <= 0:
+            return 0.0
+
+        today = fields.Date.to_date(today) or fields.Date.context_today(self)
+        period_start, period_end = self._wgs_get_current_subscription_period_bounds(source_order, today=today)
+        if not period_start or not period_end:
+            return 0.0
+        if period_end <= period_start:
+            return 0.0
+        if today >= period_end:
+            return 0.0
+
+        effective_start = today if today > period_start else period_start
+        total_days = max((period_end - period_start).days, 1)
+        remaining_days = max((period_end - effective_start).days, 0)
+        credit_amount = recurring_total * (remaining_days / total_days)
+        return round(max(credit_amount, 0.0), 2)
+
+    def _wgs_get_order_recurring_total_amount(self, sale_order):
+        sale_order.ensure_one()
+        recurring_lines = sale_order.order_line.filtered(
+            lambda so_line: (
+                so_line.product_id
+                and so_line.product_id.product_tmpl_id.recurring_invoice
+                and not ('display_type' in so_line._fields and so_line.display_type)
+                and abs(self._wgs_get_so_line_qty(so_line)) > 0
+            )
+        )
+        total = 0.0
+        for so_line in recurring_lines:
+            qty = abs(self._wgs_get_so_line_qty(so_line))
+            discount = float(so_line.discount or 0.0) if 'discount' in so_line._fields else 0.0
+            total += qty * float(so_line.price_unit or 0.0) * (1 - (discount / 100.0))
+        return max(total, 0.0)
+
+    def _wgs_get_so_line_qty(self, so_line):
+        for field_name in ('product_uom_qty', 'quantity', 'qty'):
+            if field_name in so_line._fields:
+                return float(so_line[field_name] or 0.0)
+        return 0.0
+
+    def _wgs_get_current_subscription_period_bounds(self, source_order, today=False):
+        source_order.ensure_one()
+        today = fields.Date.to_date(today) or fields.Date.context_today(self)
+
+        period_end = self._wgs_get_first_date_from_order(source_order, ('recurring_next_date', 'next_invoice_date'))
+        delta = self._wgs_get_order_recurrence_delta(source_order)
+        if not period_end:
+            start_date = self._wgs_get_first_date_from_order(
+                source_order,
+                ('wgs_effective_start_date', 'start_date', 'date_start', 'subscription_start_date', 'date_order'),
+            ) or today
+            period_end = start_date + delta
+            period_start = start_date
+        else:
+            period_start = period_end - delta
+
+        if isinstance(period_start, datetime):
+            period_start = period_start.date()
+        if isinstance(period_end, datetime):
+            period_end = period_end.date()
+
+        if isinstance(period_start, date) and isinstance(period_end, date):
+            return period_start, period_end
+        return False, False
+
+    def _wgs_get_order_recurrence_delta(self, sale_order):
+        sale_order.ensure_one()
+
+        interval = 1
+        unit = 'month'
+        if {'recurring_interval', 'recurring_rule_type'}.issubset(sale_order._fields):
+            interval = int(sale_order.recurring_interval or 1)
+            unit = sale_order.recurring_rule_type or 'month'
+        else:
+            plan = self._wgs_extract_plan_record_from_sale_order(sale_order)
+            if plan:
+                interval, unit = self._wgs_extract_interval_from_plan(plan)
+
+        interval = max(1, int(interval or 1))
+        unit_value = (unit or 'month').lower()
+        if 'day' in unit_value:
+            return relativedelta(days=interval)
+        if 'week' in unit_value:
+            return relativedelta(weeks=interval)
+        if 'year' in unit_value:
+            return relativedelta(years=interval)
+        return relativedelta(months=interval)
+
+    def _wgs_extract_plan_record_from_sale_order(self, sale_order):
+        sale_order.ensure_one()
+        if 'plan_id' in sale_order._fields and sale_order.plan_id:
+            return sale_order.plan_id
+
+        recurring_lines = sale_order.order_line.filtered(
+            lambda so_line: so_line.product_id and so_line.product_id.product_tmpl_id.recurring_invoice
+        )
+        line_plan_fields = ('subscription_plan_id', 'plan_id', 'recurring_plan_id')
+        for so_line in recurring_lines:
+            for field_name in line_plan_fields:
+                if field_name in so_line._fields and so_line[field_name]:
+                    return so_line[field_name]
+        return False
+
+    def _wgs_get_first_date_from_order(self, sale_order, field_names):
+        sale_order.ensure_one()
+        for field_name in field_names:
+            if field_name not in sale_order._fields:
+                continue
+            value = sale_order[field_name]
+            converted = self._wgs_to_date(value)
+            if converted:
+                return converted
+        return False
+
+    def _wgs_to_date(self, value):
+        if not value:
+            return False
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
+        return fields.Date.to_date(value)
+
+    def _wgs_close_source_subscription_after_upgrade(self, source_order, new_subscription_start_date):
+        source_order.ensure_one()
+
+        close_date = fields.Date.to_date(new_subscription_start_date) or fields.Date.context_today(self)
+        close_date = close_date - timedelta(days=1)
+        values = {}
+        end_field = self._wgs_find_subscription_end_date_field(source_order)
+        if end_field:
+            values[end_field] = close_date
+        if values:
+            source_order.write(values)
+
+        for method_name in ('action_close', 'action_subscription_close', 'set_close'):
+            method = getattr(source_order, method_name, None)
+            if not callable(method):
+                continue
+            try:
+                method()
+                _logger.info(
+                    'WGS POS: source subscription %s closed after upgrade with %s',
+                    source_order.name,
+                    method_name,
+                )
+                return
+            except Exception as error:
+                _logger.warning(
+                    'WGS POS: could not execute %s on source subscription %s (%s)',
+                    method_name,
+                    source_order.name,
+                    error,
+                )
 
     def _wgs_link_pos_and_sale_records(self, pos_line, sale_order, sale_order_line=False):
         self.ensure_one()

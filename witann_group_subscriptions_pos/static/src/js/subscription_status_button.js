@@ -886,26 +886,32 @@ patch(PaymentScreen.prototype, {
         }
 
         const productId = Number(product.id || 0);
-        const cacheKey = `${productId}:${selection.planId || 0}:${selection.pricingId || 0}`;
+        const order = getCurrentOrder(this);
+        const partner = getCurrentPartner(this, order);
+        const partnerId = partner && partner.id ? Number(partner.id) : 0;
+        const cacheKey = `${partnerId}:${productId}:${selection.planId || 0}:${selection.pricingId || 0}`;
         let cached = this._wgsRecurringPriceCache[cacheKey];
         if (!cached) {
             cached = await this.orm.call(
                 "pos.order",
-                "wgs_get_recurring_price_for_pos",
-                [productId, getLineUnitPrice(line), selection.planId || false, selection.pricingId || false]
+                "wgs_get_subscription_charge_for_pos",
+                [partnerId || false, productId, getLineUnitPrice(line), selection.planId || false, selection.pricingId || false]
             );
             this._wgsRecurringPriceCache[cacheKey] = cached || {};
         }
 
-        const recurringPrice = Number(cached && cached.price);
-        if (!Number.isFinite(recurringPrice) || recurringPrice <= 0) {
+        const chargeNow = Number(cached && cached.charge_now);
+        if (!Number.isFinite(chargeNow) || chargeNow < 0) {
             return;
         }
 
         const currentPrice = getLineUnitPrice(line);
-        if (Math.abs(currentPrice - recurringPrice) > 0.0001) {
-            setLineUnitPrice(line, recurringPrice);
+        if (Math.abs(currentPrice - chargeNow) > 0.0001) {
+            setLineUnitPrice(line, chargeNow);
         }
+
+        line.wgs_upgrade_credit_amount = Number(cached && cached.credit_amount) || 0;
+        line.wgs_is_upgrade = !!(cached && cached.is_upgrade);
 
         const resolvedPlanId = Number.parseInt(cached && cached.plan_id, 10);
         const resolvedPricingId = Number.parseInt(cached && cached.pricing_id, 10);
@@ -1133,18 +1139,24 @@ patch(ControlButtons.prototype, {
         const selection = getLineSubscriptionSelection(line);
         const preferredPlanId = selection.planId || context.default_plan_id || false;
         const preferredPricingId = selection.pricingId || context.default_pricing_id || false;
+        const order = getCurrentOrder(this);
+        const partner = getCurrentPartner(this, order);
+        const partnerId = partner && partner.id ? Number(partner.id) : 0;
         const result = await this.orm.call(
             "pos.order",
-            "wgs_get_recurring_price_for_pos",
-            [productId, getLineUnitPrice(line), preferredPlanId, preferredPricingId]
+            "wgs_get_subscription_charge_for_pos",
+            [partnerId || false, productId, getLineUnitPrice(line), preferredPlanId, preferredPricingId]
         );
-        const recurringPrice = Number(result && result.price);
-        if (Number.isFinite(recurringPrice) && recurringPrice > 0) {
+        const chargeNow = Number(result && result.charge_now);
+        if (Number.isFinite(chargeNow) && chargeNow >= 0) {
             const currentPrice = getLineUnitPrice(line);
-            if (Math.abs(currentPrice - recurringPrice) > 0.0001) {
-                setLineUnitPrice(line, recurringPrice);
+            if (Math.abs(currentPrice - chargeNow) > 0.0001) {
+                setLineUnitPrice(line, chargeNow);
             }
         }
+
+        line.wgs_upgrade_credit_amount = Number(result && result.credit_amount) || 0;
+        line.wgs_is_upgrade = !!(result && result.is_upgrade);
 
         setLineSubscriptionSelection(
             line,
@@ -1336,8 +1348,9 @@ patch(ControlButtons.prototype, {
 
         syncPlanSelection();
         if (planSelect) {
-            planSelect.addEventListener("change", () => {
+            planSelect.addEventListener("change", async () => {
                 syncPlanSelection();
+                await this._wgsEnsureRecurringPriceOnLine(line, product, subscriptionContext);
             });
         }
         if (startDateInput) {
