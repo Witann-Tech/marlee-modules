@@ -767,7 +767,10 @@ class PosOrder(models.Model):
             'order_line': [Command.create(line_values)],
         }
         if 'date_order' in sale_order_fields:
-            sale_order_values['date_order'] = fields.Datetime.now()
+            sale_order_values['date_order'] = self._wgs_convert_date_for_field_value(
+                contract_date,
+                sale_order_fields.get('date_order'),
+            )
         self._wgs_assign_date_field(
             values=sale_order_values,
             fields_map=sale_order_fields,
@@ -907,7 +910,15 @@ class PosOrder(models.Model):
             if contract_date:
                 contract_field = self._wgs_find_subscription_contract_date_field(target_order)
                 if contract_field:
-                    values[contract_field] = contract_date
+                    values[contract_field] = self._wgs_convert_date_for_field_value(
+                        contract_date,
+                        target_order._fields.get(contract_field),
+                    )
+                if 'date_order' in target_order._fields and 'date_order' not in values:
+                    values['date_order'] = self._wgs_convert_date_for_field_value(
+                        contract_date,
+                        target_order._fields.get('date_order'),
+                    )
             if subscription_start_date:
                 start_field = self._wgs_find_subscription_start_date_field(target_order)
                 if start_field:
@@ -972,6 +983,14 @@ class PosOrder(models.Model):
             if any(token in normalized_name for token in ('participant', 'member', 'attendee')):
                 return field_name
         return False
+
+    def _wgs_convert_date_for_field_value(self, date_value, field):
+        date_value = fields.Date.to_date(date_value)
+        if not date_value:
+            return False
+        if field and field.type == 'datetime':
+            return fields.Datetime.to_datetime(date_value)
+        return date_value
 
     def _wgs_find_subscription_end_date_field(self, sale_order):
         fields_map = sale_order._fields
