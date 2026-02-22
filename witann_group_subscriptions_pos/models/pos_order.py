@@ -19,7 +19,13 @@ class PosSession(models.Model):
         search_params = params.setdefault('search_params', {})
         field_list = search_params.setdefault('fields', [])
 
-        for field_name in ('recurring_invoice', 'is_subscription', 'subscription_ok', 'max_participants_total'):
+        for field_name in (
+            'recurring_invoice',
+            'is_subscription',
+            'subscription_ok',
+            'max_participants_total',
+            'subscription_minimum_term_periods',
+        ):
             if field_name not in field_list:
                 field_list.append(field_name)
         return params
@@ -32,6 +38,7 @@ class PosOrderLine(models.Model):
     wgs_sale_order_id = fields.Many2one('sale.order', string='Suscripción generada', copy=False)
     wgs_subscription_plan_id = fields.Integer(string='Plan de suscripción (POS)', copy=False)
     wgs_subscription_pricing_id = fields.Integer(string='Tarifa de suscripción (POS)', copy=False)
+    wgs_subscription_start_date = fields.Date(string='Fecha inicio de suscripción (POS)', copy=False)
     wgs_subscription_end_date = fields.Date(string='Fecha fin de suscripción (POS)', copy=False)
 
     def wgs_get_participant_ids(self):
@@ -62,6 +69,12 @@ class PosOrderLine(models.Model):
         if not self.wgs_subscription_end_date:
             return False
         return fields.Date.to_date(self.wgs_subscription_end_date)
+
+    def wgs_get_subscription_start_date(self):
+        self.ensure_one()
+        if not self.wgs_subscription_start_date:
+            return False
+        return fields.Date.to_date(self.wgs_subscription_start_date)
 
 
 class PosOrder(models.Model):
@@ -161,6 +174,7 @@ class PosOrder(models.Model):
         max_total = int(product.max_participants_total or 1)
         if max_total < 1:
             max_total = 1
+        min_term_periods = self._wgs_get_product_min_term_periods(product)
 
         candidates = self._wgs_get_recurring_pricing_candidates(product)
         candidates.sort(key=lambda row: (row['sequence'], row.get('pricing_id') or 0))
@@ -173,6 +187,7 @@ class PosOrder(models.Model):
         return {
             'is_subscription': is_subscription,
             'max_participants_total': max_total,
+            'min_term_periods': min_term_periods,
             'default_plan_id': default_plan_id,
             'default_pricing_id': default_pricing_id,
             'default_price': float(choice.get('price') or fallback or 0.0),
@@ -225,6 +240,11 @@ class PosOrder(models.Model):
             end_date = fields.Date.to_date(raw_end_date)
             if end_date:
                 values['wgs_subscription_end_date'] = end_date
+        raw_start_date = config_payload.get('start_date')
+        if raw_start_date:
+            start_date = fields.Date.to_date(raw_start_date)
+            if start_date:
+                values['wgs_subscription_start_date'] = start_date
 
         return values
 
@@ -252,6 +272,7 @@ class PosOrder(models.Model):
             'participant_ids': [],
             'plan_id': False,
             'pricing_id': False,
+            'start_date': False,
             'end_date': False,
         }
         if not isinstance(ui_line, dict):
@@ -300,6 +321,13 @@ class PosOrder(models.Model):
             or ui_line.get('wgsSubscriptionEndDate')
             or raw_config.get('end_date')
             or raw_config.get('endDate')
+            or False
+        )
+        data['start_date'] = (
+            ui_line.get('wgs_subscription_start_date')
+            or ui_line.get('wgsSubscriptionStartDate')
+            or raw_config.get('start_date')
+            or raw_config.get('startDate')
             or False
         )
 
@@ -430,6 +458,11 @@ class PosOrder(models.Model):
                 end_date = fields.Date.to_date(raw_end_date)
                 if end_date:
                     write_values['wgs_subscription_end_date'] = end_date
+            raw_start_date = config.get('start_date')
+            if raw_start_date:
+                start_date = fields.Date.to_date(raw_start_date)
+                if start_date:
+                    write_values['wgs_subscription_start_date'] = start_date
 
             if write_values:
                 target_line.write(write_values)
@@ -477,6 +510,7 @@ class PosOrder(models.Model):
                 config.get('participant_ids')
                 or config.get('plan_id')
                 or config.get('pricing_id')
+                or config.get('start_date')
                 or config.get('end_date')
             ):
                 continue
@@ -630,22 +664,38 @@ class PosOrder(models.Model):
             plan_id=recurring_plan_id,
             pricing_id=recurring_pricing_id,
         )
+        today = fields.Date.context_today(self)
+        subscription_start_date = line.wgs_get_subscription_start_date() or today
         subscription_end_date = line.wgs_get_subscription_end_date()
-        sale_start_date = fields.Date.context_today(self)
-        if subscription_end_date:
+        minimum_term_periods = self._wgs_get_product_min_term_periods(product)
+        sale_start_date = subscription_start_date
+        if subscription_start_date < today:
+            raise UserError(
+                _(
+                    'La fecha de inicio no puede ser anterior a %(date)s.'
+                )
+                % {'date': fields.Date.to_string(today)}
+            )
+        if subscription_end_date and minimum_term_periods > 0:
             if not plan_record:
                 raise UserError(
                     _('No se pudo validar la fecha de finalización porque el plan recurrente no está definido.')
                 )
-            min_threshold_date = self._wgs_get_plan_min_end_threshold(plan_record, sale_start_date)
+            min_threshold_date = self._wgs_get_plan_min_end_threshold(
+                plan_record,
+                sale_start_date,
+                periods_count=minimum_term_periods,
+            )
             if subscription_end_date <= min_threshold_date:
                 raise UserError(
                     _(
-                        'La fecha de finalización debe ser posterior a %(date)s para el plan %(plan)s.'
+                        'La fecha de finalización debe ser posterior a %(date)s para el plan %(plan)s '
+                        '(plazo mínimo: %(periods)s periodos).'
                     )
                     % {
                         'date': fields.Date.to_string(min_threshold_date),
                         'plan': plan_record.display_name,
+                        'periods': minimum_term_periods,
                     }
                 )
 
@@ -766,6 +816,7 @@ class PosOrder(models.Model):
         self._wgs_sync_subscription_metadata(
             sale_order=sale_order,
             participant_ids=participant_ids,
+            subscription_start_date=subscription_start_date,
             subscription_end_date=subscription_end_date,
             next_billing_date=next_billing_date,
         )
@@ -829,6 +880,7 @@ class PosOrder(models.Model):
         self,
         sale_order,
         participant_ids,
+        subscription_start_date=False,
         subscription_end_date=False,
         next_billing_date=False,
     ):
@@ -838,6 +890,10 @@ class PosOrder(models.Model):
             participant_field = self._wgs_find_partner_multi_field(target_order)
             if participant_field:
                 values[participant_field] = [Command.set(participant_ids)]
+            if subscription_start_date:
+                start_field = self._wgs_find_subscription_start_date_field(target_order)
+                if start_field:
+                    values[start_field] = subscription_start_date
             if subscription_end_date:
                 end_field = self._wgs_find_subscription_end_date_field(target_order)
                 if end_field:
@@ -849,9 +905,10 @@ class PosOrder(models.Model):
             if values:
                 target_order.write(values)
                 _logger.info(
-                    'WGS POS: synced metadata on subscription order %s (participants=%s end_date=%s next=%s)',
+                    'WGS POS: synced metadata on subscription order %s (participants=%s start_date=%s end_date=%s next=%s)',
                     target_order.name,
                     participant_ids,
+                    subscription_start_date or False,
                     subscription_end_date or False,
                     next_billing_date or False,
                 )
@@ -910,6 +967,24 @@ class PosOrder(models.Model):
                 continue
             normalized_name = (field_name or '').lower()
             if any(token in normalized_name for token in ('end', 'until', 'close')) and any(
+                token in normalized_name for token in ('subscription', 'recurr', 'period')
+            ):
+                return field_name
+        return False
+
+    def _wgs_find_subscription_start_date_field(self, sale_order):
+        fields_map = sale_order._fields
+        preferred = ('start_date', 'date_start', 'subscription_start_date', 'recurring_start_date')
+        for field_name in preferred:
+            field = fields_map.get(field_name)
+            if field and field.type in ('date', 'datetime'):
+                return field_name
+
+        for field_name, field in fields_map.items():
+            if field.type not in ('date', 'datetime'):
+                continue
+            normalized_name = (field_name or '').lower()
+            if any(token in normalized_name for token in ('start', 'begin', 'from')) and any(
                 token in normalized_name for token in ('subscription', 'recurr', 'period')
             ):
                 return field_name
@@ -1040,9 +1115,11 @@ class PosOrder(models.Model):
                 return record
         return False
 
-    def _wgs_get_plan_min_end_threshold(self, plan, start_date):
+    def _wgs_get_plan_min_end_threshold(self, plan, start_date, periods_count=1):
         start_date = fields.Date.to_date(start_date) or fields.Date.context_today(self)
         interval_value, interval_unit = self._wgs_extract_interval_from_plan(plan)
+        multiplier = max(1, int(periods_count or 1))
+        interval_value = interval_value * multiplier
         if interval_unit == 'day':
             return start_date + timedelta(days=interval_value)
         if interval_unit == 'week':
@@ -1051,6 +1128,31 @@ class PosOrder(models.Model):
             return start_date + relativedelta(years=interval_value)
         # month by default
         return start_date + relativedelta(months=interval_value)
+
+    def _wgs_get_product_min_term_periods(self, product):
+        product.ensure_one()
+        try:
+            raw_value = (
+                (('subscription_minimum_term_periods' in product._fields) and product.subscription_minimum_term_periods)
+                or (
+                    ('subscription_minimum_term_periods' in product.product_tmpl_id._fields)
+                    and product.product_tmpl_id.subscription_minimum_term_periods
+                )
+                or 0
+            )
+        except Exception as error:
+            _logger.warning(
+                'WGS POS: could not read subscription_minimum_term_periods for product %s (%s)',
+                product.id,
+                error,
+            )
+            return 0
+
+        try:
+            numeric_value = int(raw_value or 0)
+        except (TypeError, ValueError):
+            return 0
+        return max(0, numeric_value)
 
     def _wgs_extract_interval_from_plan(self, plan):
         interval_value = 1
