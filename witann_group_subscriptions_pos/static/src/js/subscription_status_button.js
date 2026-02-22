@@ -1528,12 +1528,7 @@ patch(ControlButtons.prototype, {
                 return;
             }
             setLineSubscriptionSelection(line, planData.planId, planData.pricingId);
-            if (Number.isFinite(planData.price) && planData.price > 0) {
-                const currentPrice = getLineUnitPrice(line);
-                if (Math.abs(currentPrice - planData.price) > 0.0001) {
-                    setLineUnitPrice(line, planData.price);
-                }
-            }
+            // Pricing is always resolved via backend to preserve upgrade credit logic.
             syncDateConstraints();
         };
 

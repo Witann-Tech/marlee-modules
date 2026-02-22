@@ -822,9 +822,15 @@ class PosOrder(models.Model):
             recurring_total = max(0.0, float(recurring_price_unit or 0.0) * float(qty or 0.0))
             paid_total = max(0.0, float(line.price_unit or 0.0) * float(qty or 0.0))
             credit_from_pos = max(0.0, recurring_total - paid_total)
+            upsell_line_values = dict(line_values)
+            if credit_from_pos > 0 and 'name' in sale_order_line_fields:
+                base_name = upsell_line_values.get('name') or product.display_name
+                upsell_line_values['name'] = _('%(name)s (Complemento por upgrade POS)') % {
+                    'name': base_name,
+                }
             upsell_order = self._wgs_create_subscription_upsell_sale_order_from_line(
                 source_order=upsell_source_order,
-                line_values=dict(line_values),
+                line_values=upsell_line_values,
                 credit_amount=credit_from_pos,
             )
             sale_order_line = upsell_order.order_line.filtered(lambda so_line: so_line.product_id == product)[:1]
