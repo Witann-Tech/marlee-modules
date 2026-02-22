@@ -17,6 +17,29 @@ class SaleOrder(models.Model):
         'pause',
         'upsell',
     )
+    _PARTNER_GENDER_FIELD_CANDIDATES = (
+        'gender',
+        'x_gender',
+        'x_studio_gender',
+        'x_studio_genero',
+    )
+    _PARTNER_BIRTHDAY_FIELD_CANDIDATES = (
+        'birthday',
+        'birthdate_date',
+        'date_of_birth',
+        'x_birthday',
+        'x_studio_birthday',
+        'x_studio_cumpleanos',
+        'x_studio_fecha_nacimiento',
+    )
+    _PARTNER_LAST_ACCESS_FIELD_CANDIDATES = (
+        'last_access_date',
+        'last_access_datetime',
+        'x_last_access_date',
+        'x_last_access_datetime',
+        'x_studio_last_access',
+        'x_studio_ultimo_acceso',
+    )
 
     @api.model
     def get_partner_subscription_status_for_pos(self, partner_id):
@@ -73,6 +96,7 @@ class SaleOrder(models.Model):
 
         today = fields.Date.context_today(self)
         subscriptions_by_partner = self._get_pos_subscription_orders_by_partners(partners)
+        access_last_map = self._get_access_person_last_access_map_for_pos(partners)
 
         result = {}
         for partner in partners:
@@ -83,29 +107,104 @@ class SaleOrder(models.Model):
                 if item:
                     items.append(item)
 
-            valid_items = [row for row in items if row['is_valid']]
-            if valid_items:
-                valid_until_values = [row['valid_until'] for row in valid_items if row['valid_until']]
-                nearest_valid_until = min(valid_until_values) if valid_until_values else False
-                result[partner.id] = {
-                    'state': 'valid',
-                    'short_label': '[VIGENTE]',
-                    'valid_until': nearest_valid_until,
-                }
-            elif items:
-                result[partner.id] = {
-                    'state': 'expired',
-                    'short_label': '[SIN VIGENCIA]',
-                    'valid_until': False,
-                }
-            else:
-                result[partner.id] = {
-                    'state': 'none',
-                    'short_label': False,
-                    'valid_until': False,
-                }
+            summary = self._summarize_partner_subscription_items_for_pos(items)
+            birthday_value = self._get_partner_field_value_for_pos(
+                partner,
+                self._PARTNER_BIRTHDAY_FIELD_CANDIDATES,
+            )
+            gender_value = self._get_partner_field_value_for_pos(
+                partner,
+                self._PARTNER_GENDER_FIELD_CANDIDATES,
+            )
+            last_access_value = self._get_partner_field_value_for_pos(
+                partner,
+                self._PARTNER_LAST_ACCESS_FIELD_CANDIDATES,
+            )
+            if not last_access_value:
+                last_access_value = access_last_map.get(partner.id)
+
+            result[partner.id] = {
+                'state': summary.get('state') or 'none',
+                'short_label': summary.get('short_label') or False,
+                'valid_until': summary.get('valid_until') or False,
+                'start_date': summary.get('start_date') or False,
+                'package_label': summary.get('package_label') or False,
+                'package_names': summary.get('package_names') or [],
+                'plan_name': summary.get('plan_name') or False,
+                'reason': summary.get('reason') or False,
+                'subscription_name': summary.get('subscription_name') or False,
+                'partner_name': partner.display_name,
+                'phone': partner.phone or partner.mobile or False,
+                'email': partner.email or False,
+                'gender': gender_value or False,
+                'birthday': birthday_value or False,
+                'last_access': last_access_value or False,
+                'image_url': '/web/image/res.partner/%s/image_128' % partner.id,
+            }
 
         return result
+
+    def _summarize_partner_subscription_items_for_pos(self, items):
+        if not items:
+            return {
+                'state': 'none',
+                'short_label': False,
+                'valid_until': False,
+                'start_date': False,
+                'package_label': False,
+                'package_names': [],
+                'plan_name': False,
+                'reason': False,
+                'subscription_name': False,
+            }
+
+        valid_items = [row for row in items if row.get('is_valid')]
+        if valid_items:
+            prioritized = sorted(
+                valid_items,
+                key=lambda row: (
+                    row.get('valid_until') or '9999-12-31',
+                    row.get('start_date') or row.get('period_start') or '9999-12-31',
+                    row.get('subscription_name') or '',
+                ),
+            )
+            state = 'valid'
+            short_label = '[VIGENTE]'
+        else:
+            prioritized = sorted(
+                items,
+                key=lambda row: (
+                    row.get('valid_until') or '',
+                    row.get('start_date') or row.get('period_start') or '',
+                    row.get('subscription_name') or '',
+                ),
+                reverse=True,
+            )
+            state = 'expired'
+            short_label = '[SIN VIGENCIA]'
+
+        primary = prioritized[0]
+        package_names = sorted(
+            {
+                package_name
+                for row in items
+                for package_name in (row.get('package_names') or [])
+                if package_name
+            }
+        )
+        package_label = ', '.join(package_names) if package_names else False
+
+        return {
+            'state': state,
+            'short_label': short_label,
+            'valid_until': primary.get('valid_until') or False,
+            'start_date': primary.get('start_date') or primary.get('period_start') or False,
+            'package_label': package_label,
+            'package_names': package_names,
+            'plan_name': primary.get('plan_name') or False,
+            'reason': primary.get('reason') or False,
+            'subscription_name': primary.get('subscription_name') or False,
+        }
 
     @api.model
     def _get_pos_subscription_orders(self, partner):
@@ -156,6 +255,7 @@ class SaleOrder(models.Model):
 
         is_valid = True
         reason = _('Dentro del periodo pagado.')
+        plan_name = self._get_subscription_plan_name_for_pos(recurring_lines)
 
         start_date = self._get_first_available_date(
             ('wgs_effective_start_date', 'start_date', 'date_start', 'subscription_start_date', 'date_order')
@@ -200,6 +300,8 @@ class SaleOrder(models.Model):
             'subscription_name': self.name,
             'state': self.subscription_state if 'subscription_state' in self._fields else False,
             'package_names': sorted(set(recurring_lines.mapped('product_id.display_name'))),
+            'plan_name': plan_name,
+            'start_date': start_date.isoformat() if start_date else False,
             'period_start': period_start.isoformat() if period_start else False,
             'valid_until': valid_until.isoformat() if valid_until else False,
             'is_valid': is_valid,
@@ -212,6 +314,28 @@ class SaleOrder(models.Model):
         return self.order_line.filtered(
             lambda line: line.product_id and line.product_id.product_tmpl_id.recurring_invoice
         )
+
+    def _get_subscription_plan_name_for_pos(self, recurring_lines):
+        self.ensure_one()
+
+        if 'plan_id' in self._fields and self.plan_id:
+            return self.plan_id.display_name
+
+        names = []
+        line_plan_fields = ('subscription_plan_id', 'plan_id', 'recurring_plan_id')
+        for line in recurring_lines:
+            for field_name in line_plan_fields:
+                if field_name not in line._fields:
+                    continue
+                plan_value = line[field_name]
+                if not plan_value:
+                    continue
+                if getattr(plan_value, 'display_name', False):
+                    names.append(plan_value.display_name)
+                    break
+
+        names = sorted(set(name for name in names if name))
+        return ', '.join(names) if names else False
 
     def _is_active_subscription_state(self):
         self.ensure_one()
@@ -268,6 +392,92 @@ class SaleOrder(models.Model):
         if 'year' in unit_value:
             return relativedelta(years=interval)
         return relativedelta(months=interval)
+
+    def _get_partner_field_value_for_pos(self, partner, field_candidates):
+        partner.ensure_one()
+
+        for field_name in field_candidates:
+            field = partner._fields.get(field_name)
+            if not field:
+                continue
+            value = partner[field_name]
+            formatted = self._format_value_for_pos(value, field)
+            if formatted:
+                return formatted
+        return False
+
+    def _format_value_for_pos(self, value, field=False):
+        if value in (False, None, ''):
+            return False
+
+        if field and field.type == 'selection':
+            selection = field._description_selection(self.env) if callable(field.selection) else field.selection
+            selection_map = dict(selection or [])
+            return selection_map.get(value, value)
+
+        if field and field.type == 'datetime':
+            converted = fields.Datetime.to_datetime(value)
+            if converted:
+                return fields.Datetime.to_string(converted)
+        if field and field.type == 'date':
+            converted = fields.Date.to_date(value)
+            if converted:
+                return fields.Date.to_string(converted)
+
+        if isinstance(value, datetime):
+            return fields.Datetime.to_string(value)
+        if isinstance(value, date):
+            return fields.Date.to_string(value)
+        return str(value)
+
+    def _get_access_person_last_access_map_for_pos(self, partners):
+        model_name = 'access_control.person'
+        if model_name not in self.env.registry or not partners:
+            return {}
+
+        person_model = self.env[model_name].sudo()
+        fields_map = person_model._fields
+        if 'partner_id' not in fields_map:
+            return {}
+
+        candidate_fields = []
+        for field_name in self._PARTNER_LAST_ACCESS_FIELD_CANDIDATES:
+            field = fields_map.get(field_name)
+            if field and field.type in ('date', 'datetime'):
+                candidate_fields.append(field_name)
+
+        for field_name, field in fields_map.items():
+            if field.type not in ('date', 'datetime'):
+                continue
+            normalized_name = (field_name or '').lower()
+            if any(
+                token in normalized_name
+                for token in ('last_access', 'last_entry', 'last_visit', 'ultimo_acceso', 'last_checkin')
+            ):
+                if field_name not in candidate_fields:
+                    candidate_fields.append(field_name)
+
+        if not candidate_fields:
+            return {}
+
+        records = person_model.search([('partner_id', 'in', partners.ids)], order='id desc')
+        result = {}
+        for record in records:
+            partner_id = record.partner_id.id
+            if not partner_id or partner_id in result:
+                continue
+            last_access_value = False
+            for field_name in candidate_fields:
+                if field_name not in record._fields:
+                    continue
+                field = record._fields[field_name]
+                formatted = self._format_value_for_pos(record[field_name], field)
+                if formatted:
+                    last_access_value = formatted
+                    break
+            if last_access_value:
+                result[partner_id] = last_access_value
+        return result
 
     @api.model
     def _to_date(self, value):

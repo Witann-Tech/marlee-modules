@@ -5,14 +5,16 @@
        t-inherit-mode="extension"
        owl="1">
         <xpath expr="//SelectPartnerButton" position="after">
-            <button class="btn btn-light rounded-0 fw-bolder" t-on-click="onClickSubscriptionParticipants" type="button">
-                <i class="fa fa-users me-1"/>
-                Configuración
-            </button>
-            <button class="btn btn-light rounded-0 fw-bolder" t-on-click="onClickSubscriptionStatus" type="button">
-                <i class="fa fa-id-card me-1"/>
-                Vigencia
-            </button>
+            <div class="wgs-control-buttons-row">
+                <button class="btn btn-light rounded-0 fw-bolder wgs-control-button" t-on-click="onClickSubscriptionParticipants" type="button">
+                    <i class="fa fa-users me-1"/>
+                    Configuración
+                </button>
+                <button class="btn btn-light rounded-0 fw-bolder wgs-control-button" t-on-click="onClickSubscriptionStatus" type="button">
+                    <i class="fa fa-id-card me-1"/>
+                    Vigencias
+                </button>
+            </div>
         </xpath>
     </t>
 </templates>

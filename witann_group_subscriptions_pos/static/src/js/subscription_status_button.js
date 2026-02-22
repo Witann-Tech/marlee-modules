@@ -1098,11 +1098,18 @@ patch(ControlButtons.prototype, {
             const status = this._getPartnerStatusEntry(statusMap, partner.id) || {};
             return {
                 id: partner.id,
-                name: partner.name || partner.display_name || _t("Sin nombre"),
-                email: partner.email || "",
-                phone: partner.phone || partner.mobile || "",
+                name: status.partner_name || partner.name || partner.display_name || _t("Sin nombre"),
+                email: status.email || partner.email || "",
+                phone: status.phone || partner.phone || partner.mobile || "",
                 state: status.state || "none",
+                package_label: status.package_label || "",
+                plan_name: status.plan_name || "",
+                start_date: status.start_date || "",
                 valid_until: status.valid_until || "",
+                birthday: status.birthday || "",
+                gender: status.gender || "",
+                last_access: status.last_access || "",
+                image_url: status.image_url || `/web/image/res.partner/${partner.id}/image_128`,
             };
         });
 
@@ -1496,31 +1503,42 @@ patch(ControlButtons.prototype, {
         overlay.className = "wgs-status-modal-overlay";
 
         const modal = document.createElement("div");
-        modal.className = "wgs-status-modal";
+        modal.className = "wgs-status-modal wgs-directory-modal";
 
         const header = document.createElement("div");
         header.className = "wgs-status-modal-header";
-        const title = document.createElement("h3");
-        title.textContent = _t("Directorio de Vigencia de Clientes");
-        header.appendChild(title);
+        header.innerHTML = `
+            <h3>${this._escapeHtml(_t("Directorio de Vigencia de Clientes"))}</h3>
+            <p class="wgs-subtitle">${this._escapeHtml(_t("Listado general de titulares y participantes, con vigencia y datos clave."))}</p>
+        `;
 
         const toolbar = document.createElement("div");
         toolbar.className = "wgs-status-toolbar";
         toolbar.innerHTML = `
-            <input type="text" class="wgs-filter-search" placeholder="${_t("Buscar por nombre, teléfono o email")}" />
+            <input type="text" class="wgs-filter-search" placeholder="${_t("Buscar por cliente, paquete, teléfono o email")}" />
             <select class="wgs-filter-state">
-                <option value="all">${_t("Todos")}</option>
-                <option value="valid">${_t("Vigentes")}</option>
-                <option value="expired">${_t("Sin vigencia")}</option>
-                <option value="none">${_t("Sin paquete")}</option>
+                <option value="all">${_t("Estado: Todos")}</option>
+                <option value="valid">${_t("Estado: Vigentes")}</option>
+                <option value="expired">${_t("Estado: Sin vigencia")}</option>
+                <option value="none">${_t("Estado: Sin paquete")}</option>
+            </select>
+            <select class="wgs-filter-birthday">
+                <option value="all">${_t("Cumpleaños: Todos")}</option>
+                <option value="today">${_t("Cumpleaños: Hoy")}</option>
+                <option value="this_month">${_t("Cumpleaños: Este mes")}</option>
+                <option value="next_7">${_t("Cumpleaños: Próximos 7 días")}</option>
+                <option value="missing">${_t("Cumpleaños: Sin dato")}</option>
             </select>
             <select class="wgs-sort">
-                <option value="name_asc">${_t("Nombre A-Z")}</option>
-                <option value="name_desc">${_t("Nombre Z-A")}</option>
-                <option value="state">${_t("Estado")}</option>
-                <option value="valid_until_asc">${_t("Vigencia cercana")}</option>
-                <option value="valid_until_desc">${_t("Vigencia lejana")}</option>
+                <option value="name_asc">${_t("Orden: Nombre A-Z")}</option>
+                <option value="name_desc">${_t("Orden: Nombre Z-A")}</option>
+                <option value="state">${_t("Orden: Estado")}</option>
+                <option value="valid_until_asc">${_t("Orden: Vencimiento cercano")}</option>
+                <option value="valid_until_desc">${_t("Orden: Vencimiento lejano")}</option>
+                <option value="birthday_asc">${_t("Orden: Cumpleaños próximo")}</option>
+                <option value="last_access_desc">${_t("Orden: Último acceso reciente")}</option>
             </select>
+            <button type="button" class="wgs-status-close-btn wgs-btn-export">${this._escapeHtml(_t("Descargar XLS"))}</button>
         `;
 
         const summary = document.createElement("div");
@@ -1534,9 +1552,16 @@ patch(ControlButtons.prototype, {
         table.innerHTML = `
             <thead>
                 <tr>
+                    <th>${_t("Foto")}</th>
                     <th>${_t("Cliente")}</th>
                     <th>${_t("Estado")}</th>
-                    <th>${_t("Vigente hasta")}</th>
+                    <th>${_t("Paquete")}</th>
+                    <th>${_t("Plan")}</th>
+                    <th>${_t("Inicio")}</th>
+                    <th>${_t("Vencimiento")}</th>
+                    <th>${_t("Género")}</th>
+                    <th>${_t("Cumpleaños")}</th>
+                    <th>${_t("Último acceso")}</th>
                     <th>${_t("Teléfono")}</th>
                     <th>${_t("Email")}</th>
                 </tr>
@@ -1573,7 +1598,9 @@ patch(ControlButtons.prototype, {
 
         const searchInput = toolbar.querySelector(".wgs-filter-search");
         const stateSelect = toolbar.querySelector(".wgs-filter-state");
+        const birthdaySelect = toolbar.querySelector(".wgs-filter-birthday");
         const sortSelect = toolbar.querySelector(".wgs-sort");
+        const exportButton = toolbar.querySelector(".wgs-btn-export");
         const tbody = table.querySelector("tbody");
 
         const stateLabel = {
@@ -1588,27 +1615,25 @@ patch(ControlButtons.prototype, {
             none: 2,
         };
 
-        const parseDate = (value) => {
-            if (!value) {
-                return null;
-            }
-            const ts = Date.parse(value);
-            return Number.isNaN(ts) ? null : ts;
-        };
+        let filteredSnapshot = [...rows];
 
         const render = () => {
             const query = (searchInput.value || "").trim().toLowerCase();
             const stateFilter = stateSelect.value;
+            const birthdayFilter = birthdaySelect.value;
             const sortMode = sortSelect.value;
 
             let filtered = rows.filter((row) => {
                 if (stateFilter !== "all" && row.state !== stateFilter) {
                     return false;
                 }
+                if (!this._matchesBirthdayFilter(row.birthday, birthdayFilter)) {
+                    return false;
+                }
                 if (!query) {
                     return true;
                 }
-                const haystack = `${row.name} ${row.phone} ${row.email}`.toLowerCase();
+                const haystack = `${row.name || ""} ${row.phone || ""} ${row.email || ""} ${row.package_label || ""} ${row.plan_name || ""}`.toLowerCase();
                 return haystack.includes(query);
             });
 
@@ -1624,8 +1649,8 @@ patch(ControlButtons.prototype, {
                     return (a.name || "").localeCompare(b.name || "", "es");
                 }
                 if (sortMode === "valid_until_asc") {
-                    const av = parseDate(a.valid_until);
-                    const bv = parseDate(b.valid_until);
+                    const av = this._toTimestamp(a.valid_until);
+                    const bv = this._toTimestamp(b.valid_until);
                     if (av === null && bv === null) {
                         return (a.name || "").localeCompare(b.name || "", "es");
                     }
@@ -1638,8 +1663,30 @@ patch(ControlButtons.prototype, {
                     return av - bv;
                 }
                 if (sortMode === "valid_until_desc") {
-                    const av = parseDate(a.valid_until);
-                    const bv = parseDate(b.valid_until);
+                    const av = this._toTimestamp(a.valid_until);
+                    const bv = this._toTimestamp(b.valid_until);
+                    if (av === null && bv === null) {
+                        return (a.name || "").localeCompare(b.name || "", "es");
+                    }
+                    if (av === null) {
+                        return 1;
+                    }
+                    if (bv === null) {
+                        return -1;
+                    }
+                    return bv - av;
+                }
+                if (sortMode === "birthday_asc") {
+                    const av = this._birthdaySortRank(a.birthday);
+                    const bv = this._birthdaySortRank(b.birthday);
+                    if (av !== bv) {
+                        return av - bv;
+                    }
+                    return (a.name || "").localeCompare(b.name || "", "es");
+                }
+                if (sortMode === "last_access_desc") {
+                    const av = this._toTimestamp(a.last_access);
+                    const bv = this._toTimestamp(b.last_access);
                     if (av === null && bv === null) {
                         return (a.name || "").localeCompare(b.name || "", "es");
                     }
@@ -1654,15 +1701,18 @@ patch(ControlButtons.prototype, {
                 return (a.name || "").localeCompare(b.name || "", "es");
             });
 
+            filteredSnapshot = filtered;
+
             const counts = rows.reduce(
                 (acc, row) => {
                     acc.total += 1;
                     if (row.state === "valid") acc.valid += 1;
                     else if (row.state === "expired") acc.expired += 1;
                     else acc.none += 1;
+                    if (row.birthday) acc.birthday += 1;
                     return acc;
                 },
-                { total: 0, valid: 0, expired: 0, none: 0 }
+                { total: 0, valid: 0, expired: 0, none: 0, birthday: 0 }
             );
 
             summary.innerHTML = `
@@ -1670,24 +1720,36 @@ patch(ControlButtons.prototype, {
                 <span class="wgs-summary-pill wgs-summary-valid">${_t("Vigentes")}: ${counts.valid}</span>
                 <span class="wgs-summary-pill wgs-summary-expired">${_t("Sin vigencia")}: ${counts.expired}</span>
                 <span class="wgs-summary-pill wgs-summary-none">${_t("Sin paquete")}: ${counts.none}</span>
+                <span class="wgs-summary-pill">${_t("Con cumpleaños")}: ${counts.birthday}</span>
                 <span class="wgs-summary-pill">${_t("Mostrando")}: ${filtered.length}</span>
             `;
 
             if (!filtered.length) {
-                tbody.innerHTML = `<tr><td colspan="5">${_t("No hay resultados para el filtro actual.")}</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="12">${_t("No hay resultados para el filtro actual.")}</td></tr>`;
                 return;
             }
 
             tbody.innerHTML = filtered
                 .map((row) => {
-                    const badgeClass = row.state === "valid" ? "wgs-badge-valid" : row.state === "expired" ? "wgs-badge-expired" : "wgs-badge-none";
-                    const badgeLabel = stateLabel[row.state] || stateLabel.none;
-                    const untilLabel = row.valid_until || _t("N/D");
+                    const stateClass = row.state === "valid"
+                        ? "wgs-state-valid"
+                        : row.state === "expired"
+                            ? "wgs-state-expired"
+                            : "wgs-state-none";
                     return `
                         <tr>
-                            <td>${this._escapeHtml(row.name || "")}</td>
-                            <td><span class="wgs-status-badge ${badgeClass}">${this._escapeHtml(badgeLabel)}</span></td>
-                            <td>${this._escapeHtml(untilLabel)}</td>
+                            <td>
+                                <img class="wgs-partner-avatar" src="${this._escapeHtml(row.image_url || "")}" alt="${this._escapeHtml(row.name || "")}" loading="lazy" />
+                            </td>
+                            <td class="wgs-cell-name">${this._escapeHtml(row.name || "-")}</td>
+                            <td><span class="${stateClass}">${this._escapeHtml(stateLabel[row.state] || stateLabel.none)}</span></td>
+                            <td>${this._escapeHtml(row.package_label || "-")}</td>
+                            <td>${this._escapeHtml(row.plan_name || "-")}</td>
+                            <td>${this._escapeHtml(this._formatDateDisplay(row.start_date) || "-")}</td>
+                            <td>${this._escapeHtml(this._formatDateDisplay(row.valid_until) || "-")}</td>
+                            <td>${this._escapeHtml(row.gender || "-")}</td>
+                            <td>${this._escapeHtml(this._formatDateDisplay(row.birthday) || "-")}</td>
+                            <td>${this._escapeHtml(this._formatDateTimeDisplay(row.last_access) || "-")}</td>
                             <td>${this._escapeHtml(row.phone || "-")}</td>
                             <td>${this._escapeHtml(row.email || "-")}</td>
                         </tr>
@@ -1698,8 +1760,165 @@ patch(ControlButtons.prototype, {
 
         searchInput.addEventListener("input", render);
         stateSelect.addEventListener("change", render);
+        birthdaySelect.addEventListener("change", render);
         sortSelect.addEventListener("change", render);
+        exportButton.addEventListener("click", () => {
+            this._downloadDirectoryAsXls(filteredSnapshot);
+        });
         render();
+    },
+
+    _toTimestamp(value) {
+        if (!value) {
+            return null;
+        }
+        const ts = Date.parse(String(value).trim());
+        return Number.isNaN(ts) ? null : ts;
+    },
+
+    _birthdaySortRank(birthdayValue) {
+        const parsed = parseISODate(String(birthdayValue || "").trim());
+        if (!parsed) {
+            return 367;
+        }
+        const today = new Date();
+        const currentYear = today.getFullYear();
+        let nextBirthday = new Date(currentYear, parsed.getUTCMonth(), parsed.getUTCDate());
+        if (nextBirthday < new Date(currentYear, today.getMonth(), today.getDate())) {
+            nextBirthday = new Date(currentYear + 1, parsed.getUTCMonth(), parsed.getUTCDate());
+        }
+        const diffMs = nextBirthday.getTime() - new Date(currentYear, today.getMonth(), today.getDate()).getTime();
+        return Math.floor(diffMs / 86400000);
+    },
+
+    _matchesBirthdayFilter(birthdayValue, filterMode) {
+        if (filterMode === "all") {
+            return true;
+        }
+        const parsed = parseISODate(String(birthdayValue || "").trim());
+        if (!parsed) {
+            return filterMode === "missing";
+        }
+        if (filterMode === "missing") {
+            return false;
+        }
+
+        const today = new Date();
+        const todayMonth = today.getMonth() + 1;
+        const todayDay = today.getDate();
+        const birthMonth = parsed.getUTCMonth() + 1;
+        const birthDay = parsed.getUTCDate();
+
+        if (filterMode === "today") {
+            return birthMonth === todayMonth && birthDay === todayDay;
+        }
+        if (filterMode === "this_month") {
+            return birthMonth === todayMonth;
+        }
+        if (filterMode === "next_7") {
+            return this._birthdaySortRank(birthdayValue) <= 7;
+        }
+        return true;
+    },
+
+    _formatDateDisplay(value) {
+        if (!value) {
+            return "";
+        }
+        const parsed = parseISODate(String(value).slice(0, 10));
+        if (!parsed) {
+            return String(value);
+        }
+        const date = new Date(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate());
+        return date.toLocaleDateString("es-MX", {
+            day: "2-digit",
+            month: "short",
+            year: "numeric",
+        });
+    },
+
+    _formatDateTimeDisplay(value) {
+        if (!value) {
+            return "";
+        }
+        const ts = this._toTimestamp(value);
+        if (ts === null) {
+            return String(value);
+        }
+        return new Date(ts).toLocaleString("es-MX", {
+            day: "2-digit",
+            month: "short",
+            year: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+        });
+    },
+
+    _downloadDirectoryAsXls(rows) {
+        const dataRows = Array.isArray(rows) ? rows : [];
+        const filenameDate = new Date().toISOString().slice(0, 10);
+        const filename = `directorio_vigencias_${filenameDate}.xls`;
+
+        const tableRows = dataRows
+            .map((row) => `
+                <tr>
+                    <td>${this._escapeHtml(row.name || "-")}</td>
+                    <td>${this._escapeHtml(row.state === "valid" ? _t("Vigente") : row.state === "expired" ? _t("Sin vigencia") : _t("Sin paquete"))}</td>
+                    <td>${this._escapeHtml(row.package_label || "-")}</td>
+                    <td>${this._escapeHtml(row.plan_name || "-")}</td>
+                    <td>${this._escapeHtml(this._formatDateDisplay(row.start_date) || "-")}</td>
+                    <td>${this._escapeHtml(this._formatDateDisplay(row.valid_until) || "-")}</td>
+                    <td>${this._escapeHtml(row.gender || "-")}</td>
+                    <td>${this._escapeHtml(this._formatDateDisplay(row.birthday) || "-")}</td>
+                    <td>${this._escapeHtml(this._formatDateTimeDisplay(row.last_access) || "-")}</td>
+                    <td>${this._escapeHtml(row.phone || "-")}</td>
+                    <td>${this._escapeHtml(row.email || "-")}</td>
+                </tr>
+            `)
+            .join("");
+
+        const html = `
+            <html>
+                <head>
+                    <meta charset="UTF-8" />
+                    <style>
+                        table { border-collapse: collapse; font-family: Arial, sans-serif; font-size: 12px; }
+                        th, td { border: 1px solid #999; padding: 6px; text-align: left; }
+                        th { background: #e9eef5; }
+                    </style>
+                </head>
+                <body>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>${this._escapeHtml(_t("Cliente"))}</th>
+                                <th>${this._escapeHtml(_t("Estado"))}</th>
+                                <th>${this._escapeHtml(_t("Paquete"))}</th>
+                                <th>${this._escapeHtml(_t("Plan"))}</th>
+                                <th>${this._escapeHtml(_t("Inicio"))}</th>
+                                <th>${this._escapeHtml(_t("Vencimiento"))}</th>
+                                <th>${this._escapeHtml(_t("Género"))}</th>
+                                <th>${this._escapeHtml(_t("Cumpleaños"))}</th>
+                                <th>${this._escapeHtml(_t("Último acceso"))}</th>
+                                <th>${this._escapeHtml(_t("Teléfono"))}</th>
+                                <th>${this._escapeHtml(_t("Email"))}</th>
+                            </tr>
+                        </thead>
+                        <tbody>${tableRows}</tbody>
+                    </table>
+                </body>
+            </html>
+        `;
+
+        const blob = new Blob([`\uFEFF${html}`], { type: "application/vnd.ms-excel;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = filename;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 500);
     },
 
     _showSimpleInfoModal(title, message) {
@@ -1772,6 +1991,22 @@ patch(ControlButtons.prototype, {
                 display: flex;
                 flex-direction: column;
             }
+            .wgs-directory-modal {
+                width: min(1500px, 99vw);
+            }
+            .control-buttons {
+                flex-wrap: wrap;
+            }
+            .wgs-control-buttons-row {
+                width: 100%;
+                display: flex;
+                gap: 0.35rem;
+                margin-top: 0.35rem;
+            }
+            .wgs-control-button {
+                flex: 1 1 auto;
+                min-width: 0;
+            }
             .wgs-status-modal-header {
                 padding: 1rem 1.2rem;
                 border-bottom: 1px solid #e5e7eb;
@@ -1795,7 +2030,8 @@ patch(ControlButtons.prototype, {
                 align-items: center;
             }
             .wgs-status-toolbar input,
-            .wgs-status-toolbar select {
+            .wgs-status-toolbar select,
+            .wgs-status-toolbar button {
                 width: 100%;
                 border: 1px solid #d1d5db;
                 border-radius: 0.45rem;
@@ -1868,6 +2104,10 @@ patch(ControlButtons.prototype, {
             .wgs-btn-muted {
                 background: #64748b;
             }
+            .wgs-btn-export {
+                background: #0369a1;
+                white-space: nowrap;
+            }
             .wgs-status-table {
                 width: 100%;
                 border-collapse: collapse;
@@ -1877,7 +2117,7 @@ patch(ControlButtons.prototype, {
                 border-bottom: 1px solid #e5e7eb;
                 padding: 0.55rem 0.6rem;
                 text-align: left;
-                vertical-align: top;
+                vertical-align: middle;
                 font-size: 0.86rem;
             }
             .wgs-status-table th {
@@ -1914,6 +2154,32 @@ patch(ControlButtons.prototype, {
                 color: #475569;
                 border: 1px solid #cbd5e1;
             }
+            .wgs-partner-avatar {
+                width: 38px;
+                height: 38px;
+                border-radius: 50%;
+                object-fit: cover;
+                border: 1px solid #d1d5db;
+                display: block;
+                background: #f1f5f9;
+            }
+            .wgs-cell-name {
+                font-weight: 600;
+                color: #0f172a;
+                min-width: 180px;
+            }
+            .wgs-state-valid {
+                color: #0f7b4b;
+                font-weight: 700;
+            }
+            .wgs-state-expired {
+                color: #9f1239;
+                font-weight: 700;
+            }
+            .wgs-state-none {
+                color: #475569;
+                font-weight: 700;
+            }
             .wgs-participant-list {
                 padding: 0.75rem 1rem;
                 display: flex;
@@ -1944,6 +2210,9 @@ patch(ControlButtons.prototype, {
             @media (max-width: 900px) {
                 .wgs-status-toolbar {
                     grid-template-columns: 1fr;
+                }
+                .wgs-control-buttons-row {
+                    flex-direction: column;
                 }
             }
         `;
