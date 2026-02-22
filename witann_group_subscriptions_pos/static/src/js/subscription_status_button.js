@@ -1482,10 +1482,6 @@ patch(ControlButtons.prototype, {
             setLineSubscriptionStartDate(line, startDateValue || false);
             setLineSubscriptionEndDate(line, endDateValue || false);
             closeModal();
-            this._showSimpleInfoModal(
-                _t("Configuración guardada"),
-                _t("La configuración de suscripción se aplicará al validar el ticket en POS.")
-            );
         });
 
         setCounter();
