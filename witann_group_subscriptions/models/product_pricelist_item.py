@@ -95,6 +95,9 @@ class ProductPricelistItem(models.Model):
         if view_type not in ('tree', 'list', 'form') or not result.get('arch'):
             return result
         result['arch'] = self._wgs_patch_arch_add_min_term(result['arch'], view_type)
+        fields_map = result.setdefault('fields', {})
+        if 'wgs_minimum_term_periods' not in fields_map:
+            fields_map.update(self.fields_get(['wgs_minimum_term_periods']))
         return result
 
     @api.model
