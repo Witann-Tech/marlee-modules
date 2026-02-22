@@ -78,6 +78,14 @@ class PosOrderLine(models.Model):
 
 class PosOrder(models.Model):
     _inherit = 'pos.order'
+    _WGS_INVALID_SUBSCRIPTION_STATE_TOKENS = (
+        'cancel',
+        'churn',
+        'close',
+        'draft',
+        'pause',
+        'upsell',
+    )
 
     @api.model
     def _wgs_is_subscription_buffer_ready(self):
@@ -759,8 +767,45 @@ class PosOrder(models.Model):
                 comodel_checker=self._wgs_is_pricing_model_name,
             )
 
-        sale_order_fields = self.env['sale.order']._fields
         contract_date = fields.Date.context_today(self)
+        upsell_source_order = self._wgs_find_partner_active_subscription_for_upsell()
+        if upsell_source_order:
+            upsell_order = self._wgs_create_subscription_upsell_sale_order_from_line(
+                source_order=upsell_source_order,
+                line_values=dict(line_values),
+            )
+            sale_order_line = upsell_order.order_line.filtered(lambda so_line: so_line.product_id == product)[:1]
+            if not sale_order_line:
+                sale_order_line = upsell_order.order_line[:1]
+            self._wgs_link_pos_and_sale_records(
+                pos_line=line,
+                sale_order=upsell_order,
+                sale_order_line=sale_order_line,
+            )
+
+            if upsell_order.state in ('draft', 'sent'):
+                upsell_order.action_confirm()
+
+            # On upsell we keep original contract/start dates; only sync participant and optional end date.
+            self._wgs_sync_subscription_metadata(
+                sale_order=upsell_order,
+                participant_ids=participant_ids,
+                contract_date=False,
+                subscription_start_date=False,
+                subscription_end_date=subscription_end_date,
+                next_billing_date=False,
+            )
+
+            _logger.info(
+                'Created subscription upsell order %s from POS order %s line %s (source=%s)',
+                upsell_order.name,
+                self.pos_reference,
+                line.id,
+                upsell_source_order.name,
+            )
+            return upsell_order
+
+        sale_order_fields = self.env['sale.order']._fields
         sale_order_values = {
             'partner_id': self.partner_id.id,
             'origin': self.pos_reference or self.name,
@@ -846,6 +891,181 @@ class PosOrder(models.Model):
             line.id,
         )
         return sale_order
+
+    def _wgs_find_partner_active_subscription_for_upsell(self):
+        self.ensure_one()
+        if not self.partner_id:
+            return False
+
+        domain = [
+            ('partner_id', '=', self.partner_id.id),
+            ('state', 'in', ['sale', 'done']),
+        ]
+        if 'company_id' in self._fields and self.company_id:
+            domain.append(('company_id', '=', self.company_id.id))
+
+        candidates = self.env['sale.order'].search(domain, order='id desc', limit=25)
+        candidates = candidates.filtered(
+            lambda order: (
+                bool(order.order_line.filtered(
+                    lambda so_line: so_line.product_id and so_line.product_id.product_tmpl_id.recurring_invoice
+                ))
+                and self._wgs_is_subscription_order_active_for_upsell(order)
+            )
+        )
+        if not candidates:
+            return False
+
+        if len(candidates) > 1:
+            _logger.warning(
+                'WGS POS: multiple active subscriptions for partner %s. Using most recent %s',
+                self.partner_id.id,
+                candidates[0].name,
+            )
+        return candidates[0]
+
+    def _wgs_is_subscription_order_active_for_upsell(self, sale_order):
+        sale_order.ensure_one()
+        if 'subscription_state' not in sale_order._fields:
+            return True
+        state_value = (sale_order.subscription_state or '').lower()
+        if not state_value:
+            return True
+        return not any(token in state_value for token in self._WGS_INVALID_SUBSCRIPTION_STATE_TOKENS)
+
+    def _wgs_create_subscription_upsell_sale_order_from_line(self, source_order, line_values):
+        self.ensure_one()
+        source_order.ensure_one()
+
+        upsell_order = self._wgs_get_or_create_subscription_upsell_order(source_order)
+        if not upsell_order:
+            raise UserError(
+                _(
+                    'No se pudo generar una cotización de Upsell para la suscripción %(subscription)s.'
+                ) % {'subscription': source_order.display_name}
+            )
+        if upsell_order.state not in ('draft', 'sent'):
+            raise UserError(
+                _(
+                    'La cotización de Upsell %(order)s no está en borrador.'
+                ) % {'order': upsell_order.display_name}
+            )
+
+        write_values = {}
+        if 'origin' in upsell_order._fields:
+            write_values['origin'] = self.pos_reference or self.name
+        if 'client_order_ref' in upsell_order._fields:
+            write_values['client_order_ref'] = self.pos_reference or self.name
+        if 'pricelist_id' in self._fields and self.pricelist_id and 'pricelist_id' in upsell_order._fields:
+            write_values['pricelist_id'] = self.pricelist_id.id
+        if write_values:
+            upsell_order.write(write_values)
+
+        # Replace default lines generated by upsell action with POS-selected target package.
+        if upsell_order.order_line:
+            upsell_order.order_line.unlink()
+        upsell_order.write({'order_line': [Command.create(line_values)]})
+
+        return upsell_order
+
+    def _wgs_get_or_create_subscription_upsell_order(self, source_order):
+        source_order.ensure_one()
+
+        method_names = (
+            'action_upsell',
+            'action_subscription_upsell',
+            'action_subscription_create_upsell',
+        )
+        for method_name in method_names:
+            method = getattr(source_order, method_name, None)
+            if not callable(method):
+                continue
+            try:
+                result = method()
+            except Exception as error:
+                _logger.warning(
+                    'WGS POS: upsell method %s failed on %s (%s)',
+                    method_name,
+                    source_order.name,
+                    error,
+                )
+                continue
+
+            upsell_order = self._wgs_extract_sale_order_from_upsell_result(result, source_order)
+            if upsell_order:
+                return upsell_order
+
+        return self._wgs_find_recent_subscription_upsell_order(source_order)
+
+    def _wgs_extract_sale_order_from_upsell_result(self, result, source_order):
+        if not result:
+            return self.env['sale.order']
+
+        if isinstance(result, models.BaseModel):
+            if result._name == 'sale.order':
+                return result.exists()[:1]
+            return self.env['sale.order']
+
+        if isinstance(result, int):
+            return self.env['sale.order'].browse(int(result)).exists()[:1]
+
+        if isinstance(result, dict):
+            res_model = result.get('res_model')
+            res_id = result.get('res_id')
+            if res_model == 'sale.order' and res_id:
+                return self.env['sale.order'].browse(int(res_id)).exists()[:1]
+
+            context = result.get('context') or {}
+            default_res_id = context.get('default_subscription_id') or context.get('default_origin_order_id')
+            if default_res_id and int(default_res_id) != source_order.id:
+                candidate = self.env['sale.order'].browse(int(default_res_id)).exists()
+                if candidate:
+                    return candidate[:1]
+
+        return self.env['sale.order']
+
+    def _wgs_find_recent_subscription_upsell_order(self, source_order):
+        source_order.ensure_one()
+        sale_order_model = self.env['sale.order']
+
+        preferred_relation_fields = (
+            'subscription_id',
+            'origin_order_id',
+            'note_order',
+        )
+        for field_name in preferred_relation_fields:
+            field = sale_order_model._fields.get(field_name)
+            if not field or field.type != 'many2one' or getattr(field, 'comodel_name', '') != 'sale.order':
+                continue
+            upsell_order = sale_order_model.search(
+                [
+                    (field_name, '=', source_order.id),
+                    ('state', 'in', ['draft', 'sent']),
+                ],
+                order='id desc',
+                limit=1,
+            )
+            if upsell_order:
+                return upsell_order
+
+        for field_name, field in sale_order_model._fields.items():
+            if field.type != 'many2one' or getattr(field, 'comodel_name', '') != 'sale.order':
+                continue
+            normalized_name = (field_name or '').lower()
+            if not any(token in normalized_name for token in ('subscription', 'origin', 'upsell', 'note')):
+                continue
+            upsell_order = sale_order_model.search(
+                [
+                    (field_name, '=', source_order.id),
+                    ('state', 'in', ['draft', 'sent']),
+                ],
+                order='id desc',
+                limit=1,
+            )
+            if upsell_order:
+                return upsell_order
+
+        return sale_order_model.browse()
 
     def _wgs_link_pos_and_sale_records(self, pos_line, sale_order, sale_order_line=False):
         self.ensure_one()
