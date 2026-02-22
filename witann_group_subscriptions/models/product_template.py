@@ -77,8 +77,10 @@ class ProductTemplate(models.Model):
         return False
 
     @api.model
-    def _wgs_remove_min_term_from_arch(self, arch):
+    def _wgs_strip_min_term_if_missing_runtime_field(self, arch):
         if not arch:
+            return arch
+        if 'product.pricelist.item' in self.env.registry and 'wgs_minimum_term_periods' in self.env['product.pricelist.item']._fields:
             return arch
 
         is_element = isinstance(arch, etree._Element)
@@ -95,20 +97,11 @@ class ProductTemplate(models.Model):
         return etree.tostring(doc, encoding='unicode')
 
     @api.model
-    def _wgs_patch_recurring_prices_arch(self, arch):
-        if not arch:
-            return arch
-
-        # Defensive mode: never inject dynamic fields here.
-        # If stale cached arches contain wgs_minimum_term_periods, remove them to avoid Owl crashes.
-        return self._wgs_remove_min_term_from_arch(arch)
-
-    @api.model
     def fields_view_get(self, view_id=None, view_type='form', toolbar=False, submenu=False):
         result = super().fields_view_get(view_id=view_id, view_type=view_type, toolbar=toolbar, submenu=submenu)
         if view_type != 'form' or not result.get('arch'):
             return result
-        result['arch'] = self._wgs_patch_recurring_prices_arch(result['arch'])
+        result['arch'] = self._wgs_strip_min_term_if_missing_runtime_field(result['arch'])
         return result
 
     @api.model
@@ -116,5 +109,5 @@ class ProductTemplate(models.Model):
         result = super().get_view(view_id=view_id, view_type=view_type, **options)
         if view_type != 'form' or not result.get('arch'):
             return result
-        result['arch'] = self._wgs_patch_recurring_prices_arch(result['arch'])
+        result['arch'] = self._wgs_strip_min_term_if_missing_runtime_field(result['arch'])
         return result

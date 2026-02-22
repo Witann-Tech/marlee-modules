@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_product_template_form_wgs_recurring_pricing_min_term" model="ir.ui.view">
+        <field name="name">product.template.form.wgs.recurring.pricing.min.term</field>
+        <field name="model">product.template</field>
+        <field name="inherit_id" ref="product.product_template_only_form_view"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='subscription_pricing_ids']/list/field[@name='min_quantity']" position="after">
+                <field name="wgs_minimum_term_periods" optional="show"/>
+            </xpath>
+            <xpath expr="//field[@name='subscription_pricing_ids']/tree/field[@name='min_quantity']" position="after">
+                <field name="wgs_minimum_term_periods" optional="show"/>
+            </xpath>
+            <xpath expr="//field[@name='subscription_pricing_ids']/form//field[@name='min_quantity']" position="after">
+                <field name="wgs_minimum_term_periods"/>
+            </xpath>
+            <xpath expr="//field[@name='recurring_pricing_ids']/list/field[@name='min_quantity']" position="after">
+                <field name="wgs_minimum_term_periods" optional="show"/>
+            </xpath>
+            <xpath expr="//field[@name='recurring_pricing_ids']/tree/field[@name='min_quantity']" position="after">
+                <field name="wgs_minimum_term_periods" optional="show"/>
+            </xpath>
+            <xpath expr="//field[@name='recurring_pricing_ids']/form//field[@name='min_quantity']" position="after">
+                <field name="wgs_minimum_term_periods"/>
+            </xpath>
+        </field>
+    </record>
+</odoo>
