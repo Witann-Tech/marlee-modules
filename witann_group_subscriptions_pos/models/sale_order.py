@@ -1,9 +1,12 @@
+import logging
 from datetime import date, datetime
 
 from dateutil.relativedelta import relativedelta
 
 from odoo import _, api, fields, models
 from odoo.exceptions import AccessError
+
+_logger = logging.getLogger(__name__)
 
 
 class SaleOrder(models.Model):
@@ -96,30 +99,55 @@ class SaleOrder(models.Model):
 
         today = fields.Date.context_today(self)
         subscriptions_by_partner = self._get_pos_subscription_orders_by_partners(partners)
-        access_last_map = self._get_access_person_last_access_map_for_pos(partners)
+        try:
+            access_last_map = self._get_access_person_last_access_map_for_pos(partners)
+        except Exception as error:
+            _logger.warning('WGS POS: fallback without access last map (%s)', error)
+            access_last_map = {}
 
         result = {}
         for partner in partners:
             subscriptions = subscriptions_by_partner.get(partner.id, self.browse())
             items = []
             for subscription in subscriptions:
-                item = subscription._build_pos_subscription_status_item(today)
+                try:
+                    item = subscription._build_pos_subscription_status_item(today)
+                except Exception as error:
+                    _logger.warning(
+                        'WGS POS: could not build subscription status item (so=%s, partner=%s, error=%s)',
+                        subscription.id,
+                        partner.id,
+                        error,
+                    )
+                    item = False
                 if item:
                     items.append(item)
 
             summary = self._summarize_partner_subscription_items_for_pos(items)
-            birthday_value = self._get_partner_field_value_for_pos(
-                partner,
-                self._PARTNER_BIRTHDAY_FIELD_CANDIDATES,
-            )
-            gender_value = self._get_partner_field_value_for_pos(
-                partner,
-                self._PARTNER_GENDER_FIELD_CANDIDATES,
-            )
-            last_access_value = self._get_partner_field_value_for_pos(
-                partner,
-                self._PARTNER_LAST_ACCESS_FIELD_CANDIDATES,
-            )
+            try:
+                birthday_value = self._get_partner_field_value_for_pos(
+                    partner,
+                    self._PARTNER_BIRTHDAY_FIELD_CANDIDATES,
+                )
+            except Exception as error:
+                _logger.warning('WGS POS: birthday fallback for partner %s (%s)', partner.id, error)
+                birthday_value = False
+            try:
+                gender_value = self._get_partner_field_value_for_pos(
+                    partner,
+                    self._PARTNER_GENDER_FIELD_CANDIDATES,
+                )
+            except Exception as error:
+                _logger.warning('WGS POS: gender fallback for partner %s (%s)', partner.id, error)
+                gender_value = False
+            try:
+                last_access_value = self._get_partner_field_value_for_pos(
+                    partner,
+                    self._PARTNER_LAST_ACCESS_FIELD_CANDIDATES,
+                )
+            except Exception as error:
+                _logger.warning('WGS POS: partner last access fallback for partner %s (%s)', partner.id, error)
+                last_access_value = False
             if not last_access_value:
                 last_access_value = access_last_map.get(partner.id)
 
