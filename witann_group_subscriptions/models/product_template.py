@@ -81,19 +81,34 @@ class ProductTemplate(models.Model):
         if not arch:
             return arch
 
+        pricing_model_name = 'product.pricelist.item'
+        if pricing_model_name not in self.env.registry:
+            return arch
+        if 'wgs_minimum_term_periods' not in self.env[pricing_model_name]._fields:
+            return arch
+
+        pricing_field_names = {
+            field_name
+            for field_name, field in self._fields.items()
+            if field.type in ('one2many', 'many2many') and getattr(field, 'comodel_name', '') == pricing_model_name
+        }
+        if not pricing_field_names:
+            return arch
+
         is_element = isinstance(arch, etree._Element)
         doc = arch if is_element else etree.XML(arch)
 
         # Target inline recurrent pricing editors in product form.
-        pricing_fields = doc.xpath(
-            "//page[contains(@name, 'recurr') or contains(@name, 'subscription')]"
-            "//field[@name='subscription_pricing_ids' or @name='recurring_pricing_ids']"
-        )
-        if not pricing_fields:
-            pricing_fields = doc.xpath(
-                "//field[(./tree or ./list or ./form)]"
-                "[.//field[@name='plan_id' or @name='subscription_plan_id' or @name='recurrence_id' or @name='recurring_plan_id']]"
-            )
+        all_inline_fields = doc.xpath("//field[(./tree or ./list or ./form)]")
+        pricing_fields = []
+        for node in all_inline_fields:
+            field_name = node.get('name')
+            if field_name not in pricing_field_names:
+                continue
+            if not node.xpath("ancestor::page[contains(@name, 'recurr') or contains(@name, 'subscription')]"):
+                continue
+            pricing_fields.append(node)
+
         if not pricing_fields:
             return arch
 
