@@ -193,7 +193,7 @@ class PosOrder(models.Model):
         source_order = False
         credit_amount = 0.0
         if partner:
-            source_order = self._wgs_find_active_subscription_for_partner(partner, company=self.env.company)
+            source_order = self._wgs_find_active_subscription_for_partner(partner)
             if source_order:
                 credit_amount = self._wgs_compute_upgrade_credit_amount(source_order)
 
@@ -950,14 +950,17 @@ class PosOrder(models.Model):
 
     def _wgs_find_active_subscription_for_partner(self, partner, company=False):
         partner.ensure_one()
-        domain = [
-            ('partner_id', '=', partner.id),
-            ('state', 'in', ['sale', 'done']),
-        ]
-        if company and 'company_id' in self.env['sale.order']._fields:
+        sale_order_model = self.env['sale.order']
+        domain = [('state', 'in', ['sale', 'done'])]
+        if 'participant_ids' in sale_order_model._fields:
+            domain.extend(['|', ('partner_id', '=', partner.id), ('participant_ids', 'in', partner.id)])
+        else:
+            domain.append(('partner_id', '=', partner.id))
+
+        if company and 'company_id' in sale_order_model._fields:
             domain.append(('company_id', '=', company.id))
 
-        candidates = self.env['sale.order'].search(domain, order='id desc', limit=25)
+        candidates = sale_order_model.search(domain, order='id desc', limit=50)
         candidates = candidates.filtered(
             lambda order: (
                 bool(order.order_line.filtered(
@@ -966,13 +969,14 @@ class PosOrder(models.Model):
                 and self._wgs_is_subscription_order_active_for_upsell(order)
             )
         )
-        return candidates[:1]
+        direct_owner_candidates = candidates.filtered(lambda order: order.partner_id.id == partner.id)
+        return (direct_owner_candidates or candidates)[:1]
 
     def _wgs_find_partner_active_subscription_for_upsell(self):
         self.ensure_one()
         if not self.partner_id:
             return False
-        candidate = self._wgs_find_active_subscription_for_partner(self.partner_id, company=self.company_id)
+        candidate = self._wgs_find_active_subscription_for_partner(self.partner_id)
         if not candidate:
             return False
 
@@ -1264,8 +1268,13 @@ class PosOrder(models.Model):
                 source_order,
                 ('wgs_effective_start_date', 'start_date', 'date_start', 'subscription_start_date', 'date_order'),
             ) or today
-            period_end = start_date + delta
             period_start = start_date
+            period_end = period_start + delta
+            safety_counter = 0
+            while period_end <= today and safety_counter < 120:
+                period_start = period_end
+                period_end = period_start + delta
+                safety_counter += 1
         else:
             period_start = period_end - delta
 
