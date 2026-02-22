@@ -4,7 +4,7 @@
        t-inherit="point_of_sale.ControlButtons"
        t-inherit-mode="extension"
        owl="1">
-        <xpath expr="//div[contains(concat(' ', normalize-space(@class), ' '), ' control-buttons ')]" position="inside">
+        <xpath expr="//SelectPartnerButton" position="after">
             <div class="wgs-control-buttons-row">
                 <button class="btn btn-light rounded-0 fw-bolder wgs-control-button" t-on-click="onClickSubscriptionParticipants" type="button">
                     <i class="fa fa-users me-1"/>

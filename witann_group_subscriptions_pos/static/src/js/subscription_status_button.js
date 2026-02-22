@@ -1994,6 +1994,10 @@ patch(ControlButtons.prototype, {
             .wgs-directory-modal {
                 width: min(1500px, 99vw);
             }
+            .control-buttons {
+                flex-wrap: wrap !important;
+                align-content: flex-start;
+            }
             .wgs-control-buttons-row {
                 width: 100%;
                 flex: 0 0 100%;
