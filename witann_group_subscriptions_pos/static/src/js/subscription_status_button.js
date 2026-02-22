@@ -1186,8 +1186,6 @@ patch(ControlButtons.prototype, {
         const toolbar = document.createElement("div");
         toolbar.className = "wgs-status-toolbar";
         const plans = Array.isArray(subscriptionContext && subscriptionContext.plans) ? subscriptionContext.plans : [];
-        const minimumTermPeriods = Math.max(0, Number.parseInt(subscriptionContext && subscriptionContext.min_term_periods, 10) || 0);
-        const requiredTermPeriods = Math.max(1, minimumTermPeriods);
         const selection = getLineSubscriptionSelection(line);
         const defaultPlanId = selection.planId || (subscriptionContext && subscriptionContext.default_plan_id) || (plans[0] && plans[0].plan_id) || false;
         const defaultPricingId = selection.pricingId || (subscriptionContext && subscriptionContext.default_pricing_id) || (plans[0] && plans[0].pricing_id) || false;
@@ -1206,7 +1204,7 @@ patch(ControlButtons.prototype, {
                         labelParts.push(`(${plan.interval_label})`);
                     }
                     labelParts.push(`$${Number(plan.price || 0).toFixed(2)}`);
-                    return `<option value="${planId || 0}" data-pricing-id="${pricingId || 0}" data-price="${Number(plan.price || 0)}" data-interval-value="${Number(plan.interval_value || 1)}" data-interval-unit="${this._escapeHtml(plan.interval_unit || "month")}" ${selected}>${this._escapeHtml(labelParts.join(" "))}</option>`;
+                    return `<option value="${planId || 0}" data-pricing-id="${pricingId || 0}" data-price="${Number(plan.price || 0)}" data-interval-value="${Number(plan.interval_value || 1)}" data-interval-unit="${this._escapeHtml(plan.interval_unit || "month")}" data-min-term-periods="${Number(plan.min_term_periods || 0)}" ${selected}>${this._escapeHtml(labelParts.join(" "))}</option>`;
                 })
                 .join("")
             : `<option value="0">${this._escapeHtml(_t("Sin planes configurados"))}</option>`;
@@ -1284,7 +1282,8 @@ patch(ControlButtons.prototype, {
             const price = Number.parseFloat((selectedOption.dataset && selectedOption.dataset.price) || "0");
             const intervalValue = Number.parseInt((selectedOption.dataset && selectedOption.dataset.intervalValue) || "1", 10) || 1;
             const intervalUnit = (selectedOption.dataset && selectedOption.dataset.intervalUnit) || "month";
-            return { planId, pricingId, price, intervalValue, intervalUnit };
+            const minTermPeriods = Math.max(0, Number.parseInt((selectedOption.dataset && selectedOption.dataset.minTermPeriods) || "0", 10) || 0);
+            return { planId, pricingId, price, intervalValue, intervalUnit, minTermPeriods };
         };
 
         const syncDateConstraints = () => {
@@ -1299,12 +1298,13 @@ patch(ControlButtons.prototype, {
                 endDateInput.min = "";
                 return;
             }
+            const requiredTermPeriods = Math.max(1, planData.minTermPeriods || 0);
             const minDate = getPlanMinEndDate({
                 interval_value: planData.intervalValue,
                 interval_unit: planData.intervalUnit,
             }, (startDateInput && startDateInput.value) || "", requiredTermPeriods);
             endDateInput.min = minDate ? formatISODate(minDate) : "";
-            if (minimumTermPeriods > 0 && minDate) {
+            if ((planData.minTermPeriods || 0) > 0 && minDate) {
                 const currentEnd = parseISODate(String(endDateInput.value || "").trim());
                 if (!currentEnd || currentEnd.getTime() < minDate.getTime()) {
                     endDateInput.value = formatISODate(minDate);
@@ -1427,8 +1427,10 @@ patch(ControlButtons.prototype, {
                 return;
             }
             let endDateValue = String((endDateInput && endDateInput.value) || "").trim();
+            const planData = getSelectedPlanData();
+            const minimumTermPeriods = Math.max(0, Number.parseInt(planData && planData.minTermPeriods, 10) || 0);
+            const requiredTermPeriods = Math.max(1, minimumTermPeriods);
             if (!endDateValue && minimumTermPeriods > 0) {
-                const planData = getSelectedPlanData();
                 const minEndDate = planData
                     ? getPlanMinEndDate(
                         {
@@ -1455,7 +1457,6 @@ patch(ControlButtons.prototype, {
                     );
                     return;
                 }
-                const planData = getSelectedPlanData();
                 if (planData) {
                     const minEndDate = getPlanMinEndDate({
                         interval_value: planData.intervalValue,

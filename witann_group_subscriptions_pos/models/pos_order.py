@@ -24,7 +24,6 @@ class PosSession(models.Model):
             'is_subscription',
             'subscription_ok',
             'max_participants_total',
-            'subscription_minimum_term_periods',
         ):
             if field_name not in field_list:
                 field_list.append(field_name)
@@ -174,7 +173,6 @@ class PosOrder(models.Model):
         max_total = int(product.max_participants_total or 1)
         if max_total < 1:
             max_total = 1
-        min_term_periods = self._wgs_get_product_min_term_periods(product)
 
         candidates = self._wgs_get_recurring_pricing_candidates(product)
         candidates.sort(key=lambda row: (row['sequence'], row.get('pricing_id') or 0))
@@ -183,11 +181,12 @@ class PosOrder(models.Model):
         choice = self._wgs_get_recurring_pricing_choice(product, fallback=fallback)
         default_plan_id = choice.get('plan_id') or False
         default_pricing_id = choice.get('pricing_id') or False
+        default_min_term_periods = max(0, int(choice.get('min_term_periods') or 0))
 
         return {
             'is_subscription': is_subscription,
             'max_participants_total': max_total,
-            'min_term_periods': min_term_periods,
+            'min_term_periods': default_min_term_periods,
             'default_plan_id': default_plan_id,
             'default_pricing_id': default_pricing_id,
             'default_price': float(choice.get('price') or fallback or 0.0),
@@ -200,6 +199,7 @@ class PosOrder(models.Model):
                     'interval_label': row.get('interval_label') or '',
                     'interval_value': int(row.get('interval_value') or 1),
                     'interval_unit': row.get('interval_unit') or 'month',
+                    'min_term_periods': max(0, int(row.get('min_term_periods') or 0)),
                 }
                 for row in candidates
             ],
@@ -667,7 +667,9 @@ class PosOrder(models.Model):
         today = fields.Date.context_today(self)
         subscription_start_date = line.wgs_get_subscription_start_date() or today
         subscription_end_date = line.wgs_get_subscription_end_date()
-        minimum_term_periods = self._wgs_get_product_min_term_periods(product)
+        minimum_term_periods = max(0, int(pricing_choice.get('min_term_periods') or 0))
+        if plan_record:
+            minimum_term_periods = self._wgs_get_plan_min_term_periods(plan_record)
         sale_start_date = subscription_start_date
         if subscription_start_date < today:
             raise UserError(
@@ -1183,24 +1185,20 @@ class PosOrder(models.Model):
         # month by default
         return start_date + relativedelta(months=interval_value)
 
-    def _wgs_get_product_min_term_periods(self, product):
-        product.ensure_one()
-        try:
-            raw_value = (
-                (('subscription_minimum_term_periods' in product._fields) and product.subscription_minimum_term_periods)
-                or (
-                    ('subscription_minimum_term_periods' in product.product_tmpl_id._fields)
-                    and product.product_tmpl_id.subscription_minimum_term_periods
-                )
-                or 0
-            )
-        except Exception as error:
-            _logger.warning(
-                'WGS POS: could not read subscription_minimum_term_periods for product %s (%s)',
-                product.id,
-                error,
-            )
+    def _wgs_get_plan_min_term_periods(self, plan):
+        if not plan:
             return 0
+
+        raw_value = 0
+        candidate_fields = (
+            'wgs_minimum_term_periods',
+            'minimum_term_periods',
+            'subscription_minimum_term_periods',
+        )
+        for field_name in candidate_fields:
+            if field_name in plan._fields:
+                raw_value = plan[field_name]
+                break
 
         try:
             numeric_value = int(raw_value or 0)
@@ -1421,6 +1419,7 @@ class PosOrder(models.Model):
                 'interval_label': self._wgs_extract_plan_interval_label_from_pricing(record),
                 'interval_value': interval_value,
                 'interval_unit': interval_unit,
+                'min_term_periods': self._wgs_get_plan_min_term_periods(plan),
                 'price': float(price),
             })
         return output
@@ -1439,6 +1438,7 @@ class PosOrder(models.Model):
             'interval_label': self._wgs_extract_plan_interval_label_from_pricing(pricing),
             'interval_value': interval_value,
             'interval_unit': interval_unit,
+            'min_term_periods': self._wgs_get_plan_min_term_periods(plan),
             'price': float(price),
         }
 
@@ -1488,6 +1488,7 @@ class PosOrder(models.Model):
                 'interval_label': self._wgs_extract_plan_interval_label_from_pricing(pricing),
                 'interval_value': interval_value,
                 'interval_unit': interval_unit,
+                'min_term_periods': self._wgs_get_plan_min_term_periods(plan),
                 'price': float(price),
             })
         return output
