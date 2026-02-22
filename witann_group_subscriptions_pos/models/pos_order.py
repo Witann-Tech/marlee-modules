@@ -953,7 +953,10 @@ class PosOrder(models.Model):
         sale_order_model = self.env['sale.order']
         partner_ids = {partner.id}
         if 'commercial_partner_id' in partner._fields and partner.commercial_partner_id:
-            partner_ids.add(partner.commercial_partner_id.id)
+            commercial_partner = partner.commercial_partner_id
+            partner_ids.add(commercial_partner.id)
+            if 'child_ids' in commercial_partner._fields:
+                partner_ids.update(commercial_partner.child_ids.ids)
 
         candidates = sale_order_model.browse()
         # Prefer shared helper used by vigencias flow.
@@ -965,10 +968,28 @@ class PosOrder(models.Model):
                 for pid in partner_batch.ids:
                     candidates |= mapped.get(pid, sale_order_model.browse())
 
-        if not candidates:
-            domain = [('state', 'in', ['sale', 'done'])]
+        domain = [('state', 'in', ['sale', 'done'])]
+        if 'participant_ids' in sale_order_model._fields:
+            domain.extend(
+                [
+                    '|',
+                    ('partner_id', 'in', list(partner_ids)),
+                    ('participant_ids', 'in', list(partner_ids)),
+                ]
+            )
+        else:
+            domain.append(('partner_id', 'in', list(partner_ids)))
+
+        if company and 'company_id' in sale_order_model._fields:
+            domain.append(('company_id', '=', company.id))
+        direct_candidates = sale_order_model.search(domain, order='id desc', limit=500)
+        candidates |= direct_candidates
+
+        # Extra fallback: any order carrying subscription_state marker for related partners.
+        if 'subscription_state' in sale_order_model._fields:
+            state_domain = [('state', 'in', ['sale', 'done']), ('subscription_state', '!=', False)]
             if 'participant_ids' in sale_order_model._fields:
-                domain.extend(
+                state_domain.extend(
                     [
                         '|',
                         ('partner_id', 'in', list(partner_ids)),
@@ -976,24 +997,31 @@ class PosOrder(models.Model):
                     ]
                 )
             else:
-                domain.append(('partner_id', 'in', list(partner_ids)))
-
+                state_domain.append(('partner_id', 'in', list(partner_ids)))
             if company and 'company_id' in sale_order_model._fields:
-                domain.append(('company_id', '=', company.id))
-            candidates = sale_order_model.search(domain, order='id desc', limit=100)
-            candidates = candidates.filtered(
-                lambda order: bool(
-                    order.order_line.filtered(
-                        lambda so_line: so_line.product_id and so_line.product_id.product_tmpl_id.recurring_invoice
-                    )
-                )
-            )
+                state_domain.append(('company_id', '=', company.id))
+            candidates |= sale_order_model.search(state_domain, order='id desc', limit=200)
 
         if company and 'company_id' in sale_order_model._fields:
             candidates = candidates.filtered(lambda order: order.company_id.id == company.id)
 
-        candidates = candidates.filtered(self._wgs_is_subscription_order_active_for_upsell)
+        candidates = candidates.filtered(
+            lambda order: self._wgs_order_has_subscription_signal(order) and self._wgs_is_subscription_order_active_for_upsell(order)
+        )
         if not candidates:
+            # Last-resort fallback for DBs where recurring markers are sparse but subscription_state is set.
+            relaxed_candidates = direct_candidates.filtered(
+                lambda order: self._wgs_order_has_subscription_state_value(order)
+                and self._wgs_is_subscription_order_active_for_upsell(order)
+            )
+            candidates = relaxed_candidates
+        if not candidates:
+            _logger.info(
+                'WGS POS: no active subscription source detected for partner %s (commercial=%s, partner_ids=%s)',
+                partner.id,
+                partner.commercial_partner_id.id if 'commercial_partner_id' in partner._fields and partner.commercial_partner_id else False,
+                sorted(partner_ids),
+            )
             return candidates
 
         direct_owner_candidates = candidates.filtered(lambda order: order.partner_id.id in partner_ids)
@@ -1012,12 +1040,7 @@ class PosOrder(models.Model):
             order='id desc',
             limit=25,
         ).filtered(
-            lambda order: (
-                bool(order.order_line.filtered(
-                    lambda so_line: so_line.product_id and so_line.product_id.product_tmpl_id.recurring_invoice
-                ))
-                and self._wgs_is_subscription_order_active_for_upsell(order)
-            )
+            lambda order: self._wgs_order_has_subscription_signal(order) and self._wgs_is_subscription_order_active_for_upsell(order)
         )
         if len(all_candidates) > 1:
             _logger.warning(
@@ -1027,6 +1050,31 @@ class PosOrder(models.Model):
             )
         return candidate
 
+    def _wgs_order_has_subscription_signal(self, sale_order):
+        sale_order.ensure_one()
+
+        # 1) Standard recurring line flag
+        if sale_order.order_line.filtered(lambda so_line: self._wgs_is_recurring_so_line(so_line)):
+            return True
+
+        # 2) Subscription state marker
+        if 'subscription_state' in sale_order._fields:
+            state_value = (sale_order.subscription_state or '').strip()
+            if state_value:
+                return True
+
+        # 3) Next invoice marker
+        for field_name in ('recurring_next_date', 'next_invoice_date'):
+            if field_name in sale_order._fields and sale_order[field_name]:
+                return True
+
+        # 4) Plan marker
+        for field_name in ('plan_id', 'subscription_plan_id', 'recurring_plan_id'):
+            if field_name in sale_order._fields and sale_order[field_name]:
+                return True
+
+        return False
+
     def _wgs_is_subscription_order_active_for_upsell(self, sale_order):
         sale_order.ensure_one()
         if 'subscription_state' not in sale_order._fields:
@@ -1035,6 +1083,13 @@ class PosOrder(models.Model):
         if not state_value:
             return True
         return not any(token in state_value for token in self._WGS_INVALID_SUBSCRIPTION_STATE_TOKENS)
+
+    def _wgs_order_has_subscription_state_value(self, sale_order):
+        sale_order.ensure_one()
+        if 'subscription_state' not in sale_order._fields:
+            return False
+        state_value = (sale_order.subscription_state or '').strip()
+        return bool(state_value)
 
     def _wgs_create_subscription_upsell_sale_order_from_line(self, source_order, line_values, credit_amount=0.0):
         self.ensure_one()
@@ -1264,12 +1319,7 @@ class PosOrder(models.Model):
     def _wgs_get_order_recurring_total_amount(self, sale_order):
         sale_order.ensure_one()
         recurring_lines = sale_order.order_line.filtered(
-            lambda so_line: (
-                so_line.product_id
-                and so_line.product_id.product_tmpl_id.recurring_invoice
-                and not ('display_type' in so_line._fields and so_line.display_type)
-                and abs(self._wgs_get_so_line_qty(so_line)) > 0
-            )
+            lambda so_line: self._wgs_is_recurring_so_line(so_line) and abs(self._wgs_get_so_line_qty(so_line)) > 0
         )
         total = 0.0
         for so_line in recurring_lines:
@@ -1277,6 +1327,21 @@ class PosOrder(models.Model):
             discount = float(so_line.discount or 0.0) if 'discount' in so_line._fields else 0.0
             total += qty * float(so_line.price_unit or 0.0) * (1 - (discount / 100.0))
         return max(total, 0.0)
+
+    def _wgs_is_recurring_so_line(self, so_line):
+        so_line.ensure_one()
+        if 'display_type' in so_line._fields and so_line.display_type:
+            return False
+        if so_line.product_id and so_line.product_id.product_tmpl_id.recurring_invoice:
+            return True
+
+        for field_name in ('subscription_plan_id', 'plan_id', 'recurring_plan_id'):
+            if field_name in so_line._fields and so_line[field_name]:
+                return True
+        for field_name in ('subscription_pricing_id', 'pricing_id', 'recurring_pricing_id'):
+            if field_name in so_line._fields and so_line[field_name]:
+                return True
+        return False
 
     def _wgs_get_so_line_qty(self, so_line):
         for field_name in ('product_uom_qty', 'quantity', 'qty'):
@@ -1343,7 +1408,7 @@ class PosOrder(models.Model):
             return sale_order.plan_id
 
         recurring_lines = sale_order.order_line.filtered(
-            lambda so_line: so_line.product_id and so_line.product_id.product_tmpl_id.recurring_invoice
+            lambda so_line: self._wgs_is_recurring_so_line(so_line)
         )
         line_plan_fields = ('subscription_plan_id', 'plan_id', 'recurring_plan_id')
         for so_line in recurring_lines:
