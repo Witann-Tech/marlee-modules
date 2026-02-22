@@ -77,15 +77,33 @@ class ProductTemplate(models.Model):
         return False
 
     @api.model
+    def _wgs_remove_min_term_from_arch(self, arch):
+        if not arch:
+            return arch
+
+        is_element = isinstance(arch, etree._Element)
+        doc = arch if is_element else etree.XML(arch)
+        nodes = doc.xpath("//field[@name='wgs_minimum_term_periods']")
+        if not nodes:
+            return arch
+        for node in nodes:
+            parent = node.getparent()
+            if parent is not None:
+                parent.remove(node)
+        if is_element:
+            return doc
+        return etree.tostring(doc, encoding='unicode')
+
+    @api.model
     def _wgs_patch_recurring_prices_arch(self, arch):
         if not arch:
             return arch
 
         pricing_model_name = 'product.pricelist.item'
         if pricing_model_name not in self.env.registry:
-            return arch
+            return self._wgs_remove_min_term_from_arch(arch)
         if 'wgs_minimum_term_periods' not in self.env[pricing_model_name]._fields:
-            return arch
+            return self._wgs_remove_min_term_from_arch(arch)
 
         pricing_field_names = {
             field_name
@@ -93,7 +111,7 @@ class ProductTemplate(models.Model):
             if field.type in ('one2many', 'many2many') and getattr(field, 'comodel_name', '') == pricing_model_name
         }
         if not pricing_field_names:
-            return arch
+            return self._wgs_remove_min_term_from_arch(arch)
 
         is_element = isinstance(arch, etree._Element)
         doc = arch if is_element else etree.XML(arch)
@@ -110,7 +128,7 @@ class ProductTemplate(models.Model):
             pricing_fields.append(node)
 
         if not pricing_fields:
-            return arch
+            return self._wgs_remove_min_term_from_arch(arch)
 
         for pricing_field in pricing_fields:
             for subview_tag in ('tree', 'list', 'form'):
