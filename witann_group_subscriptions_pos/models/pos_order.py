@@ -758,6 +758,7 @@ class PosOrder(models.Model):
             )
 
         sale_order_fields = self.env['sale.order']._fields
+        contract_date = fields.Date.context_today(self)
         sale_order_values = {
             'partner_id': self.partner_id.id,
             'origin': self.pos_reference or self.name,
@@ -765,6 +766,14 @@ class PosOrder(models.Model):
             'company_id': self.company_id.id,
             'order_line': [Command.create(line_values)],
         }
+        if 'date_order' in sale_order_fields:
+            sale_order_values['date_order'] = fields.Datetime.now()
+        self._wgs_assign_date_field(
+            values=sale_order_values,
+            fields_map=sale_order_fields,
+            date_value=contract_date,
+            preferred_field_names=('first_contract_date', 'contract_date', 'date_contract'),
+        )
         if 'pricelist_id' in self._fields and self.pricelist_id:
             sale_order_values['pricelist_id'] = self.pricelist_id.id
         self._wgs_assign_date_field(
@@ -819,6 +828,7 @@ class PosOrder(models.Model):
         self._wgs_sync_subscription_metadata(
             sale_order=sale_order,
             participant_ids=participant_ids,
+            contract_date=contract_date,
             subscription_start_date=subscription_start_date,
             subscription_end_date=subscription_end_date,
             next_billing_date=next_billing_date,
@@ -883,6 +893,7 @@ class PosOrder(models.Model):
         self,
         sale_order,
         participant_ids,
+        contract_date=False,
         subscription_start_date=False,
         subscription_end_date=False,
         next_billing_date=False,
@@ -893,6 +904,10 @@ class PosOrder(models.Model):
             participant_field = self._wgs_find_partner_multi_field(target_order)
             if participant_field:
                 values[participant_field] = [Command.set(participant_ids)]
+            if contract_date:
+                contract_field = self._wgs_find_subscription_contract_date_field(target_order)
+                if contract_field:
+                    values[contract_field] = contract_date
             if subscription_start_date:
                 start_field = self._wgs_find_subscription_start_date_field(target_order)
                 if start_field:
@@ -908,9 +923,10 @@ class PosOrder(models.Model):
             if values:
                 target_order.write(values)
                 _logger.info(
-                    'WGS POS: synced metadata on subscription order %s (participants=%s start_date=%s end_date=%s next=%s)',
+                    'WGS POS: synced metadata on subscription order %s (participants=%s contract_date=%s start_date=%s end_date=%s next=%s)',
                     target_order.name,
                     participant_ids,
+                    contract_date or False,
                     subscription_start_date or False,
                     subscription_end_date or False,
                     next_billing_date or False,
@@ -990,6 +1006,22 @@ class PosOrder(models.Model):
             if any(token in normalized_name for token in ('start', 'begin', 'from')) and any(
                 token in normalized_name for token in ('subscription', 'recurr', 'period')
             ):
+                return field_name
+        return False
+
+    def _wgs_find_subscription_contract_date_field(self, sale_order):
+        fields_map = sale_order._fields
+        preferred = ('first_contract_date', 'contract_date', 'date_contract')
+        for field_name in preferred:
+            field = fields_map.get(field_name)
+            if field and field.type in ('date', 'datetime'):
+                return field_name
+
+        for field_name, field in fields_map.items():
+            if field.type not in ('date', 'datetime'):
+                continue
+            normalized_name = (field_name or '').lower()
+            if any(token in normalized_name for token in ('contract', 'agreement')):
                 return field_name
         return False
 
