@@ -11,6 +11,45 @@ const MODAL_ID = "wgs-subscription-status-modal";
 const STYLE_ID = "wgs-subscription-status-style";
 const ORDERLINE_PATCH_FLAG = "__wgsParticipantSerializationPatched";
 const ORDER_PATCH_FLAG = "__wgsOrderSerializationPatched";
+const WGS_DEBUG_ALERTS = true;
+
+function wgsDebugAlert(title, payload = "") {
+    if (!WGS_DEBUG_ALERTS || typeof window === "undefined" || typeof window.alert !== "function") {
+        return;
+    }
+    let body = "";
+    if (typeof payload === "string") {
+        body = payload;
+    } else {
+        try {
+            body = JSON.stringify(payload || {}, null, 2);
+        } catch {
+            body = String(payload || "");
+        }
+    }
+    window.alert(`${title}\n\n${body}`);
+}
+
+function wgsDebugSubscriptionCharge(flow, { partner, product, selection, result, extra = {} }) {
+    wgsDebugAlert("WGS DEBUG COBRO POS", {
+        flow,
+        partner_id: partner && partner.id ? partner.id : false,
+        partner_name: partner && (partner.name || partner.display_name) ? (partner.name || partner.display_name) : false,
+        product_id: product && product.id ? product.id : false,
+        product_name: product && product.display_name ? product.display_name : false,
+        selected_plan_id: selection && selection.planId ? selection.planId : false,
+        selected_pricing_id: selection && selection.pricingId ? selection.pricingId : false,
+        resolved_plan_id: result && result.plan_id ? result.plan_id : false,
+        resolved_pricing_id: result && result.pricing_id ? result.pricing_id : false,
+        recurring_price: Number(result && result.recurring_price) || 0,
+        credit_amount: Number(result && result.credit_amount) || 0,
+        charge_now: Number(result && result.charge_now) || 0,
+        is_upgrade: !!(result && result.is_upgrade),
+        source_subscription_id: result && result.source_subscription_id ? result.source_subscription_id : false,
+        source_subscription_name: result && result.source_subscription_name ? result.source_subscription_name : false,
+        ...extra,
+    });
+}
 
 function getPos(component) {
     if (component.pos) {
@@ -890,6 +929,7 @@ patch(PaymentScreen.prototype, {
         const partner = getCurrentPartner(this, order);
         const partnerId = partner && partner.id ? Number(partner.id) : 0;
         const cacheKey = `${partnerId}:${productId}:${selection.planId || 0}:${selection.pricingId || 0}`;
+        const fromCache = !!this._wgsRecurringPriceCache[cacheKey];
         let cached = this._wgsRecurringPriceCache[cacheKey];
         if (!cached) {
             cached = await this.orm.call(
@@ -920,6 +960,16 @@ patch(PaymentScreen.prototype, {
             Number.isInteger(resolvedPlanId) && resolvedPlanId > 0 ? resolvedPlanId : selection.planId,
             Number.isInteger(resolvedPricingId) && resolvedPricingId > 0 ? resolvedPricingId : selection.pricingId
         );
+        wgsDebugSubscriptionCharge("validateOrder/_wgsApplyRecurringPriceToLine", {
+            partner,
+            product,
+            selection,
+            result: cached || {},
+            extra: {
+                from_cache: fromCache,
+                cache_key: cacheKey,
+            },
+        });
     },
 
     async validateOrder(isForceValidate) {
@@ -968,6 +1018,13 @@ patch(PaymentScreen.prototype, {
                     window.alert(_t("Selecciona un cliente para vender suscripciones."));
                     return;
                 }
+
+                wgsDebugAlert("WGS DEBUG VALIDAR VENTA", {
+                    order_uuid: getOrderUUID(order),
+                    partner_id: partner.id,
+                    partner_name: partner.name || partner.display_name || false,
+                    subscription_lines: lines.length,
+                });
 
                 for (const row of lines) {
                     const line = row.line;
@@ -1163,6 +1220,15 @@ patch(ControlButtons.prototype, {
             result && result.plan_id ? result.plan_id : preferredPlanId,
             result && result.pricing_id ? result.pricing_id : preferredPricingId
         );
+        wgsDebugSubscriptionCharge("configuracion/_wgsEnsureRecurringPriceOnLine", {
+            partner,
+            product: recurringProduct,
+            selection: {
+                planId: preferredPlanId,
+                pricingId: preferredPricingId,
+            },
+            result: result || {},
+        });
     },
 
     async _fetchPartnerStatusMap(partnerIds) {
