@@ -951,26 +951,53 @@ class PosOrder(models.Model):
     def _wgs_find_active_subscription_for_partner(self, partner, company=False):
         partner.ensure_one()
         sale_order_model = self.env['sale.order']
-        domain = [('state', 'in', ['sale', 'done'])]
-        if 'participant_ids' in sale_order_model._fields:
-            domain.extend(['|', ('partner_id', '=', partner.id), ('participant_ids', 'in', partner.id)])
-        else:
-            domain.append(('partner_id', '=', partner.id))
+        partner_ids = {partner.id}
+        if 'commercial_partner_id' in partner._fields and partner.commercial_partner_id:
+            partner_ids.add(partner.commercial_partner_id.id)
+
+        candidates = sale_order_model.browse()
+        # Prefer shared helper used by vigencias flow.
+        helper = getattr(sale_order_model, '_get_pos_subscription_orders_by_partners', None)
+        if callable(helper):
+            partner_batch = self.env['res.partner'].browse(list(partner_ids)).exists()
+            if partner_batch:
+                mapped = helper(partner_batch) or {}
+                for pid in partner_batch.ids:
+                    candidates |= mapped.get(pid, sale_order_model.browse())
+
+        if not candidates:
+            domain = [('state', 'in', ['sale', 'done'])]
+            if 'participant_ids' in sale_order_model._fields:
+                domain.extend(
+                    [
+                        '|',
+                        ('partner_id', 'in', list(partner_ids)),
+                        ('participant_ids', 'in', list(partner_ids)),
+                    ]
+                )
+            else:
+                domain.append(('partner_id', 'in', list(partner_ids)))
+
+            if company and 'company_id' in sale_order_model._fields:
+                domain.append(('company_id', '=', company.id))
+            candidates = sale_order_model.search(domain, order='id desc', limit=100)
+            candidates = candidates.filtered(
+                lambda order: bool(
+                    order.order_line.filtered(
+                        lambda so_line: so_line.product_id and so_line.product_id.product_tmpl_id.recurring_invoice
+                    )
+                )
+            )
 
         if company and 'company_id' in sale_order_model._fields:
-            domain.append(('company_id', '=', company.id))
+            candidates = candidates.filtered(lambda order: order.company_id.id == company.id)
 
-        candidates = sale_order_model.search(domain, order='id desc', limit=50)
-        candidates = candidates.filtered(
-            lambda order: (
-                bool(order.order_line.filtered(
-                    lambda so_line: so_line.product_id and so_line.product_id.product_tmpl_id.recurring_invoice
-                ))
-                and self._wgs_is_subscription_order_active_for_upsell(order)
-            )
-        )
-        direct_owner_candidates = candidates.filtered(lambda order: order.partner_id.id == partner.id)
-        return (direct_owner_candidates or candidates)[:1]
+        candidates = candidates.filtered(self._wgs_is_subscription_order_active_for_upsell)
+        if not candidates:
+            return candidates
+
+        direct_owner_candidates = candidates.filtered(lambda order: order.partner_id.id in partner_ids)
+        return (direct_owner_candidates or candidates).sorted(key=lambda order: order.id, reverse=True)[:1]
 
     def _wgs_find_partner_active_subscription_for_upsell(self):
         self.ensure_one()
