@@ -12,9 +12,125 @@ const STYLE_ID = "wgs-subscription-status-style";
 const ORDERLINE_PATCH_FLAG = "__wgsParticipantSerializationPatched";
 const ORDER_PATCH_FLAG = "__wgsOrderSerializationPatched";
 const WGS_DEBUG_ALERTS = true;
+const WGS_DEBUG_MODAL_ID = "wgs-debug-modal";
+
+function wgsShowDebugModal(title, body) {
+    if (typeof document === "undefined" || !document.body) {
+        if (typeof window !== "undefined" && typeof window.alert === "function") {
+            window.alert(`${title}\n\n${body}`);
+        }
+        return;
+    }
+
+    const previous = document.getElementById(WGS_DEBUG_MODAL_ID);
+    if (previous) {
+        previous.remove();
+    }
+
+    const overlay = document.createElement("div");
+    overlay.id = WGS_DEBUG_MODAL_ID;
+    overlay.style.position = "fixed";
+    overlay.style.inset = "0";
+    overlay.style.background = "rgba(0, 0, 0, 0.45)";
+    overlay.style.display = "flex";
+    overlay.style.alignItems = "center";
+    overlay.style.justifyContent = "center";
+    overlay.style.zIndex = "999999";
+
+    const modal = document.createElement("div");
+    modal.style.width = "min(960px, 92vw)";
+    modal.style.maxHeight = "80vh";
+    modal.style.background = "#111827";
+    modal.style.border = "1px solid #374151";
+    modal.style.borderRadius = "12px";
+    modal.style.padding = "16px";
+    modal.style.display = "flex";
+    modal.style.flexDirection = "column";
+    modal.style.gap = "12px";
+    modal.style.color = "#f9fafb";
+
+    const header = document.createElement("div");
+    header.textContent = title;
+    header.style.fontWeight = "700";
+    header.style.fontSize = "18px";
+
+    const textarea = document.createElement("textarea");
+    textarea.value = body;
+    textarea.readOnly = true;
+    textarea.style.width = "100%";
+    textarea.style.minHeight = "320px";
+    textarea.style.maxHeight = "58vh";
+    textarea.style.resize = "vertical";
+    textarea.style.padding = "10px";
+    textarea.style.borderRadius = "8px";
+    textarea.style.border = "1px solid #4b5563";
+    textarea.style.background = "#0f172a";
+    textarea.style.color = "#e5e7eb";
+    textarea.style.fontFamily = "ui-monospace, SFMono-Regular, Menlo, monospace";
+    textarea.style.fontSize = "13px";
+
+    const footer = document.createElement("div");
+    footer.style.display = "flex";
+    footer.style.gap = "8px";
+    footer.style.justifyContent = "flex-end";
+
+    const copyButton = document.createElement("button");
+    copyButton.type = "button";
+    copyButton.textContent = "Copiar";
+    copyButton.style.padding = "8px 12px";
+    copyButton.style.borderRadius = "8px";
+    copyButton.style.border = "1px solid #4b5563";
+    copyButton.style.background = "#1f2937";
+    copyButton.style.color = "#f9fafb";
+    copyButton.style.cursor = "pointer";
+    copyButton.addEventListener("click", async () => {
+        try {
+            if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(textarea.value);
+            } else {
+                textarea.focus();
+                textarea.select();
+                document.execCommand("copy");
+            }
+            copyButton.textContent = "Copiado";
+            setTimeout(() => {
+                copyButton.textContent = "Copiar";
+            }, 1200);
+        } catch {
+            textarea.focus();
+            textarea.select();
+        }
+    });
+
+    const closeButton = document.createElement("button");
+    closeButton.type = "button";
+    closeButton.textContent = "Cerrar";
+    closeButton.style.padding = "8px 12px";
+    closeButton.style.borderRadius = "8px";
+    closeButton.style.border = "1px solid #0369a1";
+    closeButton.style.background = "#0284c7";
+    closeButton.style.color = "#fff";
+    closeButton.style.cursor = "pointer";
+    closeButton.addEventListener("click", () => overlay.remove());
+
+    footer.appendChild(copyButton);
+    footer.appendChild(closeButton);
+    modal.appendChild(header);
+    modal.appendChild(textarea);
+    modal.appendChild(footer);
+    overlay.appendChild(modal);
+    overlay.addEventListener("click", (event) => {
+        if (event.target === overlay) {
+            overlay.remove();
+        }
+    });
+    document.body.appendChild(overlay);
+    textarea.focus();
+    textarea.select();
+}
 
 function wgsDebugAlert(title, payload = "") {
-    if (!WGS_DEBUG_ALERTS || typeof window === "undefined" || typeof window.alert !== "function") {
+    if (!WGS_DEBUG_ALERTS || typeof window === "undefined") {
         return;
     }
     let body = "";
@@ -27,7 +143,16 @@ function wgsDebugAlert(title, payload = "") {
             body = String(payload || "");
         }
     }
-    window.alert(`${title}\n\n${body}`);
+    if (typeof console !== "undefined" && typeof console.log === "function") {
+        console.log(title, payload);
+    }
+    window.__wgsLastDebug = {
+        title,
+        body,
+        payload,
+        created_at: new Date().toISOString(),
+    };
+    wgsShowDebugModal(title, body);
 }
 
 function wgsDebugSubscriptionCharge(flow, { partner, product, selection, result, extra = {} }) {
