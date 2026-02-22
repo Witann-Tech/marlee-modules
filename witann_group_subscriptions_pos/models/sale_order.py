@@ -150,6 +150,14 @@ class SaleOrder(models.Model):
                 last_access_value = False
             if not last_access_value:
                 last_access_value = access_last_map.get(partner.id)
+            phone_value = self._get_partner_field_value_for_pos(
+                partner,
+                ('phone', 'mobile'),
+            )
+            email_value = self._get_partner_field_value_for_pos(
+                partner,
+                ('email',),
+            )
 
             result[partner.id] = {
                 'state': summary.get('state') or 'none',
@@ -162,8 +170,8 @@ class SaleOrder(models.Model):
                 'reason': summary.get('reason') or False,
                 'subscription_name': summary.get('subscription_name') or False,
                 'partner_name': partner.display_name,
-                'phone': partner.phone or partner.mobile or False,
-                'email': partner.email or False,
+                'phone': phone_value or False,
+                'email': email_value or False,
                 'gender': gender_value or False,
                 'birthday': birthday_value or False,
                 'last_access': last_access_value or False,
