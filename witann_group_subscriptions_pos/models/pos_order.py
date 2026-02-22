@@ -1228,7 +1228,58 @@ class PosOrder(models.Model):
             if upsell_order:
                 return upsell_order
 
-        return self._wgs_find_recent_subscription_upsell_order(source_order)
+        upsell_order = self._wgs_find_recent_subscription_upsell_order(source_order)
+        if upsell_order:
+            return upsell_order
+
+        # Final fallback: create a draft SO linked to source subscription so POS flow can continue.
+        return self._wgs_create_manual_subscription_upsell_order(source_order)
+
+    def _wgs_create_manual_subscription_upsell_order(self, source_order):
+        source_order.ensure_one()
+        sale_order_model = self.env['sale.order']
+        sale_order_fields = sale_order_model._fields
+
+        values = {
+            'partner_id': source_order.partner_id.id or self.partner_id.id,
+            'company_id': source_order.company_id.id or self.company_id.id,
+        }
+
+        if 'origin' in sale_order_fields:
+            values['origin'] = self.pos_reference or self.name or source_order.name
+        if 'client_order_ref' in sale_order_fields:
+            values['client_order_ref'] = self.pos_reference or self.name or source_order.name
+        if 'pricelist_id' in sale_order_fields:
+            if 'pricelist_id' in self._fields and self.pricelist_id:
+                values['pricelist_id'] = self.pricelist_id.id
+            elif 'pricelist_id' in source_order._fields and source_order.pricelist_id:
+                values['pricelist_id'] = source_order.pricelist_id.id
+        if 'user_id' in sale_order_fields and source_order.user_id:
+            values['user_id'] = source_order.user_id.id
+        if 'team_id' in sale_order_fields and 'team_id' in source_order._fields and source_order.team_id:
+            values['team_id'] = source_order.team_id.id
+        if 'payment_term_id' in sale_order_fields and 'payment_term_id' in source_order._fields and source_order.payment_term_id:
+            values['payment_term_id'] = source_order.payment_term_id.id
+        if 'fiscal_position_id' in sale_order_fields and 'fiscal_position_id' in source_order._fields and source_order.fiscal_position_id:
+            values['fiscal_position_id'] = source_order.fiscal_position_id.id
+
+        # Link to source subscription/order using the best matching relation field.
+        self._wgs_assign_many2one_by_model(
+            values=values,
+            fields_map=sale_order_fields,
+            value_id=source_order.id,
+            model_name='sale.order',
+            preferred_field_names=('subscription_id', 'origin_order_id', 'note_order'),
+            required_name_tokens=('subscription',),
+        )
+
+        upsell_order = sale_order_model.create(values)
+        _logger.info(
+            'WGS POS: manual upsell draft created %s for source subscription %s',
+            upsell_order.name,
+            source_order.name,
+        )
+        return upsell_order
 
     def _wgs_extract_sale_order_from_upsell_result(self, result, source_order):
         if not result:

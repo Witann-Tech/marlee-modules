@@ -1149,6 +1149,29 @@ patch(PaymentScreen.prototype, {
                     partner_id: partner.id,
                     partner_name: partner.name || partner.display_name || false,
                     subscription_lines: lines.length,
+                    order_total_with_tax: (
+                        typeof order.get_total_with_tax === "function"
+                            ? Number(order.get_total_with_tax()) || 0
+                            : (typeof order.getTotalWithTax === "function" ? Number(order.getTotalWithTax()) || 0 : false)
+                    ),
+                    line_snapshot: lines.map((row) => {
+                        const line = row.line;
+                        const product = row.product;
+                        const selection = getLineSubscriptionSelection(line);
+                        const qty = getLineQuantity(line) || 0;
+                        const unitPrice = getLineUnitPrice(line) || 0;
+                        return {
+                            product_id: product && product.id ? product.id : false,
+                            product_name: product && (product.display_name || product.name) ? (product.display_name || product.name) : false,
+                            qty,
+                            unit_price: unitPrice,
+                            line_total: Number((qty * unitPrice).toFixed(2)),
+                            selected_plan_id: selection.planId || false,
+                            selected_pricing_id: selection.pricingId || false,
+                            is_upgrade: !!line.wgs_is_upgrade,
+                            credit_amount: Number(line.wgs_upgrade_credit_amount) || 0,
+                        };
+                    }),
                 });
 
                 for (const row of lines) {
