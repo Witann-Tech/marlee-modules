@@ -13,6 +13,7 @@
                 <page string="Participantes" name="subscription_participants" invisible="not subscription_has_recurring_products">
                     <group>
                         <field name="subscription_max_participants_total" readonly="1"/>
+                        <field name="wgs_effective_start_date"/>
                         <field name="participant_ids" widget="many2many_tags"/>
                     </group>
                 </page>

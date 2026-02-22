@@ -6,6 +6,11 @@ from odoo.fields import Command
 class SaleOrder(models.Model):
     _inherit = 'sale.order'
 
+    wgs_effective_start_date = fields.Date(
+        string='Inicio de vigencia (WGS)',
+        copy=True,
+        help='Fecha efectiva de inicio de vigencia para operación en POS y control de acceso.',
+    )
     participant_ids = fields.Many2many(
         'res.partner',
         'sale_order_subscription_participant_rel',

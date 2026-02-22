@@ -783,7 +783,7 @@ class PosOrder(models.Model):
             values=sale_order_values,
             fields_map=sale_order_fields,
             date_value=sale_start_date,
-            preferred_field_names=('start_date', 'date_start', 'subscription_start_date'),
+            preferred_field_names=('wgs_effective_start_date', 'start_date', 'date_start', 'subscription_start_date'),
         )
         if subscription_end_date:
             self._wgs_assign_date_field(
@@ -1012,7 +1012,7 @@ class PosOrder(models.Model):
 
     def _wgs_find_subscription_start_date_field(self, sale_order):
         fields_map = sale_order._fields
-        preferred = ('start_date', 'date_start', 'subscription_start_date', 'recurring_start_date')
+        preferred = ('wgs_effective_start_date', 'start_date', 'date_start', 'subscription_start_date', 'recurring_start_date')
         for field_name in preferred:
             field = fields_map.get(field_name)
             if field and field.type in ('date', 'datetime'):
