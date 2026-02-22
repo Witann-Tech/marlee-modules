@@ -99,55 +99,9 @@ class ProductTemplate(models.Model):
         if not arch:
             return arch
 
-        pricing_model_name = 'product.pricelist.item'
-        if pricing_model_name not in self.env.registry:
-            return self._wgs_remove_min_term_from_arch(arch)
-        if 'wgs_minimum_term_periods' not in self.env[pricing_model_name]._fields:
-            return self._wgs_remove_min_term_from_arch(arch)
-
-        pricing_field_names = {
-            field_name
-            for field_name, field in self._fields.items()
-            if field.type in ('one2many', 'many2many') and getattr(field, 'comodel_name', '') == pricing_model_name
-        }
-        if not pricing_field_names:
-            return self._wgs_remove_min_term_from_arch(arch)
-
-        is_element = isinstance(arch, etree._Element)
-        doc = arch if is_element else etree.XML(arch)
-
-        # Target inline recurrent pricing editors in product form.
-        all_inline_fields = doc.xpath("//field[(./tree or ./list or ./form)]")
-        pricing_fields = []
-        for node in all_inline_fields:
-            field_name = node.get('name')
-            if field_name not in pricing_field_names:
-                continue
-            if not node.xpath("ancestor::page[contains(@name, 'recurr') or contains(@name, 'subscription')]"):
-                continue
-            pricing_fields.append(node)
-
-        if not pricing_fields:
-            return self._wgs_remove_min_term_from_arch(arch)
-
-        for pricing_field in pricing_fields:
-            for subview_tag in ('tree', 'list', 'form'):
-                subviews = pricing_field.xpath(f'./{subview_tag}')
-                for subview in subviews:
-                    if subview.xpath(".//field[@name='wgs_minimum_term_periods']"):
-                        continue
-                    new_field = etree.Element('field', name='wgs_minimum_term_periods')
-                    anchors = subview.xpath(
-                        ".//field[@name='min_quantity' or @name='price' or @name='fixed_price' or @name='plan_id' or @name='recurrence_id']"
-                    )
-                    if anchors:
-                        anchors[-1].addnext(new_field)
-                    else:
-                        subview.append(new_field)
-
-        if is_element:
-            return doc
-        return etree.tostring(doc, encoding='unicode')
+        # Defensive mode: never inject dynamic fields here.
+        # If stale cached arches contain wgs_minimum_term_periods, remove them to avoid Owl crashes.
+        return self._wgs_remove_min_term_from_arch(arch)
 
     @api.model
     def fields_view_get(self, view_id=None, view_type='form', toolbar=False, submenu=False):
