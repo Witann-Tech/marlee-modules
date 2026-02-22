@@ -23,14 +23,15 @@ class SaleSubscriptionPlan(models.Model):
                 raise ValidationError(_('El plazo mínimo no puede ser negativo.'))
 
     @api.model
-    def fields_view_get(self, view_id=None, view_type='form', toolbar=False, submenu=False):
-        result = super().fields_view_get(view_id=view_id, view_type=view_type, toolbar=toolbar, submenu=submenu)
-        if view_type != 'form' or not result.get('arch'):
-            return result
+    def _wgs_patch_form_arch_with_min_term(self, arch):
+        if not arch:
+            return arch
 
-        doc = etree.XML(result['arch'])
+        is_element = isinstance(arch, etree._Element)
+        doc = arch if is_element else etree.XML(arch)
+
         if doc.xpath("//field[@name='wgs_minimum_term_periods']"):
-            return result
+            return arch
 
         field_node = etree.Element('field', name='wgs_minimum_term_periods')
         anchor_candidates = (
@@ -53,6 +54,26 @@ class SaleSubscriptionPlan(models.Model):
                 groups[0].append(field_node)
                 inserted = True
 
-        if inserted:
-            result['arch'] = etree.tostring(doc, encoding='unicode')
+        if not inserted:
+            return arch
+
+        if is_element:
+            return doc
+        return etree.tostring(doc, encoding='unicode')
+
+    @api.model
+    def fields_view_get(self, view_id=None, view_type='form', toolbar=False, submenu=False):
+        result = super().fields_view_get(view_id=view_id, view_type=view_type, toolbar=toolbar, submenu=submenu)
+        if view_type != 'form' or not result.get('arch'):
+            return result
+
+        result['arch'] = self._wgs_patch_form_arch_with_min_term(result['arch'])
+        return result
+
+    @api.model
+    def get_view(self, view_id=None, view_type='form', **options):
+        result = super().get_view(view_id=view_id, view_type=view_type, **options)
+        if view_type != 'form' or not result.get('arch'):
+            return result
+        result['arch'] = self._wgs_patch_form_arch_with_min_term(result['arch'])
         return result
