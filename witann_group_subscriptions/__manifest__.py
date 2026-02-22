@@ -1,6 +1,6 @@
 {
     'name': 'Witann Group Subscriptions',
-    'version': '19.0.1.0.8',
+    'version': '19.0.1.0.9',
     'summary': 'Participantes permitidos en suscripciones de gimnasio',
     'category': 'Sales/Subscriptions',
     'author': 'Witann Technologies',

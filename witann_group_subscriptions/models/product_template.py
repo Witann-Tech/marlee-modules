@@ -1,3 +1,5 @@
+from lxml import etree
+
 from odoo import _, api, fields, models
 from odoo.exceptions import ValidationError
 
@@ -73,3 +75,59 @@ class ProductTemplate(models.Model):
                 return True
 
         return False
+
+    @api.model
+    def _wgs_patch_recurring_prices_arch(self, arch):
+        if not arch:
+            return arch
+
+        is_element = isinstance(arch, etree._Element)
+        doc = arch if is_element else etree.XML(arch)
+
+        # Target inline recurrent pricing editors in product form.
+        pricing_fields = doc.xpath(
+            "//page[contains(@name, 'recurr') or contains(@name, 'subscription')]"
+            "//field[@name='subscription_pricing_ids' or @name='recurring_pricing_ids']"
+        )
+        if not pricing_fields:
+            pricing_fields = doc.xpath(
+                "//field[(./tree or ./list or ./form)]"
+                "[.//field[@name='plan_id' or @name='subscription_plan_id' or @name='recurrence_id' or @name='recurring_plan_id']]"
+            )
+        if not pricing_fields:
+            return arch
+
+        for pricing_field in pricing_fields:
+            for subview_tag in ('tree', 'list', 'form'):
+                subviews = pricing_field.xpath(f'./{subview_tag}')
+                for subview in subviews:
+                    if subview.xpath(".//field[@name='wgs_minimum_term_periods']"):
+                        continue
+                    new_field = etree.Element('field', name='wgs_minimum_term_periods')
+                    anchors = subview.xpath(
+                        ".//field[@name='min_quantity' or @name='price' or @name='fixed_price' or @name='plan_id' or @name='recurrence_id']"
+                    )
+                    if anchors:
+                        anchors[-1].addnext(new_field)
+                    else:
+                        subview.append(new_field)
+
+        if is_element:
+            return doc
+        return etree.tostring(doc, encoding='unicode')
+
+    @api.model
+    def fields_view_get(self, view_id=None, view_type='form', toolbar=False, submenu=False):
+        result = super().fields_view_get(view_id=view_id, view_type=view_type, toolbar=toolbar, submenu=submenu)
+        if view_type != 'form' or not result.get('arch'):
+            return result
+        result['arch'] = self._wgs_patch_recurring_prices_arch(result['arch'])
+        return result
+
+    @api.model
+    def get_view(self, view_id=None, view_type='form', **options):
+        result = super().get_view(view_id=view_id, view_type=view_type, **options)
+        if view_type != 'form' or not result.get('arch'):
+            return result
+        result['arch'] = self._wgs_patch_recurring_prices_arch(result['arch'])
+        return result
