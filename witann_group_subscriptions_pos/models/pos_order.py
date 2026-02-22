@@ -752,6 +752,15 @@ class PosOrder(models.Model):
                 participant_ids,
             )
 
+        sale_order_line = sale_order.order_line.filtered(lambda so_line: so_line.product_id == product)[:1]
+        if not sale_order_line:
+            sale_order_line = sale_order.order_line[:1]
+        self._wgs_link_pos_and_sale_records(
+            pos_line=line,
+            sale_order=sale_order,
+            sale_order_line=sale_order_line,
+        )
+
         # Confirm immediately: POS payment is considered the paid period trigger.
         sale_order.action_confirm()
         self._wgs_sync_subscription_metadata(
@@ -768,6 +777,53 @@ class PosOrder(models.Model):
             line.id,
         )
         return sale_order
+
+    def _wgs_link_pos_and_sale_records(self, pos_line, sale_order, sale_order_line=False):
+        self.ensure_one()
+        if not pos_line or not sale_order:
+            return
+
+        pos_line_values = {}
+        self._wgs_assign_many2one_by_model(
+            values=pos_line_values,
+            fields_map=pos_line._fields,
+            value_id=sale_order.id,
+            model_name='sale.order',
+            preferred_field_names=('sale_order_id', 'sale_order_origin_id', 'origin_sale_order_id'),
+            required_name_tokens=('sale', 'order'),
+        )
+        if sale_order_line:
+            self._wgs_assign_many2one_by_model(
+                values=pos_line_values,
+                fields_map=pos_line._fields,
+                value_id=sale_order_line.id,
+                model_name='sale.order.line',
+                preferred_field_names=('sale_order_line_id', 'sale_order_origin_id', 'origin_sale_order_line_id'),
+                required_name_tokens=('sale', 'line'),
+            )
+        if pos_line_values:
+            pos_line.write(pos_line_values)
+
+        sale_order_values = {}
+        self._wgs_assign_many2one_by_model(
+            values=sale_order_values,
+            fields_map=sale_order._fields,
+            value_id=self.id,
+            model_name='pos.order',
+            preferred_field_names=('pos_order_id', 'origin_pos_order_id'),
+            required_name_tokens=('pos', 'order'),
+        )
+        if sale_order_values:
+            sale_order.write(sale_order_values)
+
+        if pos_line_values or sale_order_values:
+            _logger.info(
+                'WGS POS: linked POS/Sale records for pos.order %s line %s and sale.order %s line %s',
+                self.pos_reference,
+                pos_line.id,
+                sale_order.name,
+                sale_order_line.id if sale_order_line else False,
+            )
 
     def _wgs_sync_subscription_metadata(
         self,
@@ -902,6 +958,43 @@ class PosOrder(models.Model):
             if comodel_checker(getattr(field, 'comodel_name', '')) or heuristic_name_match:
                 values[field_name] = value_id
                 return
+
+    def _wgs_assign_many2one_by_model(
+        self,
+        values,
+        fields_map,
+        value_id,
+        model_name,
+        preferred_field_names=(),
+        required_name_tokens=(),
+    ):
+        value_id = int(value_id or 0)
+        model_name = (model_name or '').strip()
+        if value_id <= 0 or not model_name:
+            return
+
+        for field_name in preferred_field_names:
+            field = fields_map.get(field_name)
+            if field and field.type == 'many2one' and getattr(field, 'comodel_name', '') == model_name:
+                values[field_name] = value_id
+                return
+
+        fallback_field_name = False
+        tokens = tuple(token.lower() for token in (required_name_tokens or ()) if token)
+        for field_name, field in fields_map.items():
+            if field.type != 'many2one':
+                continue
+            if getattr(field, 'comodel_name', '') != model_name:
+                continue
+            if not fallback_field_name:
+                fallback_field_name = field_name
+            normalized_name = (field_name or '').lower()
+            if tokens and all(token in normalized_name for token in tokens):
+                values[field_name] = value_id
+                return
+
+        if fallback_field_name:
+            values[fallback_field_name] = value_id
 
     def _wgs_assign_date_field(self, values, fields_map, date_value, preferred_field_names=()):
         if not date_value:
