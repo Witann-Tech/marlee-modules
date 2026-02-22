@@ -64,6 +64,15 @@ class ProductPricelistItem(models.Model):
         is_element = isinstance(arch, etree._Element)
         doc = arch if is_element else etree.XML(arch)
 
+        if 'wgs_minimum_term_periods' not in self._fields:
+            for node in doc.xpath("//field[@name='wgs_minimum_term_periods']"):
+                parent = node.getparent()
+                if parent is not None:
+                    parent.remove(node)
+            if is_element:
+                return doc
+            return etree.tostring(doc, encoding='unicode')
+
         if doc.xpath("//field[@name='wgs_minimum_term_periods']"):
             return arch
 
@@ -106,4 +115,7 @@ class ProductPricelistItem(models.Model):
         if view_type not in ('tree', 'list', 'form') or not result.get('arch'):
             return result
         result['arch'] = self._wgs_patch_arch_add_min_term(result['arch'], view_type)
+        fields_map = result.setdefault('fields', {})
+        if 'wgs_minimum_term_periods' not in fields_map and 'wgs_minimum_term_periods' in self._fields:
+            fields_map.update(self.fields_get(['wgs_minimum_term_periods']))
         return result
