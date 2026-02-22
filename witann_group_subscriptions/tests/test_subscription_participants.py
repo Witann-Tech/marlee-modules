@@ -121,3 +121,14 @@ class TestSubscriptionParticipants(TransactionCase):
         self.assertFalse(order.subscription_has_recurring_products)
         self.assertEqual(order.subscription_max_participants_total, 0)
         self.assertFalse(order.participant_ids)
+
+    def test_zero_qty_recurring_line_is_ignored_for_capacity(self):
+        order = self._create_subscription_order(qty=0)
+
+        self.assertFalse(order.subscription_has_recurring_products)
+        self.assertEqual(order.subscription_max_participants_total, 0)
+        self.assertFalse(order.participant_ids)
+
+        selected_participants = self.partners[:4].ids
+        order.write({'participant_ids': [Command.set(selected_participants)]})
+        self.assertEqual(set(order.participant_ids.ids), set(selected_participants))
