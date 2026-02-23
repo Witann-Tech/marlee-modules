@@ -250,6 +250,8 @@ class SaleOrder(models.Model):
             ('partner_id', '=', partner.id),
             ('state', 'in', ['sale', 'done']),
         ]
+        if 'company_id' in self._fields:
+            domain.append(('company_id', '=', self.env.company.id))
 
         subscriptions = self.sudo().search(domain, order='id desc')
         return subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
@@ -266,6 +268,8 @@ class SaleOrder(models.Model):
             ('partner_id', 'in', partner_ids),
             ('state', 'in', ['sale', 'done']),
         ]
+        if 'company_id' in self._fields:
+            domain.append(('company_id', '=', self.env.company.id))
 
         subscriptions = self.sudo().search(domain, order='id desc')
         subscriptions = subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
@@ -289,10 +293,12 @@ class SaleOrder(models.Model):
             return False
 
         # Source of truth: records that Odoo itself classifies as subscriptions.
+        if 'is_subscription' in self._fields and not self.is_subscription:
+            return False
         if 'subscription_state' in self._fields:
             return bool((self.subscription_state or '').strip())
         if 'is_subscription' in self._fields:
-            return bool(self.is_subscription)
+            return True
         return False
 
     def _build_pos_subscription_status_item(self, today):
