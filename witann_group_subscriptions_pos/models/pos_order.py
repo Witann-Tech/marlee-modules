@@ -828,11 +828,72 @@ class PosOrder(models.Model):
                 upsell_line_values['name'] = _('%(name)s (Complemento por upgrade POS)') % {
                     'name': base_name,
                 }
-            upsell_order = self._wgs_create_subscription_upsell_sale_order_from_line(
-                source_order=upsell_source_order,
-                line_values=upsell_line_values,
-                credit_amount=credit_from_pos,
+
+            # Immediate upgrade flow for POS:
+            # create a fresh subscription order (not renewal quote), apply credit as bonus line,
+            # confirm immediately, then close previous subscription.
+            sale_order_fields = self.env['sale.order']._fields
+            upsell_order_values = {
+                'partner_id': self.partner_id.id,
+                'origin': _('%(origin)s | Upsale POS de %(source)s') % {
+                    'origin': self.pos_reference or self.name,
+                    'source': upsell_source_order.name,
+                },
+                'client_order_ref': _('%(origin)s | Upsale POS de %(source)s') % {
+                    'origin': self.pos_reference or self.name,
+                    'source': upsell_source_order.name,
+                },
+                'company_id': self.company_id.id,
+                'order_line': [Command.create(upsell_line_values)],
+            }
+            if credit_from_pos > 0:
+                bonus_line_values = self._wgs_build_upgrade_bonus_line_values(credit_amount=credit_from_pos)
+                if bonus_line_values:
+                    upsell_order_values['order_line'].append(Command.create(bonus_line_values))
+
+            if 'date_order' in sale_order_fields:
+                upsell_order_values['date_order'] = self._wgs_convert_date_for_field_value(
+                    contract_date,
+                    sale_order_fields.get('date_order'),
+                )
+            if 'pricelist_id' in self._fields and self.pricelist_id:
+                upsell_order_values['pricelist_id'] = self.pricelist_id.id
+
+            self._wgs_assign_date_field(
+                values=upsell_order_values,
+                fields_map=sale_order_fields,
+                date_value=contract_date,
+                preferred_field_names=('first_contract_date', 'contract_date', 'date_contract'),
             )
+            self._wgs_assign_date_field(
+                values=upsell_order_values,
+                fields_map=sale_order_fields,
+                date_value=sale_start_date,
+                preferred_field_names=('wgs_effective_start_date', 'start_date', 'date_start', 'subscription_start_date'),
+            )
+            if subscription_end_date:
+                self._wgs_assign_date_field(
+                    values=upsell_order_values,
+                    fields_map=sale_order_fields,
+                    date_value=subscription_end_date,
+                    preferred_field_names=('end_date', 'date_end', 'subscription_end_date', 'recurring_end_date'),
+                )
+            if recurring_plan_id:
+                for field_name in ('subscription_plan_id', 'plan_id', 'recurring_plan_id'):
+                    if field_name in sale_order_fields and field_name not in upsell_order_values:
+                        upsell_order_values[field_name] = recurring_plan_id
+                self._wgs_assign_many2one_value(
+                    values=upsell_order_values,
+                    fields_map=sale_order_fields,
+                    value_id=recurring_plan_id,
+                    preferred_field_names=('subscription_plan_id', 'plan_id', 'recurring_plan_id'),
+                    comodel_checker=self._wgs_is_plan_model_name,
+                )
+
+            upsell_order = self.env['sale.order'].create(upsell_order_values)
+            if 'participant_ids' in upsell_order._fields:
+                upsell_order.write({'participant_ids': [Command.set(participant_ids)]})
+
             sale_order_line = upsell_order.order_line.filtered(lambda so_line: so_line.product_id == product)[:1]
             if not sale_order_line:
                 sale_order_line = upsell_order.order_line[:1]
@@ -843,42 +904,7 @@ class PosOrder(models.Model):
             )
 
             if upsell_order.state in ('draft', 'sent'):
-                try:
-                    upsell_order.action_confirm()
-                except Exception as error:
-                    _logger.warning(
-                        'WGS POS: upsell confirm failed on %s (%s). Falling back to manual upsell order.',
-                        upsell_order.name,
-                        error,
-                    )
-                    fallback_order = self._wgs_create_manual_subscription_upsell_order(upsell_source_order)
-                    self._wgs_apply_upsell_order_lines(
-                        upsell_order=fallback_order,
-                        line_values=upsell_line_values,
-                        credit_amount=credit_from_pos,
-                    )
-                    fallback_line = fallback_order.order_line.filtered(lambda so_line: so_line.product_id == product)[:1]
-                    if not fallback_line:
-                        fallback_line = fallback_order.order_line[:1]
-                    self._wgs_link_pos_and_sale_records(
-                        pos_line=line,
-                        sale_order=fallback_order,
-                        sale_order_line=fallback_line,
-                    )
-                    try:
-                        fallback_order.action_confirm()
-                    except Exception as fallback_error:
-                        raise UserError(
-                            _(
-                                'No se pudo confirmar la renovación por upsale. Error original: %(original)s. '
-                                'Error en fallback manual: %(fallback)s.'
-                            )
-                            % {
-                                'original': str(error),
-                                'fallback': str(fallback_error),
-                            }
-                        ) from fallback_error
-                    upsell_order = fallback_order
+                upsell_order.action_confirm()
 
             # On upsell we keep original contract/start dates; only sync participant and optional end date.
             self._wgs_sync_subscription_metadata(
