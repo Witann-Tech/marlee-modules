@@ -854,10 +854,17 @@ class PosOrder(models.Model):
                 subscription_end_date=subscription_end_date,
                 next_billing_date=next_billing_date,
             )
-            self._wgs_close_source_subscription_after_upgrade(
-                source_order=upsell_source_order,
-                new_subscription_start_date=sale_start_date,
-            )
+            if self._wgs_is_order_recognized_as_subscription(upsell_order):
+                self._wgs_close_source_subscription_after_upgrade(
+                    source_order=upsell_source_order,
+                    new_subscription_start_date=sale_start_date,
+                )
+            else:
+                _logger.warning(
+                    'WGS POS: upsell order %s is not recognized as subscription; source %s was not closed.',
+                    upsell_order.name,
+                    upsell_source_order.name,
+                )
 
             _logger.info(
                 'Created subscription upsell order %s from POS order %s line %s (source=%s, recurring_total=%s, paid=%s, credit=%s)',
@@ -1090,6 +1097,21 @@ class PosOrder(models.Model):
             return True
         return not any(token in state_value for token in self._WGS_INVALID_SUBSCRIPTION_STATE_TOKENS)
 
+    def _wgs_is_order_recognized_as_subscription(self, sale_order):
+        sale_order.ensure_one()
+
+        if not sale_order.order_line.filtered(lambda so_line: self._wgs_is_recurring_so_line(so_line)):
+            return False
+
+        if 'plan_id' in sale_order._fields and sale_order.plan_id:
+            return True
+        if 'subscription_state' in sale_order._fields and (sale_order.subscription_state or '').strip():
+            return True
+        for field_name in ('recurring_next_date', 'next_invoice_date'):
+            if field_name in sale_order._fields and sale_order[field_name]:
+                return True
+        return False
+
     def _wgs_order_has_subscription_state_value(self, sale_order):
         sale_order.ensure_one()
         if 'subscription_state' not in sale_order._fields:
@@ -1134,6 +1156,24 @@ class PosOrder(models.Model):
         if bonus_line_values:
             line_commands.append(Command.create(bonus_line_values))
         upsell_order.write({'order_line': line_commands})
+
+        recurring_plan_id = int(
+            line_values.get('subscription_plan_id')
+            or line_values.get('plan_id')
+            or line_values.get('recurring_plan_id')
+            or 0
+        )
+        if recurring_plan_id > 0:
+            order_values = {}
+            self._wgs_assign_many2one_value(
+                values=order_values,
+                fields_map=upsell_order._fields,
+                value_id=recurring_plan_id,
+                preferred_field_names=('plan_id', 'subscription_plan_id', 'recurring_plan_id'),
+                comodel_checker=self._wgs_is_plan_model_name,
+            )
+            if order_values:
+                upsell_order.write(order_values)
 
         return upsell_order
 

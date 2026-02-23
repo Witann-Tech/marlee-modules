@@ -252,7 +252,7 @@ class SaleOrder(models.Model):
         ]
 
         subscriptions = self.sudo().search(domain, order='id desc')
-        return subscriptions.filtered(lambda order: bool(order._get_recurring_lines()))
+        return subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
 
     @api.model
     def _get_pos_subscription_orders_by_partners(self, partners):
@@ -268,7 +268,7 @@ class SaleOrder(models.Model):
         ]
 
         subscriptions = self.sudo().search(domain, order='id desc')
-        subscriptions = subscriptions.filtered(lambda order: bool(order._get_recurring_lines()))
+        subscriptions = subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
 
         subscriptions_by_partner = {partner.id: self.browse() for partner in partners}
         partner_id_set = set(partner_ids)
@@ -281,6 +281,34 @@ class SaleOrder(models.Model):
                 subscriptions_by_partner[partner_id] |= subscription
 
         return subscriptions_by_partner
+
+    def _is_subscription_record_for_pos(self):
+        self.ensure_one()
+        recurring_lines = self._get_recurring_lines()
+        if not recurring_lines:
+            return False
+
+        if 'plan_id' in self._fields and self.plan_id:
+            return True
+        if 'subscription_state' in self._fields and (self.subscription_state or '').strip():
+            return True
+        for field_name in ('recurring_next_date', 'next_invoice_date'):
+            if field_name in self._fields and self[field_name]:
+                return True
+
+        line_marker_fields = (
+            'subscription_plan_id',
+            'plan_id',
+            'recurring_plan_id',
+            'subscription_pricing_id',
+            'pricing_id',
+            'recurring_pricing_id',
+        )
+        for line in recurring_lines:
+            for field_name in line_marker_fields:
+                if field_name in line._fields and line[field_name]:
+                    return True
+        return False
 
     def _build_pos_subscription_status_item(self, today):
         self.ensure_one()
