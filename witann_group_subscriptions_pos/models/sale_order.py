@@ -288,26 +288,11 @@ class SaleOrder(models.Model):
         if not recurring_lines:
             return False
 
-        if 'plan_id' in self._fields and self.plan_id:
-            return True
-        if 'subscription_state' in self._fields and (self.subscription_state or '').strip():
-            return True
-        for field_name in ('recurring_next_date', 'next_invoice_date'):
-            if field_name in self._fields and self[field_name]:
-                return True
-
-        line_marker_fields = (
-            'subscription_plan_id',
-            'plan_id',
-            'recurring_plan_id',
-            'subscription_pricing_id',
-            'pricing_id',
-            'recurring_pricing_id',
-        )
-        for line in recurring_lines:
-            for field_name in line_marker_fields:
-                if field_name in line._fields and line[field_name]:
-                    return True
+        # Source of truth: records that Odoo itself classifies as subscriptions.
+        if 'subscription_state' in self._fields:
+            return bool((self.subscription_state or '').strip())
+        if 'is_subscription' in self._fields:
+            return bool(self.is_subscription)
         return False
 
     def _build_pos_subscription_status_item(self, today):

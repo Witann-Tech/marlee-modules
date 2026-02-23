@@ -1065,6 +1065,16 @@ class PosOrder(models.Model):
 
     def _wgs_order_has_subscription_signal(self, sale_order):
         sale_order.ensure_one()
+        check_method = getattr(sale_order, '_is_subscription_record_for_pos', None)
+        if callable(check_method):
+            try:
+                return bool(check_method())
+            except Exception as error:
+                _logger.warning(
+                    'WGS POS: failed to evaluate _is_subscription_record_for_pos on %s (%s). Falling back.',
+                    sale_order.name,
+                    error,
+                )
 
         # 1) Standard recurring line flag
         if sale_order.order_line.filtered(lambda so_line: self._wgs_is_recurring_so_line(so_line)):
@@ -1099,6 +1109,16 @@ class PosOrder(models.Model):
 
     def _wgs_is_order_recognized_as_subscription(self, sale_order):
         sale_order.ensure_one()
+        check_method = getattr(sale_order, '_is_subscription_record_for_pos', None)
+        if callable(check_method):
+            try:
+                return bool(check_method())
+            except Exception as error:
+                _logger.warning(
+                    'WGS POS: failed to evaluate _is_subscription_record_for_pos on %s (%s). Falling back.',
+                    sale_order.name,
+                    error,
+                )
 
         if not sale_order.order_line.filtered(lambda so_line: self._wgs_is_recurring_so_line(so_line)):
             return False
