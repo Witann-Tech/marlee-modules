@@ -11,7 +11,7 @@ const MODAL_ID = "wgs-subscription-status-modal";
 const STYLE_ID = "wgs-subscription-status-style";
 const ORDERLINE_PATCH_FLAG = "__wgsParticipantSerializationPatched";
 const ORDER_PATCH_FLAG = "__wgsOrderSerializationPatched";
-const WGS_DEBUG_ALERTS = true;
+const WGS_DEBUG_ALERTS = false;
 const WGS_DEBUG_MODAL_ID = "wgs-debug-modal";
 
 function wgsShowDebugModal(title, body) {
@@ -338,6 +338,81 @@ function getAllPartners(component) {
     return [];
 }
 
+function getProductById(component, productId) {
+    const parsed = Number.parseInt(productId, 10);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+        return null;
+    }
+    const pos = getPos(component);
+    if (!pos) {
+        return null;
+    }
+
+    if (pos.models && pos.models["product.product"] && typeof pos.models["product.product"].get === "function") {
+        const record = pos.models["product.product"].get(parsed);
+        if (record) {
+            return record;
+        }
+    }
+    if (pos.db && typeof pos.db.get_product_by_id === "function") {
+        const record = pos.db.get_product_by_id(parsed);
+        if (record) {
+            return record;
+        }
+    }
+    if (Array.isArray(pos.products)) {
+        const record = pos.products.find((product) => Number(product.id) === parsed);
+        if (record) {
+            return record;
+        }
+    }
+    return null;
+}
+
+function setOrderPartner(order, partner) {
+    if (!order || !partner || !partner.id) {
+        return false;
+    }
+    if (typeof order.set_partner === "function") {
+        order.set_partner(partner);
+        return true;
+    }
+    if (typeof order.setPartner === "function") {
+        order.setPartner(partner);
+        return true;
+    }
+    if (typeof order.set_client === "function") {
+        order.set_client(partner);
+        return true;
+    }
+    if (typeof order.setClient === "function") {
+        order.setClient(partner);
+        return true;
+    }
+    order.partner = partner;
+    order.partner_id = partner.id;
+    return true;
+}
+
+function addProductToOrder(component, order, product, options = {}) {
+    if (!order || !product) {
+        return null;
+    }
+    const payload = {
+        quantity: 1,
+        merge: false,
+        ...options,
+    };
+    if (typeof order.add_product === "function") {
+        order.add_product(product, payload);
+    } else if (typeof order.addProduct === "function") {
+        order.addProduct(product, payload);
+    } else {
+        return null;
+    }
+    return getSelectedOrderline(component, order);
+}
+
 function getSelectedOrderline(component, order = null) {
     const activeOrder = order || getCurrentOrder(component);
     if (!activeOrder) {
@@ -568,6 +643,32 @@ function setLineSubscriptionSelection(line, planId = false, pricingId = false) {
     line.wgs_subscription_pricing_id = Number.isInteger(parsedPricingId) && parsedPricingId > 0 ? parsedPricingId : false;
 }
 
+function getLineSubscriptionFlow(line) {
+    if (!line) {
+        return { flow: "new", sourceSubscriptionId: false };
+    }
+    const normalizedFlow = String(line.wgs_subscription_flow || "new").toLowerCase();
+    const parsedSource = Number.parseInt(line.wgs_subscription_source_id, 10);
+    return {
+        flow: normalizedFlow === "renewal" ? "renewal" : "new",
+        sourceSubscriptionId: Number.isInteger(parsedSource) && parsedSource > 0 ? parsedSource : false,
+    };
+}
+
+function setLineSubscriptionFlow(line, flow = "new", sourceSubscriptionId = false) {
+    if (!line) {
+        return;
+    }
+    const normalizedFlow = String(flow || "new").toLowerCase();
+    line.wgs_subscription_flow = normalizedFlow === "renewal" ? "renewal" : "new";
+    const parsedSource = Number.parseInt(sourceSubscriptionId, 10);
+    line.wgs_subscription_source_id = Number.isInteger(parsedSource) && parsedSource > 0 ? parsedSource : false;
+
+    if (line.order && typeof line.order.trigger === "function") {
+        line.order.trigger("change", line.order);
+    }
+}
+
 function getLineSubscriptionEndDate(line) {
     if (!line || !line.wgs_subscription_end_date) {
         return "";
@@ -779,6 +880,7 @@ function ensureOrderlineSerializationPatched(component) {
         }
         const participantIds = getLineParticipantIds(line);
         const selection = getLineSubscriptionSelection(line);
+        const flowInfo = getLineSubscriptionFlow(line);
         const startDate = getLineSubscriptionStartDate(line) || false;
         const endDate = getLineSubscriptionEndDate(line) || false;
         payload.wgs_participant_ids = participantIds;
@@ -791,12 +893,18 @@ function ensureOrderlineSerializationPatched(component) {
         payload.wgsSubscriptionStartDate = startDate;
         payload.wgs_subscription_end_date = endDate;
         payload.wgsSubscriptionEndDate = endDate;
+        payload.wgs_subscription_flow = flowInfo.flow || "new";
+        payload.wgsSubscriptionFlow = flowInfo.flow || "new";
+        payload.wgs_subscription_source_id = flowInfo.sourceSubscriptionId || false;
+        payload.wgsSubscriptionSourceId = flowInfo.sourceSubscriptionId || false;
         payload.wgs_subscription_config = {
             participant_ids: participantIds,
             plan_id: selection.planId || false,
             pricing_id: selection.pricingId || false,
             start_date: startDate,
             end_date: endDate,
+            flow: flowInfo.flow || "new",
+            source_subscription_id: flowInfo.sourceSubscriptionId || false,
         };
         return payload;
     };
@@ -841,6 +949,11 @@ function ensureOrderlineSerializationPatched(component) {
                 this,
                 (json && (json.wgs_subscription_start_date || json.wgsSubscriptionStartDate)) || cfg.start_date
             );
+            setLineSubscriptionFlow(
+                this,
+                (json && (json.wgs_subscription_flow || json.wgsSubscriptionFlow)) || cfg.flow || "new",
+                (json && (json.wgs_subscription_source_id || json.wgsSubscriptionSourceId)) || cfg.source_subscription_id
+            );
         };
     }
 
@@ -878,6 +991,7 @@ function ensureOrderSerializationPatched(component) {
                     return;
                 }
                 const selection = getLineSubscriptionSelection(line);
+                const flowInfo = getLineSubscriptionFlow(line);
                 const participantIds = getLineParticipantIds(line);
                 const startDate = getLineSubscriptionStartDate(line) || false;
                 const endDate = getLineSubscriptionEndDate(line) || false;
@@ -894,12 +1008,18 @@ function ensureOrderSerializationPatched(component) {
                 linePayload.wgsSubscriptionStartDate = startDate;
                 linePayload.wgs_subscription_end_date = endDate;
                 linePayload.wgsSubscriptionEndDate = endDate;
+                linePayload.wgs_subscription_flow = flowInfo.flow || "new";
+                linePayload.wgsSubscriptionFlow = flowInfo.flow || "new";
+                linePayload.wgs_subscription_source_id = flowInfo.sourceSubscriptionId || false;
+                linePayload.wgsSubscriptionSourceId = flowInfo.sourceSubscriptionId || false;
                 linePayload.wgs_subscription_config = {
                     participant_ids: participantIds,
                     plan_id: selection.planId || false,
                     pricing_id: selection.pricingId || false,
                     start_date: startDate,
                     end_date: endDate,
+                    flow: flowInfo.flow || "new",
+                    source_subscription_id: flowInfo.sourceSubscriptionId || false,
                     product_id: productId || false,
                     quantity: quantity || 0,
                     line_index: index,
@@ -911,6 +1031,8 @@ function ensureOrderSerializationPatched(component) {
                     pricing_id: selection.pricingId || false,
                     start_date: startDate,
                     end_date: endDate,
+                    flow: flowInfo.flow || "new",
+                    source_subscription_id: flowInfo.sourceSubscriptionId || false,
                     product_id: productId || false,
                     quantity: quantity || 0,
                     line_index: index,
@@ -922,12 +1044,21 @@ function ensureOrderSerializationPatched(component) {
         jsonPayload.wgs_subscription_configs = configs;
         lines.forEach((line, index) => {
             const selection = getLineSubscriptionSelection(line);
+            const flowInfo = getLineSubscriptionFlow(line);
             const participantIds = getLineParticipantIds(line);
             const startDate = getLineSubscriptionStartDate(line) || false;
             const endDate = getLineSubscriptionEndDate(line) || false;
             const productId = getLineProductId(line);
             const quantity = getLineQuantity(line);
-            if (!participantIds.length && !selection.planId && !selection.pricingId && !startDate && !endDate) {
+            if (
+                !participantIds.length
+                && !selection.planId
+                && !selection.pricingId
+                && !startDate
+                && !endDate
+                && flowInfo.flow !== "renewal"
+                && !flowInfo.sourceSubscriptionId
+            ) {
                 return;
             }
             if (configs.find((row) => row.line_index === index)) {
@@ -939,6 +1070,8 @@ function ensureOrderSerializationPatched(component) {
                 pricing_id: selection.pricingId || false,
                 start_date: startDate,
                 end_date: endDate,
+                flow: flowInfo.flow || "new",
+                source_subscription_id: flowInfo.sourceSubscriptionId || false,
                 product_id: productId || false,
                 quantity: quantity || 0,
                 line_index: index,
@@ -985,10 +1118,19 @@ function collectOrderSubscriptionConfigs(order) {
         }
         const productId = getLineProductId(line);
         const selection = getLineSubscriptionSelection(line);
+        const flowInfo = getLineSubscriptionFlow(line);
         const participantIds = getLineParticipantIds(line);
         const startDate = getLineSubscriptionStartDate(line) || false;
         const endDate = getLineSubscriptionEndDate(line) || false;
-        if (!participantIds.length && !selection.planId && !selection.pricingId && !startDate && !endDate) {
+        if (
+            !participantIds.length
+            && !selection.planId
+            && !selection.pricingId
+            && !startDate
+            && !endDate
+            && flowInfo.flow !== "renewal"
+            && !flowInfo.sourceSubscriptionId
+        ) {
             return;
         }
         configs.push({
@@ -997,6 +1139,8 @@ function collectOrderSubscriptionConfigs(order) {
             pricing_id: selection.pricingId || false,
             start_date: startDate,
             end_date: endDate,
+            flow: flowInfo.flow || "new",
+            source_subscription_id: flowInfo.sourceSubscriptionId || false,
             product_id: productId || false,
             quantity: getLineQuantity(line) || 0,
             line_index: index,
@@ -1044,6 +1188,7 @@ patch(PaymentScreen.prototype, {
         }
 
         const selection = getLineSubscriptionSelection(line);
+        const flowInfo = getLineSubscriptionFlow(line);
         const context = await getSubscriptionContext(this, product, getLineUnitPrice(line));
         if (!context || !context.is_subscription) {
             return;
@@ -1053,15 +1198,23 @@ patch(PaymentScreen.prototype, {
         const order = getCurrentOrder(this);
         const partner = getCurrentPartner(this, order);
         const partnerId = partner && partner.id ? Number(partner.id) : 0;
-        const cacheKey = `${partnerId}:${productId}:${selection.planId || 0}:${selection.pricingId || 0}`;
+        const cacheKey = `${flowInfo.flow}:${flowInfo.sourceSubscriptionId || 0}:${partnerId}:${productId}:${selection.planId || 0}:${selection.pricingId || 0}`;
         const fromCache = !!this._wgsRecurringPriceCache[cacheKey];
         let cached = this._wgsRecurringPriceCache[cacheKey];
         if (!cached) {
-            cached = await this.orm.call(
-                "pos.order",
-                "wgs_get_subscription_charge_for_pos",
-                [partnerId || false, productId, getLineUnitPrice(line), selection.planId || false, selection.pricingId || false]
-            );
+            if (flowInfo.flow === "renewal" && flowInfo.sourceSubscriptionId) {
+                cached = await this.orm.call(
+                    "pos.order",
+                    "wgs_get_subscription_renewal_charge_for_pos",
+                    [flowInfo.sourceSubscriptionId, productId, selection.planId || false, selection.pricingId || false]
+                );
+            } else {
+                cached = await this.orm.call(
+                    "pos.order",
+                    "wgs_get_subscription_charge_for_pos",
+                    [partnerId || false, productId, getLineUnitPrice(line), selection.planId || false, selection.pricingId || false]
+                );
+            }
             this._wgsRecurringPriceCache[cacheKey] = cached || {};
         }
 
@@ -1076,7 +1229,7 @@ patch(PaymentScreen.prototype, {
         }
 
         line.wgs_upgrade_credit_amount = Number(cached && cached.credit_amount) || 0;
-        line.wgs_is_upgrade = !!(cached && cached.is_upgrade);
+        line.wgs_is_upgrade = flowInfo.flow === "renewal" ? false : !!(cached && cached.is_upgrade);
 
         const resolvedPlanId = Number.parseInt(cached && cached.plan_id, 10);
         const resolvedPricingId = Number.parseInt(cached && cached.pricing_id, 10);
@@ -1091,6 +1244,8 @@ patch(PaymentScreen.prototype, {
             selection,
             result: cached || {},
             extra: {
+                flow: flowInfo.flow,
+                source_subscription_id: flowInfo.sourceSubscriptionId || false,
                 from_cache: fromCache,
                 cache_key: cacheKey,
             },
@@ -1158,6 +1313,7 @@ patch(PaymentScreen.prototype, {
                         const line = row.line;
                         const product = row.product;
                         const selection = getLineSubscriptionSelection(line);
+                        const flowInfo = getLineSubscriptionFlow(line);
                         const qty = getLineQuantity(line) || 0;
                         const unitPrice = getLineUnitPrice(line) || 0;
                         return {
@@ -1168,6 +1324,8 @@ patch(PaymentScreen.prototype, {
                             line_total: Number((qty * unitPrice).toFixed(2)),
                             selected_plan_id: selection.planId || false,
                             selected_pricing_id: selection.pricingId || false,
+                            flow: flowInfo.flow || "new",
+                            source_subscription_id: flowInfo.sourceSubscriptionId || false,
                             is_upgrade: !!line.wgs_is_upgrade,
                             credit_amount: Number(line.wgs_upgrade_credit_amount) || 0,
                         };
@@ -1253,6 +1411,14 @@ patch(ControlButtons.prototype, {
             );
             return;
         }
+        const flowInfo = getLineSubscriptionFlow(line);
+        if (flowInfo.flow === "renewal") {
+            this._showSimpleInfoModal(
+                _t("Renovación recurrente"),
+                _t("Esta línea es de renovación de pago recurrente y no requiere reconfigurar participantes.")
+            );
+            return;
+        }
 
         const product = getLineProduct(this, line);
         const context = await getSubscriptionContext(this, product, getLineUnitPrice(line));
@@ -1317,6 +1483,17 @@ patch(ControlButtons.prototype, {
                 plan_name: status.plan_name || "",
                 start_date: status.start_date || "",
                 valid_until: status.valid_until || "",
+                next_invoice_date: status.next_invoice_date || "",
+                days_to_due: Number.isFinite(Number(status.days_to_due)) ? Number(status.days_to_due) : null,
+                payment_status: status.payment_status || "none",
+                payment_status_label: status.payment_status_label || "",
+                can_charge_renewal: !!status.can_charge_renewal,
+                subscription_id: status.subscription_id || false,
+                renewal_product_id: status.renewal_product_id || false,
+                renewal_product_name: status.renewal_product_name || "",
+                renewal_plan_id: status.renewal_plan_id || false,
+                renewal_pricing_id: status.renewal_pricing_id || false,
+                renewal_amount: Number(status.renewal_amount) || 0,
                 birthday: status.birthday || "",
                 gender: status.gender || "",
                 last_access: status.last_access || "",
@@ -1342,16 +1519,26 @@ patch(ControlButtons.prototype, {
         }
 
         const selection = getLineSubscriptionSelection(line);
+        const flowInfo = getLineSubscriptionFlow(line);
         const preferredPlanId = selection.planId || context.default_plan_id || false;
         const preferredPricingId = selection.pricingId || context.default_pricing_id || false;
         const order = getCurrentOrder(this);
         const partner = getCurrentPartner(this, order);
         const partnerId = partner && partner.id ? Number(partner.id) : 0;
-        const result = await this.orm.call(
-            "pos.order",
-            "wgs_get_subscription_charge_for_pos",
-            [partnerId || false, productId, getLineUnitPrice(line), preferredPlanId, preferredPricingId]
-        );
+        let result = {};
+        if (flowInfo.flow === "renewal" && flowInfo.sourceSubscriptionId) {
+            result = await this.orm.call(
+                "pos.order",
+                "wgs_get_subscription_renewal_charge_for_pos",
+                [flowInfo.sourceSubscriptionId, productId, preferredPlanId, preferredPricingId]
+            );
+        } else {
+            result = await this.orm.call(
+                "pos.order",
+                "wgs_get_subscription_charge_for_pos",
+                [partnerId || false, productId, getLineUnitPrice(line), preferredPlanId, preferredPricingId]
+            );
+        }
         const chargeNow = Number(result && result.charge_now);
         if (Number.isFinite(chargeNow) && chargeNow >= 0) {
             const currentPrice = getLineUnitPrice(line);
@@ -1361,7 +1548,7 @@ patch(ControlButtons.prototype, {
         }
 
         line.wgs_upgrade_credit_amount = Number(result && result.credit_amount) || 0;
-        line.wgs_is_upgrade = !!(result && result.is_upgrade);
+        line.wgs_is_upgrade = flowInfo.flow === "renewal" ? false : !!(result && result.is_upgrade);
 
         setLineSubscriptionSelection(
             line,
@@ -1376,6 +1563,10 @@ patch(ControlButtons.prototype, {
                 pricingId: preferredPricingId,
             },
             result: result || {},
+            extra: {
+                flow: flowInfo.flow,
+                source_subscription_id: flowInfo.sourceSubscriptionId || false,
+            },
         });
     },
 
@@ -1740,6 +1931,12 @@ patch(ControlButtons.prototype, {
                 <option value="expired">${_t("Estado: Sin vigencia")}</option>
                 <option value="none">${_t("Estado: Sin paquete")}</option>
             </select>
+            <select class="wgs-filter-payment">
+                <option value="all">${_t("Cobro: Todos")}</option>
+                <option value="window">${_t("Cobro: Ventana de pago")}</option>
+                <option value="overdue">${_t("Cobro: Vencidos")}</option>
+                <option value="up_to_date">${_t("Cobro: Al corriente")}</option>
+            </select>
             <select class="wgs-filter-birthday">
                 <option value="all">${_t("Cumpleaños: Todos")}</option>
                 <option value="today">${_t("Cumpleaños: Hoy")}</option>
@@ -1753,6 +1950,7 @@ patch(ControlButtons.prototype, {
                 <option value="state">${_t("Orden: Estado")}</option>
                 <option value="valid_until_asc">${_t("Orden: Vencimiento cercano")}</option>
                 <option value="valid_until_desc">${_t("Orden: Vencimiento lejano")}</option>
+                <option value="payment_status">${_t("Orden: Cobro recurrente")}</option>
                 <option value="birthday_asc">${_t("Orden: Cumpleaños próximo")}</option>
                 <option value="last_access_desc">${_t("Orden: Último acceso reciente")}</option>
             </select>
@@ -1777,11 +1975,13 @@ patch(ControlButtons.prototype, {
                     <th>${_t("Plan")}</th>
                     <th>${_t("Inicio")}</th>
                     <th>${_t("Vencimiento")}</th>
+                    <th>${_t("Cobro")}</th>
                     <th>${_t("Género")}</th>
                     <th>${_t("Cumpleaños")}</th>
                     <th>${_t("Último acceso")}</th>
                     <th>${_t("Teléfono")}</th>
                     <th>${_t("Email")}</th>
+                    <th>${_t("Acción")}</th>
                 </tr>
             </thead>
             <tbody></tbody>
@@ -1816,6 +2016,7 @@ patch(ControlButtons.prototype, {
 
         const searchInput = toolbar.querySelector(".wgs-filter-search");
         const stateSelect = toolbar.querySelector(".wgs-filter-state");
+        const paymentSelect = toolbar.querySelector(".wgs-filter-payment");
         const birthdaySelect = toolbar.querySelector(".wgs-filter-birthday");
         const sortSelect = toolbar.querySelector(".wgs-sort");
         const exportButton = toolbar.querySelector(".wgs-btn-export");
@@ -1832,17 +2033,39 @@ patch(ControlButtons.prototype, {
             expired: 1,
             none: 2,
         };
+        const paymentStatusLabel = {
+            up_to_date: _t("Al corriente"),
+            window: _t("Ventana de pago"),
+            overdue: _t("Pago vencido"),
+            future: _t("Inicio futuro"),
+            inactive: _t("Inactiva"),
+            unknown: _t("Sin próxima fecha"),
+            none: _t("Sin ciclo"),
+        };
+        const paymentStatusRank = {
+            window: 0,
+            overdue: 1,
+            up_to_date: 2,
+            future: 3,
+            inactive: 4,
+            unknown: 5,
+            none: 6,
+        };
 
         let filteredSnapshot = [...rows];
 
         const render = () => {
             const query = (searchInput.value || "").trim().toLowerCase();
             const stateFilter = stateSelect.value;
+            const paymentFilter = paymentSelect.value;
             const birthdayFilter = birthdaySelect.value;
             const sortMode = sortSelect.value;
 
             let filtered = rows.filter((row) => {
                 if (stateFilter !== "all" && row.state !== stateFilter) {
+                    return false;
+                }
+                if (paymentFilter !== "all" && (row.payment_status || "none") !== paymentFilter) {
                     return false;
                 }
                 if (!this._matchesBirthdayFilter(row.birthday, birthdayFilter)) {
@@ -1861,6 +2084,13 @@ patch(ControlButtons.prototype, {
                 }
                 if (sortMode === "state") {
                     const diff = (stateRank[a.state] ?? 9) - (stateRank[b.state] ?? 9);
+                    if (diff !== 0) {
+                        return diff;
+                    }
+                    return (a.name || "").localeCompare(b.name || "", "es");
+                }
+                if (sortMode === "payment_status") {
+                    const diff = (paymentStatusRank[a.payment_status] ?? 99) - (paymentStatusRank[b.payment_status] ?? 99);
                     if (diff !== 0) {
                         return diff;
                     }
@@ -1927,23 +2157,27 @@ patch(ControlButtons.prototype, {
                     if (row.state === "valid") acc.valid += 1;
                     else if (row.state === "expired") acc.expired += 1;
                     else acc.none += 1;
+                    if (row.payment_status === "window") acc.window += 1;
+                    if (row.payment_status === "overdue") acc.overdue += 1;
                     if (row.birthday) acc.birthday += 1;
                     return acc;
                 },
-                { total: 0, valid: 0, expired: 0, none: 0, birthday: 0 }
+                { total: 0, valid: 0, expired: 0, none: 0, window: 0, overdue: 0, birthday: 0 }
             );
 
             summary.innerHTML = `
                 <span class="wgs-summary-pill">${_t("Total")}: ${counts.total}</span>
                 <span class="wgs-summary-pill wgs-summary-valid">${_t("Vigentes")}: ${counts.valid}</span>
                 <span class="wgs-summary-pill wgs-summary-expired">${_t("Sin vigencia")}: ${counts.expired}</span>
+                <span class="wgs-summary-pill wgs-summary-window">${_t("Ventana de pago")}: ${counts.window}</span>
+                <span class="wgs-summary-pill wgs-summary-overdue">${_t("Vencidos de pago")}: ${counts.overdue}</span>
                 <span class="wgs-summary-pill wgs-summary-none">${_t("Sin paquete")}: ${counts.none}</span>
                 <span class="wgs-summary-pill">${_t("Con cumpleaños")}: ${counts.birthday}</span>
                 <span class="wgs-summary-pill">${_t("Mostrando")}: ${filtered.length}</span>
             `;
 
             if (!filtered.length) {
-                tbody.innerHTML = `<tr><td colspan="12">${_t("No hay resultados para el filtro actual.")}</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="14">${_t("No hay resultados para el filtro actual.")}</td></tr>`;
                 return;
             }
 
@@ -1954,6 +2188,10 @@ patch(ControlButtons.prototype, {
                         : row.state === "expired"
                             ? "wgs-state-expired"
                             : "wgs-state-none";
+                    const paymentStatus = row.payment_status || "none";
+                    const paymentLabel = row.payment_status_label || paymentStatusLabel[paymentStatus] || paymentStatusLabel.none;
+                    const paymentClass = `wgs-payment-${this._escapeHtml(paymentStatus)}`;
+                    const canRenew = !!(row.can_charge_renewal && row.subscription_id && row.renewal_product_id);
                     return `
                         <tr>
                             <td>
@@ -1965,25 +2203,144 @@ patch(ControlButtons.prototype, {
                             <td>${this._escapeHtml(row.plan_name || "-")}</td>
                             <td>${this._escapeHtml(this._formatDateDisplay(row.start_date) || "-")}</td>
                             <td>${this._escapeHtml(this._formatDateDisplay(row.valid_until) || "-")}</td>
+                            <td>
+                                <span class="wgs-payment-badge ${paymentClass}">${this._escapeHtml(paymentLabel)}</span>
+                            </td>
                             <td>${this._escapeHtml(row.gender || "-")}</td>
                             <td>${this._escapeHtml(this._formatDateDisplay(row.birthday) || "-")}</td>
                             <td>${this._escapeHtml(this._formatDateTimeDisplay(row.last_access) || "-")}</td>
                             <td>${this._escapeHtml(row.phone || "-")}</td>
                             <td>${this._escapeHtml(row.email || "-")}</td>
+                            <td>
+                                ${
+                                    canRenew
+                                        ? `<button type="button" class="wgs-renew-btn"
+                                            data-partner-id="${Number(row.id) || 0}"
+                                            data-subscription-id="${Number(row.subscription_id) || 0}"
+                                            data-product-id="${Number(row.renewal_product_id) || 0}"
+                                            data-plan-id="${Number(row.renewal_plan_id) || 0}"
+                                            data-pricing-id="${Number(row.renewal_pricing_id) || 0}"
+                                            data-amount="${Number(row.renewal_amount) || 0}">
+                                            ${this._escapeHtml(_t("Cobrar"))}
+                                        </button>`
+                                        : "-"
+                                }
+                            </td>
                         </tr>
                     `;
                 })
                 .join("");
+
+            tbody.querySelectorAll(".wgs-renew-btn").forEach((button) => {
+                button.addEventListener("click", async (event) => {
+                    const target = event.currentTarget;
+                    const partnerId = Number.parseInt(target.dataset.partnerId || "0", 10) || 0;
+                    const subscriptionId = Number.parseInt(target.dataset.subscriptionId || "0", 10) || 0;
+                    const productId = Number.parseInt(target.dataset.productId || "0", 10) || 0;
+                    const planId = Number.parseInt(target.dataset.planId || "0", 10) || false;
+                    const pricingId = Number.parseInt(target.dataset.pricingId || "0", 10) || false;
+                    const amount = Number.parseFloat(target.dataset.amount || "0") || 0;
+
+                    await this._queueRenewalToCurrentOrder({
+                        partnerId,
+                        subscriptionId,
+                        productId,
+                        planId,
+                        pricingId,
+                        amount,
+                    });
+                });
+            });
         };
 
         searchInput.addEventListener("input", render);
         stateSelect.addEventListener("change", render);
+        paymentSelect.addEventListener("change", render);
         birthdaySelect.addEventListener("change", render);
         sortSelect.addEventListener("change", render);
         exportButton.addEventListener("click", () => {
             this._downloadDirectoryAsXls(filteredSnapshot);
         });
         render();
+    },
+
+    async _queueRenewalToCurrentOrder({ partnerId, subscriptionId, productId, planId, pricingId, amount }) {
+        if (!partnerId || !subscriptionId || !productId) {
+            this._showSimpleInfoModal(
+                _t("Datos incompletos"),
+                _t("No se pudo preparar el cobro recurrente por falta de datos de suscripción.")
+            );
+            return;
+        }
+
+        const pos = getPos(this);
+        let order = getCurrentOrder(this);
+        if (!order && pos && typeof pos.add_new_order === "function") {
+            pos.add_new_order();
+            order = getCurrentOrder(this);
+        }
+        if (!order) {
+            this._showSimpleInfoModal(
+                _t("Sin orden"),
+                _t("No hay una orden activa para agregar el cobro recurrente.")
+            );
+            return;
+        }
+
+        const partner = getPartnerById(this, partnerId);
+        if (!partner || !partner.id) {
+            this._showSimpleInfoModal(
+                _t("Cliente no disponible"),
+                _t("El cliente no está disponible en esta sesión de POS.")
+            );
+            return;
+        }
+
+        const currentPartner = getCurrentPartner(this, order);
+        const orderLines = getOrderlines(order).filter((line) => getLineQuantity(line) > 0);
+        if (currentPartner && currentPartner.id && Number(currentPartner.id) !== Number(partner.id) && orderLines.length) {
+            this._showSimpleInfoModal(
+                _t("Orden con otro cliente"),
+                _t("Cierra o limpia la orden actual antes de cobrar la renovación de otro cliente.")
+            );
+            return;
+        }
+
+        setOrderPartner(order, partner);
+
+        const product = getProductById(this, productId);
+        if (!product) {
+            this._showSimpleInfoModal(
+                _t("Producto no disponible"),
+                _t("El producto recurrente no está cargado en esta sesión de POS.")
+            );
+            return;
+        }
+
+        const line = addProductToOrder(this, order, product, { merge: false, quantity: 1 });
+        if (!line) {
+            this._showSimpleInfoModal(
+                _t("No se pudo agregar"),
+                _t("No se pudo agregar la línea de renovación al ticket actual.")
+            );
+            return;
+        }
+
+        setLineSubscriptionSelection(line, planId || false, pricingId || false);
+        setLineSubscriptionFlow(line, "renewal", subscriptionId);
+        setLineSubscriptionStartDate(line, false);
+        setLineSubscriptionEndDate(line, false);
+        setLineParticipantIds(line, [partner.id]);
+        if (Number.isFinite(Number(amount)) && Number(amount) >= 0) {
+            setLineUnitPrice(line, Number(amount));
+        }
+
+        await this._wgsEnsureRecurringPriceOnLine(line, product, { is_subscription: true });
+
+        this._showSimpleInfoModal(
+            _t("Renovación agregada"),
+            _t("Se agregó el cobro recurrente al ticket. Continúa al pago para confirmar la renovación.")
+        );
     },
 
     _toTimestamp(value) {
@@ -2086,6 +2443,7 @@ patch(ControlButtons.prototype, {
                     <td>${this._escapeHtml(row.plan_name || "-")}</td>
                     <td>${this._escapeHtml(this._formatDateDisplay(row.start_date) || "-")}</td>
                     <td>${this._escapeHtml(this._formatDateDisplay(row.valid_until) || "-")}</td>
+                    <td>${this._escapeHtml(row.payment_status_label || "-")}</td>
                     <td>${this._escapeHtml(row.gender || "-")}</td>
                     <td>${this._escapeHtml(this._formatDateDisplay(row.birthday) || "-")}</td>
                     <td>${this._escapeHtml(this._formatDateTimeDisplay(row.last_access) || "-")}</td>
@@ -2115,6 +2473,7 @@ patch(ControlButtons.prototype, {
                                 <th>${this._escapeHtml(_t("Plan"))}</th>
                                 <th>${this._escapeHtml(_t("Inicio"))}</th>
                                 <th>${this._escapeHtml(_t("Vencimiento"))}</th>
+                                <th>${this._escapeHtml(_t("Cobro"))}</th>
                                 <th>${this._escapeHtml(_t("Género"))}</th>
                                 <th>${this._escapeHtml(_t("Cumpleaños"))}</th>
                                 <th>${this._escapeHtml(_t("Último acceso"))}</th>
@@ -2297,6 +2656,16 @@ patch(ControlButtons.prototype, {
                 color: #475569;
                 background: #f1f5f9;
             }
+            .wgs-summary-window {
+                border-color: #facc15;
+                color: #92400e;
+                background: #fef3c7;
+            }
+            .wgs-summary-overdue {
+                border-color: #fca5a5;
+                color: #991b1b;
+                background: #fee2e2;
+            }
             .wgs-status-modal-body {
                 padding: 0;
                 overflow: auto;
@@ -2400,6 +2769,51 @@ patch(ControlButtons.prototype, {
             .wgs-state-none {
                 color: #475569;
                 font-weight: 700;
+            }
+            .wgs-payment-badge {
+                display: inline-block;
+                border-radius: 999px;
+                padding: 0.15rem 0.45rem;
+                font-size: 0.74rem;
+                font-weight: 700;
+                border: 1px solid #d1d5db;
+                background: #f8fafc;
+                color: #374151;
+                white-space: nowrap;
+            }
+            .wgs-payment-window {
+                border-color: #facc15;
+                background: #fef3c7;
+                color: #92400e;
+            }
+            .wgs-payment-overdue {
+                border-color: #fda4af;
+                background: #ffe4e6;
+                color: #9f1239;
+            }
+            .wgs-payment-up_to_date {
+                border-color: #8ad9b5;
+                background: #daf5e8;
+                color: #0f7b4b;
+            }
+            .wgs-payment-future,
+            .wgs-payment-unknown,
+            .wgs-payment-inactive,
+            .wgs-payment-none {
+                border-color: #cbd5e1;
+                background: #f1f5f9;
+                color: #475569;
+            }
+            .wgs-renew-btn {
+                border: 1px solid #0284c7;
+                border-radius: 0.4rem;
+                background: #0284c7;
+                color: #fff;
+                padding: 0.24rem 0.5rem;
+                font-size: 0.74rem;
+                font-weight: 700;
+                cursor: pointer;
+                white-space: nowrap;
             }
             .wgs-participant-list {
                 padding: 0.75rem 1rem;
