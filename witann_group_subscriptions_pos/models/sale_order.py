@@ -252,6 +252,10 @@ class SaleOrder(models.Model):
         ]
         if 'company_id' in self._fields:
             domain.append(('company_id', '=', self.env.company.id))
+        if 'is_subscription' in self._fields:
+            domain.append(('is_subscription', '=', True))
+        elif 'subscription_state' in self._fields:
+            domain.append(('subscription_state', '!=', False))
 
         subscriptions = self.sudo().search(domain, order='id desc')
         return subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
@@ -270,6 +274,10 @@ class SaleOrder(models.Model):
         ]
         if 'company_id' in self._fields:
             domain.append(('company_id', '=', self.env.company.id))
+        if 'is_subscription' in self._fields:
+            domain.append(('is_subscription', '=', True))
+        elif 'subscription_state' in self._fields:
+            domain.append(('subscription_state', '!=', False))
 
         subscriptions = self.sudo().search(domain, order='id desc')
         subscriptions = subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
