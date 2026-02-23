@@ -208,6 +208,7 @@ class SaleOrder(models.Model):
             )
             state = 'valid'
             short_label = '[VIGENTE]'
+            package_source_items = valid_items
         else:
             prioritized = sorted(
                 items,
@@ -220,12 +221,13 @@ class SaleOrder(models.Model):
             )
             state = 'expired'
             short_label = '[SIN VIGENCIA]'
+            package_source_items = prioritized[:1]
 
         primary = prioritized[0]
         package_names = sorted(
             {
                 package_name
-                for row in items
+                for row in package_source_items
                 for package_name in (row.get('package_names') or [])
                 if package_name
             }
