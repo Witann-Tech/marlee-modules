@@ -5,6 +5,8 @@ from dateutil.relativedelta import relativedelta
 
 from odoo import _, api, fields, models
 from odoo.exceptions import AccessError
+from odoo.osv import expression
+from odoo.tools.safe_eval import safe_eval
 
 _logger = logging.getLogger(__name__)
 
@@ -244,18 +246,15 @@ class SaleOrder(models.Model):
 
     @api.model
     def _get_pos_subscription_orders(self, partner):
-        domain = [
+        partner_domain = [
             '|',
             ('participant_ids', 'in', partner.id),
             ('partner_id', '=', partner.id),
-            ('state', 'in', ['sale', 'done']),
         ]
-        if 'company_id' in self._fields:
-            domain.append(('company_id', '=', self.env.company.id))
-        if 'is_subscription' in self._fields:
-            domain.append(('is_subscription', '=', True))
-        elif 'subscription_state' in self._fields:
-            domain.append(('subscription_state', '!=', False))
+        domain = expression.AND([
+            self._get_subscription_action_domain_for_pos(),
+            partner_domain,
+        ])
 
         subscriptions = self.sudo().search(domain, order='id desc')
         return subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
@@ -266,18 +265,15 @@ class SaleOrder(models.Model):
             return {}
 
         partner_ids = partners.ids
-        domain = [
+        partner_domain = [
             '|',
             ('participant_ids', 'in', partner_ids),
             ('partner_id', 'in', partner_ids),
-            ('state', 'in', ['sale', 'done']),
         ]
-        if 'company_id' in self._fields:
-            domain.append(('company_id', '=', self.env.company.id))
-        if 'is_subscription' in self._fields:
-            domain.append(('is_subscription', '=', True))
-        elif 'subscription_state' in self._fields:
-            domain.append(('subscription_state', '!=', False))
+        domain = expression.AND([
+            self._get_subscription_action_domain_for_pos(),
+            partner_domain,
+        ])
 
         subscriptions = self.sudo().search(domain, order='id desc')
         subscriptions = subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
@@ -293,6 +289,66 @@ class SaleOrder(models.Model):
                 subscriptions_by_partner[partner_id] |= subscription
 
         return subscriptions_by_partner
+
+    @api.model
+    def _get_subscription_action_domain_for_pos(self):
+        base_domain = [('state', 'in', ['sale', 'done'])]
+        if 'company_id' in self._fields:
+            base_domain.append(('company_id', '=', self.env.company.id))
+
+        action_domain = []
+        action = self._find_subscription_action_for_pos()
+        if action:
+            action_domain = self._parse_action_domain_for_pos(action.domain)
+
+        if action_domain:
+            return expression.AND([base_domain, action_domain])
+        return base_domain
+
+    @api.model
+    def _find_subscription_action_for_pos(self):
+        xmlid_candidates = (
+            'sale_subscription.sale_order_action_subscriptions',
+            'sale_subscription.sale_subscription_action',
+            'sale_subscription.sale_order_action_subscription',
+        )
+        for xmlid in xmlid_candidates:
+            action = self.env.ref(xmlid, raise_if_not_found=False)
+            if action and getattr(action, 'res_model', '') == 'sale.order':
+                return action
+
+        return self.env['ir.actions.act_window'].sudo().search(
+            [
+                ('res_model', '=', 'sale.order'),
+                ('domain', 'ilike', 'subscription'),
+            ],
+            order='id desc',
+            limit=1,
+        )
+
+    @api.model
+    def _parse_action_domain_for_pos(self, domain_value):
+        if not domain_value:
+            return []
+        if isinstance(domain_value, (list, tuple)):
+            return list(domain_value)
+
+        if isinstance(domain_value, str):
+            try:
+                parsed = safe_eval(
+                    domain_value,
+                    {
+                        'uid': self.env.uid,
+                        'user': self.env.user,
+                        'context': dict(self.env.context),
+                    },
+                )
+            except Exception as error:
+                _logger.warning('WGS POS: could not parse subscription action domain (%s)', error)
+                return []
+            return list(parsed) if isinstance(parsed, (list, tuple)) else []
+
+        return []
 
     def _is_subscription_record_for_pos(self):
         self.ensure_one()
