@@ -56,6 +56,85 @@ class AccessPerson(models.Model):
             if rec.active and not rec.site_ids:
                 raise ValidationError("Active people must be assigned to at least one Site.")
 
+    @api.model_create_multi
+    def create(self, vals_list):
+        records = super().create(vals_list)
+        Change = self.env["access_control.sync_change"].sudo()
+        for rec in records:
+            if rec.active and rec.global_user_id and rec.site_ids:
+                Change.queue_upsert_for_person(rec, reason="person_create")
+        return records
+
+    def write(self, vals):
+        before = {
+            rec.id: {
+                "active": rec.active,
+                "global_user_id": rec.global_user_id,
+                "site_ids": set(rec.site_ids.ids),
+            }
+            for rec in self
+        }
+
+        res = super().write(vals)
+
+        Change = self.env["access_control.sync_change"].sudo()
+        Site = self.env["access_control.site"].sudo()
+
+        for rec in self:
+            prev = before[rec.id]
+            prev_active = prev["active"]
+            prev_gid = prev["global_user_id"]
+            prev_sites = prev["site_ids"]
+
+            new_active = rec.active
+            new_gid = rec.global_user_id
+            new_sites = set(rec.site_ids.ids)
+
+            prev_sync_sites = {sid for sid in prev_sites if prev_active and prev_gid}
+            new_sync_sites = {sid for sid in new_sites if new_active and new_gid}
+
+            removed_sites = prev_sync_sites - new_sync_sites
+            for site_id in sorted(removed_sites):
+                Change.queue_delete(prev_gid, [site_id], reason="person_write_removed")
+
+            # If global user id changed, old id must be removed from sites that remain active.
+            if prev_gid and new_gid and prev_gid != new_gid:
+                for site_id in sorted(prev_sync_sites & new_sync_sites):
+                    Change.queue_delete(prev_gid, [site_id], reason="person_write_gid_changed")
+
+            # Any valid current state should be upserted for current sync sites.
+            for site_id in sorted(new_sync_sites):
+                Change.queue_upsert_for_person(
+                    rec,
+                    site_ids=Site.browse(site_id),
+                    reason="person_write_upsert",
+                )
+
+        return res
+
+    def unlink(self):
+        before = [
+            {
+                "global_user_id": rec.global_user_id,
+                "site_ids": set(rec.site_ids.ids),
+                "active": rec.active,
+            }
+            for rec in self
+        ]
+
+        res = super().unlink()
+
+        Change = self.env["access_control.sync_change"].sudo()
+        for prev in before:
+            if prev["active"] and prev["global_user_id"] and prev["site_ids"]:
+                Change.queue_delete(
+                    prev["global_user_id"],
+                    list(prev["site_ids"]),
+                    reason="person_unlink",
+                )
+
+        return res
+
     def action_assign_global_user_id(self):
         """Assign the lowest available Global User ID (1..10000)."""
         for rec in self:

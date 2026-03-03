@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from odoo import models, fields
+from odoo import models, fields, api
 from odoo.exceptions import ValidationError
 
 
@@ -51,6 +51,40 @@ class AccessCredential(models.Model):
             "Only one credential per modality is allowed for each person.",
         ),
     ]
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        records = super().create(vals_list)
+        Change = self.env["access_control.sync_change"].sudo()
+        for rec in records:
+            if rec.credential_type in ("face", "palm"):
+                person = rec.person_id
+                if person.active and person.global_user_id and person.site_ids:
+                    Change.queue_upsert_for_person(person, reason="credential_create")
+        return records
+
+    def write(self, vals):
+        old_person_ids = set(self.mapped("person_id").ids)
+        res = super().write(vals)
+
+        new_person_ids = set(self.mapped("person_id").ids)
+        affected_ids = old_person_ids | new_person_ids
+        if affected_ids:
+            Change = self.env["access_control.sync_change"].sudo()
+            people = self.env["access_control.person"].sudo().browse(list(affected_ids)).exists()
+            for person in people:
+                if person.active and person.global_user_id and person.site_ids:
+                    Change.queue_upsert_for_person(person, reason="credential_write")
+        return res
+
+    def unlink(self):
+        people = self.mapped("person_id")
+        res = super().unlink()
+        Change = self.env["access_control.sync_change"].sudo()
+        for person in people.exists():
+            if person.active and person.global_user_id and person.site_ids:
+                Change.queue_upsert_for_person(person, reason="credential_unlink")
+        return res
 
     def _compute_display_name(self):
         for rec in self:

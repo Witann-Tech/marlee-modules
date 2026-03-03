@@ -5,3 +5,5 @@ access_control_site_user,access.control.site.user,model_access_control_site,base
 access_control_device_user,access.control.device.user,model_access_control_device,base.group_user,1,1,1,0
 
 access_control_enroll_request_user,access_control.enroll_request user,model_access_control_enroll_request,base.group_user,1,1,1,0
+access_control_sync_change_user,access_control.sync_change user,model_access_control_sync_change,base.group_user,1,0,0,0
+access_control_access_event_user,access_control.access_event user,model_access_control_access_event,base.group_user,1,1,1,0
