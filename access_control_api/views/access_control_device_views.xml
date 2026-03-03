@@ -13,6 +13,7 @@
           <field name="ip"/>
           <field name="port"/>
           <field name="machine_number"/>
+          <field name="user_capacity"/>
           <field name="last_heartbeat_at"/>
           <field name="last_sync_at"/>
         </list>
@@ -36,8 +37,7 @@
               <field name="port"/>
               <field name="comm_password"/>
               <field name="machine_number"/>
-          <field name="last_heartbeat_at"/>
-          <field name="last_sync_at"/>
+              <field name="user_capacity"/>
             </group>
             <group string="Telemetry">
               <field name="last_heartbeat_at" readonly="1"/>

@@ -4,7 +4,7 @@ from odoo import models, fields
 
 class AccessEnrollRequest(models.Model):
     _name = "access_control.enroll_request"
-    _description = "Enroll Request (site-scoped, ZK9500)"
+    _description = "Enroll Request (site-scoped, SpeedFace)"
     _order = "create_date asc"
 
     site_id = fields.Many2one("access_control.site", string="Site", required=True, index=True, ondelete="cascade")
@@ -13,8 +13,8 @@ class AccessEnrollRequest(models.Model):
     person_id = fields.Many2one("access_control.person", related="credential_id.person_id", store=True, readonly=True, index=True)
     partner_id = fields.Many2one("res.partner", related="person_id.partner_id", store=True, readonly=True, index=True)
 
-    finger_index = fields.Integer(related="credential_id.finger_index", store=True, readonly=True)
-    template_format = fields.Selection(related="credential_id.template_format", store=True, readonly=True)
+    modality = fields.Selection(related="credential_id.credential_type", store=True, readonly=True)
+    biometric_format = fields.Char(related="credential_id.biometric_format", store=True, readonly=True)
 
     status = fields.Selection(
         [

@@ -6,12 +6,13 @@
       <field name="model">access_control.person</field>
       <field name="arch" type="xml">
         <list string="People">
-          <field name="active"/>          <field name="partner_id" required="1"/>
-              <field name="name"/>
+          <field name="active"/>
+          <field name="partner_id" required="1"/>
+          <field name="name"/>
           <field name="external_ref"/>
-          <field name="f18_user_id" readonly="active"/>
-          <field name="site_id"/>
-                  </list>
+          <field name="global_user_id" readonly="active"/>
+          <field name="site_ids" widget="many2many_tags"/>
+        </list>
       </field>
     </record>
 
@@ -21,7 +22,7 @@
       <field name="arch" type="xml">
         <form string="Person">
           <header>
-            <button name="action_assign_f18_user_id" type="object" string="Assign F18 ID" class="btn-secondary" invisible="f18_user_id"/>
+            <button name="action_assign_global_user_id" type="object" string="Assign Global ID" class="btn-secondary" invisible="global_user_id"/>
             <button name="action_activate" type="object" string="Activate" class="btn-primary" invisible="active"/>
             <button name="action_deactivate" type="object" string="Deactivate" class="btn-secondary" invisible="not active"/>
           </header>
@@ -31,23 +32,22 @@
               <field name="partner_id" required="1"/>
               <field name="name" readonly="1"/>
               <field name="external_ref"/>
-              <field name="f18_user_id" readonly="active"/>
-              <field name="site_id"/>
-</group>
-            <group string="Links">              <field name="note"/>
+              <field name="global_user_id" readonly="active"/>
+              <field name="site_ids" widget="many2many_tags" options="{'no_create_edit': False}"/>
             </group>
-          <notebook>
+            <group string="Links">
+              <field name="note"/>
+            </group>
+            <notebook>
               <page string="Credentials">
                 <field name="credential_ids" nolabel="1">
                   <list string="Credentials" editable="bottom">
                     <field name="active"/>
                     <field name="credential_type"/>
-                    <field name="pin_value" password="True" invisible="credential_type != 'pin'"/>
-<field name="finger_index" invisible="credential_type != 'fingerprint'"/>
-                    <field name="template_format" invisible="credential_type != 'fingerprint'"/>
-                    <field name="enroll_status" invisible="credential_type != 'fingerprint'" readonly="1"/>
-                    <button name="action_request_enroll" type="object" string="Enroll (ZK9500)" class="btn-primary" invisible="credential_type != 'fingerprint' or enroll_status in ('requested','enrolling','active')"/>
-                    <button name="action_cancel_enroll" type="object" string="Cancel" class="btn-secondary" invisible="credential_type != 'fingerprint' or enroll_status not in ('requested','enrolling')"/>
+                    <field name="biometric_format"/>
+                    <field name="enroll_status" readonly="1"/>
+                    <button name="action_request_enroll" type="object" string="Enroll (SpeedFace)" class="btn-primary" invisible="enroll_status in ('requested','enrolling','active')"/>
+                    <button name="action_cancel_enroll" type="object" string="Cancel" class="btn-secondary" invisible="enroll_status not in ('requested','enrolling')"/>
                     <field name="note"/>
                   </list>
                 </field>
@@ -65,8 +65,8 @@
         <search string="People">
           <field name="name"/>
           <field name="external_ref"/>
-          <field name="f18_user_id"/>
-          <field name="site_id"/>
+          <field name="global_user_id"/>
+          <field name="site_ids"/>
           <filter string="Active" name="active" domain="[('active','=',True)]"/>
           <filter string="Inactive" name="inactive" domain="[('active','=',False)]"/>
         </search>

@@ -10,6 +10,7 @@
           <field name="site_id"/>
           <field name="partner_id"/>
           <field name="person_id"/>
+          <field name="modality"/>
           <field name="status"/>
         </search>
       </field>
@@ -24,7 +25,7 @@
           <field name="site_id"/>
           <field name="partner_id"/>
           <field name="person_id"/>
-          <field name="finger_index"/>
+          <field name="modality"/>
           <field name="status"/>
           <field name="quality"/>
           <field name="error_code"/>
@@ -43,8 +44,8 @@
               <field name="credential_id" readonly="1"/>
               <field name="partner_id" readonly="1"/>
               <field name="person_id" readonly="1"/>
-              <field name="finger_index" readonly="1"/>
-              <field name="template_format" readonly="1"/>
+              <field name="modality" readonly="1"/>
+              <field name="biometric_format" readonly="1"/>
               <field name="status" readonly="1"/>
               <field name="requested_by" readonly="1"/>
               <field name="requested_at" readonly="1"/>

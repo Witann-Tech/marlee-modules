@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 from odoo import models, fields
 
+
 class AccessControlDevice(models.Model):
     _name = "access_control.device"
-    _description = "Access Control Device (F18)"
+    _description = "Access Control Device (SpeedFace)"
     _rec_name = "name"
 
     active = fields.Boolean(default=True)
@@ -18,12 +19,18 @@ class AccessControlDevice(models.Model):
     comm_password = fields.Integer(default=0)
     machine_number = fields.Integer(default=1)
 
+    user_capacity = fields.Integer(string="User Capacity", default=10000)
+
     # Telemetry (set by middleware heartbeat)
     last_heartbeat_at = fields.Datetime(string="Last Heartbeat", readonly=True)
     last_sync_at = fields.Datetime(string="Last Sync", readonly=True)
     last_error = fields.Text(string="Last Error", readonly=True)
 
-
     _sql_constraints = [
         ("access_control_device_code_uniq", "unique(device_code)", "Device code must be unique."),
+        (
+            "check_user_capacity_positive",
+            "CHECK(user_capacity IS NULL OR user_capacity > 0)",
+            "User capacity must be greater than zero.",
+        ),
     ]
