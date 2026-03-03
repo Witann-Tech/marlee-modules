@@ -37,7 +37,7 @@ class AccessCredential(models.Model):
     person_id = fields.Many2one("access_control.person", string="Person", required=True, index=True, ondelete="cascade")
 
     partner_id = fields.Many2one("res.partner", string="Partner", related="person_id.partner_id", store=True, readonly=True, index=True)
-    site_ids = fields.Many2many("access_control.site", related="person_id.site_ids", store=True, readonly=True)
+    site_ids = fields.Many2many("access_control.site", related="person_id.site_ids", readonly=True)
     site_id = fields.Many2one("access_control.site", compute="_compute_primary_site", readonly=True)
 
     note = fields.Char(string="Note")
