@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 import json
+import logging
 from odoo import http, fields
 from odoo.http import request
+
+_logger = logging.getLogger(__name__)
 
 
 class AccessControlApi(http.Controller):
@@ -120,6 +123,59 @@ class AccessControlApi(http.Controller):
             "devices": [],
             "siteCode": None,
         }
+
+    @http.route(
+        "/api/access/topology",
+        type="jsonrpc",
+        auth="public",
+        methods=["POST"],
+        csrf=False,
+    )
+    def topology(self, **payload):
+        ok, reason = self._auth_ok()
+        if not ok:
+            return {"ok": False, "reason": reason, "sites": []}
+
+        data = self._payload_data(payload)
+        filter_site_code = (data.get("siteCode") or data.get("site_code") or "").strip()
+        default_api_base_url = (request.httprequest.host_url or "").rstrip("/") or None
+        icp = request.env["ir.config_parameter"].sudo()
+        default_api_token = icp.get_param("access_control.api_token") or icp.get_param("access_control_api.api_token")
+
+        Site = request.env["access_control.site"].sudo()
+        domain = [("active", "=", True)]
+        if filter_site_code:
+            domain.append(("code", "=", filter_site_code))
+        sites_rs = Site.search(domain, order="id asc")
+        if filter_site_code and not sites_rs:
+            return {"ok": False, "reason": "site_not_found", "sites": []}
+
+        sites = []
+        total_devices = 0
+        for site in sites_rs:
+            devices = []
+            for d in site.device_ids.filtered(lambda rec: rec.active):
+                devices.append(
+                    {
+                        "deviceCode": d.device_code,
+                        "ip": d.ip,
+                        "port": d.port,
+                        "apiBaseUrl": d.api_base_url or default_api_base_url,
+                        "apiToken": d.api_token or default_api_token,
+                    }
+                )
+
+            total_devices += len(devices)
+            sites.append(
+                {
+                    "siteCode": site.code,
+                    "enrollModality": site.enroll_modality or "both",
+                    "devices": devices,
+                }
+            )
+
+        _logger.info("endpoint=topology loaded sites=%s devices=%s", len(sites), total_devices)
+        return {"ok": True, "reason": "ok", "sites": sites}
 
     @http.route(
         "/api/access/sync/delta",

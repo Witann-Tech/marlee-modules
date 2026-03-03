@@ -1,0 +1,272 @@
+{
+  "info": {
+    "name": "SpeedFace Access API",
+    "_postman_id": "c645da2a-0ab5-4f9f-9f6f-7927f5f7d9c9",
+    "description": "Collection for Odoo SpeedFace integration endpoints (JSON-RPC).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "01 - Validate Ping",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{api_token}}", "type": "text" },
+          { "key": "Content-Type", "value": "application/json", "type": "text" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {},\n  \"id\": 1\n}"
+        },
+        "url": "{{base_url}}/api/access/validate"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const b = pm.response.json();",
+              "pm.expect(b).to.have.property('result');",
+              "pm.expect(b.result).to.have.property('reason');"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 - Sync Delta Bootstrap (cursor=0)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{api_token}}", "type": "text" },
+          { "key": "Content-Type", "value": "application/json", "type": "text" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"siteCode\": \"{{site_code}}\",\n    \"deviceCode\": \"{{device_code}}\",\n    \"cursor\": 0,\n    \"limit\": {{limit}}\n  },\n  \"id\": 1\n}"
+        },
+        "url": "{{base_url}}/api/access/sync/delta"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+              "const b = pm.response.json();",
+              "if (b.error) { throw new Error(JSON.stringify(b.error)); }",
+              "pm.expect(b).to.have.property('result');",
+              "pm.expect(b.result.ok).to.eql(true);",
+              "pm.expect(['bootstrap','delta','no_changes']).to.include(b.result.reason);",
+              "if (b.result.nextCursor !== undefined) {",
+              "  pm.environment.set('cursor', String(b.result.nextCursor));",
+              "}",
+              "pm.test('nextCursor saved', function () { pm.expect(pm.environment.get('cursor')).to.not.equal(undefined); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 - Sync Delta Incremental",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{api_token}}", "type": "text" },
+          { "key": "Content-Type", "value": "application/json", "type": "text" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"siteCode\": \"{{site_code}}\",\n    \"deviceCode\": \"{{device_code}}\",\n    \"cursor\": {{cursor}},\n    \"limit\": {{limit}}\n  },\n  \"id\": 1\n}"
+        },
+        "url": "{{base_url}}/api/access/sync/delta"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const b = pm.response.json();",
+              "if (b.error) { throw new Error(JSON.stringify(b.error)); }",
+              "pm.expect(b.result.ok).to.eql(true);",
+              "if (b.result.nextCursor !== undefined) {",
+              "  pm.environment.set('cursor', String(b.result.nextCursor));",
+              "}"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 - Enroll Next (face)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{api_token}}", "type": "text" },
+          { "key": "Content-Type", "value": "application/json", "type": "text" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"siteCode\": \"{{site_code}}\",\n    \"deviceCode\": \"{{device_code}}\",\n    \"modality\": \"face\"\n  },\n  \"id\": 1\n}"
+        },
+        "url": "{{base_url}}/api/access/enroll/next"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const b = pm.response.json();",
+              "if (b.error) { throw new Error(JSON.stringify(b.error)); }",
+              "pm.expect(b.result.ok).to.eql(true);",
+              "if (b.result.request && b.result.request.requestId) {",
+              "  pm.environment.set('request_id', String(b.result.request.requestId));",
+              "}",
+              "pm.test('requestId set when pending', function () {",
+              "  if (b.result.reason === 'pending') pm.expect(pm.environment.get('request_id')).to.not.equal(undefined);",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 - Enroll Ack",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{api_token}}", "type": "text" },
+          { "key": "Content-Type", "value": "application/json", "type": "text" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"requestId\": {{request_id}}\n  },\n  \"id\": 1\n}"
+        },
+        "url": "{{base_url}}/api/access/enroll/ack"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const b = pm.response.json();",
+              "if (b.error) { throw new Error(JSON.stringify(b.error)); }",
+              "pm.expect(b.result.ok).to.eql(true);",
+              "pm.expect(b.result.reason).to.eql('ack');"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "06 - Enroll Complete Active",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{api_token}}", "type": "text" },
+          { "key": "Content-Type", "value": "application/json", "type": "text" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"requestId\": {{request_id}},\n    \"status\": \"active\",\n    \"modality\": \"face\",\n    \"biometricB64\": \"{{biometric_b64}}\",\n    \"biometricFormat\": \"{{biometric_format}}\",\n    \"quality\": 90\n  },\n  \"id\": 1\n}"
+        },
+        "url": "{{base_url}}/api/access/enroll/complete"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const b = pm.response.json();",
+              "if (b.error) { throw new Error(JSON.stringify(b.error)); }",
+              "pm.expect(b.result.ok).to.eql(true);",
+              "pm.expect(['stored','error_saved']).to.include(b.result.reason);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "07 - Events Access (single)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{api_token}}", "type": "text" },
+          { "key": "Content-Type", "value": "application/json", "type": "text" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"events\": [\n      {\n        \"eventId\": \"{{event_id}}\",\n        \"deviceCode\": \"{{device_code}}\",\n        \"siteCode\": \"{{site_code}}\",\n        \"globalUserId\": {{event_global_user_id}},\n        \"modality\": \"face\",\n        \"result\": \"allowed\",\n        \"occurredAt\": \"{{event_occurred_at}}\"\n      }\n    ]\n  },\n  \"id\": 1\n}"
+        },
+        "url": "{{base_url}}/api/access/events/access"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const b = pm.response.json();",
+              "if (b.error) { throw new Error(JSON.stringify(b.error)); }",
+              "pm.expect(b.result.ok).to.eql(true);",
+              "pm.expect(b.result).to.have.property('received');",
+              "pm.expect(b.result).to.have.property('duplicates');"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "08 - Events Access (duplicate check)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{api_token}}", "type": "text" },
+          { "key": "Content-Type", "value": "application/json", "type": "text" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"events\": [\n      {\n        \"eventId\": \"{{event_id}}\",\n        \"deviceCode\": \"{{device_code}}\",\n        \"siteCode\": \"{{site_code}}\",\n        \"globalUserId\": {{event_global_user_id}},\n        \"modality\": \"face\",\n        \"result\": \"allowed\",\n        \"occurredAt\": \"{{event_occurred_at}}\"\n      }\n    ]\n  },\n  \"id\": 1\n}"
+        },
+        "url": "{{base_url}}/api/access/events/access"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const b = pm.response.json();",
+              "if (b.error) { throw new Error(JSON.stringify(b.error)); }",
+              "pm.expect(b.result.ok).to.eql(true);",
+              "pm.test('duplicate detected', function () {",
+              "  pm.expect(b.result.duplicates).to.be.above(0);",
+              "});"
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    { "key": "base_url", "value": "https://staging-portal.spinbike.mx" },
+    { "key": "api_token", "value": "" },
+    { "key": "site_code", "value": "" },
+    { "key": "device_code", "value": "" },
+    { "key": "cursor", "value": "0" },
+    { "key": "limit", "value": "200" },
+    { "key": "request_id", "value": "" },
+    { "key": "biometric_b64", "value": "BASE64_DE_PRUEBA" },
+    { "key": "biometric_format", "value": "speedface_v1" },
+    { "key": "event_id", "value": "evt-1001" },
+    { "key": "event_global_user_id", "value": "1001" },
+    { "key": "event_occurred_at", "value": "2026-03-03 12:00:00" }
+  ]
+}

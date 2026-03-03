@@ -11,6 +11,13 @@ class AccessControlSite(models.Model):
     code = fields.Char(required=True, index=True)
 
     active = fields.Boolean(default=True)
+    enroll_modality = fields.Selection(
+        [("both", "Face + Palm"), ("face", "Face"), ("palm", "Palm")],
+        string="Enroll Modality",
+        default="both",
+        required=True,
+        index=True,
+    )
 
     device_ids = fields.One2many("access_control.device", "site_id", string="Devices")
 
