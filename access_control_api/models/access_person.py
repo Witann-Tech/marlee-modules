@@ -25,6 +25,8 @@ class AccessPerson(models.Model):
 
     # Global sequential user id used by SpeedFace devices (1..10000)
     global_user_id = fields.Integer(string="Global User ID", index=True)
+    # Compatibility alias for existing saved filters/list layouts in database.
+    f18_user_id = fields.Integer(related="global_user_id", readonly=False)
 
     partner_id = fields.Many2one("res.partner", string="Partner", required=True, index=True)
     credential_ids = fields.One2many("access_control.credential", "person_id", string="Credentials")
