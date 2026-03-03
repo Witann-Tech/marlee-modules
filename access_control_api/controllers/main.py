@@ -6,17 +6,41 @@ from odoo.http import request
 
 class AccessControlApi(http.Controller):
 
+    def _is_valid_user_api_key(self, token):
+        """Support Odoo user API keys created from user preferences."""
+        ApiKeys = request.env["res.users.apikeys"].sudo()
+        scopes = ("rpc", "odoo", "api")
+        for scope in scopes:
+            try:
+                uid = ApiKeys._check_credentials(scope=scope, key=token)
+            except TypeError:
+                try:
+                    uid = ApiKeys._check_credentials(scope, token)
+                except Exception:
+                    uid = False
+            except Exception:
+                uid = False
+            if uid:
+                return True
+        return False
+
     def _auth_ok(self):
         auth = request.httprequest.headers.get("Authorization", "")
         if not auth.startswith("Bearer "):
             return False, "missing_token"
         token = auth.split(" ", 1)[1].strip()
-        expected = request.env["ir.config_parameter"].sudo().get_param("access_control.api_token")
-        if not expected:
-            return False, "server_token_not_configured"
-        if token != expected:
+        ICP = request.env["ir.config_parameter"].sudo()
+        expected = ICP.get_param("access_control.api_token") or ICP.get_param("access_control_api.api_token")
+
+        if expected and token == expected:
+            return True, None
+
+        if self._is_valid_user_api_key(token):
+            return True, None
+
+        if expected:
             return False, "invalid_token"
-        return True, None
+        return False, "server_token_not_configured"
 
     def _payload_data(self, payload):
         data = request.params or payload or {}
