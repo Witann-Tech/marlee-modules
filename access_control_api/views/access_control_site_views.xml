@@ -9,6 +9,7 @@
           <field name="name"/>
           <field name="code"/>
           <field name="enroll_modality"/>
+          <field name="enroll_device_id"/>
           <field name="force_sync"/>
           <field name="slots_used" readonly="1"/>
           <field name="slots_total" readonly="1"/>
@@ -29,6 +30,7 @@
               <field name="name"/>
               <field name="code"/>
               <field name="enroll_modality"/>
+              <field name="enroll_device_id" domain="[('site_id', '=', id), ('active', '=', True)]"/>
               <field name="force_sync"/>
               <field name="slots_used" readonly="1"/>
               <field name="slots_total" readonly="1"/>

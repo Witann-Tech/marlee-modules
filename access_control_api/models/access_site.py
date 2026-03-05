@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from odoo import models, fields, api
+from odoo.exceptions import ValidationError
 
 
 class AccessControlSite(models.Model):
@@ -20,6 +21,12 @@ class AccessControlSite(models.Model):
     )
 
     device_ids = fields.One2many("access_control.device", "site_id", string="Devices")
+    enroll_device_id = fields.Many2one(
+        "access_control.device",
+        string="Enroll Device",
+        ondelete="set null",
+        help="Designated SpeedFace device used to execute enrollment for this site.",
+    )
 
     force_sync = fields.Boolean(
         string="Force Sync",
@@ -51,6 +58,12 @@ class AccessControlSite(models.Model):
             site.slots_total = total
             site.slots_percent = (used / total * 100.0) if total else 0.0
             site.near_limit = used >= int(total * 0.9)
+
+    @api.constrains("enroll_device_id")
+    def _check_enroll_device_site(self):
+        for rec in self:
+            if rec.enroll_device_id and rec.enroll_device_id.site_id != rec:
+                raise ValidationError("Enroll Device must belong to the same Site.")
 
     _sql_constraints = [
         ("access_control_site_code_uniq", "unique(code)", "Site code must be unique."),

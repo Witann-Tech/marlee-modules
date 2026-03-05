@@ -8,6 +8,7 @@
       <field name="arch" type="xml">
         <search string="Enroll Requests">
           <field name="site_id"/>
+          <field name="device_id"/>
           <field name="partner_id"/>
           <field name="person_id"/>
           <field name="modality"/>
@@ -23,6 +24,7 @@
         <list string="Enroll Requests">
           <field name="requested_at"/>
           <field name="site_id"/>
+          <field name="device_id"/>
           <field name="partner_id"/>
           <field name="person_id"/>
           <field name="modality"/>
@@ -41,6 +43,7 @@
           <sheet>
             <group>
               <field name="site_id" readonly="1"/>
+              <field name="device_id" readonly="1"/>
               <field name="credential_id" readonly="1"/>
               <field name="partner_id" readonly="1"/>
               <field name="person_id" readonly="1"/>

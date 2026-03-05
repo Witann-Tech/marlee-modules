@@ -103,10 +103,14 @@ class AccessCredential(models.Model):
             if not rec.person_id or not rec.person_id.site_ids:
                 raise ValidationError("Person must be assigned to at least one Site before enrollment.")
 
-            # If person belongs to multiple sites, pick the first one by ID as default enrollment site.
-            site = rec.person_id.site_ids.sorted(key=lambda s: s.id)[:1]
+            # Choose first active site with configured active enroll device.
+            site = rec.person_id.site_ids.filtered(
+                lambda s: s.active and s.enroll_device_id and s.enroll_device_id.active
+            ).sorted(key=lambda s: s.id)[:1]
             if not site:
-                raise ValidationError("Unable to resolve an enrollment Site for this person.")
+                raise ValidationError(
+                    "Unable to resolve an enrollment Site with active Enroll Device for this person."
+                )
 
             self.env["access_control.enroll_request"].sudo().create(
                 {

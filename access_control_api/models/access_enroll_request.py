@@ -8,6 +8,14 @@ class AccessEnrollRequest(models.Model):
     _order = "create_date asc"
 
     site_id = fields.Many2one("access_control.site", string="Site", required=True, index=True, ondelete="cascade")
+    device_id = fields.Many2one(
+        "access_control.device",
+        string="Enroll Device",
+        related="site_id.enroll_device_id",
+        store=True,
+        readonly=True,
+        index=True,
+    )
     credential_id = fields.Many2one("access_control.credential", string="Credential", required=True, index=True, ondelete="cascade")
 
     person_id = fields.Many2one("access_control.person", related="credential_id.person_id", store=True, readonly=True, index=True)

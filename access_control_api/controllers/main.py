@@ -138,9 +138,6 @@ class AccessControlApi(http.Controller):
 
         data = self._payload_data(payload)
         filter_site_code = (data.get("siteCode") or data.get("site_code") or "").strip()
-        default_api_base_url = (request.httprequest.host_url or "").rstrip("/") or None
-        icp = request.env["ir.config_parameter"].sudo()
-        default_api_token = icp.get_param("access_control.api_token") or icp.get_param("access_control_api.api_token")
 
         Site = request.env["access_control.site"].sudo()
         domain = [("active", "=", True)]
@@ -160,8 +157,8 @@ class AccessControlApi(http.Controller):
                         "deviceCode": d.device_code,
                         "ip": d.ip,
                         "port": d.port,
-                        "apiBaseUrl": d.api_base_url or default_api_base_url,
-                        "apiToken": d.api_token or default_api_token,
+                        "commPassword": d.comm_password,
+                        "machineNumber": d.machine_number,
                     }
                 )
 
@@ -359,18 +356,12 @@ class AccessControlApi(http.Controller):
         if not site:
             return {"ok": False, "reason": "site_not_found", "request": None}
 
-        if device_code:
-            Device = request.env["access_control.device"].sudo()
-            device = Device.search(
-                [
-                    ("device_code", "=", device_code),
-                    ("site_id", "=", site.id),
-                    ("active", "=", True),
-                ],
-                limit=1,
-            )
-            if not device:
-                return {"ok": False, "reason": "device_not_found", "request": None}
+        enroll_device = site.enroll_device_id
+        if not enroll_device or not enroll_device.active:
+            return {"ok": False, "reason": "site_enroll_device_not_configured", "request": None}
+
+        if device_code and device_code != enroll_device.device_code:
+            return {"ok": True, "reason": "no_pending_for_device", "request": None}
 
         domain = [("site_id", "=", site.id), ("status", "=", "requested")]
         if modality:
@@ -391,7 +382,7 @@ class AccessControlApi(http.Controller):
                 "credentialId": cred.id,
                 "personId": person.id if person else None,
                 "siteCode": site.code,
-                "deviceCode": device_code or None,
+                "deviceCode": enroll_device.device_code,
                 "globalUserId": person.global_user_id if person else None,
                 "name": person.name if person else None,
                 "modality": cred.credential_type,
