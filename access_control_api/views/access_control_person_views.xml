@@ -40,7 +40,7 @@
             </group>
             <notebook>
               <page string="Credentials">
-                <field name="credential_ids" nolabel="1">
+                <field name="credential_ids" nolabel="1" domain="[('active', '=', True)]">
                   <list string="Credentials" editable="bottom">
                     <field name="active"/>
                     <field name="credential_type"/>
