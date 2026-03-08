@@ -37,20 +37,6 @@
             </field>
         </record>
 
-        <record id="action_access_control_credentials" model="ir.actions.act_window">
-            <field name="name">Credentials (Deprecated)</field>
-            <field name="res_model">access_control.credential</field>
-            <field name="view_mode">list,form</field>
-            <field name="active" eval="False"/>
-        </record>
-
-        <record id="action_access_control_enroll_requests" model="ir.actions.act_window">
-            <field name="name">Enroll Requests (Deprecated)</field>
-            <field name="res_model">access_control.enroll_request</field>
-            <field name="view_mode">list,form</field>
-            <field name="active" eval="False"/>
-        </record>
-
         <menuitem id="access_control_menu_configuration" name="Configuration"
                   parent="access_control_menu_root" sequence="10"/>
 
@@ -68,16 +54,6 @@
         <menuitem id="access_control_menu_people" name="People"
                   parent="access_control_menu_operations"
                   action="action_access_control_people" sequence="10"/>
-
-        <menuitem id="access_control_menu_credentials" name="Credentials"
-                  parent="access_control_menu_operations"
-                  action="action_access_control_credentials" sequence="20"
-                  active="False"/>
-
-        <menuitem id="access_control_menu_enroll_requests" name="Enroll Requests"
-                  parent="access_control_menu_operations"
-                  action="action_access_control_enroll_requests" sequence="30"
-                  active="False"/>
 
     </data>
 </odoo>
