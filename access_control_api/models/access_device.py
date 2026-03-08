@@ -14,13 +14,6 @@ class AccessControlDevice(models.Model):
 
     site_id = fields.Many2one("access_control.site", required=True, ondelete="cascade")
 
-    ip = fields.Char(required=True)
-    port = fields.Integer(default=4370)
-    comm_password = fields.Integer(default=0)
-    machine_number = fields.Integer(default=1)
-    api_base_url = fields.Char(string="API Base URL")
-    api_token = fields.Char(string="API Token")
-
     user_capacity = fields.Integer(string="User Capacity", default=10000)
 
     # Telemetry (set by middleware heartbeat)

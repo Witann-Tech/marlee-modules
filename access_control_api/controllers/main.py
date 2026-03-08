@@ -65,31 +65,18 @@ class AccessControlApi(http.Controller):
         if not modality:
             return None
         m = str(modality).strip().lower()
-        if m in ("face", "palm"):
+        if m in ("face",):
             return m
         return None
 
     def _person_sync_payload(self, person):
-        face = person.credential_ids.filtered(lambda c: c.active and c.credential_type == "face")[:1]
-        palm = person.credential_ids.filtered(lambda c: c.active and c.credential_type == "palm")[:1]
+        face_b64 = "".join(str(person.face_pic_b64 or "").split()) or None
 
         return {
             "globalUserId": person.global_user_id,
             "name": person.name or "",
-            "externalRef": person.external_ref or "",
-            "active": bool(person.active),
-            "modalities": {
-                "face": {
-                    "enrolled": bool(face and face.biometric_b64),
-                    "templateB64": face.biometric_b64 if face else None,
-                    "format": face.biometric_format if face else None,
-                },
-                "palm": {
-                    "enrolled": bool(palm and palm.biometric_b64),
-                    "templateB64": palm.biometric_b64 if palm else None,
-                    "format": palm.biometric_format if palm else None,
-                },
-            },
+            "accessGroup": 1,
+            "facePicB64": face_b64,
         }
 
     @http.route(
@@ -125,7 +112,7 @@ class AccessControlApi(http.Controller):
         }
 
     @http.route(
-        "/api/access/topology",
+        ["/api/access/topology", "/api/access/inventory"],
         type="jsonrpc",
         auth="public",
         methods=["POST"],
@@ -154,11 +141,13 @@ class AccessControlApi(http.Controller):
             for d in site.device_ids.filtered(lambda rec: rec.active):
                 devices.append(
                     {
+                        "name": d.name,
                         "deviceCode": d.device_code,
-                        "ip": d.ip,
-                        "port": d.port,
-                        "commPassword": d.comm_password,
-                        "machineNumber": d.machine_number,
+                        "siteCode": site.code,
+                        "userCapacity": d.user_capacity,
+                        "lastHeartbeatAt": fields.Datetime.to_string(d.last_heartbeat_at) if d.last_heartbeat_at else None,
+                        "lastSyncAt": fields.Datetime.to_string(d.last_sync_at) if d.last_sync_at else None,
+                        "lastError": d.last_error or None,
                     }
                 )
 
@@ -166,12 +155,11 @@ class AccessControlApi(http.Controller):
             sites.append(
                 {
                     "siteCode": site.code,
-                    "enrollModality": site.enroll_modality or "both",
                     "devices": devices,
                 }
             )
 
-        _logger.info("endpoint=topology loaded sites=%s devices=%s", len(sites), total_devices)
+        _logger.info("endpoint=inventory loaded sites=%s devices=%s", len(sites), total_devices)
         return {"ok": True, "reason": "ok", "sites": sites}
 
     @http.route(
@@ -341,54 +329,7 @@ class AccessControlApi(http.Controller):
         ok, reason = self._auth_ok()
         if not ok:
             return {"ok": False, "reason": reason, "request": None}
-
-        data = self._payload_data(payload)
-
-        site_code = (data.get("siteCode") or data.get("site_code") or "").strip()
-        device_code = (data.get("deviceCode") or data.get("device_code") or "").strip()
-        modality = self._normalize_modality(data.get("modality"))
-
-        if not site_code:
-            return {"ok": False, "reason": "missing_site_code", "request": None}
-
-        Site = request.env["access_control.site"].sudo()
-        site = Site.search([("code", "=", site_code), ("active", "=", True)], limit=1)
-        if not site:
-            return {"ok": False, "reason": "site_not_found", "request": None}
-
-        enroll_device = site.enroll_device_id
-        if not enroll_device or not enroll_device.active:
-            return {"ok": False, "reason": "site_enroll_device_not_configured", "request": None}
-
-        if device_code and device_code != enroll_device.device_code:
-            return {"ok": True, "reason": "no_pending_for_device", "request": None}
-
-        domain = [("site_id", "=", site.id), ("status", "=", "requested")]
-        if modality:
-            domain.append(("modality", "=", modality))
-
-        Req = request.env["access_control.enroll_request"].sudo()
-        req = Req.search(domain, limit=1, order="create_date asc")
-        if not req:
-            return {"ok": True, "reason": "no_pending", "request": None}
-
-        person = req.person_id
-        cred = req.credential_id
-        return {
-            "ok": True,
-            "reason": "pending",
-            "request": {
-                "requestId": req.id,
-                "credentialId": cred.id,
-                "personId": person.id if person else None,
-                "siteCode": site.code,
-                "deviceCode": enroll_device.device_code,
-                "globalUserId": person.global_user_id if person else None,
-                "name": person.name if person else None,
-                "modality": cred.credential_type,
-                "biometricFormat": cred.biometric_format,
-            },
-        }
+        return {"ok": False, "reason": "deprecated_enroll_disabled", "request": None}
 
     @http.route(
         "/api/access/enroll/ack",
@@ -401,22 +342,7 @@ class AccessControlApi(http.Controller):
         ok, reason = self._auth_ok()
         if not ok:
             return {"ok": False, "reason": reason}
-
-        data = self._payload_data(payload)
-        request_id = data.get("request_id") or data.get("requestId")
-        request_id = self._as_int(request_id)
-        if not request_id:
-            return {"ok": False, "reason": "missing_request_id"}
-
-        Req = request.env["access_control.enroll_request"].sudo()
-        req = Req.browse(request_id)
-        if not req.exists():
-            return {"ok": False, "reason": "request_not_found"}
-
-        if req.status == "requested":
-            req.status = "enrolling"
-            req.credential_id.enroll_status = "enrolling"
-        return {"ok": True, "reason": "ack"}
+        return {"ok": False, "reason": "deprecated_enroll_disabled"}
 
     @http.route(
         "/api/access/enroll/complete",
@@ -429,65 +355,7 @@ class AccessControlApi(http.Controller):
         ok, reason = self._auth_ok()
         if not ok:
             return {"ok": False, "reason": reason}
-
-        data = self._payload_data(payload)
-
-        request_id = self._as_int(data.get("request_id") or data.get("requestId"))
-        status = (data.get("status") or "").strip().lower()
-        modality = self._normalize_modality(data.get("modality"))
-
-        if not request_id:
-            return {"ok": False, "reason": "missing_request_id"}
-        if status not in ("active", "error"):
-            return {"ok": False, "reason": "invalid_status"}
-
-        Req = request.env["access_control.enroll_request"].sudo()
-        req = Req.browse(request_id)
-        if not req.exists():
-            return {"ok": False, "reason": "request_not_found"}
-
-        cred = req.credential_id
-        if modality and cred.credential_type != modality:
-            return {"ok": False, "reason": "modality_mismatch"}
-
-        if status == "active":
-            biometric_b64 = data.get("biometric_b64") or data.get("biometricB64") or data.get("templateB64")
-            biometric_format = data.get("biometric_format") or data.get("biometricFormat") or cred.biometric_format
-            quality = data.get("quality")
-            if not biometric_b64:
-                return {"ok": False, "reason": "missing_biometric_b64"}
-
-            cred.write(
-                {
-                    "biometric_b64": biometric_b64,
-                    "biometric_format": biometric_format,
-                    "enroll_status": "active",
-                    "active": True,
-                }
-            )
-            req.write(
-                {
-                    "status": "done",
-                    "enrolled_at": fields.Datetime.now(),
-                    "quality": quality,
-                }
-            )
-            if cred.person_id and cred.person_id.site_ids:
-                cred.person_id.site_ids.write({"force_sync": True})
-
-            return {"ok": True, "reason": "stored"}
-
-        error_code = data.get("error_code") or data.get("errorCode")
-        error_message = data.get("error_message") or data.get("errorMessage")
-        cred.enroll_status = "error"
-        req.write(
-            {
-                "status": "error",
-                "error_code": error_code,
-                "error_message": error_message,
-            }
-        )
-        return {"ok": True, "reason": "error_saved"}
+        return {"ok": False, "reason": "deprecated_enroll_disabled"}
 
     @http.route(
         "/api/access/events/access",
@@ -551,7 +419,7 @@ class AccessControlApi(http.Controller):
             person = Person.search([("global_user_id", "=", global_user_id)], limit=1) if global_user_id else False
 
             modality = (item.get("modality") or "").strip().lower()
-            if modality not in ("face", "palm"):
+            if modality not in ("face",):
                 modality = "unknown"
 
             result = (item.get("result") or item.get("status") or "").strip().lower()

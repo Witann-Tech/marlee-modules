@@ -7,11 +7,10 @@
       <field name="arch" type="xml">
         <list string="People">
           <field name="active"/>
-          <field name="partner_id" required="1"/>
           <field name="name"/>
-          <field name="external_ref"/>
           <field name="global_user_id" readonly="active"/>
           <field name="site_ids" widget="many2many_tags"/>
+          <field name="has_face_pic"/>
         </list>
       </field>
     </record>
@@ -31,28 +30,17 @@
               <field name="active" widget="boolean_toggle"/>
               <field name="partner_id" required="1"/>
               <field name="name" readonly="1"/>
-              <field name="external_ref"/>
               <field name="global_user_id" readonly="active"/>
               <field name="site_ids" widget="many2many_tags" options="{'no_create_edit': False}"/>
+              <field name="has_face_pic" readonly="1"/>
             </group>
-            <group string="Links">
+            <group string="Face Biometric">
+              <field name="face_pic_b64" placeholder="Base64 sin saltos de linea"/>
+            </group>
+            <group string="Extra">
+              <field name="external_ref"/>
               <field name="note"/>
             </group>
-            <notebook>
-              <page string="Credentials">
-                <field name="credential_ids" nolabel="1" domain="[('active', '=', True)]">
-                  <list string="Credentials" editable="bottom">
-                    <field name="active"/>
-                    <field name="credential_type"/>
-                    <field name="biometric_format"/>
-                    <field name="enroll_status" readonly="1"/>
-                    <button name="action_request_enroll" type="object" string="Enroll (SpeedFace)" class="btn-primary" invisible="enroll_status in ('requested','enrolling','active')"/>
-                    <button name="action_cancel_enroll" type="object" string="Cancel" class="btn-secondary" invisible="enroll_status not in ('requested','enrolling')"/>
-                    <field name="note"/>
-                  </list>
-                </field>
-              </page>
-            </notebook>
           </sheet>
         </form>
       </field>
@@ -67,6 +55,7 @@
           <field name="external_ref"/>
           <field name="global_user_id"/>
           <field name="site_ids"/>
+          <filter string="With Face Pic" name="with_face_pic" domain="[('face_pic_b64','!=',False)]"/>
           <filter string="Active" name="active" domain="[('active','=',True)]"/>
           <filter string="Inactive" name="inactive" domain="[('active','=',False)]"/>
         </search>

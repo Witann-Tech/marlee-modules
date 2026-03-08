@@ -29,9 +29,15 @@ class AccessPerson(models.Model):
     f18_user_id = fields.Integer(related="global_user_id", readonly=False)
 
     partner_id = fields.Many2one("res.partner", string="Partner", required=True, index=True)
-    credential_ids = fields.One2many("access_control.credential", "person_id", string="Credentials")
+    face_pic_b64 = fields.Text(string="Face Pic (Base64)")
+    has_face_pic = fields.Boolean(string="Has Face Pic", compute="_compute_has_face_pic", store=False)
 
     note = fields.Char()
+
+    @api.depends("face_pic_b64")
+    def _compute_has_face_pic(self):
+        for rec in self:
+            rec.has_face_pic = bool(rec.face_pic_b64 and str(rec.face_pic_b64).strip())
 
     @api.onchange("partner_id")
     def _onchange_partner_id_set_external_ref(self):
@@ -58,6 +64,9 @@ class AccessPerson(models.Model):
 
     @api.model_create_multi
     def create(self, vals_list):
+        for vals in vals_list:
+            if "face_pic_b64" in vals and vals["face_pic_b64"]:
+                vals["face_pic_b64"] = "".join(str(vals["face_pic_b64"]).split())
         records = super().create(vals_list)
         Change = self.env["access_control.sync_change"].sudo()
         for rec in records:
@@ -66,6 +75,8 @@ class AccessPerson(models.Model):
         return records
 
     def write(self, vals):
+        if "face_pic_b64" in vals and vals["face_pic_b64"]:
+            vals["face_pic_b64"] = "".join(str(vals["face_pic_b64"]).split())
         before = {
             rec.id: {
                 "active": rec.active,

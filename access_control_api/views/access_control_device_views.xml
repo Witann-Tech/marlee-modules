@@ -10,13 +10,10 @@
           <field name="name"/>
           <field name="device_code"/>
           <field name="site_id"/>
-          <field name="ip"/>
-          <field name="port"/>
-          <field name="machine_number"/>
-          <field name="api_base_url"/>
           <field name="user_capacity"/>
           <field name="last_heartbeat_at"/>
           <field name="last_sync_at"/>
+          <field name="last_error"/>
         </list>
       </field>
     </record>
@@ -32,14 +29,6 @@
               <field name="name"/>
               <field name="device_code"/>
               <field name="site_id" options="{'no_create_edit': False}"/>
-            </group>
-            <group string="Connection">
-              <field name="ip"/>
-              <field name="port"/>
-              <field name="comm_password"/>
-              <field name="machine_number"/>
-              <field name="api_base_url"/>
-              <field name="api_token" password="True"/>
               <field name="user_capacity"/>
             </group>
             <group string="Telemetry">
@@ -60,7 +49,6 @@
           <field name="name"/>
           <field name="device_code"/>
           <field name="site_id"/>
-          <field name="ip"/>
           <field name="active"/>
         </search>
       </field>

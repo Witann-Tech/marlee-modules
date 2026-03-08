@@ -1,6 +1,6 @@
 {
     'name': 'Witann - Access Control API', 
-    'version': '19.0.2.0.10',
+    'version': '19.0.2.0.11',
     'summary': 'API para validación de accesos (biometría / hardware)', 
     'category': 'Tools', 
     'author': 'Witann Technologies', 
@@ -11,8 +11,6 @@
              'views/access_control_site_views.xml', 
              'views/access_control_device_views.xml', 
              'views/access_control_person_views.xml', 
-             'views/access_control_credential_views.xml', 
-             'views/access_control_enroll_request_views.xml',
     ], 
     'installable': True, 
     'application': True,

@@ -8,8 +8,6 @@
         <list string="Sites">
           <field name="name"/>
           <field name="code"/>
-          <field name="enroll_modality"/>
-          <field name="enroll_device_id"/>
           <field name="force_sync"/>
           <field name="slots_used" readonly="1"/>
           <field name="slots_total" readonly="1"/>
@@ -29,8 +27,6 @@
               <field name="active" widget="boolean_toggle"/>
               <field name="name"/>
               <field name="code"/>
-              <field name="enroll_modality"/>
-              <field name="enroll_device_id" domain="[('site_id', '=', id), ('active', '=', True)]"/>
               <field name="force_sync"/>
               <field name="slots_used" readonly="1"/>
               <field name="slots_total" readonly="1"/>
@@ -43,8 +39,9 @@
                     <field name="active"/>
                     <field name="name"/>
                     <field name="device_code"/>
-                    <field name="ip"/>
-                    <field name="port"/>
+                    <field name="user_capacity"/>
+                    <field name="last_heartbeat_at" readonly="1"/>
+                    <field name="last_sync_at" readonly="1"/>
                   </list>
                 </field>
               </page>
