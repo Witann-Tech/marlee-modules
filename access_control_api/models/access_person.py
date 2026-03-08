@@ -20,30 +20,37 @@ class AccessPerson(models.Model):
         string="Sites",
     )
 
-    # Stable external reference (e.g., membership number / ERP id)
-    external_ref = fields.Char(index=True)
-
     # Global sequential user id used by SpeedFace devices (1..10000)
     global_user_id = fields.Integer(string="Global User ID", index=True)
     # Compatibility alias for existing saved filters/list layouts in database.
     f18_user_id = fields.Integer(related="global_user_id", readonly=False)
 
     partner_id = fields.Many2one("res.partner", string="Partner", required=True, index=True)
+    face_image = fields.Binary(string="Face Photo", attachment=True)
     face_pic_b64 = fields.Text(string="Face Pic (Base64)")
     has_face_pic = fields.Boolean(string="Has Face Pic", compute="_compute_has_face_pic", store=False)
 
-    note = fields.Char()
-
-    @api.depends("face_pic_b64")
+    @api.depends("face_image", "face_pic_b64")
     def _compute_has_face_pic(self):
         for rec in self:
             rec.has_face_pic = bool(rec.face_pic_b64 and str(rec.face_pic_b64).strip())
 
-    @api.onchange("partner_id")
-    def _onchange_partner_id_set_external_ref(self):
-        for rec in self:
-            if rec.partner_id and not rec.external_ref:
-                rec.external_ref = rec.partner_id.ref
+    @api.model
+    def _normalize_face_vals(self, vals):
+        data = dict(vals or {})
+
+        def _clean(value):
+            return "".join(str(value).split()) if value else False
+
+        if "face_image" in data:
+            cleaned = _clean(data.get("face_image"))
+            data["face_image"] = cleaned
+            data["face_pic_b64"] = cleaned
+        elif "face_pic_b64" in data:
+            cleaned = _clean(data.get("face_pic_b64"))
+            data["face_pic_b64"] = cleaned
+            data["face_image"] = cleaned
+        return data
 
     _sql_constraints = [
         ("uniq_global_user_id", "unique(global_user_id)", "Global User ID must be unique."),
@@ -64,10 +71,8 @@ class AccessPerson(models.Model):
 
     @api.model_create_multi
     def create(self, vals_list):
-        for vals in vals_list:
-            if "face_pic_b64" in vals and vals["face_pic_b64"]:
-                vals["face_pic_b64"] = "".join(str(vals["face_pic_b64"]).split())
-        records = super().create(vals_list)
+        normalized_vals_list = [self._normalize_face_vals(vals) for vals in vals_list]
+        records = super().create(normalized_vals_list)
         Change = self.env["access_control.sync_change"].sudo()
         for rec in records:
             if rec.active and rec.global_user_id and rec.site_ids:
@@ -75,8 +80,7 @@ class AccessPerson(models.Model):
         return records
 
     def write(self, vals):
-        if "face_pic_b64" in vals and vals["face_pic_b64"]:
-            vals["face_pic_b64"] = "".join(str(vals["face_pic_b64"]).split())
+        vals = self._normalize_face_vals(vals)
         before = {
             rec.id: {
                 "active": rec.active,

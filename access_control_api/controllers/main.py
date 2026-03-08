@@ -75,6 +75,7 @@ class AccessControlApi(http.Controller):
         return {
             "globalUserId": person.global_user_id,
             "name": person.name or "",
+            "active": bool(person.active),
             "accessGroup": 1,
             "facePicB64": face_b64,
         }
@@ -141,8 +142,9 @@ class AccessControlApi(http.Controller):
             for d in site.device_ids.filtered(lambda rec: rec.active):
                 devices.append(
                     {
+                        "active": bool(d.active),
                         "name": d.name,
-                        "deviceCode": d.device_code,
+                        "deviceSerial": d.device_serial,
                         "siteCode": site.code,
                         "userCapacity": d.user_capacity,
                         "lastHeartbeatAt": fields.Datetime.to_string(d.last_heartbeat_at) if d.last_heartbeat_at else None,
@@ -185,7 +187,13 @@ class AccessControlApi(http.Controller):
         data = self._payload_data(payload)
 
         site_code = (data.get("siteCode") or data.get("site_code") or "").strip()
-        device_code = (data.get("deviceCode") or data.get("device_code") or "").strip()
+        device_serial = (
+            data.get("deviceSerial")
+            or data.get("device_serial")
+            or data.get("deviceCode")
+            or data.get("device_code")
+            or ""
+        ).strip()
         cursor = self._as_int(data.get("cursor"), default=0) or 0
         limit = self._as_int(data.get("limit"), default=500) or 500
         limit = max(1, min(limit, 2000))
@@ -214,11 +222,11 @@ class AccessControlApi(http.Controller):
                 "deletes": [],
             }
 
-        if device_code:
+        if device_serial:
             Device = request.env["access_control.device"].sudo()
             device = Device.search(
                 [
-                    ("device_code", "=", device_code),
+                    ("device_serial", "=", device_serial),
                     ("site_id", "=", site.id),
                     ("active", "=", True),
                 ],
@@ -229,7 +237,7 @@ class AccessControlApi(http.Controller):
                     "ok": False,
                     "reason": "device_not_found",
                     "siteCode": site_code,
-                    "deviceCode": device_code,
+                    "deviceSerial": device_serial,
                     "cursor": cursor,
                     "nextCursor": cursor,
                     "upserts": [],
@@ -255,7 +263,7 @@ class AccessControlApi(http.Controller):
                 "ok": True,
                 "reason": "bootstrap",
                 "siteCode": site_code,
-                "deviceCode": device_code or None,
+                "deviceSerial": device_serial or None,
                 "cursor": cursor,
                 "nextCursor": max_cursor,
                 "hasMore": False,
@@ -274,7 +282,7 @@ class AccessControlApi(http.Controller):
                 "ok": True,
                 "reason": "no_changes",
                 "siteCode": site_code,
-                "deviceCode": device_code or None,
+                "deviceSerial": device_serial or None,
                 "cursor": cursor,
                 "nextCursor": cursor,
                 "hasMore": False,
@@ -310,7 +318,7 @@ class AccessControlApi(http.Controller):
             "ok": True,
             "reason": "delta",
             "siteCode": site_code,
-            "deviceCode": device_code or None,
+            "deviceSerial": device_serial or None,
             "cursor": cursor,
             "nextCursor": next_cursor,
             "hasMore": has_more,
@@ -379,7 +387,7 @@ class AccessControlApi(http.Controller):
         else:
             event_single = {
                 "eventId": data.get("eventId") or data.get("event_id"),
-                "deviceCode": data.get("deviceCode") or data.get("device_code"),
+                "deviceSerial": data.get("deviceSerial") or data.get("device_serial") or data.get("deviceCode") or data.get("device_code"),
                 "siteCode": data.get("siteCode") or data.get("site_code"),
                 "globalUserId": data.get("globalUserId") or data.get("global_user_id"),
                 "modality": data.get("modality"),
@@ -411,11 +419,17 @@ class AccessControlApi(http.Controller):
                 continue
 
             site_code = (item.get("siteCode") or item.get("site_code") or "").strip()
-            device_code = (item.get("deviceCode") or item.get("device_code") or "").strip()
+            device_serial = (
+                item.get("deviceSerial")
+                or item.get("device_serial")
+                or item.get("deviceCode")
+                or item.get("device_code")
+                or ""
+            ).strip()
             global_user_id = self._as_int(item.get("globalUserId") or item.get("global_user_id"))
 
             site = Site.search([("code", "=", site_code)], limit=1) if site_code else False
-            device = Device.search([("device_code", "=", device_code)], limit=1) if device_code else False
+            device = Device.search([("device_serial", "=", device_serial)], limit=1) if device_serial else False
             person = Person.search([("global_user_id", "=", global_user_id)], limit=1) if global_user_id else False
 
             modality = (item.get("modality") or "").strip().lower()
@@ -437,7 +451,7 @@ class AccessControlApi(http.Controller):
                     "event_id": event_id,
                     "site_id": site.id if site else (device.site_id.id if device and device.site_id else False),
                     "device_id": device.id if device else False,
-                    "device_code": device_code or False,
+                    "device_serial": device_serial or False,
                     "person_id": person.id if person else False,
                     "global_user_id": global_user_id,
                     "modality": modality,

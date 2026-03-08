@@ -34,12 +34,9 @@
               <field name="site_ids" widget="many2many_tags" options="{'no_create_edit': False}"/>
               <field name="has_face_pic" readonly="1"/>
             </group>
-            <group string="Face Biometric">
-              <field name="face_pic_b64" placeholder="Base64 sin saltos de linea"/>
-            </group>
-            <group string="Extra">
-              <field name="external_ref"/>
-              <field name="note"/>
+            <group string="Face Photo">
+              <field name="face_image" widget="image" class="oe_avatar"/>
+              <field name="face_pic_b64" invisible="1"/>
             </group>
           </sheet>
         </form>
@@ -52,7 +49,6 @@
       <field name="arch" type="xml">
         <search string="People">
           <field name="name"/>
-          <field name="external_ref"/>
           <field name="global_user_id"/>
           <field name="site_ids"/>
           <filter string="With Face Pic" name="with_face_pic" domain="[('face_pic_b64','!=',False)]"/>

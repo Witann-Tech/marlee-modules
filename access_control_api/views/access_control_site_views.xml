@@ -38,7 +38,7 @@
                   <list editable="bottom">
                     <field name="active"/>
                     <field name="name"/>
-                    <field name="device_code"/>
+                    <field name="device_serial"/>
                     <field name="user_capacity"/>
                     <field name="last_heartbeat_at" readonly="1"/>
                     <field name="last_sync_at" readonly="1"/>

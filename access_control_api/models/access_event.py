@@ -11,7 +11,7 @@ class AccessEvent(models.Model):
 
     site_id = fields.Many2one("access_control.site", index=True, ondelete="set null")
     device_id = fields.Many2one("access_control.device", index=True, ondelete="set null")
-    device_code = fields.Char(index=True)
+    device_serial = fields.Char(index=True, oldname="device_code")
 
     person_id = fields.Many2one("access_control.person", index=True, ondelete="set null")
     global_user_id = fields.Integer(index=True)

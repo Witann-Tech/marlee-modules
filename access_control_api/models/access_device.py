@@ -10,7 +10,7 @@ class AccessControlDevice(models.Model):
     active = fields.Boolean(default=True)
 
     name = fields.Char(required=True)
-    device_code = fields.Char(required=True, index=True)
+    device_serial = fields.Char(required=True, index=True, oldname="device_code")
 
     site_id = fields.Many2one("access_control.site", required=True, ondelete="cascade")
 
@@ -22,7 +22,7 @@ class AccessControlDevice(models.Model):
     last_error = fields.Text(string="Last Error", readonly=True)
 
     _sql_constraints = [
-        ("access_control_device_code_uniq", "unique(device_code)", "Device code must be unique."),
+        ("access_control_device_serial_uniq", "unique(device_serial)", "Device serial must be unique."),
         (
             "check_user_capacity_positive",
             "CHECK(user_capacity IS NULL OR user_capacity > 0)",

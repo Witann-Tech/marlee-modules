@@ -45,7 +45,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"siteCode\": \"{{site_code}}\",\n    \"deviceCode\": \"{{device_code}}\",\n    \"cursor\": 0,\n    \"limit\": {{limit}}\n  },\n  \"id\": 1\n}"
+          "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"siteCode\": \"{{site_code}}\",\n    \"deviceSerial\": \"{{device_serial}}\",\n    \"cursor\": 0,\n    \"limit\": {{limit}}\n  },\n  \"id\": 1\n}"
         },
         "url": "{{base_url}}/api/access/sync/delta"
       },
@@ -80,7 +80,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"siteCode\": \"{{site_code}}\",\n    \"deviceCode\": \"{{device_code}}\",\n    \"cursor\": {{cursor}},\n    \"limit\": {{limit}}\n  },\n  \"id\": 1\n}"
+          "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"siteCode\": \"{{site_code}}\",\n    \"deviceSerial\": \"{{device_serial}}\",\n    \"cursor\": {{cursor}},\n    \"limit\": {{limit}}\n  },\n  \"id\": 1\n}"
         },
         "url": "{{base_url}}/api/access/sync/delta"
       },
@@ -111,7 +111,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"siteCode\": \"{{site_code}}\",\n    \"deviceCode\": \"{{device_code}}\",\n    \"modality\": \"face\"\n  },\n  \"id\": 1\n}"
+          "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"siteCode\": \"{{site_code}}\",\n    \"deviceSerial\": \"{{device_serial}}\",\n    \"modality\": \"face\"\n  },\n  \"id\": 1\n}"
         },
         "url": "{{base_url}}/api/access/enroll/next"
       },
@@ -203,7 +203,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"events\": [\n      {\n        \"eventId\": \"{{event_id}}\",\n        \"deviceCode\": \"{{device_code}}\",\n        \"siteCode\": \"{{site_code}}\",\n        \"globalUserId\": {{event_global_user_id}},\n        \"modality\": \"face\",\n        \"result\": \"allowed\",\n        \"occurredAt\": \"{{event_occurred_at}}\"\n      }\n    ]\n  },\n  \"id\": 1\n}"
+          "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"events\": [\n      {\n        \"eventId\": \"{{event_id}}\",\n        \"deviceSerial\": \"{{device_serial}}\",\n        \"siteCode\": \"{{site_code}}\",\n        \"globalUserId\": {{event_global_user_id}},\n        \"modality\": \"face\",\n        \"result\": \"allowed\",\n        \"occurredAt\": \"{{event_occurred_at}}\"\n      }\n    ]\n  },\n  \"id\": 1\n}"
         },
         "url": "{{base_url}}/api/access/events/access"
       },
@@ -233,7 +233,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"events\": [\n      {\n        \"eventId\": \"{{event_id}}\",\n        \"deviceCode\": \"{{device_code}}\",\n        \"siteCode\": \"{{site_code}}\",\n        \"globalUserId\": {{event_global_user_id}},\n        \"modality\": \"face\",\n        \"result\": \"allowed\",\n        \"occurredAt\": \"{{event_occurred_at}}\"\n      }\n    ]\n  },\n  \"id\": 1\n}"
+          "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"params\": {\n    \"events\": [\n      {\n        \"eventId\": \"{{event_id}}\",\n        \"deviceSerial\": \"{{device_serial}}\",\n        \"siteCode\": \"{{site_code}}\",\n        \"globalUserId\": {{event_global_user_id}},\n        \"modality\": \"face\",\n        \"result\": \"allowed\",\n        \"occurredAt\": \"{{event_occurred_at}}\"\n      }\n    ]\n  },\n  \"id\": 1\n}"
         },
         "url": "{{base_url}}/api/access/events/access"
       },
@@ -259,7 +259,7 @@
     { "key": "base_url", "value": "https://staging-portal.spinbike.mx" },
     { "key": "api_token", "value": "" },
     { "key": "site_code", "value": "" },
-    { "key": "device_code", "value": "" },
+    { "key": "device_serial", "value": "" },
     { "key": "cursor", "value": "0" },
     { "key": "limit", "value": "200" },
     { "key": "request_id", "value": "" },

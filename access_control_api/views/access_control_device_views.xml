@@ -8,7 +8,7 @@
         <list string="Devices">
           <field name="active"/>
           <field name="name"/>
-          <field name="device_code"/>
+          <field name="device_serial"/>
           <field name="site_id"/>
           <field name="user_capacity"/>
           <field name="last_heartbeat_at"/>
@@ -27,7 +27,7 @@
             <group>
               <field name="active" widget="boolean_toggle"/>
               <field name="name"/>
-              <field name="device_code"/>
+              <field name="device_serial"/>
               <field name="site_id" options="{'no_create_edit': False}"/>
               <field name="user_capacity"/>
             </group>
@@ -47,7 +47,7 @@
       <field name="arch" type="xml">
         <search string="Devices">
           <field name="name"/>
-          <field name="device_code"/>
+          <field name="device_serial"/>
           <field name="site_id"/>
           <field name="active"/>
         </search>
