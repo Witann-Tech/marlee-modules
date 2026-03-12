@@ -104,16 +104,6 @@ class FaceCameraField extends Component {
                 // Ignore and continue with runtime request.
             }
         }
-        if (navigator.permissions && typeof navigator.permissions.query === "function") {
-            try {
-                const status = await navigator.permissions.query({ name: "camera" });
-                if (status && status.state === "denied") {
-                    return { ok: false, code: "permission_denied" };
-                }
-            } catch (_error) {
-                // Some browsers do not support querying "camera".
-            }
-        }
         return { ok: true };
     }
 
@@ -147,9 +137,6 @@ class FaceCameraField extends Component {
         const code = error && error.code ? error.code : "";
         if (code === "policy_blocked") {
             return "La cámara está bloqueada por la política del sitio (Permissions-Policy).";
-        }
-        if (code === "permission_denied") {
-            return "El navegador tiene la cámara en estado denegado para este sitio. Restablece el permiso y vuelve a intentar.";
         }
         const name = error && error.name ? error.name : "";
         if (name === "NotAllowedError" || name === "SecurityError") {
