@@ -19,6 +19,18 @@ class FaceCameraField extends Component {
         return this.hasValue ? `data:image/jpeg;base64,${this.props.value}` : null;
     }
 
+    _setValue(value) {
+        if (typeof this.props.update === "function") {
+            this.props.update(value);
+            return;
+        }
+        if (this.props.record && typeof this.props.record.update === "function") {
+            this.props.record.update({ [this.props.name]: value });
+            return;
+        }
+        throw new Error("face_camera: no writable API found on field props");
+    }
+
     async onFileChange(ev) {
         const file = ev.target.files && ev.target.files[0];
         if (!file) {
@@ -26,7 +38,7 @@ class FaceCameraField extends Component {
         }
         try {
             const dataUrl = await this._readFileAsDataURL(file);
-            this.props.update(this._base64FromDataURL(dataUrl));
+            this._setValue(this._base64FromDataURL(dataUrl));
         } finally {
             ev.target.value = "";
         }
@@ -36,7 +48,7 @@ class FaceCameraField extends Component {
         if (this.props.readonly) {
             return;
         }
-        this.props.update(false);
+        this._setValue(false);
     }
 
     async takePhoto() {
@@ -82,7 +94,7 @@ class FaceCameraField extends Component {
         try {
             const base64 = await this._captureFromStream(stream);
             if (base64) {
-                this.props.update(base64);
+                this._setValue(base64);
             }
         } finally {
             if (stream) {
