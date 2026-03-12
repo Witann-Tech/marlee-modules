@@ -8,6 +8,9 @@
       <field name="arch" type="xml">
         <xpath expr="//notebook" position="inside">
           <page string="Control de Acceso">
+            <group string="Foto del Contacto">
+              <field name="image_1920" widget="face_camera" class="oe_avatar"/>
+            </group>
             <field name="access_person_ids" context="{'default_partner_id': id}" nolabel="1">
               <list editable="bottom" string="Personas de acceso">
                 <field name="active"/>
@@ -23,8 +26,8 @@
                     <field name="site_ids" widget="many2many_tags"/>
                     <field name="has_face_pic" readonly="1"/>
                   </group>
-                  <group string="Foto de rostro">
-                    <field name="face_image" widget="face_camera"/>
+                  <group string="Foto de rostro (sincronizada desde Contacto)">
+                    <field name="face_image" widget="image" readonly="1" class="oe_avatar"/>
                     <field name="face_pic_b64" invisible="1"/>
                   </group>
                 </sheet>

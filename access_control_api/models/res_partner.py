@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from odoo import models, fields
+from odoo import models, fields, api
 
 
 class ResPartner(models.Model):
@@ -10,3 +10,45 @@ class ResPartner(models.Model):
         "partner_id",
         string="Control de acceso",
     )
+
+    @api.model
+    def _normalize_image_b64(self, image_b64):
+        return "".join(str(image_b64).split()) if image_b64 else False
+
+    def _sync_access_person_face(self):
+        Person = self.env["access_control.person"].sudo()
+        for partner in self:
+            people = Person.search([("partner_id", "=", partner.id)])
+            if not people:
+                continue
+            img = self._normalize_image_b64(partner.image_1920)
+            people.write(
+                {
+                    "face_image": img,
+                    "face_pic_b64": img,
+                }
+            )
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        normalized_vals_list = []
+        for vals in vals_list:
+            data = dict(vals or {})
+            if "image_1920" in data:
+                data["image_1920"] = self._normalize_image_b64(data.get("image_1920"))
+            normalized_vals_list.append(data)
+
+        records = super().create(normalized_vals_list)
+        if records:
+            records._sync_access_person_face()
+        return records
+
+    def write(self, vals):
+        data = dict(vals or {})
+        if "image_1920" in data:
+            data["image_1920"] = self._normalize_image_b64(data.get("image_1920"))
+
+        res = super().write(data)
+        if "image_1920" in data:
+            self._sync_access_person_face()
+        return res
