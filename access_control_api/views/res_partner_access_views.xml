@@ -6,10 +6,15 @@
       <field name="model">res.partner</field>
       <field name="inherit_id" ref="base.view_partner_form"/>
       <field name="arch" type="xml">
+        <xpath expr="//field[@name='image_1920'][1]" position="attributes">
+          <attribute name="widget">face_camera</attribute>
+        </xpath>
         <xpath expr="//notebook" position="inside">
           <page string="Control de Acceso">
             <group string="Foto del Contacto">
-              <field name="image_1920" widget="face_camera" class="oe_avatar"/>
+              <div class="text-muted">
+                La foto biométrica se toma en la foto principal del contacto (parte superior del formulario).
+              </div>
             </group>
             <field name="access_person_ids" context="{'default_partner_id': id}" nolabel="1">
               <list editable="bottom" string="Personas de acceso">

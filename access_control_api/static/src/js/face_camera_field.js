@@ -43,6 +43,10 @@ class FaceCameraField extends Component {
         if (this.props.readonly) {
             return;
         }
+        if (!window.isSecureContext) {
+            window.alert("La cámara solo funciona en contexto seguro (HTTPS o localhost).");
+            return;
+        }
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
             window.alert("Tu navegador no soporta acceso a cámara.");
             return;
@@ -50,12 +54,9 @@ class FaceCameraField extends Component {
 
         let stream = null;
         try {
-            stream = await navigator.mediaDevices.getUserMedia({
-                video: { facingMode: "user" },
-                audio: false,
-            });
-        } catch (_error) {
-            window.alert("No fue posible acceder a la cámara. Revisa permisos del navegador.");
+            stream = await this._openCameraStream();
+        } catch (error) {
+            window.alert(this._cameraErrorMessage(error));
             return;
         }
 
@@ -65,8 +66,53 @@ class FaceCameraField extends Component {
                 this.props.update(base64);
             }
         } finally {
-            stream.getTracks().forEach((track) => track.stop());
+            if (stream) {
+                stream.getTracks().forEach((track) => track.stop());
+            }
         }
+    }
+
+    async _openCameraStream() {
+        const attempts = [
+            {
+                video: {
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 },
+                    facingMode: { ideal: "user" },
+                },
+                audio: false,
+            },
+            {
+                video: true,
+                audio: false,
+            },
+        ];
+        let lastError = null;
+        for (const constraints of attempts) {
+            try {
+                return await navigator.mediaDevices.getUserMedia(constraints);
+            } catch (error) {
+                lastError = error;
+            }
+        }
+        throw lastError;
+    }
+
+    _cameraErrorMessage(error) {
+        const name = error && error.name ? error.name : "";
+        if (name === "NotAllowedError" || name === "SecurityError") {
+            return "No fue posible acceder a la cámara. Autoriza el permiso de cámara para este sitio.";
+        }
+        if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+            return "No se encontró una cámara disponible en este equipo.";
+        }
+        if (name === "NotReadableError" || name === "TrackStartError") {
+            return "La cámara está en uso por otra aplicación. Ciérrala e inténtalo de nuevo.";
+        }
+        if (name === "OverconstrainedError" || name === "ConstraintNotSatisfiedError") {
+            return "No se pudo iniciar la cámara con la configuración solicitada.";
+        }
+        return "No fue posible acceder a la cámara. Revisa permisos del navegador.";
     }
 
     _readFileAsDataURL(file) {
@@ -129,6 +175,7 @@ class FaceCameraField extends Component {
             captureButton.type = "button";
             captureButton.className = "btn btn-primary";
             captureButton.textContent = "Tomar foto";
+            captureButton.disabled = true;
 
             actions.appendChild(cancelButton);
             actions.appendChild(captureButton);
@@ -143,6 +190,14 @@ class FaceCameraField extends Component {
                     overlay.parentNode.removeChild(overlay);
                 }
             };
+
+            const enableCapture = () => {
+                captureButton.disabled = false;
+            };
+            video.addEventListener("loadedmetadata", enableCapture, { once: true });
+            video.play().catch(() => {
+                // Ignore play race errors; capture button is enabled on metadata.
+            });
 
             cancelButton.addEventListener("click", () => {
                 cleanup();

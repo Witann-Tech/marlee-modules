@@ -164,6 +164,12 @@ class AccessPerson(models.Model):
             prev_sync_sites = {sid for sid in prev_sites if prev_active and prev_gid}
             new_sync_sites = {sid for sid in new_sites if new_active and new_gid}
 
+            # En transición activo->inactivo, forzar delete en todos los sitios previos.
+            if prev_active and not new_active and prev_gid:
+                for site_id in sorted(prev_sync_sites):
+                    Change.queue_delete(prev_gid, [site_id], reason="person_write_deactivated")
+                continue
+
             removed_sites = prev_sync_sites - new_sync_sites
             for site_id in sorted(removed_sites):
                 Change.queue_delete(prev_gid, [site_id], reason="person_write_removed")
