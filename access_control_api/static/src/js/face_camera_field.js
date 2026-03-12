@@ -47,14 +47,20 @@ class FaceCameraField extends Component {
             window.alert("La cámara solo funciona en contexto seguro (HTTPS o localhost).");
             return;
         }
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        const mediaDevices = this._getMediaDevices();
+        if (!mediaDevices || !mediaDevices.getUserMedia) {
             window.alert("Tu navegador no soporta acceso a cámara.");
+            return;
+        }
+        const preflight = await this._cameraPreflight();
+        if (!preflight.ok) {
+            window.alert(this._cameraErrorMessage({ code: preflight.code }));
             return;
         }
 
         let stream = null;
         try {
-            stream = await this._openCameraStream();
+            stream = await this._openCameraStream(mediaDevices);
         } catch (error) {
             window.alert(this._cameraErrorMessage(error));
             return;
@@ -72,7 +78,46 @@ class FaceCameraField extends Component {
         }
     }
 
-    async _openCameraStream() {
+    _getMediaDevices() {
+        // In embedded contexts, prefer top window mediaDevices when same-origin.
+        try {
+            if (window.top && window.top !== window) {
+                const topMediaDevices = window.top.navigator && window.top.navigator.mediaDevices;
+                if (topMediaDevices && topMediaDevices.getUserMedia) {
+                    return topMediaDevices;
+                }
+            }
+        } catch (_error) {
+            // Cross-origin access blocked: fallback to current window.
+        }
+        return navigator.mediaDevices;
+    }
+
+    async _cameraPreflight() {
+        const policy = document.permissionsPolicy || document.featurePolicy;
+        if (policy && typeof policy.allowsFeature === "function") {
+            try {
+                if (!policy.allowsFeature("camera")) {
+                    return { ok: false, code: "policy_blocked" };
+                }
+            } catch (_error) {
+                // Ignore and continue with runtime request.
+            }
+        }
+        if (navigator.permissions && typeof navigator.permissions.query === "function") {
+            try {
+                const status = await navigator.permissions.query({ name: "camera" });
+                if (status && status.state === "denied") {
+                    return { ok: false, code: "permission_denied" };
+                }
+            } catch (_error) {
+                // Some browsers do not support querying "camera".
+            }
+        }
+        return { ok: true };
+    }
+
+    async _openCameraStream(mediaDevices) {
         const attempts = [
             {
                 video: {
@@ -90,7 +135,7 @@ class FaceCameraField extends Component {
         let lastError = null;
         for (const constraints of attempts) {
             try {
-                return await navigator.mediaDevices.getUserMedia(constraints);
+                return await mediaDevices.getUserMedia(constraints);
             } catch (error) {
                 lastError = error;
             }
@@ -99,9 +144,16 @@ class FaceCameraField extends Component {
     }
 
     _cameraErrorMessage(error) {
+        const code = error && error.code ? error.code : "";
+        if (code === "policy_blocked") {
+            return "La cámara está bloqueada por la política del sitio (Permissions-Policy).";
+        }
+        if (code === "permission_denied") {
+            return "El navegador tiene la cámara en estado denegado para este sitio. Restablece el permiso y vuelve a intentar.";
+        }
         const name = error && error.name ? error.name : "";
         if (name === "NotAllowedError" || name === "SecurityError") {
-            return "No fue posible acceder a la cámara. Autoriza el permiso de cámara para este sitio.";
+            return "No fue posible acceder a la cámara. El navegador la bloqueó antes de abrir el prompt; revisa permisos del sitio.";
         }
         if (name === "NotFoundError" || name === "DevicesNotFoundError") {
             return "No se encontró una cámara disponible en este equipo.";
