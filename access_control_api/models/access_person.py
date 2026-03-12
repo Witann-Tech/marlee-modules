@@ -36,6 +36,24 @@ class AccessPerson(models.Model):
             rec.has_face_pic = bool(rec.face_pic_b64 and str(rec.face_pic_b64).strip())
 
     @api.model
+    def _used_global_user_ids(self):
+        self.env.cr.execute(
+            """
+            SELECT global_user_id
+              FROM access_control_person
+             WHERE global_user_id IS NOT NULL
+            """
+        )
+        return {row[0] for row in self.env.cr.fetchall() if row and row[0]}
+
+    @api.model
+    def _next_available_global_user_id(self, used):
+        for i in range(1, 10001):
+            if i not in used:
+                return i
+        return False
+
+    @api.model
     def _normalize_face_vals(self, vals):
         data = dict(vals or {})
 
@@ -51,6 +69,28 @@ class AccessPerson(models.Model):
             data["face_pic_b64"] = cleaned
             data["face_image"] = cleaned
         return data
+
+    @api.model
+    def _fill_face_from_partner(self, vals):
+        data = dict(vals or {})
+        if data.get("face_image") or data.get("face_pic_b64"):
+            return data
+        partner_id = data.get("partner_id")
+        if not partner_id:
+            return data
+        partner = self.env["res.partner"].sudo().browse(partner_id)
+        if partner.exists() and partner.image_1920:
+            img = "".join(str(partner.image_1920).split())
+            data["face_image"] = img
+            data["face_pic_b64"] = img
+        return data
+
+    @api.onchange("partner_id")
+    def _onchange_partner_id_copy_face(self):
+        for rec in self:
+            if rec.partner_id and not rec.face_image and rec.partner_id.image_1920:
+                rec.face_image = rec.partner_id.image_1920
+                rec.face_pic_b64 = rec.partner_id.image_1920
 
     _sql_constraints = [
         ("uniq_global_user_id", "unique(global_user_id)", "El ID global debe ser único."),
@@ -71,7 +111,19 @@ class AccessPerson(models.Model):
 
     @api.model_create_multi
     def create(self, vals_list):
-        normalized_vals_list = [self._normalize_face_vals(vals) for vals in vals_list]
+        used_ids = self._used_global_user_ids()
+        normalized_vals_list = []
+        for vals in vals_list:
+            data = self._normalize_face_vals(vals)
+            data = self._fill_face_from_partner(data)
+            if not data.get("global_user_id"):
+                next_id = self._next_available_global_user_id(used_ids)
+                if not next_id:
+                    raise ValidationError("No hay IDs globales disponibles (1..10000).")
+                data["global_user_id"] = next_id
+            used_ids.add(int(data["global_user_id"]))
+            normalized_vals_list.append(data)
+
         records = super().create(normalized_vals_list)
         Change = self.env["access_control.sync_change"].sudo()
         for rec in records:
@@ -81,6 +133,10 @@ class AccessPerson(models.Model):
 
     def write(self, vals):
         vals = self._normalize_face_vals(vals)
+        vals = self._fill_face_from_partner(vals)
+        # Al dar de baja, se libera el ID global para reutilización futura.
+        if vals.get("active") is False and "global_user_id" not in vals:
+            vals["global_user_id"] = False
         before = {
             rec.id: {
                 "active": rec.active,
@@ -152,25 +208,15 @@ class AccessPerson(models.Model):
 
     def action_assign_global_user_id(self):
         """Asigna el ID global disponible más bajo (1..10000)."""
+        used = self._used_global_user_ids()
         for rec in self:
             if rec.global_user_id:
                 continue
-            self.env.cr.execute(
-                """
-                SELECT global_user_id
-                  FROM access_control_person
-                 WHERE global_user_id IS NOT NULL
-                """
-            )
-            used = {row[0] for row in self.env.cr.fetchall() if row and row[0]}
-            chosen = None
-            for i in range(1, 10001):
-                if i not in used:
-                    chosen = i
-                    break
+            chosen = self._next_available_global_user_id(used)
             if not chosen:
                 raise ValidationError("No hay IDs globales disponibles (1..10000).")
             rec.global_user_id = chosen
+            used.add(chosen)
         return True
 
     def _notify(self, title, message, typ="success"):
@@ -204,4 +250,8 @@ class AccessPerson(models.Model):
             rec.active = False
             if rec.site_ids:
                 rec.site_ids.write({"force_sync": True})
-        return self._notify("Desactivado", "Persona desactivada y marcada para sincronización.", typ="warning")
+        return self._notify(
+            "Desactivado",
+            "Persona desactivada, marcada para sincronización y con ID global liberado.",
+            typ="warning",
+        )
