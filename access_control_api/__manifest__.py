@@ -1,11 +1,11 @@
 {
     'name': 'Witann - Access Control API', 
-    'version': '19.0.2.0.15',
+    'version': '19.0.2.0.16',
     'summary': 'API para validación de accesos (biometría / hardware)', 
     'category': 'Tools', 
     'author': 'Witann Technologies', 
     'license': 'LGPL-3', 
-    'depends': ['base'], 
+    'depends': ['base', 'web'], 
     'data': ['security/ir.model.access.csv', 
              'views/access_control_menus.xml', 
              'views/access_control_site_views.xml', 
@@ -13,6 +13,12 @@
              'views/access_control_person_views.xml', 
              'views/res_partner_access_views.xml',
     ], 
+    'assets': {
+        'web.assets_backend': [
+            'access_control_api/static/src/js/face_camera_field.js',
+            'access_control_api/static/src/xml/face_camera_field.xml',
+        ],
+    },
     'installable': True, 
     'application': True,
 }
