@@ -11,16 +11,20 @@
         </xpath>
         <xpath expr="//notebook" position="inside">
           <page string="Control de Acceso">
-            <group string="Foto del Contacto">
-              <div class="text-muted">
-                La foto biométrica se toma en la foto principal del contacto (parte superior del formulario).
-              </div>
+            <group string="Fotos">
+              <group string="Foto del Contacto">
+                <field name="image_1920" widget="image" readonly="1" class="oe_avatar"/>
+                <div class="text-muted">
+                  La captura se realiza en la foto principal del contacto.
+                </div>
+              </group>
             </group>
             <field name="access_person_ids" context="{'default_partner_id': id}" nolabel="1">
               <list editable="bottom" string="Personas de acceso">
                 <field name="active"/>
                 <field name="global_user_id"/>
                 <field name="site_ids" widget="many2many_tags"/>
+                <field name="face_image" widget="image" readonly="1"/>
                 <field name="has_face_pic" readonly="1"/>
               </list>
               <form string="Persona de acceso">
