@@ -4,14 +4,14 @@ from odoo import models, fields, api
 
 class AccessSyncChange(models.Model):
     _name = "access_control.sync_change"
-    _description = "Access Sync Change"
+    _description = "Cambio de Sincronización de Acceso"
     _order = "id asc"
 
     site_id = fields.Many2one("access_control.site", required=True, index=True, ondelete="cascade")
     person_id = fields.Many2one("access_control.person", index=True, ondelete="set null")
     global_user_id = fields.Integer(required=True, index=True)
     action = fields.Selection(
-        [("upsert", "Upsert"), ("delete", "Delete")],
+        [("upsert", "Alta/Actualización"), ("delete", "Eliminación")],
         required=True,
         index=True,
     )

@@ -1,59 +1,55 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
     <data>
-        <menuitem id="access_control_menu_root" name="Access Control" sequence="10"/>
+        <menuitem id="access_control_menu_root" name="Control de Acceso" sequence="10"/>
 
         <record id="action_access_control_sites" model="ir.actions.act_window">
-            <field name="name">Sites</field>
+            <field name="name">Sitios</field>
             <field name="res_model">access_control.site</field>
             <field name="view_mode">list,form</field>
             <field name="help" type="html">
                 <p class="o_view_nocontent_smiling_face">
-                    Create your first site to group devices and people.
+                    Crea tu primer sitio para agrupar dispositivos.
                 </p>
             </field>
         </record>
 
         <record id="action_access_control_devices" model="ir.actions.act_window">
-            <field name="name">Devices</field>
+            <field name="name">Dispositivos</field>
             <field name="res_model">access_control.device</field>
             <field name="view_mode">list,form</field>
             <field name="help" type="html">
                 <p class="o_view_nocontent_smiling_face">
-                    Register your SpeedFace devices here.
+                    Registra aquí tus dispositivos SpeedFace.
                 </p>
             </field>
         </record>
 
-        <record id="action_access_control_people" model="ir.actions.act_window">
-            <field name="name">People</field>
-            <field name="res_model">access_control.person</field>
-            <field name="view_mode">list,form</field>
-            <field name="context">{'active_test': False, 'search_default_active': 1}</field>
-            <field name="help" type="html">
-                <p class="o_view_nocontent_smiling_face">
-                    Manage people and assign them to one or more sites.
-                </p>
-            </field>
-        </record>
-
-        <menuitem id="access_control_menu_configuration" name="Configuration"
+        <menuitem id="access_control_menu_configuration" name="Inventario"
                   parent="access_control_menu_root" sequence="10"/>
 
-        <menuitem id="access_control_menu_sites" name="Sites"
+        <menuitem id="access_control_menu_sites" name="Sitios"
                   parent="access_control_menu_configuration"
                   action="action_access_control_sites" sequence="10"/>
 
-        <menuitem id="access_control_menu_devices" name="Devices"
+        <menuitem id="access_control_menu_devices" name="Dispositivos"
                   parent="access_control_menu_configuration"
                   action="action_access_control_devices" sequence="20"/>
 
-        <menuitem id="access_control_menu_operations" name="Operations"
-                  parent="access_control_menu_root" sequence="20"/>
+        <!-- Legacy: mantener IDs para desactivar menús antiguos al actualizar. -->
+        <record id="action_access_control_people" model="ir.actions.act_window">
+            <field name="name">Personas</field>
+            <field name="res_model">access_control.person</field>
+            <field name="view_mode">list,form</field>
+            <field name="context">{'active_test': False, 'search_default_active': 1}</field>
+        </record>
 
-        <menuitem id="access_control_menu_people" name="People"
+        <menuitem id="access_control_menu_operations" name="Operación"
+                  parent="access_control_menu_root" sequence="20" active="False"/>
+
+        <menuitem id="access_control_menu_people" name="Personas"
                   parent="access_control_menu_operations"
-                  action="action_access_control_people" sequence="10"/>
+                  action="action_access_control_people" sequence="10" active="False"/>
 
     </data>
 </odoo>

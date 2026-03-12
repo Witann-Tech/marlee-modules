@@ -4,7 +4,7 @@ from odoo import models, fields
 
 class AccessEvent(models.Model):
     _name = "access_control.access_event"
-    _description = "Access Event"
+    _description = "Evento de Acceso"
     _order = "occurred_at desc, id desc"
 
     event_id = fields.Char(required=True, index=True)
@@ -17,12 +17,12 @@ class AccessEvent(models.Model):
     global_user_id = fields.Integer(index=True)
 
     modality = fields.Selection(
-        [("face", "Face"), ("unknown", "Unknown")],
+        [("face", "Rostro"), ("unknown", "Desconocido")],
         default="unknown",
         index=True,
     )
     result = fields.Selection(
-        [("allowed", "Allowed"), ("denied", "Denied"), ("error", "Error")],
+        [("allowed", "Permitido"), ("denied", "Denegado"), ("error", "Error")],
         default="denied",
         index=True,
     )
@@ -33,5 +33,5 @@ class AccessEvent(models.Model):
     raw_payload = fields.Text()
 
     _sql_constraints = [
-        ("uniq_access_event_event_id", "unique(event_id)", "Event ID must be unique."),
+        ("uniq_access_event_event_id", "unique(event_id)", "El ID del evento debe ser único."),
     ]

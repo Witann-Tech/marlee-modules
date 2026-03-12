@@ -2,10 +2,10 @@
 <odoo>
   <data>
     <record id="view_access_control_device_tree" model="ir.ui.view">
-      <field name="name">access_control.device.tree</field>
+      <field name="name">access_control.device.lista</field>
       <field name="model">access_control.device</field>
       <field name="arch" type="xml">
-        <list string="Devices">
+        <list string="Dispositivos">
           <field name="active"/>
           <field name="name"/>
           <field name="device_serial"/>
@@ -19,10 +19,10 @@
     </record>
 
     <record id="view_access_control_device_form" model="ir.ui.view">
-      <field name="name">access_control.device.form</field>
+      <field name="name">access_control.device.formulario</field>
       <field name="model">access_control.device</field>
       <field name="arch" type="xml">
-        <form string="Device">
+        <form string="Dispositivo">
           <sheet>
             <group>
               <field name="active" widget="boolean_toggle"/>
@@ -31,7 +31,7 @@
               <field name="site_id" options="{'no_create_edit': False}"/>
               <field name="user_capacity"/>
             </group>
-            <group string="Telemetry">
+            <group string="Telemetría">
               <field name="last_heartbeat_at" readonly="1"/>
               <field name="last_sync_at" readonly="1"/>
               <field name="last_error" readonly="1"/>
@@ -42,10 +42,10 @@
     </record>
 
     <record id="view_access_control_device_search" model="ir.ui.view">
-      <field name="name">access_control.device.search</field>
+      <field name="name">access_control.device.buscar</field>
       <field name="model">access_control.device</field>
       <field name="arch" type="xml">
-        <search string="Devices">
+        <search string="Dispositivos">
           <field name="name"/>
           <field name="device_serial"/>
           <field name="site_id"/>

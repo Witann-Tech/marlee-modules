@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+  <data>
+    <record id="view_partner_form_access_control" model="ir.ui.view">
+      <field name="name">res.partner.form.access.control</field>
+      <field name="model">res.partner</field>
+      <field name="inherit_id" ref="base.view_partner_form"/>
+      <field name="arch" type="xml">
+        <xpath expr="//notebook" position="inside">
+          <page string="Control de Acceso">
+            <field name="access_person_ids" context="{'default_partner_id': id}" nolabel="1">
+              <list editable="bottom" string="Personas de acceso">
+                <field name="active"/>
+                <field name="global_user_id"/>
+                <field name="site_ids" widget="many2many_tags"/>
+                <field name="has_face_pic" readonly="1"/>
+              </list>
+              <form string="Persona de acceso">
+                <sheet>
+                  <group>
+                    <field name="active" widget="boolean_toggle"/>
+                    <field name="global_user_id"/>
+                    <field name="site_ids" widget="many2many_tags"/>
+                    <field name="has_face_pic" readonly="1"/>
+                  </group>
+                  <group string="Foto de rostro">
+                    <field name="face_image" widget="image" class="oe_avatar"/>
+                    <field name="face_pic_b64" invisible="1"/>
+                  </group>
+                </sheet>
+              </form>
+            </field>
+          </page>
+        </xpath>
+      </field>
+    </record>
+  </data>
+</odoo>

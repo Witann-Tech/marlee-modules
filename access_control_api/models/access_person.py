@@ -5,7 +5,7 @@ from odoo.exceptions import ValidationError
 
 class AccessPerson(models.Model):
     _name = "access_control.person"
-    _description = "Access Control Person (to sync to devices)"
+    _description = "Persona de Control de Acceso (sincronización a dispositivos)"
     _rec_name = "partner_id"
 
     active = fields.Boolean(default=False, index=True)
@@ -17,18 +17,18 @@ class AccessPerson(models.Model):
         "access_control_person_site_rel",
         "person_id",
         "site_id",
-        string="Sites",
+        string="Sitios",
     )
 
-    # Global sequential user id used by SpeedFace devices (1..10000)
-    global_user_id = fields.Integer(string="Global User ID", index=True)
+    # Id global secuencial utilizado por SpeedFace (1..10000)
+    global_user_id = fields.Integer(string="ID global", index=True)
     # Compatibility alias for existing saved filters/list layouts in database.
     f18_user_id = fields.Integer(related="global_user_id", readonly=False)
 
     partner_id = fields.Many2one("res.partner", string="Partner", required=True, index=True)
-    face_image = fields.Binary(string="Face Photo", attachment=True)
-    face_pic_b64 = fields.Text(string="Face Pic (Base64)")
-    has_face_pic = fields.Boolean(string="Has Face Pic", compute="_compute_has_face_pic", store=False)
+    face_image = fields.Binary(string="Foto de rostro", attachment=True)
+    face_pic_b64 = fields.Text(string="Foto de rostro (Base64)")
+    has_face_pic = fields.Boolean(string="Tiene foto de rostro", compute="_compute_has_face_pic", store=False)
 
     @api.depends("face_image", "face_pic_b64")
     def _compute_has_face_pic(self):
@@ -53,11 +53,11 @@ class AccessPerson(models.Model):
         return data
 
     _sql_constraints = [
-        ("uniq_global_user_id", "unique(global_user_id)", "Global User ID must be unique."),
+        ("uniq_global_user_id", "unique(global_user_id)", "El ID global debe ser único."),
         (
             "check_global_user_id_range",
             "CHECK(global_user_id IS NULL OR (global_user_id >= 1 AND global_user_id <= 10000))",
-            "Global User ID must be between 1 and 10000.",
+            "El ID global debe estar entre 1 y 10000.",
         ),
     ]
 
@@ -65,9 +65,9 @@ class AccessPerson(models.Model):
     def _check_active_requirements(self):
         for rec in self:
             if rec.active and rec.global_user_id is None:
-                raise ValidationError("Active people must have a Global User ID (1..10000).")
+                raise ValidationError("Las personas activas deben tener un ID global (1..10000).")
             if rec.active and not rec.site_ids:
-                raise ValidationError("Active people must be assigned to at least one Site.")
+                raise ValidationError("Las personas activas deben estar asignadas a al menos un sitio.")
 
     @api.model_create_multi
     def create(self, vals_list):
@@ -151,7 +151,7 @@ class AccessPerson(models.Model):
         return res
 
     def action_assign_global_user_id(self):
-        """Assign the lowest available Global User ID (1..10000)."""
+        """Asigna el ID global disponible más bajo (1..10000)."""
         for rec in self:
             if rec.global_user_id:
                 continue
@@ -169,7 +169,7 @@ class AccessPerson(models.Model):
                     chosen = i
                     break
             if not chosen:
-                raise ValidationError("No available Global User IDs (1..10000).")
+                raise ValidationError("No hay IDs globales disponibles (1..10000).")
             rec.global_user_id = chosen
         return True
 
@@ -190,12 +190,12 @@ class AccessPerson(models.Model):
             if rec.active:
                 continue
             if not rec.site_ids:
-                raise ValidationError("Please assign at least one Site before activating this person.")
+                raise ValidationError("Asigna al menos un sitio antes de activar esta persona.")
             if not rec.global_user_id:
-                raise ValidationError("Please assign a Global User ID (1..10000) before activating this person.")
+                raise ValidationError("Asigna un ID global (1..10000) antes de activar esta persona.")
             rec.active = True
             rec.site_ids.write({"force_sync": True})
-        return self._notify("Activated", "Person activated and marked for sync.")
+        return self._notify("Activado", "Persona activada y marcada para sincronización.")
 
     def action_deactivate(self):
         for rec in self:
@@ -204,4 +204,4 @@ class AccessPerson(models.Model):
             rec.active = False
             if rec.site_ids:
                 rec.site_ids.write({"force_sync": True})
-        return self._notify("Deactivated", "Person deactivated and marked for sync.", typ="warning")
+        return self._notify("Desactivado", "Persona desactivada y marcada para sincronización.", typ="warning")

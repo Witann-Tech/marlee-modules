@@ -2,10 +2,10 @@
 <odoo>
   <data>
     <record id="view_access_control_site_tree" model="ir.ui.view">
-      <field name="name">access_control.site.tree</field>
+      <field name="name">access_control.site.lista</field>
       <field name="model">access_control.site</field>
       <field name="arch" type="xml">
-        <list string="Sites">
+        <list string="Sitios">
           <field name="name"/>
           <field name="code"/>
           <field name="force_sync"/>
@@ -18,10 +18,10 @@
     </record>
 
     <record id="view_access_control_site_form" model="ir.ui.view">
-      <field name="name">access_control.site.form</field>
+      <field name="name">access_control.site.formulario</field>
       <field name="model">access_control.site</field>
       <field name="arch" type="xml">
-        <form string="Site">
+        <form string="Sitio">
           <sheet>
             <group>
               <field name="active" widget="boolean_toggle"/>
@@ -33,7 +33,7 @@
               <field name="slots_percent" widget="progressbar" readonly="1"/>
             </group>
             <notebook>
-              <page string="Devices">
+              <page string="Dispositivos">
                 <field name="device_ids" nolabel="1">
                   <list editable="bottom">
                     <field name="active"/>

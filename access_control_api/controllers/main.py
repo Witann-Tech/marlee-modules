@@ -139,7 +139,7 @@ class AccessControlApi(http.Controller):
         total_devices = 0
         for site in sites_rs:
             devices = []
-            for d in site.device_ids.filtered(lambda rec: rec.active):
+            for d in site.device_ids.sorted(key=lambda rec: rec.id):
                 devices.append(
                     {
                         "active": bool(d.active),

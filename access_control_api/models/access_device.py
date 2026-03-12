@@ -4,7 +4,7 @@ from odoo import models, fields
 
 class AccessControlDevice(models.Model):
     _name = "access_control.device"
-    _description = "Access Control Device (SpeedFace)"
+    _description = "Dispositivo de Control de Acceso (SpeedFace)"
     _rec_name = "name"
 
     active = fields.Boolean(default=True)
@@ -14,18 +14,18 @@ class AccessControlDevice(models.Model):
 
     site_id = fields.Many2one("access_control.site", required=True, ondelete="cascade")
 
-    user_capacity = fields.Integer(string="User Capacity", default=10000)
+    user_capacity = fields.Integer(string="Capacidad de usuarios", default=10000)
 
-    # Telemetry (set by middleware heartbeat)
-    last_heartbeat_at = fields.Datetime(string="Last Heartbeat", readonly=True)
-    last_sync_at = fields.Datetime(string="Last Sync", readonly=True)
-    last_error = fields.Text(string="Last Error", readonly=True)
+    # Telemetría (actualizada por middleware/ADMS)
+    last_heartbeat_at = fields.Datetime(string="Último heartbeat", readonly=True)
+    last_sync_at = fields.Datetime(string="Última sincronización", readonly=True)
+    last_error = fields.Text(string="Último error", readonly=True)
 
     _sql_constraints = [
-        ("access_control_device_serial_uniq", "unique(device_serial)", "Device serial must be unique."),
+        ("access_control_device_serial_uniq", "unique(device_serial)", "El serial del dispositivo debe ser único."),
         (
             "check_user_capacity_positive",
             "CHECK(user_capacity IS NULL OR user_capacity > 0)",
-            "User capacity must be greater than zero.",
+            "La capacidad de usuarios debe ser mayor a cero.",
         ),
     ]
