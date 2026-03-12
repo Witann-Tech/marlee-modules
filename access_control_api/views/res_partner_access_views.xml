@@ -11,13 +11,10 @@
         </xpath>
         <xpath expr="//notebook" position="inside">
           <page string="Control de Acceso">
-            <group string="Fotos">
-              <group string="Foto del Contacto">
-                <field name="image_1920" widget="image" readonly="1" class="oe_avatar"/>
-                <div class="text-muted">
-                  La captura se realiza en la foto principal del contacto.
-                </div>
-              </group>
+            <group>
+              <div class="text-muted">
+                La foto del contacto se captura en su ubicación original y se sincroniza a la foto biométrica de la persona.
+              </div>
             </group>
             <field name="access_person_ids" context="{'default_partner_id': id}" nolabel="1">
               <list editable="bottom" string="Personas de acceso">

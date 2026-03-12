@@ -38,7 +38,8 @@ class FaceCameraField extends Component {
         }
         try {
             const dataUrl = await this._readFileAsDataURL(file);
-            this._setValue(this._base64FromDataURL(dataUrl));
+            const squareDataUrl = await this._squareImageFromDataURL(dataUrl);
+            this._setValue(this._base64FromDataURL(squareDataUrl));
         } finally {
             ev.target.value = "";
         }
@@ -240,20 +241,38 @@ class FaceCameraField extends Component {
                 const vw = video.videoWidth || 1280;
                 const vh = video.videoHeight || 720;
                 const maxSize = 1024;
-                const scale = Math.min(maxSize / vw, maxSize / vh, 1);
-                const width = Math.max(1, Math.round(vw * scale));
-                const height = Math.max(1, Math.round(vh * scale));
-
+                const cropSize = Math.max(1, Math.min(vw, vh));
+                const sx = Math.max(0, Math.floor((vw - cropSize) / 2));
+                const sy = Math.max(0, Math.floor((vh - cropSize) / 2));
                 const canvas = document.createElement("canvas");
-                canvas.width = width;
-                canvas.height = height;
+                canvas.width = maxSize;
+                canvas.height = maxSize;
                 const ctx = canvas.getContext("2d");
-                ctx.drawImage(video, 0, 0, width, height);
+                ctx.drawImage(video, sx, sy, cropSize, cropSize, 0, 0, maxSize, maxSize);
 
                 const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
                 cleanup();
                 resolve(this._base64FromDataURL(dataUrl));
             });
+        });
+    }
+
+    _squareImageFromDataURL(dataUrl) {
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            img.onload = () => {
+                const size = Math.max(1, Math.min(img.width || 0, img.height || 0));
+                const sx = Math.max(0, Math.floor(((img.width || 0) - size) / 2));
+                const sy = Math.max(0, Math.floor(((img.height || 0) - size) / 2));
+                const canvas = document.createElement("canvas");
+                canvas.width = 1024;
+                canvas.height = 1024;
+                const ctx = canvas.getContext("2d");
+                ctx.drawImage(img, sx, sy, size, size, 0, 0, 1024, 1024);
+                resolve(canvas.toDataURL("image/jpeg", 0.9));
+            };
+            img.onerror = reject;
+            img.src = dataUrl;
         });
     }
 }

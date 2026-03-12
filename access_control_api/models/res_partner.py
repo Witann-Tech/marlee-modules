@@ -15,6 +15,14 @@ class ResPartner(models.Model):
     def _normalize_image_b64(self, image_b64):
         return "".join(str(image_b64).split()) if image_b64 else False
 
+    @api.onchange("image_1920")
+    def _onchange_image_1920_sync_access_people(self):
+        for partner in self:
+            img = partner._normalize_image_b64(partner.image_1920)
+            for person in partner.access_person_ids:
+                person.face_image = img
+                person.face_pic_b64 = img
+
     def _sync_access_person_face(self):
         Person = self.env["access_control.person"].sudo()
         for partner in self:
