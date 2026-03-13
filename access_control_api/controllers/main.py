@@ -70,7 +70,7 @@ class AccessControlApi(http.Controller):
         return None
 
     def _person_sync_payload(self, person):
-        face_b64 = "".join(str(person.face_pic_b64 or "").split()) or None
+        face_b64 = "".join(str(person.face_pic_b64 or person.partner_id.image_1920 or "").split()) or None
 
         return {
             "globalUserId": person.global_user_id,

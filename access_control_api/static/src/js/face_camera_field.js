@@ -288,3 +288,24 @@ registry.category("fields").add("face_camera", {
     component: FaceCameraField,
     displayName: "Foto con cámara",
 });
+
+class FaceCameraButtonField extends FaceCameraField {
+    static template = "access_control_api.FaceCameraButtonField";
+    static props = {
+        ...standardFieldProps,
+    };
+    static supportedTypes = ["char"];
+
+    _setValue(value) {
+        if (this.props.record && typeof this.props.record.update === "function") {
+            this.props.record.update({ image_1920: value, [this.props.name]: false });
+            return;
+        }
+        throw new Error("face_camera_button: no writable API found on field props");
+    }
+}
+
+registry.category("fields").add("face_camera_button", {
+    component: FaceCameraButtonField,
+    displayName: "Botón cámara",
+});

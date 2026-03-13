@@ -7,7 +7,10 @@
       <field name="inherit_id" ref="base.view_partner_form"/>
       <field name="arch" type="xml">
         <xpath expr="//field[@name='image_1920'][1]" position="attributes">
-          <attribute name="widget">face_camera</attribute>
+          <attribute name="widget">image</attribute>
+        </xpath>
+        <xpath expr="//field[@name='image_1920'][1]" position="after">
+          <field name="camera_capture_helper" widget="face_camera_button" nolabel="1"/>
         </xpath>
         <xpath expr="//notebook" position="inside">
           <page string="Control de Acceso">
@@ -21,7 +24,7 @@
                 <field name="active"/>
                 <field name="global_user_id"/>
                 <field name="site_ids" widget="many2many_tags"/>
-                <field name="face_image" widget="image" readonly="1"/>
+                <field name="partner_face_image" widget="image" readonly="1"/>
                 <field name="has_face_pic" readonly="1"/>
               </list>
               <form string="Persona de acceso">
@@ -33,7 +36,7 @@
                     <field name="has_face_pic" readonly="1"/>
                   </group>
                   <group string="Foto de rostro (sincronizada desde Contacto)">
-                    <field name="face_image" widget="image" readonly="1" class="oe_avatar"/>
+                    <field name="partner_face_image" widget="image" readonly="1" class="oe_avatar"/>
                     <field name="face_pic_b64" invisible="1"/>
                   </group>
                 </sheet>

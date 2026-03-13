@@ -26,14 +26,19 @@ class AccessPerson(models.Model):
     f18_user_id = fields.Integer(related="global_user_id", readonly=False)
 
     partner_id = fields.Many2one("res.partner", string="Partner", required=True, index=True)
+    partner_face_image = fields.Binary(related="partner_id.image_1920", string="Foto de rostro", readonly=True)
     face_image = fields.Binary(string="Foto de rostro", attachment=True)
     face_pic_b64 = fields.Text(string="Foto de rostro (Base64)")
     has_face_pic = fields.Boolean(string="Tiene foto de rostro", compute="_compute_has_face_pic", store=False)
 
-    @api.depends("face_image", "face_pic_b64")
+    @api.depends("face_image", "face_pic_b64", "partner_face_image")
     def _compute_has_face_pic(self):
         for rec in self:
-            rec.has_face_pic = bool(rec.face_pic_b64 and str(rec.face_pic_b64).strip())
+            rec.has_face_pic = bool(
+                (rec.face_pic_b64 and str(rec.face_pic_b64).strip())
+                or rec.face_image
+                or rec.partner_face_image
+            )
 
     @api.model
     def _used_global_user_ids(self):

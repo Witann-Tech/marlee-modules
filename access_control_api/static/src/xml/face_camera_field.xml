@@ -23,4 +23,14 @@
             </t>
         </div>
     </t>
+
+    <t t-name="access_control_api.FaceCameraButtonField">
+        <div class="o_face_camera_button_field mt-2">
+            <t t-if="!props.readonly">
+                <button type="button" class="btn btn-primary" t-on-click="takePhoto">
+                    Tomar foto
+                </button>
+            </t>
+        </div>
+    </t>
 </templates>

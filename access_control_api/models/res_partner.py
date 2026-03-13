@@ -10,10 +10,18 @@ class ResPartner(models.Model):
         "partner_id",
         string="Control de acceso",
     )
+    camera_capture_helper = fields.Char(
+        string="Captura de foto",
+        compute="_compute_camera_capture_helper",
+    )
 
     @api.model
     def _normalize_image_b64(self, image_b64):
         return "".join(str(image_b64).split()) if image_b64 else False
+
+    def _compute_camera_capture_helper(self):
+        for partner in self:
+            partner.camera_capture_helper = False
 
     @api.onchange("image_1920")
     def _onchange_image_1920_sync_access_people(self):
