@@ -10,6 +10,10 @@ class ResPartner(models.Model):
         "partner_id",
         string="Control de acceso",
     )
+    access_person_face_preview = fields.Binary(
+        string="Foto biométrica",
+        compute="_compute_access_person_face_preview",
+    )
 
     @api.model
     def _normalize_image_b64(self, image_b64):
@@ -22,6 +26,12 @@ class ResPartner(models.Model):
             for person in partner.access_person_ids:
                 person.face_image = img
                 person.face_pic_b64 = img
+
+    @api.depends("access_person_ids.face_image", "access_person_ids.face_pic_b64")
+    def _compute_access_person_face_preview(self):
+        for partner in self:
+            person = partner.access_person_ids[:1]
+            partner.access_person_face_preview = person.face_image or person.face_pic_b64 or False
 
     def _sync_access_person_face(self):
         Person = self.env["access_control.person"].sudo()

@@ -11,12 +11,19 @@ class FaceCameraField extends Component {
     };
     static supportedTypes = ["binary"];
 
+    get currentValue() {
+        if (this.props.record && this.props.name && this.props.record.data) {
+            return this.props.record.data[this.props.name] || false;
+        }
+        return this.props.value || false;
+    }
+
     get hasValue() {
-        return Boolean(this.props.value);
+        return Boolean(this.currentValue);
     }
 
     get imageSrc() {
-        return this.hasValue ? `data:image/jpeg;base64,${this.props.value}` : null;
+        return this.hasValue ? `data:image/jpeg;base64,${this.currentValue}` : null;
     }
 
     _setValue(value) {
