@@ -9,6 +9,7 @@ class AccessControlSite(models.Model):
 
     name = fields.Char(required=True)
     code = fields.Char(required=True, index=True)
+    company_id = fields.Many2one("res.company", string="Empresa", index=True)
 
     active = fields.Boolean(default=True)
     device_ids = fields.One2many("access_control.device", "site_id", string="Dispositivos")

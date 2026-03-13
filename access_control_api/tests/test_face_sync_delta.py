@@ -107,6 +107,12 @@ class TestFaceSyncDelta(TransactionCase):
         payload = self.controller._person_sync_payload(person, include_face_pic=False, clear_face_pic=False)
         self.assertNotIn("facePicB64", payload)
 
+    def test_suspended_person_uses_null_access_group(self):
+        _, person = self._make_person(self._make_image_b64())
+        person.write({"access_state": "suspended"})
+        payload = self.controller._person_sync_payload(person, include_face_pic=False, clear_face_pic=False)
+        self.assertIsNone(payload["accessGroup"])
+
     def test_partner_face_update_queues_upsert_with_face(self):
         partner, person = self._make_person(self._make_image_b64(color=(180, 40, 40)))
         self.Change.search([("person_id", "=", person.id)]).unlink()
