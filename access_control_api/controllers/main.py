@@ -297,11 +297,30 @@ class AccessControlApi(http.Controller):
             gid = ch.global_user_id
             if not gid:
                 continue
-            latest_by_gid[gid] = ch
+            state = latest_by_gid.setdefault(
+                gid,
+                {
+                    "change": ch,
+                    "include_face_pic": False,
+                    "clear_face_pic": False,
+                },
+            )
+            state["change"] = ch
+            if ch.action == "delete":
+                state["include_face_pic"] = False
+                state["clear_face_pic"] = False
+                continue
+            if ch.include_face_pic:
+                state["include_face_pic"] = True
+                state["clear_face_pic"] = False
+            elif ch.clear_face_pic:
+                state["include_face_pic"] = False
+                state["clear_face_pic"] = True
 
         upserts = []
         deletes = []
-        for gid, change in sorted(latest_by_gid.items()):
+        for gid, state in sorted(latest_by_gid.items()):
+            change = state["change"]
             if change.action == "delete":
                 deletes.append({"globalUserId": gid})
                 continue
@@ -314,8 +333,8 @@ class AccessControlApi(http.Controller):
             upserts.append(
                 self._person_sync_payload(
                     person,
-                    include_face_pic=bool(change.include_face_pic),
-                    clear_face_pic=bool(change.clear_face_pic),
+                    include_face_pic=bool(state["include_face_pic"]),
+                    clear_face_pic=bool(state["clear_face_pic"]),
                 )
             )
 

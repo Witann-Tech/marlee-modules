@@ -106,6 +106,58 @@ class TestFaceSyncDelta(TransactionCase):
         payload = self.controller._person_sync_payload(person, include_face_pic=False, clear_face_pic=False)
         self.assertNotIn("facePicB64", payload)
 
+    def test_latest_delta_keeps_facepicb64_if_any_change_requires_it(self):
+        _, person = self._make_person(self._make_image_b64())
+        first = self.Change.create(
+            {
+                "site_id": self.site.id,
+                "person_id": person.id,
+                "global_user_id": person.global_user_id,
+                "action": "upsert",
+                "include_face_pic": True,
+                "reason": "face_changed",
+            }
+        )
+        second = self.Change.create(
+            {
+                "site_id": self.site.id,
+                "person_id": person.id,
+                "global_user_id": person.global_user_id,
+                "action": "upsert",
+                "include_face_pic": False,
+                "clear_face_pic": False,
+                "reason": "other_change",
+            }
+        )
+
+        latest_by_gid = {}
+        for ch in self.Change.browse([first.id, second.id]):
+            gid = ch.global_user_id
+            state = latest_by_gid.setdefault(
+                gid,
+                {"change": ch, "include_face_pic": False, "clear_face_pic": False},
+            )
+            state["change"] = ch
+            if ch.action == "delete":
+                state["include_face_pic"] = False
+                state["clear_face_pic"] = False
+                continue
+            if ch.include_face_pic:
+                state["include_face_pic"] = True
+                state["clear_face_pic"] = False
+            elif ch.clear_face_pic:
+                state["include_face_pic"] = False
+                state["clear_face_pic"] = True
+
+        state = latest_by_gid[person.global_user_id]
+        payload = self.controller._person_sync_payload(
+            person,
+            include_face_pic=bool(state["include_face_pic"]),
+            clear_face_pic=bool(state["clear_face_pic"]),
+        )
+        self.assertIn("facePicB64", payload)
+        self.assertTrue(payload["facePicB64"])
+
     def test_invalid_image_is_rejected(self):
         result = self.Partner._prepare_biometric_face_b64("esto-no-es-una-imagen", log_context="test_invalid")
         self.assertFalse(result)
