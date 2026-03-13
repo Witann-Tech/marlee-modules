@@ -194,6 +194,38 @@ class SaleOrder(models.Model):
 
         return result
 
+    @api.model
+    def get_partner_directory_rows_for_pos(self):
+        if not self.env.user.has_group('point_of_sale.group_pos_user'):
+            raise AccessError(_('No tienes permisos para consultar vigencia desde Punto de Venta.'))
+
+        partners = self.env['res.partner'].search([], order='display_name asc')
+        if not partners:
+            return []
+
+        status_map = self.get_partner_subscription_status_map_for_pos(partners.ids)
+        rows = []
+        for partner in partners:
+            status = status_map.get(partner.id, {})
+            rows.append({
+                'id': partner.id,
+                'name': status.get('partner_name') or partner.display_name,
+                'email': status.get('email') or partner.email or False,
+                'phone': status.get('phone') or getattr(partner, 'phone', False) or False,
+                'state': status.get('state') or 'none',
+                'payment_status': status.get('payment_status') or 'none',
+                'payment_status_label': status.get('payment_status_label') or False,
+                'package_label': status.get('package_label') or False,
+                'plan_name': status.get('plan_name') or False,
+                'start_date': status.get('start_date') or False,
+                'valid_until': status.get('valid_until') or False,
+                'birthday': status.get('birthday') or False,
+                'gender': status.get('gender') or False,
+                'last_access': status.get('last_access') or False,
+                'image_url': status.get('image_url') or ('/web/image/res.partner/%s/image_128' % partner.id),
+            })
+        return rows
+
     def _summarize_partner_subscription_items_for_pos(self, items):
         if not items:
             return {

@@ -9,44 +9,6 @@ import { onWillUnmount } from "@odoo/owl";
 const MODAL_ID = "wgs-subscription-status-modal";
 const STYLE_ID = "wgs-subscription-status-style";
 
-function getPos(component) {
-    if (component.pos) {
-        return component.pos;
-    }
-    if (component.env && component.env.pos) {
-        return component.env.pos;
-    }
-    return null;
-}
-
-function getAllPartners(component) {
-    const pos = getPos(component);
-    if (!pos) {
-        return [];
-    }
-
-    if (pos.models && pos.models["res.partner"]) {
-        const partnerModel = pos.models["res.partner"];
-        if (typeof partnerModel.getAll === "function") {
-            return partnerModel.getAll();
-        }
-        if (Array.isArray(partnerModel.records)) {
-            return partnerModel.records;
-        }
-    }
-
-    if (pos.db) {
-        if (typeof pos.db.get_partners_sorted === "function") {
-            return pos.db.get_partners_sorted(100000) || [];
-        }
-        if (pos.db.partner_by_id) {
-            return Object.values(pos.db.partner_by_id);
-        }
-    }
-
-    return [];
-}
-
 function parseISODate(value) {
     if (!value || typeof value !== "string") {
         return null;
@@ -84,19 +46,9 @@ patch(ControlButtons.prototype, {
     },
 
     async onClickSubscriptionStatus() {
-        const partners = getAllPartners(this);
-        if (!partners.length) {
-            this._showSimpleInfoModal(
-                _t("Sin clientes cargados"),
-                _t("No hay clientes disponibles en esta sesion de Punto de Venta.")
-            );
-            return;
-        }
-
-        const partnerIds = partners.map((partner) => partner.id).filter(Boolean);
-        let statusMap = {};
+        let rows = [];
         try {
-            statusMap = await this._fetchPartnerStatusMap(partnerIds);
+            rows = await this._fetchPartnerDirectoryRows();
         } catch (error) {
             this._showSimpleInfoModal(
                 _t("Error al consultar vigencia"),
@@ -106,45 +58,23 @@ patch(ControlButtons.prototype, {
             return;
         }
 
-        const rows = partners.map((partner) => {
-            const status = this._getPartnerStatusEntry(statusMap, partner.id) || {};
-            return {
-                id: partner.id,
-                name: status.partner_name || partner.name || partner.display_name || _t("Sin nombre"),
-                email: status.email || partner.email || "",
-                phone: status.phone || partner.phone || partner.mobile || "",
-                state: status.state || "none",
-                payment_status: status.payment_status || "none",
-                payment_status_label: status.payment_status_label || "",
-                package_label: status.package_label || "",
-                plan_name: status.plan_name || "",
-                start_date: status.start_date || "",
-                valid_until: status.valid_until || "",
-                birthday: status.birthday || "",
-                gender: status.gender || "",
-                last_access: status.last_access || "",
-                image_url: status.image_url || `/web/image/res.partner/${partner.id}/image_128`,
-            };
-        });
+        if (!rows.length) {
+            this._showSimpleInfoModal(
+                _t("Sin clientes"),
+                _t("No se encontraron clientes disponibles para mostrar.")
+            );
+            return;
+        }
 
         this._showDirectoryModal(rows);
     },
 
-    async _fetchPartnerStatusMap(partnerIds) {
-        const statusMap = {};
-        const chunkSize = 500;
-
-        for (let index = 0; index < partnerIds.length; index += chunkSize) {
-            const chunk = partnerIds.slice(index, index + chunkSize);
-            const partialMap = await this.orm.call(
-                "sale.order",
-                "get_partner_subscription_status_map_for_pos",
-                [chunk]
-            );
-            Object.assign(statusMap, partialMap || {});
-        }
-
-        return statusMap;
+    async _fetchPartnerDirectoryRows() {
+        return await this.orm.call(
+            "sale.order",
+            "get_partner_directory_rows_for_pos",
+            []
+        );
     },
 
     _showDirectoryModal(rows) {
@@ -901,9 +831,5 @@ patch(ControlButtons.prototype, {
             }
         `;
         document.head.appendChild(style);
-    },
-
-    _getPartnerStatusEntry(statusMap, partnerId) {
-        return statusMap[partnerId] || statusMap[String(partnerId)] || null;
     },
 });
