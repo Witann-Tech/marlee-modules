@@ -123,12 +123,6 @@ patch(ControlButtons.prototype, {
                 <option value="expired">${_t("Estado: Sin vigencia")}</option>
                 <option value="none">${_t("Estado: Sin paquete")}</option>
             </select>
-            <select class="wgs-filter-payment">
-                <option value="all">${_t("Cobro: Todos")}</option>
-                <option value="window">${_t("Cobro: Ventana de pago")}</option>
-                <option value="overdue">${_t("Cobro: Vencidos")}</option>
-                <option value="up_to_date">${_t("Cobro: Al corriente")}</option>
-            </select>
             <select class="wgs-filter-birthday">
                 <option value="all">${_t("Cumpleanos: Todos")}</option>
                 <option value="today">${_t("Cumpleanos: Hoy")}</option>
@@ -140,7 +134,6 @@ patch(ControlButtons.prototype, {
                 <option value="name_asc">${_t("Orden: Nombre A-Z")}</option>
                 <option value="name_desc">${_t("Orden: Nombre Z-A")}</option>
                 <option value="state">${_t("Orden: Estado")}</option>
-                <option value="payment_status">${_t("Orden: Cobro recurrente")}</option>
                 <option value="valid_until_asc">${_t("Orden: Vencimiento cercano")}</option>
                 <option value="valid_until_desc">${_t("Orden: Vencimiento lejano")}</option>
                 <option value="birthday_asc">${_t("Orden: Cumpleanos proximo")}</option>
@@ -167,7 +160,6 @@ patch(ControlButtons.prototype, {
                     <th>${_t("Plan")}</th>
                     <th>${_t("Inicio")}</th>
                     <th>${_t("Vencimiento")}</th>
-                    <th>${_t("Cobro")}</th>
                     <th>${_t("Genero")}</th>
                     <th>${_t("Cumpleanos")}</th>
                     <th>${_t("Ultimo acceso")}</th>
@@ -207,7 +199,6 @@ patch(ControlButtons.prototype, {
 
         const searchInput = toolbar.querySelector(".wgs-filter-search");
         const stateSelect = toolbar.querySelector(".wgs-filter-state");
-        const paymentSelect = toolbar.querySelector(".wgs-filter-payment");
         const birthdaySelect = toolbar.querySelector(".wgs-filter-birthday");
         const sortSelect = toolbar.querySelector(".wgs-sort");
         const exportButton = toolbar.querySelector(".wgs-btn-export");
@@ -223,39 +214,17 @@ patch(ControlButtons.prototype, {
             expired: 1,
             none: 2,
         };
-        const paymentStatusLabel = {
-            up_to_date: _t("Al corriente"),
-            window: _t("Ventana de pago"),
-            overdue: _t("Pago vencido"),
-            future: _t("Inicio futuro"),
-            inactive: _t("Inactiva"),
-            unknown: _t("Sin proxima fecha"),
-            none: _t("Sin ciclo"),
-        };
-        const paymentStatusRank = {
-            window: 0,
-            overdue: 1,
-            up_to_date: 2,
-            future: 3,
-            inactive: 4,
-            unknown: 5,
-            none: 6,
-        };
 
         let filteredSnapshot = [...rows];
 
         const render = () => {
             const query = (searchInput.value || "").trim().toLowerCase();
             const stateFilter = stateSelect.value;
-            const paymentFilter = paymentSelect.value;
             const birthdayFilter = birthdaySelect.value;
             const sortMode = sortSelect.value;
 
             let filtered = rows.filter((row) => {
                 if (stateFilter !== "all" && row.state !== stateFilter) {
-                    return false;
-                }
-                if (paymentFilter !== "all" && (row.payment_status || "none") !== paymentFilter) {
                     return false;
                 }
                 if (!this._matchesBirthdayFilter(row.birthday, birthdayFilter)) {
@@ -274,13 +243,6 @@ patch(ControlButtons.prototype, {
                 }
                 if (sortMode === "state") {
                     const diff = (stateRank[a.state] ?? 9) - (stateRank[b.state] ?? 9);
-                    if (diff !== 0) {
-                        return diff;
-                    }
-                    return (a.name || "").localeCompare(b.name || "", "es");
-                }
-                if (sortMode === "payment_status") {
-                    const diff = (paymentStatusRank[a.payment_status] ?? 99) - (paymentStatusRank[b.payment_status] ?? 99);
                     if (diff !== 0) {
                         return diff;
                     }
@@ -347,27 +309,23 @@ patch(ControlButtons.prototype, {
                     if (row.state === "valid") acc.valid += 1;
                     else if (row.state === "expired") acc.expired += 1;
                     else acc.none += 1;
-                    if (row.payment_status === "window") acc.window += 1;
-                    if (row.payment_status === "overdue") acc.overdue += 1;
                     if (row.birthday) acc.birthday += 1;
                     return acc;
                 },
-                { total: 0, valid: 0, expired: 0, none: 0, window: 0, overdue: 0, birthday: 0 }
+                { total: 0, valid: 0, expired: 0, none: 0, birthday: 0 }
             );
 
             summary.innerHTML = `
                 <span class="wgs-summary-pill">${_t("Total")}: ${counts.total}</span>
                 <span class="wgs-summary-pill wgs-summary-valid">${_t("Vigentes")}: ${counts.valid}</span>
                 <span class="wgs-summary-pill wgs-summary-expired">${_t("Sin vigencia")}: ${counts.expired}</span>
-                <span class="wgs-summary-pill wgs-summary-window">${_t("Ventana de pago")}: ${counts.window}</span>
-                <span class="wgs-summary-pill wgs-summary-overdue">${_t("Vencidos de pago")}: ${counts.overdue}</span>
                 <span class="wgs-summary-pill wgs-summary-none">${_t("Sin paquete")}: ${counts.none}</span>
                 <span class="wgs-summary-pill">${_t("Con cumpleanos")}: ${counts.birthday}</span>
                 <span class="wgs-summary-pill">${_t("Mostrando")}: ${filtered.length}</span>
             `;
 
             if (!filtered.length) {
-                tbody.innerHTML = `<tr><td colspan="13">${_t("No hay resultados para el filtro actual.")}</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="12">${_t("No hay resultados para el filtro actual.")}</td></tr>`;
                 return;
             }
 
@@ -377,9 +335,6 @@ patch(ControlButtons.prototype, {
                     : row.state === "expired"
                         ? "wgs-state-expired"
                         : "wgs-state-none";
-                const paymentStatus = row.payment_status || "none";
-                const paymentLabel = row.payment_status_label || paymentStatusLabel[paymentStatus] || paymentStatusLabel.none;
-                const paymentClass = `wgs-payment-${this._escapeHtml(paymentStatus)}`;
                 return `
                     <tr>
                         <td>
@@ -391,7 +346,6 @@ patch(ControlButtons.prototype, {
                         <td>${this._escapeHtml(row.plan_name || "-")}</td>
                         <td>${this._escapeHtml(this._formatDateDisplay(row.start_date) || "-")}</td>
                         <td>${this._escapeHtml(this._formatDateDisplay(row.valid_until) || "-")}</td>
-                        <td><span class="wgs-payment-badge ${paymentClass}">${this._escapeHtml(paymentLabel)}</span></td>
                         <td>${this._escapeHtml(row.gender || "-")}</td>
                         <td>${this._escapeHtml(this._formatDateDisplay(row.birthday) || "-")}</td>
                         <td>${this._escapeHtml(this._formatDateTimeDisplay(row.last_access) || "-")}</td>
@@ -404,7 +358,6 @@ patch(ControlButtons.prototype, {
 
         searchInput.addEventListener("input", render);
         stateSelect.addEventListener("change", render);
-        paymentSelect.addEventListener("change", render);
         birthdaySelect.addEventListener("change", render);
         sortSelect.addEventListener("change", render);
         exportButton.addEventListener("click", () => {
@@ -512,7 +465,6 @@ patch(ControlButtons.prototype, {
                 <td>${this._escapeHtml(row.plan_name || "-")}</td>
                 <td>${this._escapeHtml(this._formatDateDisplay(row.start_date) || "-")}</td>
                 <td>${this._escapeHtml(this._formatDateDisplay(row.valid_until) || "-")}</td>
-                <td>${this._escapeHtml(row.payment_status_label || "-")}</td>
                 <td>${this._escapeHtml(row.gender || "-")}</td>
                 <td>${this._escapeHtml(this._formatDateDisplay(row.birthday) || "-")}</td>
                 <td>${this._escapeHtml(this._formatDateTimeDisplay(row.last_access) || "-")}</td>
@@ -541,7 +493,6 @@ patch(ControlButtons.prototype, {
                                 <th>${this._escapeHtml(_t("Plan"))}</th>
                                 <th>${this._escapeHtml(_t("Inicio"))}</th>
                                 <th>${this._escapeHtml(_t("Vencimiento"))}</th>
-                                <th>${this._escapeHtml(_t("Cobro"))}</th>
                                 <th>${this._escapeHtml(_t("Genero"))}</th>
                                 <th>${this._escapeHtml(_t("Cumpleanos"))}</th>
                                 <th>${this._escapeHtml(_t("Ultimo acceso"))}</th>
@@ -719,16 +670,6 @@ patch(ControlButtons.prototype, {
                 color: #475569;
                 background: #f1f5f9;
             }
-            .wgs-summary-window {
-                border-color: #facc15;
-                color: #92400e;
-                background: #fef3c7;
-            }
-            .wgs-summary-overdue {
-                border-color: #fca5a5;
-                color: #991b1b;
-                background: #fee2e2;
-            }
             .wgs-status-modal-body {
                 padding: 0;
                 overflow: auto;
@@ -805,40 +746,6 @@ patch(ControlButtons.prototype, {
             .wgs-state-none {
                 color: #475569;
                 font-weight: 700;
-            }
-            .wgs-payment-badge {
-                display: inline-block;
-                border-radius: 999px;
-                padding: 0.15rem 0.45rem;
-                font-size: 0.74rem;
-                font-weight: 700;
-                border: 1px solid #d1d5db;
-                background: #f8fafc;
-                color: #374151;
-                white-space: nowrap;
-            }
-            .wgs-payment-window {
-                border-color: #facc15;
-                background: #fef3c7;
-                color: #92400e;
-            }
-            .wgs-payment-overdue {
-                border-color: #fda4af;
-                background: #ffe4e6;
-                color: #9f1239;
-            }
-            .wgs-payment-up_to_date {
-                border-color: #8ad9b5;
-                background: #daf5e8;
-                color: #0f7b4b;
-            }
-            .wgs-payment-future,
-            .wgs-payment-unknown,
-            .wgs-payment-inactive,
-            .wgs-payment-none {
-                border-color: #cbd5e1;
-                background: #f1f5f9;
-                color: #475569;
             }
             @media (max-width: 900px) {
                 .wgs-status-toolbar {

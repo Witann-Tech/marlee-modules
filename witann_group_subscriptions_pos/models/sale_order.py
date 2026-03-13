@@ -13,14 +13,33 @@ _logger = logging.getLogger(__name__)
 
 class SaleOrder(models.Model):
     _inherit = 'sale.order'
-    _DEFAULT_PAYMENT_WINDOW_DAYS = 5
-
-    _INVALID_SUBSCRIPTION_STATE_TOKENS = (
-        'cancel',
-        'churn',
-        'close',
-        'draft',
+    _WGS_ACCESS_ENABLED_STATE_TOKENS = (
+        'progress',
+        'in progress',
+        'in_progress',
+        'en progreso',
+        'renew',
+        'to renew',
+        'por renovar',
+    )
+    _WGS_ACCESS_SUSPENDED_STATE_TOKENS = (
         'pause',
+        'paused',
+        'pausa',
+        'hold',
+        'on hold',
+        'suspend',
+        'suspended',
+    )
+    _WGS_ACCESS_DISABLED_STATE_TOKENS = (
+        'cancel',
+        'cancelled',
+        'canceled',
+        'close',
+        'closed',
+        'churn',
+        'churned',
+        'draft',
         'upsell',
     )
     _PARTNER_GENDER_FIELD_CANDIDATES = (
@@ -167,22 +186,12 @@ class SaleOrder(models.Model):
                 'short_label': summary.get('short_label') or False,
                 'valid_until': summary.get('valid_until') or False,
                 'start_date': summary.get('start_date') or False,
-                'next_invoice_date': summary.get('next_invoice_date') or False,
-                'days_to_due': summary.get('days_to_due'),
-                'payment_status': summary.get('payment_status') or 'none',
-                'payment_status_label': summary.get('payment_status_label') or False,
-                'can_charge_renewal': bool(summary.get('can_charge_renewal')),
                 'subscription_id': summary.get('subscription_id') or False,
                 'package_label': summary.get('package_label') or False,
                 'package_names': summary.get('package_names') or [],
                 'plan_name': summary.get('plan_name') or False,
                 'reason': summary.get('reason') or False,
                 'subscription_name': summary.get('subscription_name') or False,
-                'renewal_product_id': summary.get('renewal_product_id') or False,
-                'renewal_product_name': summary.get('renewal_product_name') or False,
-                'renewal_plan_id': summary.get('renewal_plan_id') or False,
-                'renewal_pricing_id': summary.get('renewal_pricing_id') or False,
-                'renewal_amount': summary.get('renewal_amount') or 0.0,
                 'partner_name': partner.display_name,
                 'phone': phone_value or False,
                 'email': email_value or False,
@@ -236,8 +245,6 @@ class SaleOrder(models.Model):
                 'email': status.get('email') or partner.email or False,
                 'phone': status.get('phone') or phone_fallback,
                 'state': status.get('state') or 'none',
-                'payment_status': status.get('payment_status') or 'none',
-                'payment_status_label': status.get('payment_status_label') or False,
                 'package_label': status.get('package_label') or False,
                 'plan_name': status.get('plan_name') or False,
                 'start_date': status.get('start_date') or False,
@@ -256,22 +263,12 @@ class SaleOrder(models.Model):
                 'short_label': False,
                 'valid_until': False,
                 'start_date': False,
-                'next_invoice_date': False,
-                'days_to_due': False,
-                'payment_status': 'none',
-                'payment_status_label': False,
-                'can_charge_renewal': False,
                 'subscription_id': False,
                 'package_label': False,
                 'package_names': [],
                 'plan_name': False,
                 'reason': False,
                 'subscription_name': False,
-                'renewal_product_id': False,
-                'renewal_product_name': False,
-                'renewal_plan_id': False,
-                'renewal_pricing_id': False,
-                'renewal_amount': 0.0,
             }
 
         valid_items = [row for row in items if row.get('is_valid')]
@@ -317,22 +314,12 @@ class SaleOrder(models.Model):
             'short_label': short_label,
             'valid_until': primary.get('valid_until') or False,
             'start_date': primary.get('start_date') or primary.get('period_start') or False,
-            'next_invoice_date': primary.get('next_invoice_date') or False,
-            'days_to_due': primary.get('days_to_due'),
-            'payment_status': primary.get('payment_status') or 'none',
-            'payment_status_label': primary.get('payment_status_label') or False,
-            'can_charge_renewal': bool(primary.get('can_charge_renewal')),
             'subscription_id': primary.get('subscription_id') or False,
             'package_label': package_label,
             'package_names': package_names,
             'plan_name': primary.get('plan_name') or False,
             'reason': primary.get('reason') or False,
             'subscription_name': primary.get('subscription_name') or False,
-            'renewal_product_id': primary.get('renewal_product_id') or False,
-            'renewal_product_name': primary.get('renewal_product_name') or False,
-            'renewal_plan_id': primary.get('renewal_plan_id') or False,
-            'renewal_pricing_id': primary.get('renewal_pricing_id') or False,
-            'renewal_amount': primary.get('renewal_amount') or 0.0,
         }
 
     @api.model
@@ -463,10 +450,10 @@ class SaleOrder(models.Model):
         if not recurring_lines:
             return False
 
-        is_valid = True
-        reason = _('Dentro del periodo pagado.')
+        is_valid = False
+        reason = _('La suscripción no está vigente para control de acceso.')
         plan_name = self._get_subscription_plan_name_for_pos(recurring_lines)
-        active_state = self._is_active_subscription_state()
+        access_state = self._classify_subscription_access_state_for_pos()
 
         start_date = self._get_first_available_date(
             ('wgs_effective_start_date', 'start_date', 'date_start', 'subscription_start_date', 'date_order')
@@ -490,64 +477,13 @@ class SaleOrder(models.Model):
         if hard_end_date and (not valid_until or hard_end_date < valid_until):
             valid_until = hard_end_date
 
-        if not active_state:
-            is_valid = False
-            reason = _('La suscripción no está en estado activo.')
-        elif start_date and today < start_date:
-            is_valid = False
-            reason = _('La suscripción todavía no inicia.')
-        elif next_invoice_date and today >= next_invoice_date:
-            is_valid = False
-            reason = _('Periodo vencido por falta de pago del siguiente ciclo.')
-        elif valid_until and today > valid_until:
-            is_valid = False
-            reason = _('Periodo vencido.')
-        elif not next_invoice_date and not valid_until:
-            is_valid = False
-            reason = _('No se pudo determinar la vigencia (sin próxima fecha de cobro).')
-
-        days_to_due = False
-        if next_invoice_date:
-            days_to_due = (next_invoice_date - today).days
-
-        payment_status = 'none'
-        payment_status_label = _('Sin ciclo')
-        payment_window_days = self._get_pos_payment_window_days()
-        if not active_state:
-            payment_status = 'inactive'
-            payment_status_label = _('Suscripción inactiva')
-        elif start_date and today < start_date:
-            payment_status = 'future'
-            payment_status_label = _('Inicio futuro')
-        elif not next_invoice_date:
-            payment_status = 'unknown'
-            payment_status_label = _('Sin próxima fecha')
-        elif days_to_due < 0:
-            payment_status = 'overdue'
-            payment_status_label = _('Pago vencido')
-        elif days_to_due <= payment_window_days:
-            payment_status = 'window'
-            payment_status_label = _('Ventana de cobro')
+        if access_state == 'enabled':
+            is_valid = True
+            reason = _('Suscripción en progreso o en renovación.')
+        elif access_state == 'suspended':
+            reason = _('La suscripción está pausada o suspendida.')
         else:
-            payment_status = 'up_to_date'
-            payment_status_label = _('Al corriente')
-
-        recurring_total = 0.0
-        for recurring_line in recurring_lines:
-            qty = abs(self._get_recurring_line_qty_for_pos(recurring_line))
-            discount = float(recurring_line.discount or 0.0) if 'discount' in recurring_line._fields else 0.0
-            recurring_total += qty * float(recurring_line.price_unit or 0.0) * (1 - (discount / 100.0))
-        recurring_total = round(max(recurring_total, 0.0), 2)
-
-        renewal_line = recurring_lines.sorted(key=lambda line: line.id)[:1]
-        renewal_product = renewal_line.product_id if renewal_line else False
-        renewal_plan_id, renewal_pricing_id = self._extract_recurring_line_plan_pricing_for_pos(renewal_line)
-        can_charge_renewal = bool(
-            active_state
-            and renewal_product
-            and next_invoice_date
-            and not (start_date and today < start_date)
-        )
+            reason = _('La suscripción no está en progreso ni en renovación.')
 
         return {
             'subscription_id': self.id,
@@ -558,63 +494,16 @@ class SaleOrder(models.Model):
             'start_date': start_date.isoformat() if start_date else False,
             'period_start': period_start.isoformat() if period_start else False,
             'valid_until': valid_until.isoformat() if valid_until else False,
-            'next_invoice_date': next_invoice_date.isoformat() if next_invoice_date else False,
-            'days_to_due': days_to_due,
-            'payment_status': payment_status,
-            'payment_status_label': payment_status_label,
-            'can_charge_renewal': can_charge_renewal,
-            'renewal_product_id': renewal_product.id if renewal_product else False,
-            'renewal_product_name': renewal_product.display_name if renewal_product else False,
-            'renewal_plan_id': renewal_plan_id or False,
-            'renewal_pricing_id': renewal_pricing_id or False,
-            'renewal_amount': recurring_total,
             'is_valid': is_valid,
             'status_label': _('Vigente') if is_valid else _('Sin vigencia'),
             'reason': reason,
         }
-
-    @api.model
-    def _get_pos_payment_window_days(self):
-        raw_value = self.env['ir.config_parameter'].sudo().get_param(
-            'witann_group_subscriptions_pos.payment_window_days',
-            str(self._DEFAULT_PAYMENT_WINDOW_DAYS),
-        )
-        try:
-            days = int(raw_value)
-        except (TypeError, ValueError):
-            days = self._DEFAULT_PAYMENT_WINDOW_DAYS
-        return max(0, days)
 
     def _get_recurring_lines(self):
         self.ensure_one()
         return self.order_line.filtered(
             lambda line: line.product_id and line.product_id.product_tmpl_id.recurring_invoice
         )
-
-    @api.model
-    def _get_recurring_line_qty_for_pos(self, line):
-        for field_name in ('product_uom_qty', 'quantity', 'qty'):
-            if field_name in line._fields:
-                return float(line[field_name] or 0.0)
-        return 0.0
-
-    @api.model
-    def _extract_recurring_line_plan_pricing_for_pos(self, line):
-        line = line and line[:1]
-        if not line:
-            return False, False
-
-        plan_id = False
-        pricing_id = False
-        for field_name in ('subscription_plan_id', 'plan_id', 'recurring_plan_id'):
-            if field_name in line._fields and line[field_name]:
-                plan_id = line[field_name].id
-                break
-        for field_name in ('subscription_pricing_id', 'pricing_id', 'recurring_pricing_id'):
-            if field_name in line._fields and line[field_name]:
-                pricing_id = line[field_name].id
-                break
-        return plan_id, pricing_id
 
     def _get_subscription_plan_name_for_pos(self, recurring_lines):
         self.ensure_one()
@@ -638,16 +527,21 @@ class SaleOrder(models.Model):
         names = sorted(set(name for name in names if name))
         return ', '.join(names) if names else False
 
-    def _is_active_subscription_state(self):
+    def _classify_subscription_access_state_for_pos(self):
         self.ensure_one()
         if 'subscription_state' not in self._fields:
-            return True
+            return False
 
-        state_value = (self.subscription_state or '').lower()
+        state_value = (self.subscription_state or '').strip().lower()
         if not state_value:
-            return True
-
-        return not any(token in state_value for token in self._INVALID_SUBSCRIPTION_STATE_TOKENS)
+            return False
+        if any(token in state_value for token in self._WGS_ACCESS_SUSPENDED_STATE_TOKENS):
+            return 'suspended'
+        if any(token in state_value for token in self._WGS_ACCESS_ENABLED_STATE_TOKENS):
+            return 'enabled'
+        if any(token in state_value for token in self._WGS_ACCESS_DISABLED_STATE_TOKENS):
+            return False
+        return False
 
     def _get_first_available_date(self, field_names):
         self.ensure_one()
