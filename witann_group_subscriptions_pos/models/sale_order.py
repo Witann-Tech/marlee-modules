@@ -195,15 +195,30 @@ class SaleOrder(models.Model):
         return result
 
     @api.model
-    def get_partner_directory_rows_for_pos(self):
+    def get_partner_directory_rows_for_pos(self, offset=0, limit=500):
         if not self.env.user.has_group('point_of_sale.group_pos_user'):
             raise AccessError(_('No tienes permisos para consultar vigencia desde Punto de Venta.'))
 
-        partners = self.env['res.partner'].search([], order='display_name asc')
+        try:
+            offset = int(offset or 0)
+        except (TypeError, ValueError):
+            offset = 0
+        try:
+            limit = int(limit or 500)
+        except (TypeError, ValueError):
+            limit = 500
+        if limit < 1:
+            limit = 500
+
+        partners = self.env['res.partner'].search([], order='display_name asc', offset=max(offset, 0), limit=limit)
         if not partners:
             return []
 
-        status_map = self.get_partner_subscription_status_map_for_pos(partners.ids)
+        try:
+            status_map = self.get_partner_subscription_status_map_for_pos(partners.ids)
+        except Exception as error:
+            _logger.warning('WGS POS: could not build partner status map for directory batch offset=%s limit=%s (%s)', offset, limit, error)
+            status_map = {}
         rows = []
         for partner in partners:
             status = status_map.get(partner.id, {})

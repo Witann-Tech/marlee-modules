@@ -70,11 +70,27 @@ patch(ControlButtons.prototype, {
     },
 
     async _fetchPartnerDirectoryRows() {
-        return await this.orm.call(
-            "sale.order",
-            "get_partner_directory_rows_for_pos",
-            []
-        );
+        const rows = [];
+        const batchSize = 500;
+        let offset = 0;
+
+        while (true) {
+            const batch = await this.orm.call(
+                "sale.order",
+                "get_partner_directory_rows_for_pos",
+                [offset, batchSize]
+            );
+            if (!Array.isArray(batch) || !batch.length) {
+                break;
+            }
+            rows.push(...batch);
+            if (batch.length < batchSize) {
+                break;
+            }
+            offset += batchSize;
+        }
+
+        return rows;
     },
 
     _showDirectoryModal(rows) {
