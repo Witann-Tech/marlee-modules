@@ -106,6 +106,23 @@ class TestFaceSyncDelta(TransactionCase):
         payload = self.controller._person_sync_payload(person, include_face_pic=False, clear_face_pic=False)
         self.assertNotIn("facePicB64", payload)
 
+    def test_partner_face_update_queues_upsert_with_face(self):
+        partner, person = self._make_person(self._make_image_b64(color=(180, 40, 40)))
+        self.Change.search([("person_id", "=", person.id)]).unlink()
+
+        partner.write({"image_1920": self._make_image_b64(color=(40, 180, 40))})
+        changes = self.Change.search([("person_id", "=", person.id)], order="id asc")
+
+        self.assertTrue(changes)
+        self.assertEqual(changes[-1].action, "upsert")
+        self.assertTrue(changes[-1].include_face_pic)
+        self.assertFalse(changes[-1].clear_face_pic)
+
+        person.invalidate_recordset(["face_pic_b64", "face_image"])
+        payload = self.controller._person_sync_payload(person, include_face_pic=True, clear_face_pic=False)
+        self.assertIn("facePicB64", payload)
+        self.assertTrue(payload["facePicB64"])
+
     def test_latest_delta_keeps_facepicb64_if_any_change_requires_it(self):
         _, person = self._make_person(self._make_image_b64())
         first = self.Change.create(
@@ -157,6 +174,11 @@ class TestFaceSyncDelta(TransactionCase):
         )
         self.assertIn("facePicB64", payload)
         self.assertTrue(payload["facePicB64"])
+
+    def test_normalize_image_b64_accepts_bytes_without_b_prefix_corruption(self):
+        original = self._make_image_b64()
+        normalized = self.Partner._normalize_image_b64(original.encode())
+        self.assertEqual(normalized, self.Partner._normalize_image_b64(original))
 
     def test_invalid_image_is_rejected(self):
         result = self.Partner._prepare_biometric_face_b64("esto-no-es-una-imagen", log_context="test_invalid")

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import base64
 import json
 import logging
 from odoo import http, fields
@@ -77,9 +78,35 @@ class AccessControlApi(http.Controller):
             "accessGroup": 1,
         }
         if clear_face_pic:
+            _logger.info("sync_delta facePicB64=null pin=%s person_id=%s", person.global_user_id, person.id)
             payload["facePicB64"] = None
         elif include_face_pic:
-            payload["facePicB64"] = "".join(str(person.face_pic_b64 or "").split()) or None
+            face_b64 = person.env["res.partner"].sudo()._normalize_image_b64(person.face_pic_b64)
+            if face_b64:
+                try:
+                    raw = base64.b64decode(face_b64, validate=True)
+                    _logger.info(
+                        "sync_delta facePicB64 included pin=%s person_id=%s jpeg_bytes=%s b64_len=%s",
+                        person.global_user_id,
+                        person.id,
+                        len(raw),
+                        len(face_b64),
+                    )
+                except Exception:
+                    _logger.warning(
+                        "sync_delta invalid facePicB64 pin=%s person_id=%s",
+                        person.global_user_id,
+                        person.id,
+                    )
+                    face_b64 = None
+            else:
+                _logger.warning(
+                    "sync_delta requested facePicB64 but no valid image pin=%s person_id=%s",
+                    person.global_user_id,
+                    person.id,
+                )
+            if face_b64:
+                payload["facePicB64"] = face_b64
         return payload
 
     @http.route(
@@ -340,6 +367,15 @@ class AccessControlApi(http.Controller):
 
         next_cursor = changes[-1].id
         has_more = len(changes) >= limit
+        _logger.info(
+            "sync_delta site=%s device=%s cursor=%s next_cursor=%s upserts=%s deletes=%s",
+            site_code,
+            device_serial or None,
+            cursor,
+            next_cursor,
+            len(upserts),
+            len(deletes),
+        )
 
         return {
             "ok": True,

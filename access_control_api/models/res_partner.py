@@ -33,7 +33,15 @@ class ResPartner(models.Model):
     def _normalize_image_b64(self, image_b64):
         if not image_b64:
             return False
-        value = "".join(str(image_b64).split())
+        if isinstance(image_b64, (bytes, bytearray)):
+            try:
+                value = image_b64.decode()
+            except UnicodeDecodeError:
+                _logger.warning("face_b64 invalid_format context=normalize reason=bytes_decode_failed")
+                return False
+        else:
+            value = str(image_b64)
+        value = "".join(value.split())
         value = re.sub(r"^data:image/[^;]+;base64,", "", value, flags=re.IGNORECASE)
         value = re.sub(r"[^A-Za-z0-9+/=]", "", value)
         while value and len(value) % 4 == 1:
@@ -136,6 +144,13 @@ class ResPartner(models.Model):
             if not people:
                 continue
             img = self._prepare_biometric_face_b64(partner.image_1920, log_context=f"partner_write:{partner.id}")
+            _logger.info(
+                "partner_face_sync partner_id=%s people=%s has_face=%s b64_len=%s",
+                partner.id,
+                people.ids,
+                bool(img),
+                len(img or ""),
+            )
             people.write(
                 {
                     "face_image": img,

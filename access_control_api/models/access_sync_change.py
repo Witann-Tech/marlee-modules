@@ -1,5 +1,10 @@
 # -*- coding: utf-8 -*-
+import logging
+
 from odoo import models, fields, api
+
+
+_logger = logging.getLogger(__name__)
 
 
 class AccessSyncChange(models.Model):
@@ -57,6 +62,15 @@ class AccessSyncChange(models.Model):
                 }
             )
         self.sudo().create(vals_list)
+        _logger.info(
+            "queue_upsert person_id=%s pin=%s sites=%s include_face_pic=%s clear_face_pic=%s reason=%s",
+            person.id,
+            person.global_user_id,
+            resolved_site_ids,
+            bool(include_face_pic),
+            bool(clear_face_pic),
+            reason,
+        )
         return True
 
     @api.model
@@ -78,4 +92,11 @@ class AccessSyncChange(models.Model):
                 }
             )
         self.sudo().create(vals_list)
+        _logger.info(
+            "queue_delete person_id=%s pin=%s sites=%s reason=%s",
+            person.id if person else None,
+            int(global_user_id),
+            resolved_site_ids,
+            reason,
+        )
         return True
