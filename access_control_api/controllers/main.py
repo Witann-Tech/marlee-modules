@@ -75,7 +75,7 @@ class AccessControlApi(http.Controller):
             "globalUserId": person.global_user_id,
             "name": person.name or "",
             "active": bool(person.active),
-            "accessGroup": None if person.access_state == "suspended" else 1,
+            "accessGroup": 0 if person.access_state == "suspended" else 1,
         }
         if clear_face_pic:
             _logger.info("sync_delta facePicB64=null pin=%s person_id=%s", person.global_user_id, person.id)
