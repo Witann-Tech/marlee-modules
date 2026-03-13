@@ -11,10 +11,9 @@
         </xpath>
         <xpath expr="//notebook" position="inside">
           <page string="Control de Acceso">
-            <group string="Validación de foto biométrica">
-              <field name="access_person_face_preview" widget="image" readonly="1" class="oe_avatar"/>
+            <group>
               <div class="text-muted">
-                La foto del contacto se captura en su ubicación original y aquí se valida la foto sincronizada al registro biométrico.
+                La foto del contacto se captura en su ubicación original y se sincroniza a la foto biométrica de la persona.
               </div>
             </group>
             <field name="access_person_ids" context="{'default_partner_id': id}" nolabel="1">
@@ -22,6 +21,7 @@
                 <field name="active"/>
                 <field name="global_user_id"/>
                 <field name="site_ids" widget="many2many_tags"/>
+                <field name="face_image" widget="image" readonly="1"/>
                 <field name="has_face_pic" readonly="1"/>
               </list>
               <form string="Persona de acceso">
