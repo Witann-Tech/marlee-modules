@@ -328,12 +328,10 @@ class PosOrder(models.Model):
         choice = self._wgs_get_recurring_pricing_choice(product, fallback=fallback)
         default_plan_id = choice.get('plan_id') or False
         default_pricing_id = choice.get('pricing_id') or False
-        default_min_term_periods = max(0, int(choice.get('min_term_periods') or 0))
 
         return {
             'is_subscription': is_subscription,
             'max_participants_total': max_total,
-            'min_term_periods': default_min_term_periods,
             'default_plan_id': default_plan_id,
             'default_pricing_id': default_pricing_id,
             'default_price': float(choice.get('price') or fallback or 0.0),
@@ -346,7 +344,6 @@ class PosOrder(models.Model):
                     'interval_label': row.get('interval_label') or '',
                     'interval_value': int(row.get('interval_value') or 1),
                     'interval_unit': row.get('interval_unit') or 'month',
-                    'min_term_periods': max(0, int(row.get('min_term_periods') or 0)),
                 }
                 for row in candidates
             ],
@@ -925,9 +922,6 @@ class PosOrder(models.Model):
         today = fields.Date.context_today(self)
         subscription_start_date = line.wgs_get_subscription_start_date() or today
         subscription_end_date = line.wgs_get_subscription_end_date()
-        minimum_term_periods = max(0, int(pricing_choice.get('min_term_periods') or 0))
-        if plan_record:
-            minimum_term_periods = self._wgs_get_plan_min_term_periods(plan_record)
         sale_start_date = subscription_start_date
         if subscription_start_date < today:
             raise UserError(
@@ -936,34 +930,9 @@ class PosOrder(models.Model):
                 )
                 % {'date': fields.Date.to_string(today)}
             )
-        required_periods = max(1, minimum_term_periods)
-        if subscription_end_date or minimum_term_periods > 0:
-            if not plan_record:
-                raise UserError(
-                    _('No se pudo validar la fecha de finalización porque el plan recurrente no está definido.')
-                )
         next_billing_date = False
         if plan_record:
             next_billing_date = self._wgs_get_plan_min_end_threshold(plan_record, sale_start_date)
-            min_threshold_date = self._wgs_get_plan_min_end_threshold(
-                plan_record,
-                sale_start_date,
-                periods_count=required_periods,
-            )
-            if not subscription_end_date and minimum_term_periods > 0:
-                subscription_end_date = min_threshold_date
-            elif subscription_end_date and subscription_end_date < min_threshold_date:
-                raise UserError(
-                    _(
-                        'La fecha de finalización debe ser igual o posterior a %(date)s para el plan %(plan)s '
-                        '(plazo mínimo aplicado: %(periods)s periodos).'
-                    )
-                    % {
-                        'date': fields.Date.to_string(min_threshold_date),
-                        'plan': plan_record.display_name,
-                        'periods': required_periods,
-                    }
-                )
 
         sale_order_line_fields = self.env['sale.order.line']._fields
         line_values = {'product_id': product.id}
@@ -2203,27 +2172,6 @@ class PosOrder(models.Model):
         # month by default
         return start_date + relativedelta(months=interval_value)
 
-    def _wgs_get_plan_min_term_periods(self, plan):
-        if not plan:
-            return 0
-
-        raw_value = 0
-        candidate_fields = (
-            'wgs_minimum_term_periods',
-            'minimum_term_periods',
-            'subscription_minimum_term_periods',
-        )
-        for field_name in candidate_fields:
-            if field_name in plan._fields:
-                raw_value = plan[field_name]
-                break
-
-        try:
-            numeric_value = int(raw_value or 0)
-        except (TypeError, ValueError):
-            return 0
-        return max(0, numeric_value)
-
     def _wgs_extract_interval_from_plan(self, plan):
         interval_value = 1
         interval_unit = 'month'
@@ -2437,7 +2385,6 @@ class PosOrder(models.Model):
                 'interval_label': self._wgs_extract_plan_interval_label_from_pricing(record),
                 'interval_value': interval_value,
                 'interval_unit': interval_unit,
-                'min_term_periods': self._wgs_get_plan_min_term_periods(plan),
                 'price': float(price),
             })
         return output
@@ -2456,7 +2403,6 @@ class PosOrder(models.Model):
             'interval_label': self._wgs_extract_plan_interval_label_from_pricing(pricing),
             'interval_value': interval_value,
             'interval_unit': interval_unit,
-            'min_term_periods': self._wgs_get_plan_min_term_periods(plan),
             'price': float(price),
         }
 
@@ -2506,7 +2452,6 @@ class PosOrder(models.Model):
                 'interval_label': self._wgs_extract_plan_interval_label_from_pricing(pricing),
                 'interval_value': interval_value,
                 'interval_unit': interval_unit,
-                'min_term_periods': self._wgs_get_plan_min_term_periods(plan),
                 'price': float(price),
             })
         return output
