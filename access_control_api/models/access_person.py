@@ -1,4 +1,7 @@
 # -*- coding: utf-8 -*-
+import base64
+import binascii
+import re
 from odoo import models, fields, api
 from odoo.exceptions import ValidationError
 
@@ -63,7 +66,22 @@ class AccessPerson(models.Model):
         data = dict(vals or {})
 
         def _clean(value):
-            return "".join(str(value).split()) if value else False
+            if not value:
+                return False
+            cleaned = "".join(str(value).split())
+            cleaned = re.sub(r"^data:image/[^;]+;base64,", "", cleaned, flags=re.IGNORECASE)
+            cleaned = re.sub(r"[^A-Za-z0-9+/=]", "", cleaned)
+            while cleaned and len(cleaned) % 4 == 1:
+                cleaned = cleaned[:-1]
+            if cleaned and len(cleaned) % 4:
+                cleaned += "=" * (4 - (len(cleaned) % 4))
+            if not cleaned:
+                return False
+            try:
+                raw = base64.b64decode(cleaned, validate=True)
+            except (binascii.Error, ValueError):
+                return False
+            return base64.b64encode(raw).decode()
 
         if "face_image" in data:
             cleaned = _clean(data.get("face_image"))

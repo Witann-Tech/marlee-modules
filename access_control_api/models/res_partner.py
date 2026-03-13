@@ -1,4 +1,7 @@
 # -*- coding: utf-8 -*-
+import base64
+import binascii
+import re
 from odoo import models, fields, api
 
 
@@ -17,7 +20,22 @@ class ResPartner(models.Model):
 
     @api.model
     def _normalize_image_b64(self, image_b64):
-        return "".join(str(image_b64).split()) if image_b64 else False
+        if not image_b64:
+            return False
+        value = "".join(str(image_b64).split())
+        value = re.sub(r"^data:image/[^;]+;base64,", "", value, flags=re.IGNORECASE)
+        value = re.sub(r"[^A-Za-z0-9+/=]", "", value)
+        while value and len(value) % 4 == 1:
+            value = value[:-1]
+        if value and len(value) % 4:
+            value += "=" * (4 - (len(value) % 4))
+        if not value:
+            return False
+        try:
+            raw = base64.b64decode(value, validate=True)
+        except (binascii.Error, ValueError):
+            return False
+        return base64.b64encode(raw).decode()
 
     def _compute_camera_capture_helper(self):
         for partner in self:
