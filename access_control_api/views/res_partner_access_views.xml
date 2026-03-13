@@ -11,7 +11,7 @@
         </xpath>
         <xpath expr="//field[@name='image_1920'][1]/.." position="inside">
           <div class="mt-2">
-            <field name="camera_capture_helper" widget="face_camera_button" nolabel="1"/>
+            <field name="camera_capture_helper" widget="face_camera_button" nolabel="1" readonly="0"/>
           </div>
         </xpath>
         <xpath expr="//notebook" position="inside">
