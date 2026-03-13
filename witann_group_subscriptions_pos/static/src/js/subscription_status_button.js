@@ -1,7 +1,6 @@
 /** @odoo-module **/
 
 import { ControlButtons } from "@point_of_sale/app/screens/product_screen/control_buttons/control_buttons";
-import { PaymentScreen } from "@point_of_sale/app/screens/payment_screen/payment_screen";
 import { _t } from "@web/core/l10n/translation";
 import { useService } from "@web/core/utils/hooks";
 import { patch } from "@web/core/utils/patch";
@@ -9,172 +8,6 @@ import { onWillUnmount } from "@odoo/owl";
 
 const MODAL_ID = "wgs-subscription-status-modal";
 const STYLE_ID = "wgs-subscription-status-style";
-const ORDERLINE_PATCH_FLAG = "__wgsParticipantSerializationPatched";
-const ORDER_PATCH_FLAG = "__wgsOrderSerializationPatched";
-const WGS_DEBUG_ALERTS = false;
-const WGS_DEBUG_MODAL_ID = "wgs-debug-modal";
-
-function wgsShowDebugModal(title, body) {
-    if (typeof document === "undefined" || !document.body) {
-        if (typeof window !== "undefined" && typeof window.alert === "function") {
-            window.alert(`${title}\n\n${body}`);
-        }
-        return;
-    }
-
-    const previous = document.getElementById(WGS_DEBUG_MODAL_ID);
-    if (previous) {
-        previous.remove();
-    }
-
-    const overlay = document.createElement("div");
-    overlay.id = WGS_DEBUG_MODAL_ID;
-    overlay.style.position = "fixed";
-    overlay.style.inset = "0";
-    overlay.style.background = "rgba(0, 0, 0, 0.45)";
-    overlay.style.display = "flex";
-    overlay.style.alignItems = "center";
-    overlay.style.justifyContent = "center";
-    overlay.style.zIndex = "999999";
-
-    const modal = document.createElement("div");
-    modal.style.width = "min(960px, 92vw)";
-    modal.style.maxHeight = "80vh";
-    modal.style.background = "#111827";
-    modal.style.border = "1px solid #374151";
-    modal.style.borderRadius = "12px";
-    modal.style.padding = "16px";
-    modal.style.display = "flex";
-    modal.style.flexDirection = "column";
-    modal.style.gap = "12px";
-    modal.style.color = "#f9fafb";
-
-    const header = document.createElement("div");
-    header.textContent = title;
-    header.style.fontWeight = "700";
-    header.style.fontSize = "18px";
-
-    const textarea = document.createElement("textarea");
-    textarea.value = body;
-    textarea.readOnly = true;
-    textarea.style.width = "100%";
-    textarea.style.minHeight = "320px";
-    textarea.style.maxHeight = "58vh";
-    textarea.style.resize = "vertical";
-    textarea.style.padding = "10px";
-    textarea.style.borderRadius = "8px";
-    textarea.style.border = "1px solid #4b5563";
-    textarea.style.background = "#0f172a";
-    textarea.style.color = "#e5e7eb";
-    textarea.style.fontFamily = "ui-monospace, SFMono-Regular, Menlo, monospace";
-    textarea.style.fontSize = "13px";
-
-    const footer = document.createElement("div");
-    footer.style.display = "flex";
-    footer.style.gap = "8px";
-    footer.style.justifyContent = "flex-end";
-
-    const copyButton = document.createElement("button");
-    copyButton.type = "button";
-    copyButton.textContent = "Copiar";
-    copyButton.style.padding = "8px 12px";
-    copyButton.style.borderRadius = "8px";
-    copyButton.style.border = "1px solid #4b5563";
-    copyButton.style.background = "#1f2937";
-    copyButton.style.color = "#f9fafb";
-    copyButton.style.cursor = "pointer";
-    copyButton.addEventListener("click", async () => {
-        try {
-            if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.writeText) {
-                await navigator.clipboard.writeText(textarea.value);
-            } else {
-                textarea.focus();
-                textarea.select();
-                document.execCommand("copy");
-            }
-            copyButton.textContent = "Copiado";
-            setTimeout(() => {
-                copyButton.textContent = "Copiar";
-            }, 1200);
-        } catch {
-            textarea.focus();
-            textarea.select();
-        }
-    });
-
-    const closeButton = document.createElement("button");
-    closeButton.type = "button";
-    closeButton.textContent = "Cerrar";
-    closeButton.style.padding = "8px 12px";
-    closeButton.style.borderRadius = "8px";
-    closeButton.style.border = "1px solid #0369a1";
-    closeButton.style.background = "#0284c7";
-    closeButton.style.color = "#fff";
-    closeButton.style.cursor = "pointer";
-    closeButton.addEventListener("click", () => overlay.remove());
-
-    footer.appendChild(copyButton);
-    footer.appendChild(closeButton);
-    modal.appendChild(header);
-    modal.appendChild(textarea);
-    modal.appendChild(footer);
-    overlay.appendChild(modal);
-    overlay.addEventListener("click", (event) => {
-        if (event.target === overlay) {
-            overlay.remove();
-        }
-    });
-    document.body.appendChild(overlay);
-    textarea.focus();
-    textarea.select();
-}
-
-function wgsDebugAlert(title, payload = "") {
-    if (!WGS_DEBUG_ALERTS || typeof window === "undefined") {
-        return;
-    }
-    let body = "";
-    if (typeof payload === "string") {
-        body = payload;
-    } else {
-        try {
-            body = JSON.stringify(payload || {}, null, 2);
-        } catch {
-            body = String(payload || "");
-        }
-    }
-    if (typeof console !== "undefined" && typeof console.log === "function") {
-        console.log(title, payload);
-    }
-    window.__wgsLastDebug = {
-        title,
-        body,
-        payload,
-        created_at: new Date().toISOString(),
-    };
-    wgsShowDebugModal(title, body);
-}
-
-function wgsDebugSubscriptionCharge(flow, { partner, product, selection, result, extra = {} }) {
-    wgsDebugAlert("WGS DEBUG COBRO POS", {
-        flow,
-        partner_id: partner && partner.id ? partner.id : false,
-        partner_name: partner && (partner.name || partner.display_name) ? (partner.name || partner.display_name) : false,
-        product_id: product && product.id ? product.id : false,
-        product_name: product && product.display_name ? product.display_name : false,
-        selected_plan_id: selection && selection.planId ? selection.planId : false,
-        selected_pricing_id: selection && selection.pricingId ? selection.pricingId : false,
-        resolved_plan_id: result && result.plan_id ? result.plan_id : false,
-        resolved_pricing_id: result && result.pricing_id ? result.pricing_id : false,
-        recurring_price: Number(result && result.recurring_price) || 0,
-        credit_amount: Number(result && result.credit_amount) || 0,
-        charge_now: Number(result && result.charge_now) || 0,
-        is_upgrade: !!(result && result.is_upgrade),
-        source_subscription_id: result && result.source_subscription_id ? result.source_subscription_id : false,
-        source_subscription_name: result && result.source_subscription_name ? result.source_subscription_name : false,
-        ...extra,
-    });
-}
 
 function getPos(component) {
     if (component.pos) {
@@ -184,130 +17,6 @@ function getPos(component) {
         return component.env.pos;
     }
     return null;
-}
-
-function getCurrentOrder(component) {
-    const pos = getPos(component);
-    if (component.currentOrder) {
-        return component.currentOrder;
-    }
-    if (component.props && component.props.order) {
-        return component.props.order;
-    }
-    if (pos && typeof pos.get_order === "function") {
-        return pos.get_order();
-    }
-    if (pos && typeof pos.getOrder === "function") {
-        return pos.getOrder();
-    }
-    if (pos && pos.selectedOrder) {
-        return pos.selectedOrder;
-    }
-    return null;
-}
-
-function getOrderUUID(order) {
-    if (!order) {
-        return "";
-    }
-    const candidates = [order.uuid, order.uid, order.order_uuid, order.orderUid];
-    for (const value of candidates) {
-        if (value) {
-            return String(value);
-        }
-    }
-    if (typeof order.get_uid === "function") {
-        const value = order.get_uid();
-        if (value) {
-            return String(value);
-        }
-    }
-    if (typeof order.getUID === "function") {
-        const value = order.getUID();
-        if (value) {
-            return String(value);
-        }
-    }
-    return "";
-}
-
-function getCurrentPartner(component, order = null) {
-    if (component.props && component.props.partner && component.props.partner.id) {
-        return component.props.partner;
-    }
-
-    const activeOrder = order || getCurrentOrder(component);
-    if (!activeOrder) {
-        return null;
-    }
-
-    if (typeof activeOrder.get_partner === "function") {
-        const partner = activeOrder.get_partner();
-        if (partner) {
-            return partner;
-        }
-    }
-    if (typeof activeOrder.getPartner === "function") {
-        const partner = activeOrder.getPartner();
-        if (partner) {
-            return partner;
-        }
-    }
-
-    if (activeOrder.partner && activeOrder.partner.id) {
-        return activeOrder.partner;
-    }
-
-    const partnerField = activeOrder.partner_id;
-    if (Array.isArray(partnerField) && partnerField.length) {
-        return getPartnerById(component, partnerField[0]);
-    }
-    if (typeof partnerField === "number") {
-        return getPartnerById(component, partnerField);
-    }
-    if (partnerField && typeof partnerField === "object" && partnerField.id) {
-        return partnerField;
-    }
-    const camelPartnerField = activeOrder.partnerId;
-    if (Array.isArray(camelPartnerField) && camelPartnerField.length) {
-        return getPartnerById(component, camelPartnerField[0]);
-    }
-    if (typeof camelPartnerField === "number") {
-        return getPartnerById(component, camelPartnerField);
-    }
-    if (camelPartnerField && typeof camelPartnerField === "object" && camelPartnerField.id) {
-        return camelPartnerField;
-    }
-
-    return null;
-}
-
-function getPartnerById(component, partnerId) {
-    const parsed = Number.parseInt(partnerId, 10);
-    if (!Number.isInteger(parsed) || parsed <= 0) {
-        return null;
-    }
-
-    const pos = getPos(component);
-    if (!pos) {
-        return null;
-    }
-
-    if (pos.models && pos.models["res.partner"] && typeof pos.models["res.partner"].get === "function") {
-        const record = pos.models["res.partner"].get(parsed);
-        if (record) {
-            return record;
-        }
-    }
-
-    if (pos.db && typeof pos.db.get_partner_by_id === "function") {
-        const record = pos.db.get_partner_by_id(parsed);
-        if (record) {
-            return record;
-        }
-    }
-
-    return { id: parsed, name: _t("Cliente") };
 }
 
 function getAllPartners(component) {
@@ -338,375 +47,6 @@ function getAllPartners(component) {
     return [];
 }
 
-function getProductById(component, productId) {
-    const parsed = Number.parseInt(productId, 10);
-    if (!Number.isInteger(parsed) || parsed <= 0) {
-        return null;
-    }
-    const pos = getPos(component);
-    if (!pos) {
-        return null;
-    }
-
-    if (pos.models && pos.models["product.product"] && typeof pos.models["product.product"].get === "function") {
-        const record = pos.models["product.product"].get(parsed);
-        if (record) {
-            return record;
-        }
-    }
-    if (pos.db && typeof pos.db.get_product_by_id === "function") {
-        const record = pos.db.get_product_by_id(parsed);
-        if (record) {
-            return record;
-        }
-    }
-    if (Array.isArray(pos.products)) {
-        const record = pos.products.find((product) => Number(product.id) === parsed);
-        if (record) {
-            return record;
-        }
-    }
-    return null;
-}
-
-function setOrderPartner(order, partner) {
-    if (!order || !partner || !partner.id) {
-        return false;
-    }
-    if (typeof order.set_partner === "function") {
-        order.set_partner(partner);
-        return true;
-    }
-    if (typeof order.setPartner === "function") {
-        order.setPartner(partner);
-        return true;
-    }
-    if (typeof order.set_client === "function") {
-        order.set_client(partner);
-        return true;
-    }
-    if (typeof order.setClient === "function") {
-        order.setClient(partner);
-        return true;
-    }
-    order.partner = partner;
-    order.partner_id = partner.id;
-    return true;
-}
-
-function addProductToOrder(component, order, product, options = {}) {
-    if (!order || !product) {
-        return null;
-    }
-    const payload = {
-        quantity: 1,
-        merge: false,
-        ...options,
-    };
-    if (typeof order.add_product === "function") {
-        order.add_product(product, payload);
-    } else if (typeof order.addProduct === "function") {
-        order.addProduct(product, payload);
-    } else {
-        return null;
-    }
-    return getSelectedOrderline(component, order);
-}
-
-function getSelectedOrderline(component, order = null) {
-    const activeOrder = order || getCurrentOrder(component);
-    if (!activeOrder) {
-        return null;
-    }
-
-    if (typeof activeOrder.get_selected_orderline === "function") {
-        return activeOrder.get_selected_orderline();
-    }
-    if (typeof activeOrder.getSelectedOrderline === "function") {
-        return activeOrder.getSelectedOrderline();
-    }
-    if (typeof activeOrder.getSelectedOrderLine === "function") {
-        return activeOrder.getSelectedOrderLine();
-    }
-
-    if (activeOrder.selected_orderline) {
-        return activeOrder.selected_orderline;
-    }
-    if (activeOrder.selectedOrderline) {
-        return activeOrder.selectedOrderline;
-    }
-    if (activeOrder.selectedOrderLine) {
-        return activeOrder.selectedOrderLine;
-    }
-
-    return null;
-}
-
-function getOrderlines(order) {
-    if (!order) {
-        return [];
-    }
-    if (typeof order.get_orderlines === "function") {
-        return order.get_orderlines() || [];
-    }
-    if (typeof order.getOrderlines === "function") {
-        return order.getOrderlines() || [];
-    }
-    if (Array.isArray(order.lines)) {
-        return order.lines;
-    }
-    if (order.lines && Array.isArray(order.lines.models)) {
-        return order.lines.models;
-    }
-    if (order.lines && typeof order.lines.toArray === "function") {
-        const values = order.lines.toArray();
-        if (Array.isArray(values)) {
-            return values;
-        }
-    }
-    if (Array.isArray(order.orderlines)) {
-        return order.orderlines;
-    }
-    if (order.orderlines && Array.isArray(order.orderlines.models)) {
-        return order.orderlines.models;
-    }
-    return [];
-}
-
-function getLineProduct(component, line) {
-    if (!line) {
-        return null;
-    }
-
-    if (line.product) {
-        return line.product;
-    }
-
-    if (typeof line.get_product === "function") {
-        const product = line.get_product();
-        if (product) {
-            return product;
-        }
-    }
-    if (typeof line.getProduct === "function") {
-        const product = line.getProduct();
-        if (product) {
-            return product;
-        }
-    }
-
-    let productId = line.product_id || (typeof line.get_product_id === "function" ? line.get_product_id() : null);
-    if (Array.isArray(productId)) {
-        productId = productId[0];
-    }
-    if (typeof productId === "object" && productId && productId.id) {
-        productId = productId.id;
-    }
-    const parsedProductId = Number.parseInt(productId, 10);
-    if (Number.isInteger(parsedProductId) && parsedProductId > 0) {
-        productId = parsedProductId;
-    }
-    if (!productId) {
-        return null;
-    }
-
-    const pos = getPos(component);
-    if (pos && pos.db && typeof pos.db.get_product_by_id === "function") {
-        return pos.db.get_product_by_id(productId);
-    }
-
-    return null;
-}
-
-function getLineProductId(line) {
-    if (!line) {
-        return 0;
-    }
-    if (line.product && line.product.id) {
-        return Number.parseInt(line.product.id, 10) || 0;
-    }
-    if (typeof line.get_product === "function") {
-        const product = line.get_product();
-        if (product && product.id) {
-            return Number.parseInt(product.id, 10) || 0;
-        }
-    }
-    if (typeof line.getProduct === "function") {
-        const product = line.getProduct();
-        if (product && product.id) {
-            return Number.parseInt(product.id, 10) || 0;
-        }
-    }
-    let productId = line.product_id || (typeof line.get_product_id === "function" ? line.get_product_id() : null);
-    if (Array.isArray(productId) && productId.length) {
-        productId = productId[0];
-    }
-    if (typeof productId === "object" && productId && productId.id) {
-        productId = productId.id;
-    }
-    const parsed = Number.parseInt(productId, 10);
-    return Number.isInteger(parsed) && parsed > 0 ? parsed : 0;
-}
-
-function isSubscriptionProduct(product) {
-    if (!product) {
-        return false;
-    }
-    return !!(
-        product.recurring_invoice
-        || product.is_subscription
-        || product.subscription_ok
-        || (product.product_tmpl_id && product.product_tmpl_id.recurring_invoice)
-    );
-}
-
-function getLineQuantity(line) {
-    if (!line) {
-        return 0;
-    }
-    if (typeof line.get_quantity === "function") {
-        return Math.abs(Number(line.get_quantity()) || 0);
-    }
-    if (typeof line.getQuantity === "function") {
-        return Math.abs(Number(line.getQuantity()) || 0);
-    }
-    if ("quantity" in line) {
-        return Math.abs(Number(line.quantity) || 0);
-    }
-    return Math.abs(Number(line.qty) || 0);
-}
-
-function getLineParticipantIds(line, holderId = null) {
-    const initial = Array.isArray(line && line.wgs_participant_ids) ? [...line.wgs_participant_ids] : [];
-    const cleaned = [];
-
-    for (const value of initial) {
-        const parsed = Number.parseInt(value, 10);
-        if (Number.isInteger(parsed) && parsed > 0 && !cleaned.includes(parsed)) {
-            cleaned.push(parsed);
-        }
-    }
-
-    if (holderId && !cleaned.includes(holderId)) {
-        cleaned.unshift(holderId);
-    }
-
-    return cleaned;
-}
-
-function setLineParticipantIds(line, participantIds) {
-    if (!line) {
-        return;
-    }
-
-    const cleaned = [];
-    for (const value of participantIds || []) {
-        const parsed = Number.parseInt(value, 10);
-        if (Number.isInteger(parsed) && parsed > 0 && !cleaned.includes(parsed)) {
-            cleaned.push(parsed);
-        }
-    }
-
-    line.wgs_participant_ids = cleaned;
-
-    if (line.order && typeof line.order.trigger === "function") {
-        line.order.trigger("change", line.order);
-    }
-}
-
-function getLineParticipantCapacity(product, line) {
-    const maxPerUnit = Number.parseInt(product && product.max_participants_total, 10) || 1;
-    const qty = getLineQuantity(line) || 1;
-    const total = Math.floor(maxPerUnit * qty);
-    return total > 0 ? total : 1;
-}
-
-function getLineSubscriptionSelection(line) {
-    if (!line) {
-        return { planId: false, pricingId: false };
-    }
-    const planId = Number.parseInt(line.wgs_subscription_plan_id, 10);
-    const pricingId = Number.parseInt(line.wgs_subscription_pricing_id, 10);
-    return {
-        planId: Number.isInteger(planId) && planId > 0 ? planId : false,
-        pricingId: Number.isInteger(pricingId) && pricingId > 0 ? pricingId : false,
-    };
-}
-
-function setLineSubscriptionSelection(line, planId = false, pricingId = false) {
-    if (!line) {
-        return;
-    }
-    const parsedPlanId = Number.parseInt(planId, 10);
-    const parsedPricingId = Number.parseInt(pricingId, 10);
-    line.wgs_subscription_plan_id = Number.isInteger(parsedPlanId) && parsedPlanId > 0 ? parsedPlanId : false;
-    line.wgs_subscription_pricing_id = Number.isInteger(parsedPricingId) && parsedPricingId > 0 ? parsedPricingId : false;
-}
-
-function getLineSubscriptionFlow(line) {
-    if (!line) {
-        return { flow: "new", sourceSubscriptionId: false };
-    }
-    const normalizedFlow = String(line.wgs_subscription_flow || "new").toLowerCase();
-    const parsedSource = Number.parseInt(line.wgs_subscription_source_id, 10);
-    return {
-        flow: normalizedFlow === "renewal" ? "renewal" : "new",
-        sourceSubscriptionId: Number.isInteger(parsedSource) && parsedSource > 0 ? parsedSource : false,
-    };
-}
-
-function setLineSubscriptionFlow(line, flow = "new", sourceSubscriptionId = false) {
-    if (!line) {
-        return;
-    }
-    const normalizedFlow = String(flow || "new").toLowerCase();
-    line.wgs_subscription_flow = normalizedFlow === "renewal" ? "renewal" : "new";
-    const parsedSource = Number.parseInt(sourceSubscriptionId, 10);
-    line.wgs_subscription_source_id = Number.isInteger(parsedSource) && parsedSource > 0 ? parsedSource : false;
-
-    if (line.order && typeof line.order.trigger === "function") {
-        line.order.trigger("change", line.order);
-    }
-}
-
-function getLineSubscriptionEndDate(line) {
-    if (!line || !line.wgs_subscription_end_date) {
-        return "";
-    }
-    return String(line.wgs_subscription_end_date);
-}
-
-function setLineSubscriptionEndDate(line, endDateValue = "") {
-    if (!line) {
-        return;
-    }
-    const normalized = String(endDateValue || "").trim();
-    line.wgs_subscription_end_date = normalized || false;
-
-    if (line.order && typeof line.order.trigger === "function") {
-        line.order.trigger("change", line.order);
-    }
-}
-
-function getLineSubscriptionStartDate(line) {
-    if (!line || !line.wgs_subscription_start_date) {
-        return "";
-    }
-    return String(line.wgs_subscription_start_date);
-}
-
-function setLineSubscriptionStartDate(line, startDateValue = "") {
-    if (!line) {
-        return;
-    }
-    const normalized = String(startDateValue || "").trim();
-    line.wgs_subscription_start_date = normalized || false;
-
-    if (line.order && typeof line.order.trigger === "function") {
-        line.order.trigger("change", line.order);
-    }
-}
-
 function parseISODate(value) {
     if (!value || typeof value !== "string") {
         return null;
@@ -729,644 +69,11 @@ function parseISODate(value) {
     return date;
 }
 
-function formatISODate(date) {
-    if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
-        return "";
-    }
-    const year = date.getUTCFullYear();
-    const month = `${date.getUTCMonth() + 1}`.padStart(2, "0");
-    const day = `${date.getUTCDate()}`.padStart(2, "0");
-    return `${year}-${month}-${day}`;
-}
-
-function getTodayUTCDate() {
-    const baseDate = new Date();
-    return new Date(Date.UTC(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate()));
-}
-
-function addIntervalToDate(baseDate, intervalValue = 1, intervalUnit = "month") {
-    const date = new Date(baseDate.getTime());
-    const value = Math.max(1, Number.parseInt(intervalValue, 10) || 1);
-    const normalizedUnit = String(intervalUnit || "month").toLowerCase();
-    if (normalizedUnit === "day") {
-        date.setUTCDate(date.getUTCDate() + value);
-        return date;
-    }
-    if (normalizedUnit === "week") {
-        date.setUTCDate(date.getUTCDate() + (7 * value));
-        return date;
-    }
-    if (normalizedUnit === "year") {
-        date.setUTCFullYear(date.getUTCFullYear() + value);
-        return date;
-    }
-    date.setUTCMonth(date.getUTCMonth() + value);
-    return date;
-}
-
-function getPlanMinEndDate(plan, startDateValue = "", minTermPeriods = 1) {
-    if (!plan) {
-        return null;
-    }
-    const periods = Math.max(0, Number.parseInt(minTermPeriods, 10) || 0);
-    if (periods <= 0) {
-        return null;
-    }
-    const parsedStartDate = parseISODate(String(startDateValue || "").trim());
-    const utcStart = parsedStartDate || getTodayUTCDate();
-    const intervalValue = Math.max(1, Number.parseInt(plan.interval_value, 10) || 1) * periods;
-    const threshold = addIntervalToDate(
-        utcStart,
-        intervalValue,
-        plan.interval_unit || "month"
-    );
-    // Rule is inclusive: at least the configured minimum term.
-    return threshold;
-}
-
-function getLineUnitPrice(line) {
-    if (!line) {
-        return 0;
-    }
-    if (typeof line.get_unit_price === "function") {
-        return Number(line.get_unit_price()) || 0;
-    }
-    if (typeof line.getUnitPrice === "function") {
-        return Number(line.getUnitPrice()) || 0;
-    }
-    return Number(line.price_unit) || Number(line.price) || 0;
-}
-
-function setLineUnitPrice(line, price) {
-    const unitPrice = Number(price) || 0;
-    if (typeof line.set_unit_price === "function") {
-        line.set_unit_price(unitPrice);
-    } else if (typeof line.setUnitPrice === "function") {
-        line.setUnitPrice(unitPrice);
-    } else {
-        line.price_unit = unitPrice;
-        line.price = unitPrice;
-        line.priceUnit = unitPrice;
-    }
-
-    if (line.order && typeof line.order.trigger === "function") {
-        line.order.trigger("change", line.order);
-    }
-}
-
-function getSubscriptionLineForParticipants(component, order = null) {
-    const activeOrder = order || getCurrentOrder(component);
-    if (!activeOrder) {
-        return null;
-    }
-
-    const selected = getSelectedOrderline(component, activeOrder);
-    if (selected && getLineQuantity(selected) > 0 && isSubscriptionProduct(getLineProduct(component, selected))) {
-        return selected;
-    }
-
-    const lines = getOrderlines(activeOrder);
-    for (let index = lines.length - 1; index >= 0; index -= 1) {
-        const line = lines[index];
-        if (getLineQuantity(line) > 0 && isSubscriptionProduct(getLineProduct(component, line))) {
-            if (typeof activeOrder.select_orderline === "function") {
-                activeOrder.select_orderline(line);
-            } else if (typeof activeOrder.selectOrderline === "function") {
-                activeOrder.selectOrderline(line);
-            } else if (typeof activeOrder.selectOrderLine === "function") {
-                activeOrder.selectOrderLine(line);
-            } else if ("selected_orderline" in activeOrder) {
-                activeOrder.selected_orderline = line;
-            } else if ("selectedOrderline" in activeOrder) {
-                activeOrder.selectedOrderline = line;
-            }
-            return line;
-        }
-    }
-
-    if (selected && getLineQuantity(selected) > 0) {
-        return selected;
-    }
-
-    for (let index = lines.length - 1; index >= 0; index -= 1) {
-        if (getLineQuantity(lines[index]) > 0) {
-            return lines[index];
-        }
-    }
-
-    return null;
-}
-
-function ensureOrderlineSerializationPatched(component) {
-    const order = getCurrentOrder(component);
-    if (!order) {
-        return;
-    }
-
-    const lines = getOrderlines(order);
-    const sample = lines[0] || getSelectedOrderline(component, order);
-    if (!sample || !sample.constructor || !sample.constructor.prototype) {
-        return;
-    }
-
-    const proto = sample.constructor.prototype;
-    if (proto[ORDERLINE_PATCH_FLAG]) {
-        return;
-    }
-
-    const patchLinePayload = (payload, line) => {
-        if (!payload || typeof payload !== "object") {
-            return payload;
-        }
-        const participantIds = getLineParticipantIds(line);
-        const selection = getLineSubscriptionSelection(line);
-        const flowInfo = getLineSubscriptionFlow(line);
-        const startDate = getLineSubscriptionStartDate(line) || false;
-        const endDate = getLineSubscriptionEndDate(line) || false;
-        payload.wgs_participant_ids = participantIds;
-        payload.wgsParticipantIds = participantIds;
-        payload.wgs_subscription_plan_id = selection.planId || false;
-        payload.wgsSubscriptionPlanId = selection.planId || false;
-        payload.wgs_subscription_pricing_id = selection.pricingId || false;
-        payload.wgsSubscriptionPricingId = selection.pricingId || false;
-        payload.wgs_subscription_start_date = startDate;
-        payload.wgsSubscriptionStartDate = startDate;
-        payload.wgs_subscription_end_date = endDate;
-        payload.wgsSubscriptionEndDate = endDate;
-        payload.wgs_subscription_flow = flowInfo.flow || "new";
-        payload.wgsSubscriptionFlow = flowInfo.flow || "new";
-        payload.wgs_subscription_source_id = flowInfo.sourceSubscriptionId || false;
-        payload.wgsSubscriptionSourceId = flowInfo.sourceSubscriptionId || false;
-        payload.wgs_subscription_config = {
-            participant_ids: participantIds,
-            plan_id: selection.planId || false,
-            pricing_id: selection.pricingId || false,
-            start_date: startDate,
-            end_date: endDate,
-            flow: flowInfo.flow || "new",
-            source_subscription_id: flowInfo.sourceSubscriptionId || false,
-        };
-        return payload;
-    };
-
-    const baseExport = proto.export_as_JSON;
-    if (typeof baseExport === "function") {
-        proto.export_as_JSON = function (...args) {
-            const json = baseExport.apply(this, args);
-            return patchLinePayload(json, this);
-        };
-    }
-
-    const baseSerialize = proto.serialize;
-    if (typeof baseSerialize === "function") {
-        proto.serialize = function (...args) {
-            const data = baseSerialize.apply(this, args);
-            return patchLinePayload(data, this);
-        };
-    }
-
-    const baseInit = proto.init_from_JSON;
-    if (typeof baseInit === "function") {
-        proto.init_from_JSON = function (...args) {
-            baseInit.apply(this, args);
-            const json = args && args.length ? args[0] : null;
-            const cfg = (json && json.wgs_subscription_config && typeof json.wgs_subscription_config === "object")
-                ? json.wgs_subscription_config
-                : {};
-            this.wgs_participant_ids = getLineParticipantIds({
-                wgs_participant_ids: (json && (json.wgs_participant_ids || json.wgsParticipantIds)) || cfg.participant_ids,
-            });
-            setLineSubscriptionSelection(
-                this,
-                (json && (json.wgs_subscription_plan_id || json.wgsSubscriptionPlanId)) || cfg.plan_id,
-                (json && (json.wgs_subscription_pricing_id || json.wgsSubscriptionPricingId)) || cfg.pricing_id
-            );
-            setLineSubscriptionEndDate(
-                this,
-                (json && (json.wgs_subscription_end_date || json.wgsSubscriptionEndDate)) || cfg.end_date
-            );
-            setLineSubscriptionStartDate(
-                this,
-                (json && (json.wgs_subscription_start_date || json.wgsSubscriptionStartDate)) || cfg.start_date
-            );
-            setLineSubscriptionFlow(
-                this,
-                (json && (json.wgs_subscription_flow || json.wgsSubscriptionFlow)) || cfg.flow || "new",
-                (json && (json.wgs_subscription_source_id || json.wgsSubscriptionSourceId)) || cfg.source_subscription_id
-            );
-        };
-    }
-
-    proto[ORDERLINE_PATCH_FLAG] = true;
-}
-
-function ensureOrderSerializationPatched(component) {
-    const order = getCurrentOrder(component);
-    if (!order || !order.constructor || !order.constructor.prototype) {
-        return;
-    }
-    const proto = order.constructor.prototype;
-    if (proto[ORDER_PATCH_FLAG]) {
-        return;
-    }
-
-    const patchExportPayload = function (jsonPayload, currentOrder) {
-        if (!jsonPayload) {
-            return jsonPayload;
-        }
-        const lines = getOrderlines(currentOrder);
-        const configs = [];
-
-        if (Array.isArray(jsonPayload.lines)) {
-            jsonPayload.lines.forEach((uiLine, index) => {
-                const line = lines[index];
-                if (!line) {
-                    return;
-                }
-                let linePayload = uiLine;
-                if (Array.isArray(uiLine) && uiLine.length >= 3 && typeof uiLine[2] === "object") {
-                    linePayload = uiLine[2];
-                }
-                if (!linePayload || typeof linePayload !== "object") {
-                    return;
-                }
-                const selection = getLineSubscriptionSelection(line);
-                const flowInfo = getLineSubscriptionFlow(line);
-                const participantIds = getLineParticipantIds(line);
-                const startDate = getLineSubscriptionStartDate(line) || false;
-                const endDate = getLineSubscriptionEndDate(line) || false;
-                const productId = getLineProductId(line);
-                const quantity = getLineQuantity(line);
-
-                linePayload.wgs_participant_ids = participantIds;
-                linePayload.wgsParticipantIds = participantIds;
-                linePayload.wgs_subscription_plan_id = selection.planId || false;
-                linePayload.wgsSubscriptionPlanId = selection.planId || false;
-                linePayload.wgs_subscription_pricing_id = selection.pricingId || false;
-                linePayload.wgsSubscriptionPricingId = selection.pricingId || false;
-                linePayload.wgs_subscription_start_date = startDate;
-                linePayload.wgsSubscriptionStartDate = startDate;
-                linePayload.wgs_subscription_end_date = endDate;
-                linePayload.wgsSubscriptionEndDate = endDate;
-                linePayload.wgs_subscription_flow = flowInfo.flow || "new";
-                linePayload.wgsSubscriptionFlow = flowInfo.flow || "new";
-                linePayload.wgs_subscription_source_id = flowInfo.sourceSubscriptionId || false;
-                linePayload.wgsSubscriptionSourceId = flowInfo.sourceSubscriptionId || false;
-                linePayload.wgs_subscription_config = {
-                    participant_ids: participantIds,
-                    plan_id: selection.planId || false,
-                    pricing_id: selection.pricingId || false,
-                    start_date: startDate,
-                    end_date: endDate,
-                    flow: flowInfo.flow || "new",
-                    source_subscription_id: flowInfo.sourceSubscriptionId || false,
-                    product_id: productId || false,
-                    quantity: quantity || 0,
-                    line_index: index,
-                };
-
-                configs.push({
-                    participant_ids: participantIds,
-                    plan_id: selection.planId || false,
-                    pricing_id: selection.pricingId || false,
-                    start_date: startDate,
-                    end_date: endDate,
-                    flow: flowInfo.flow || "new",
-                    source_subscription_id: flowInfo.sourceSubscriptionId || false,
-                    product_id: productId || false,
-                    quantity: quantity || 0,
-                    line_index: index,
-                });
-            });
-        }
-
-        // Root-level fallback payload consumed by backend parser for Odoo variants.
-        jsonPayload.wgs_subscription_configs = configs;
-        lines.forEach((line, index) => {
-            const selection = getLineSubscriptionSelection(line);
-            const flowInfo = getLineSubscriptionFlow(line);
-            const participantIds = getLineParticipantIds(line);
-            const startDate = getLineSubscriptionStartDate(line) || false;
-            const endDate = getLineSubscriptionEndDate(line) || false;
-            const productId = getLineProductId(line);
-            const quantity = getLineQuantity(line);
-            if (
-                !participantIds.length
-                && !selection.planId
-                && !selection.pricingId
-                && !startDate
-                && !endDate
-                && flowInfo.flow !== "renewal"
-                && !flowInfo.sourceSubscriptionId
-            ) {
-                return;
-            }
-            if (configs.find((row) => row.line_index === index)) {
-                return;
-            }
-            configs.push({
-                participant_ids: participantIds,
-                plan_id: selection.planId || false,
-                pricing_id: selection.pricingId || false,
-                start_date: startDate,
-                end_date: endDate,
-                flow: flowInfo.flow || "new",
-                source_subscription_id: flowInfo.sourceSubscriptionId || false,
-                product_id: productId || false,
-                quantity: quantity || 0,
-                line_index: index,
-            });
-        });
-        jsonPayload.wgs_subscription_configs = configs;
-
-        return jsonPayload;
-    };
-
-    const baseExport = proto.export_as_JSON;
-    if (typeof baseExport === "function") {
-        proto.export_as_JSON = function (...args) {
-            const json = baseExport.apply(this, args);
-            return patchExportPayload(json, this);
-        };
-    }
-
-    const baseExportCamel = proto.exportAsJSON;
-    if (typeof baseExportCamel === "function") {
-        proto.exportAsJSON = function (...args) {
-            const json = baseExportCamel.apply(this, args);
-            return patchExportPayload(json, this);
-        };
-    }
-
-    const baseSerialize = proto.serialize;
-    if (typeof baseSerialize === "function") {
-        proto.serialize = function (...args) {
-            const json = baseSerialize.apply(this, args);
-            return patchExportPayload(json, this);
-        };
-    }
-
-    proto[ORDER_PATCH_FLAG] = true;
-}
-
-function collectOrderSubscriptionConfigs(order) {
-    const lines = getOrderlines(order);
-    const configs = [];
-    lines.forEach((line, index) => {
-        if (getLineQuantity(line) <= 0) {
-            return;
-        }
-        const productId = getLineProductId(line);
-        const selection = getLineSubscriptionSelection(line);
-        const flowInfo = getLineSubscriptionFlow(line);
-        const participantIds = getLineParticipantIds(line);
-        const startDate = getLineSubscriptionStartDate(line) || false;
-        const endDate = getLineSubscriptionEndDate(line) || false;
-        if (
-            !participantIds.length
-            && !selection.planId
-            && !selection.pricingId
-            && !startDate
-            && !endDate
-            && flowInfo.flow !== "renewal"
-            && !flowInfo.sourceSubscriptionId
-        ) {
-            return;
-        }
-        configs.push({
-            participant_ids: participantIds,
-            plan_id: selection.planId || false,
-            pricing_id: selection.pricingId || false,
-            start_date: startDate,
-            end_date: endDate,
-            flow: flowInfo.flow || "new",
-            source_subscription_id: flowInfo.sourceSubscriptionId || false,
-            product_id: productId || false,
-            quantity: getLineQuantity(line) || 0,
-            line_index: index,
-        });
-    });
-    return configs;
-}
-
-async function getSubscriptionContext(component, product, fallbackPrice = 0) {
-    if (!product || !product.id || !component.orm) {
-        return { is_subscription: false, max_participants_total: 1, plans: [] };
-    }
-
-    const pos = getPos(component);
-    const cache = pos
-        ? (pos.wgsSubscriptionContextCache = pos.wgsSubscriptionContextCache || {})
-        : (component._wgsSubscriptionContextCache = component._wgsSubscriptionContextCache || {});
-
-    const cacheKey = String(product.id);
-    if (cache[cacheKey]) {
-        return cache[cacheKey];
-    }
-
-    const context = await component.orm.call(
-        "pos.order",
-        "wgs_get_subscription_product_context_for_pos",
-        [product.id, fallbackPrice]
-    );
-    cache[cacheKey] = context || { is_subscription: false, max_participants_total: 1, plans: [] };
-    return cache[cacheKey];
-}
-
-patch(PaymentScreen.prototype, {
-    setup() {
-        super.setup(...arguments);
-        this.orm = useService("orm");
-        this._wgsRecurringPriceCache = {};
-        this._wgsSubscriptionContextCache = {};
-    },
-
-    async _wgsApplyRecurringPriceToLine(line) {
-        const product = getLineProduct(this, line);
-        if (!product) {
-            return;
-        }
-
-        const selection = getLineSubscriptionSelection(line);
-        const flowInfo = getLineSubscriptionFlow(line);
-        const context = await getSubscriptionContext(this, product, getLineUnitPrice(line));
-        if (!context || !context.is_subscription) {
-            return;
-        }
-
-        const productId = Number(product.id || 0);
-        const order = getCurrentOrder(this);
-        const partner = getCurrentPartner(this, order);
-        const partnerId = partner && partner.id ? Number(partner.id) : 0;
-        const cacheKey = `${flowInfo.flow}:${flowInfo.sourceSubscriptionId || 0}:${partnerId}:${productId}:${selection.planId || 0}:${selection.pricingId || 0}`;
-        const fromCache = !!this._wgsRecurringPriceCache[cacheKey];
-        let cached = this._wgsRecurringPriceCache[cacheKey];
-        if (!cached) {
-            if (flowInfo.flow === "renewal" && flowInfo.sourceSubscriptionId) {
-                cached = await this.orm.call(
-                    "pos.order",
-                    "wgs_get_subscription_renewal_charge_for_pos",
-                    [flowInfo.sourceSubscriptionId, productId, selection.planId || false, selection.pricingId || false]
-                );
-            } else {
-                cached = await this.orm.call(
-                    "pos.order",
-                    "wgs_get_subscription_charge_for_pos",
-                    [partnerId || false, productId, getLineUnitPrice(line), selection.planId || false, selection.pricingId || false]
-                );
-            }
-            this._wgsRecurringPriceCache[cacheKey] = cached || {};
-        }
-
-        const chargeNow = Number(cached && cached.charge_now);
-        if (!Number.isFinite(chargeNow) || chargeNow < 0) {
-            return;
-        }
-
-        const currentPrice = getLineUnitPrice(line);
-        if (Math.abs(currentPrice - chargeNow) > 0.0001) {
-            setLineUnitPrice(line, chargeNow);
-        }
-
-        line.wgs_upgrade_credit_amount = Number(cached && cached.credit_amount) || 0;
-        line.wgs_is_upgrade = flowInfo.flow === "renewal" ? false : !!(cached && cached.is_upgrade);
-
-        const resolvedPlanId = Number.parseInt(cached && cached.plan_id, 10);
-        const resolvedPricingId = Number.parseInt(cached && cached.pricing_id, 10);
-        setLineSubscriptionSelection(
-            line,
-            Number.isInteger(resolvedPlanId) && resolvedPlanId > 0 ? resolvedPlanId : selection.planId,
-            Number.isInteger(resolvedPricingId) && resolvedPricingId > 0 ? resolvedPricingId : selection.pricingId
-        );
-        wgsDebugSubscriptionCharge("validateOrder/_wgsApplyRecurringPriceToLine", {
-            partner,
-            product,
-            selection,
-            result: cached || {},
-            extra: {
-                flow: flowInfo.flow,
-                source_subscription_id: flowInfo.sourceSubscriptionId || false,
-                from_cache: fromCache,
-                cache_key: cacheKey,
-            },
-        });
-    },
-
-    async validateOrder(isForceValidate) {
-        ensureOrderlineSerializationPatched(this);
-        ensureOrderSerializationPatched(this);
-        const order = getCurrentOrder(this);
-        if (order && this.orm) {
-            const orderUUID = getOrderUUID(order);
-            const configs = collectOrderSubscriptionConfigs(order);
-            if (orderUUID && configs.length) {
-                try {
-                    await this.orm.call(
-                        "pos.order",
-                        "wgs_stage_subscription_config_for_uuid",
-                        [orderUUID, configs]
-                    );
-                } catch (error) {
-                    console.warn("No se pudo guardar buffer de configuración de suscripción POS", error);
-                }
-            }
-        }
-        if (order) {
-            const partner = getCurrentPartner(this, order);
-            const lines = [];
-            for (const line of getOrderlines(order)) {
-                if (getLineQuantity(line) <= 0) {
-                    continue;
-                }
-                const product = getLineProduct(this, line);
-                if (!product) {
-                    continue;
-                }
-                const context = await getSubscriptionContext(this, product, getLineUnitPrice(line));
-                if (context && context.is_subscription) {
-                    lines.push({ line, product, context });
-                }
-            }
-
-            if (lines.length) {
-                if (typeof navigator !== "undefined" && navigator.onLine === false) {
-                    window.alert(_t("No se permite vender suscripciones sin conexión a internet."));
-                    return;
-                }
-
-                if (!partner || !partner.id) {
-                    window.alert(_t("Selecciona un cliente para vender suscripciones."));
-                    return;
-                }
-
-                wgsDebugAlert("WGS DEBUG VALIDAR VENTA", {
-                    order_uuid: getOrderUUID(order),
-                    partner_id: partner.id,
-                    partner_name: partner.name || partner.display_name || false,
-                    subscription_lines: lines.length,
-                    order_total_with_tax: (
-                        typeof order.get_total_with_tax === "function"
-                            ? Number(order.get_total_with_tax()) || 0
-                            : (typeof order.getTotalWithTax === "function" ? Number(order.getTotalWithTax()) || 0 : false)
-                    ),
-                    line_snapshot: lines.map((row) => {
-                        const line = row.line;
-                        const product = row.product;
-                        const selection = getLineSubscriptionSelection(line);
-                        const flowInfo = getLineSubscriptionFlow(line);
-                        const qty = getLineQuantity(line) || 0;
-                        const unitPrice = getLineUnitPrice(line) || 0;
-                        return {
-                            product_id: product && product.id ? product.id : false,
-                            product_name: product && (product.display_name || product.name) ? (product.display_name || product.name) : false,
-                            qty,
-                            unit_price: unitPrice,
-                            line_total: Number((qty * unitPrice).toFixed(2)),
-                            selected_plan_id: selection.planId || false,
-                            selected_pricing_id: selection.pricingId || false,
-                            flow: flowInfo.flow || "new",
-                            source_subscription_id: flowInfo.sourceSubscriptionId || false,
-                            is_upgrade: !!line.wgs_is_upgrade,
-                            credit_amount: Number(line.wgs_upgrade_credit_amount) || 0,
-                        };
-                    }),
-                });
-
-                for (const row of lines) {
-                    const line = row.line;
-                    const product = row.product;
-                    const context = row.context;
-                    await this._wgsApplyRecurringPriceToLine(line);
-                    const maxPerUnit = Number.parseInt(context.max_participants_total, 10) || product.max_participants_total || 1;
-                    const capacity = getLineParticipantCapacity(
-                        { ...product, max_participants_total: maxPerUnit },
-                        line
-                    );
-                    const participantIds = getLineParticipantIds(line, partner.id);
-
-                    if (participantIds.length > capacity) {
-                        window.alert(
-                            _t("Una línea de suscripción excede el máximo de participantes permitidos.")
-                        );
-                        return;
-                    }
-
-                    setLineParticipantIds(line, participantIds);
-                }
-            }
-        }
-
-        return super.validateOrder(...arguments);
-    },
-});
-
 patch(ControlButtons.prototype, {
     setup() {
         super.setup(...arguments);
         this.orm = useService("orm");
         this._ensureStatusStyles();
-        ensureOrderlineSerializationPatched(this);
-        ensureOrderSerializationPatched(this);
 
         onWillUnmount(() => {
             const modal = document.getElementById(MODAL_ID);
@@ -1376,84 +83,12 @@ patch(ControlButtons.prototype, {
         });
     },
 
-    async onClickSubscriptionParticipants() {
-        ensureOrderlineSerializationPatched(this);
-        ensureOrderSerializationPatched(this);
-
-        if (typeof navigator !== "undefined" && navigator.onLine === false) {
-            this._showSimpleInfoModal(
-                _t("Sin conexión"),
-                _t("No se permite vender suscripciones sin conexión a internet.")
-            );
-            return;
-        }
-
-        const order = getCurrentOrder(this);
-        if (!order) {
-            this._showSimpleInfoModal(_t("Sin orden"), _t("No hay una orden activa en este momento."));
-            return;
-        }
-
-        const partner = getCurrentPartner(this, order);
-        if (!partner || !partner.id) {
-            this._showSimpleInfoModal(
-                _t("Cliente requerido"),
-                _t("Selecciona primero un cliente para configurar la suscripción.")
-            );
-            return;
-        }
-
-        const line = getSubscriptionLineForParticipants(this, order);
-        if (!line) {
-            this._showSimpleInfoModal(
-                _t("Línea requerida"),
-                _t("Agrega un producto de suscripción al ticket para configurarlo.")
-            );
-            return;
-        }
-        const flowInfo = getLineSubscriptionFlow(line);
-        if (flowInfo.flow === "renewal") {
-            this._showSimpleInfoModal(
-                _t("Renovación recurrente"),
-                _t("Esta línea es de renovación de pago recurrente y no requiere reconfigurar participantes.")
-            );
-            return;
-        }
-
-        const product = getLineProduct(this, line);
-        const context = await getSubscriptionContext(this, product, getLineUnitPrice(line));
-        if (!context || !context.is_subscription) {
-            this._showSimpleInfoModal(
-                _t("Producto no válido"),
-                _t("La línea seleccionada no corresponde a un producto de suscripción.")
-            );
-            return;
-        }
-
-        await this._wgsEnsureRecurringPriceOnLine(line, product, context);
-
-        const maxPerUnit = Number.parseInt(context.max_participants_total, 10) || product.max_participants_total || 1;
-        const capacity = getLineParticipantCapacity(
-            { ...product, max_participants_total: maxPerUnit },
-            line
-        );
-        const participants = getAllPartners(this);
-        this._showParticipantsModal({
-            holder: partner,
-            product,
-            line,
-            participants,
-            capacity,
-            subscriptionContext: context,
-        });
-    },
-
     async onClickSubscriptionStatus() {
         const partners = getAllPartners(this);
         if (!partners.length) {
             this._showSimpleInfoModal(
                 _t("Sin clientes cargados"),
-                _t("No hay clientes disponibles en esta sesión de Punto de Venta.")
+                _t("No hay clientes disponibles en esta sesion de Punto de Venta.")
             );
             return;
         }
@@ -1465,9 +100,9 @@ patch(ControlButtons.prototype, {
         } catch (error) {
             this._showSimpleInfoModal(
                 _t("Error al consultar vigencia"),
-                _t("No se pudo consultar la vigencia en este momento.")
+                _t("No se pudo consultar la informacion en este momento.")
             );
-            console.error("Error al consultar vigencia global en POS", error);
+            console.error("Error al consultar control de acceso en POS", error);
             return;
         }
 
@@ -1479,21 +114,12 @@ patch(ControlButtons.prototype, {
                 email: status.email || partner.email || "",
                 phone: status.phone || partner.phone || partner.mobile || "",
                 state: status.state || "none",
+                payment_status: status.payment_status || "none",
+                payment_status_label: status.payment_status_label || "",
                 package_label: status.package_label || "",
                 plan_name: status.plan_name || "",
                 start_date: status.start_date || "",
                 valid_until: status.valid_until || "",
-                next_invoice_date: status.next_invoice_date || "",
-                days_to_due: Number.isFinite(Number(status.days_to_due)) ? Number(status.days_to_due) : null,
-                payment_status: status.payment_status || "none",
-                payment_status_label: status.payment_status_label || "",
-                can_charge_renewal: !!status.can_charge_renewal,
-                subscription_id: status.subscription_id || false,
-                renewal_product_id: status.renewal_product_id || false,
-                renewal_product_name: status.renewal_product_name || "",
-                renewal_plan_id: status.renewal_plan_id || false,
-                renewal_pricing_id: status.renewal_pricing_id || false,
-                renewal_amount: Number(status.renewal_amount) || 0,
                 birthday: status.birthday || "",
                 gender: status.gender || "",
                 last_access: status.last_access || "",
@@ -1502,72 +128,6 @@ patch(ControlButtons.prototype, {
         });
 
         this._showDirectoryModal(rows);
-    },
-
-    async _wgsEnsureRecurringPriceOnLine(line, product = null, providedContext = null) {
-        const recurringProduct = product || getLineProduct(this, line);
-        if (!recurringProduct) {
-            return;
-        }
-        const context = providedContext || await getSubscriptionContext(this, recurringProduct, getLineUnitPrice(line));
-        if (!context || !context.is_subscription) {
-            return;
-        }
-        const productId = Number(recurringProduct.id || 0);
-        if (!productId) {
-            return;
-        }
-
-        const selection = getLineSubscriptionSelection(line);
-        const flowInfo = getLineSubscriptionFlow(line);
-        const preferredPlanId = selection.planId || context.default_plan_id || false;
-        const preferredPricingId = selection.pricingId || context.default_pricing_id || false;
-        const order = getCurrentOrder(this);
-        const partner = getCurrentPartner(this, order);
-        const partnerId = partner && partner.id ? Number(partner.id) : 0;
-        let result = {};
-        if (flowInfo.flow === "renewal" && flowInfo.sourceSubscriptionId) {
-            result = await this.orm.call(
-                "pos.order",
-                "wgs_get_subscription_renewal_charge_for_pos",
-                [flowInfo.sourceSubscriptionId, productId, preferredPlanId, preferredPricingId]
-            );
-        } else {
-            result = await this.orm.call(
-                "pos.order",
-                "wgs_get_subscription_charge_for_pos",
-                [partnerId || false, productId, getLineUnitPrice(line), preferredPlanId, preferredPricingId]
-            );
-        }
-        const chargeNow = Number(result && result.charge_now);
-        if (Number.isFinite(chargeNow) && chargeNow >= 0) {
-            const currentPrice = getLineUnitPrice(line);
-            if (Math.abs(currentPrice - chargeNow) > 0.0001) {
-                setLineUnitPrice(line, chargeNow);
-            }
-        }
-
-        line.wgs_upgrade_credit_amount = Number(result && result.credit_amount) || 0;
-        line.wgs_is_upgrade = flowInfo.flow === "renewal" ? false : !!(result && result.is_upgrade);
-
-        setLineSubscriptionSelection(
-            line,
-            result && result.plan_id ? result.plan_id : preferredPlanId,
-            result && result.pricing_id ? result.pricing_id : preferredPricingId
-        );
-        wgsDebugSubscriptionCharge("configuracion/_wgsEnsureRecurringPriceOnLine", {
-            partner,
-            product: recurringProduct,
-            selection: {
-                planId: preferredPlanId,
-                pricingId: preferredPricingId,
-            },
-            result: result || {},
-            extra: {
-                flow: flowInfo.flow,
-                source_subscription_id: flowInfo.sourceSubscriptionId || false,
-            },
-        });
     },
 
     async _fetchPartnerStatusMap(partnerIds) {
@@ -1587,320 +147,6 @@ patch(ControlButtons.prototype, {
         return statusMap;
     },
 
-    _showParticipantsModal({ holder, product, line, participants, capacity, subscriptionContext }) {
-        const previous = document.getElementById(MODAL_ID);
-        if (previous) {
-            previous.remove();
-        }
-
-        const overlay = document.createElement("div");
-        overlay.id = MODAL_ID;
-        overlay.className = "wgs-status-modal-overlay";
-
-        const modal = document.createElement("div");
-        modal.className = "wgs-status-modal";
-
-        const header = document.createElement("div");
-        header.className = "wgs-status-modal-header";
-        header.innerHTML = `
-            <h3>${this._escapeHtml(_t("Configuración de Suscripción"))}</h3>
-            <p class="wgs-subtitle">${this._escapeHtml(product.display_name || "")} | ${this._escapeHtml(_t("Cupo total"))}: ${capacity}</p>
-        `;
-
-        const toolbar = document.createElement("div");
-        toolbar.className = "wgs-status-toolbar";
-        const plans = Array.isArray(subscriptionContext && subscriptionContext.plans) ? subscriptionContext.plans : [];
-        const selection = getLineSubscriptionSelection(line);
-        const defaultPlanId = selection.planId || (subscriptionContext && subscriptionContext.default_plan_id) || (plans[0] && plans[0].plan_id) || false;
-        const defaultPricingId = selection.pricingId || (subscriptionContext && subscriptionContext.default_pricing_id) || (plans[0] && plans[0].pricing_id) || false;
-
-        const planOptions = plans.length
-            ? plans
-                .map((plan) => {
-                    const planId = Number(plan.plan_id || 0);
-                    const pricingId = Number(plan.pricing_id || 0);
-                    const selected = (
-                        (defaultPricingId && pricingId === Number(defaultPricingId))
-                        || (!defaultPricingId && defaultPlanId && planId === Number(defaultPlanId))
-                    ) ? "selected" : "";
-                    const labelParts = [plan.plan_name || _t("Plan recurrente")];
-                    if (plan.interval_label) {
-                        labelParts.push(`(${plan.interval_label})`);
-                    }
-                    labelParts.push(`$${Number(plan.price || 0).toFixed(2)}`);
-                    return `<option value="${planId || 0}" data-pricing-id="${pricingId || 0}" data-price="${Number(plan.price || 0)}" data-interval-value="${Number(plan.interval_value || 1)}" data-interval-unit="${this._escapeHtml(plan.interval_unit || "month")}" data-min-term-periods="${Number(plan.min_term_periods || 0)}" ${selected}>${this._escapeHtml(labelParts.join(" "))}</option>`;
-                })
-                .join("")
-            : `<option value="0">${this._escapeHtml(_t("Sin planes configurados"))}</option>`;
-
-        const todayISO = formatISODate(getTodayUTCDate());
-        const currentStartDateValue = getLineSubscriptionStartDate(line) || todayISO;
-        const currentEndDateValue = getLineSubscriptionEndDate(line);
-        toolbar.innerHTML = `
-            <input type="text" class="wgs-filter-search" placeholder="${_t("Buscar participante")}" />
-            <select class="wgs-plan-select">${planOptions}</select>
-            <input type="date" class="wgs-start-date-input" min="${this._escapeHtml(todayISO)}" value="${this._escapeHtml(currentStartDateValue)}" />
-            <input type="date" class="wgs-end-date-input" value="${this._escapeHtml(currentEndDateValue)}" />
-            <div class="wgs-inline-note">${_t("El titular siempre está incluido")}: <strong>${this._escapeHtml(holder.name || "")}</strong></div>
-        `;
-
-        const body = document.createElement("div");
-        body.className = "wgs-status-modal-body";
-
-        const list = document.createElement("div");
-        list.className = "wgs-participant-list";
-        body.appendChild(list);
-
-        const footer = document.createElement("div");
-        footer.className = "wgs-status-modal-footer";
-        const counter = document.createElement("span");
-        counter.className = "wgs-inline-note";
-        footer.appendChild(counter);
-
-        const cancelButton = document.createElement("button");
-        cancelButton.type = "button";
-        cancelButton.className = "wgs-status-close-btn wgs-btn-muted";
-        cancelButton.textContent = _t("Cancelar");
-
-        const saveButton = document.createElement("button");
-        saveButton.type = "button";
-        saveButton.className = "wgs-status-close-btn";
-        saveButton.textContent = _t("Guardar configuración");
-
-        footer.appendChild(cancelButton);
-        footer.appendChild(saveButton);
-
-        modal.appendChild(header);
-        modal.appendChild(toolbar);
-        modal.appendChild(body);
-        modal.appendChild(footer);
-        overlay.appendChild(modal);
-
-        const closeModal = () => overlay.remove();
-        cancelButton.addEventListener("click", closeModal);
-        overlay.addEventListener("click", (event) => {
-            if (event.target === overlay) {
-                closeModal();
-            }
-        });
-
-        document.body.appendChild(overlay);
-
-        const searchInput = toolbar.querySelector(".wgs-filter-search");
-        const planSelect = toolbar.querySelector(".wgs-plan-select");
-        const startDateInput = toolbar.querySelector(".wgs-start-date-input");
-        const endDateInput = toolbar.querySelector(".wgs-end-date-input");
-        const holderId = holder.id;
-        const selected = new Set(getLineParticipantIds(line, holderId));
-
-        const getSelectedPlanData = () => {
-            if (!planSelect) {
-                return null;
-            }
-            const selectedOption = planSelect.options[planSelect.selectedIndex];
-            if (!selectedOption) {
-                return null;
-            }
-            const planId = Number.parseInt(planSelect.value, 10) || false;
-            const pricingId = Number.parseInt((selectedOption.dataset && selectedOption.dataset.pricingId) || 0, 10) || false;
-            const price = Number.parseFloat((selectedOption.dataset && selectedOption.dataset.price) || "0");
-            const intervalValue = Number.parseInt((selectedOption.dataset && selectedOption.dataset.intervalValue) || "1", 10) || 1;
-            const intervalUnit = (selectedOption.dataset && selectedOption.dataset.intervalUnit) || "month";
-            const minTermPeriods = Math.max(0, Number.parseInt((selectedOption.dataset && selectedOption.dataset.minTermPeriods) || "0", 10) || 0);
-            return { planId, pricingId, price, intervalValue, intervalUnit, minTermPeriods };
-        };
-
-        const syncDateConstraints = () => {
-            if (startDateInput) {
-                startDateInput.min = todayISO;
-            }
-            if (!endDateInput) {
-                return;
-            }
-            const planData = getSelectedPlanData();
-            if (!planData) {
-                endDateInput.min = "";
-                return;
-            }
-            const requiredTermPeriods = Math.max(1, planData.minTermPeriods || 0);
-            const minDate = getPlanMinEndDate({
-                interval_value: planData.intervalValue,
-                interval_unit: planData.intervalUnit,
-            }, (startDateInput && startDateInput.value) || "", requiredTermPeriods);
-            endDateInput.min = minDate ? formatISODate(minDate) : "";
-            if ((planData.minTermPeriods || 0) > 0 && minDate) {
-                const currentEnd = parseISODate(String(endDateInput.value || "").trim());
-                if (!currentEnd || currentEnd.getTime() < minDate.getTime()) {
-                    endDateInput.value = formatISODate(minDate);
-                }
-            }
-        };
-
-        const syncPlanSelection = () => {
-            const planData = getSelectedPlanData();
-            if (!planData) {
-                return;
-            }
-            setLineSubscriptionSelection(line, planData.planId, planData.pricingId);
-            // Pricing is always resolved via backend to preserve upgrade credit logic.
-            syncDateConstraints();
-        };
-
-        syncPlanSelection();
-        if (planSelect) {
-            planSelect.addEventListener("change", async () => {
-                syncPlanSelection();
-                await this._wgsEnsureRecurringPriceOnLine(line, product, subscriptionContext);
-            });
-        }
-        if (startDateInput) {
-            startDateInput.addEventListener("change", () => {
-                syncDateConstraints();
-            });
-        }
-
-        const setCounter = () => {
-            counter.textContent = `${_t("Seleccionados")}: ${selected.size}/${capacity}`;
-        };
-
-        const renderList = () => {
-            const query = (searchInput.value || "").trim().toLowerCase();
-            const rows = participants
-                .filter((partner) => partner && partner.id)
-                .filter((partner) => {
-                    if (!query) {
-                        return true;
-                    }
-                    const haystack = `${partner.name || ""} ${partner.email || ""} ${partner.phone || ""}`.toLowerCase();
-                    return haystack.includes(query);
-                })
-                .sort((a, b) => (a.name || "").localeCompare(b.name || "", "es"));
-
-            list.innerHTML = rows
-                .map((partner) => {
-                    const checked = selected.has(partner.id) ? "checked" : "";
-                    const disabled = partner.id === holderId ? "disabled" : "";
-                    return `
-                        <label class="wgs-participant-row" data-partner-id="${partner.id}">
-                            <input type="checkbox" ${checked} ${disabled} />
-                            <span class="wgs-participant-name">${this._escapeHtml(partner.name || _t("Sin nombre"))}</span>
-                            <span class="wgs-participant-meta">${this._escapeHtml(partner.phone || partner.email || "")}</span>
-                        </label>
-                    `;
-                })
-                .join("");
-
-            list.querySelectorAll(".wgs-participant-row input[type='checkbox']").forEach((checkbox) => {
-                checkbox.addEventListener("change", (event) => {
-                    const row = event.target.closest(".wgs-participant-row");
-                    const partnerId = Number.parseInt(row.getAttribute("data-partner-id"), 10);
-                    if (!partnerId || partnerId === holderId) {
-                        return;
-                    }
-
-                    if (event.target.checked) {
-                        if (selected.size >= capacity) {
-                            event.target.checked = false;
-                            this._showSimpleInfoModal(
-                                _t("Cupo excedido"),
-                                _t("No puedes exceder el máximo de participantes permitido para esta suscripción.")
-                            );
-                            return;
-                        }
-                        selected.add(partnerId);
-                    } else {
-                        selected.delete(partnerId);
-                    }
-                    selected.add(holderId);
-                    setCounter();
-                });
-            });
-        };
-
-        searchInput.addEventListener("input", renderList);
-
-        saveButton.addEventListener("click", () => {
-            syncPlanSelection();
-            selected.add(holderId);
-            if (selected.size > capacity) {
-                this._showSimpleInfoModal(
-                    _t("Cupo excedido"),
-                    _t("No puedes exceder el máximo de participantes permitido para esta suscripción.")
-                );
-                return;
-            }
-            const startDateValue = String((startDateInput && startDateInput.value) || "").trim();
-            const parsedStartDate = parseISODate(startDateValue);
-            if (!parsedStartDate) {
-                this._showSimpleInfoModal(
-                    _t("Fecha inválida"),
-                    _t("La fecha de inicio no tiene un formato válido.")
-                );
-                return;
-            }
-            const todayDate = getTodayUTCDate();
-            if (parsedStartDate.getTime() < todayDate.getTime()) {
-                this._showSimpleInfoModal(
-                    _t("Fecha de inicio inválida"),
-                    _t("La fecha de inicio no puede ser anterior al día actual.")
-                );
-                return;
-            }
-            let endDateValue = String((endDateInput && endDateInput.value) || "").trim();
-            const planData = getSelectedPlanData();
-            const minimumTermPeriods = Math.max(0, Number.parseInt(planData && planData.minTermPeriods, 10) || 0);
-            const requiredTermPeriods = Math.max(1, minimumTermPeriods);
-            if (!endDateValue && minimumTermPeriods > 0) {
-                const minEndDate = planData
-                    ? getPlanMinEndDate(
-                        {
-                            interval_value: planData.intervalValue,
-                            interval_unit: planData.intervalUnit,
-                        },
-                        startDateValue,
-                        requiredTermPeriods
-                    )
-                    : null;
-                if (minEndDate) {
-                    endDateValue = formatISODate(minEndDate);
-                    if (endDateInput) {
-                        endDateInput.value = endDateValue;
-                    }
-                }
-            }
-            if (endDateValue) {
-                const parsedEndDate = parseISODate(endDateValue);
-                if (!parsedEndDate) {
-                    this._showSimpleInfoModal(
-                        _t("Fecha inválida"),
-                        _t("La fecha de finalización no tiene un formato válido.")
-                    );
-                    return;
-                }
-                if (planData) {
-                    const minEndDate = getPlanMinEndDate({
-                        interval_value: planData.intervalValue,
-                        interval_unit: planData.intervalUnit,
-                    }, startDateValue, requiredTermPeriods);
-                    if (minEndDate && parsedEndDate.getTime() < minEndDate.getTime()) {
-                        this._showSimpleInfoModal(
-                            _t("Fecha de finalización inválida"),
-                            _t("La fecha final debe ser igual o posterior al mínimo permitido por este paquete.")
-                        );
-                        return;
-                    }
-                }
-            }
-            setLineParticipantIds(line, Array.from(selected));
-            setLineSubscriptionStartDate(line, startDateValue || false);
-            setLineSubscriptionEndDate(line, endDateValue || false);
-            closeModal();
-        });
-
-        setCounter();
-        renderList();
-    },
-
     _showDirectoryModal(rows) {
         const previous = document.getElementById(MODAL_ID);
         if (previous) {
@@ -1917,14 +163,14 @@ patch(ControlButtons.prototype, {
         const header = document.createElement("div");
         header.className = "wgs-status-modal-header";
         header.innerHTML = `
-            <h3>${this._escapeHtml(_t("Directorio de Vigencia de Clientes"))}</h3>
+            <h3>${this._escapeHtml(_t("Directorio de Control de Acceso"))}</h3>
             <p class="wgs-subtitle">${this._escapeHtml(_t("Listado general de titulares y participantes, con vigencia y datos clave."))}</p>
         `;
 
         const toolbar = document.createElement("div");
         toolbar.className = "wgs-status-toolbar";
         toolbar.innerHTML = `
-            <input type="text" class="wgs-filter-search" placeholder="${_t("Buscar por cliente, paquete, teléfono o email")}" />
+            <input type="text" class="wgs-filter-search" placeholder="${_t("Buscar por cliente, paquete, telefono o email")}" />
             <select class="wgs-filter-state">
                 <option value="all">${_t("Estado: Todos")}</option>
                 <option value="valid">${_t("Estado: Vigentes")}</option>
@@ -1938,21 +184,21 @@ patch(ControlButtons.prototype, {
                 <option value="up_to_date">${_t("Cobro: Al corriente")}</option>
             </select>
             <select class="wgs-filter-birthday">
-                <option value="all">${_t("Cumpleaños: Todos")}</option>
-                <option value="today">${_t("Cumpleaños: Hoy")}</option>
-                <option value="this_month">${_t("Cumpleaños: Este mes")}</option>
-                <option value="next_7">${_t("Cumpleaños: Próximos 7 días")}</option>
-                <option value="missing">${_t("Cumpleaños: Sin dato")}</option>
+                <option value="all">${_t("Cumpleanos: Todos")}</option>
+                <option value="today">${_t("Cumpleanos: Hoy")}</option>
+                <option value="this_month">${_t("Cumpleanos: Este mes")}</option>
+                <option value="next_7">${_t("Cumpleanos: Proximos 7 dias")}</option>
+                <option value="missing">${_t("Cumpleanos: Sin dato")}</option>
             </select>
             <select class="wgs-sort">
                 <option value="name_asc">${_t("Orden: Nombre A-Z")}</option>
                 <option value="name_desc">${_t("Orden: Nombre Z-A")}</option>
                 <option value="state">${_t("Orden: Estado")}</option>
+                <option value="payment_status">${_t("Orden: Cobro recurrente")}</option>
                 <option value="valid_until_asc">${_t("Orden: Vencimiento cercano")}</option>
                 <option value="valid_until_desc">${_t("Orden: Vencimiento lejano")}</option>
-                <option value="payment_status">${_t("Orden: Cobro recurrente")}</option>
-                <option value="birthday_asc">${_t("Orden: Cumpleaños próximo")}</option>
-                <option value="last_access_desc">${_t("Orden: Último acceso reciente")}</option>
+                <option value="birthday_asc">${_t("Orden: Cumpleanos proximo")}</option>
+                <option value="last_access_desc">${_t("Orden: Ultimo acceso reciente")}</option>
             </select>
             <button type="button" class="wgs-status-close-btn wgs-btn-export">${this._escapeHtml(_t("Descargar XLS"))}</button>
         `;
@@ -1976,12 +222,11 @@ patch(ControlButtons.prototype, {
                     <th>${_t("Inicio")}</th>
                     <th>${_t("Vencimiento")}</th>
                     <th>${_t("Cobro")}</th>
-                    <th>${_t("Género")}</th>
-                    <th>${_t("Cumpleaños")}</th>
-                    <th>${_t("Último acceso")}</th>
-                    <th>${_t("Teléfono")}</th>
+                    <th>${_t("Genero")}</th>
+                    <th>${_t("Cumpleanos")}</th>
+                    <th>${_t("Ultimo acceso")}</th>
+                    <th>${_t("Telefono")}</th>
                     <th>${_t("Email")}</th>
-                    <th>${_t("Acción")}</th>
                 </tr>
             </thead>
             <tbody></tbody>
@@ -2027,7 +272,6 @@ patch(ControlButtons.prototype, {
             expired: _t("Sin vigencia"),
             none: _t("Sin paquete"),
         };
-
         const stateRank = {
             valid: 0,
             expired: 1,
@@ -2039,7 +283,7 @@ patch(ControlButtons.prototype, {
             overdue: _t("Pago vencido"),
             future: _t("Inicio futuro"),
             inactive: _t("Inactiva"),
-            unknown: _t("Sin próxima fecha"),
+            unknown: _t("Sin proxima fecha"),
             none: _t("Sin ciclo"),
         };
         const paymentStatusRank = {
@@ -2172,85 +416,44 @@ patch(ControlButtons.prototype, {
                 <span class="wgs-summary-pill wgs-summary-window">${_t("Ventana de pago")}: ${counts.window}</span>
                 <span class="wgs-summary-pill wgs-summary-overdue">${_t("Vencidos de pago")}: ${counts.overdue}</span>
                 <span class="wgs-summary-pill wgs-summary-none">${_t("Sin paquete")}: ${counts.none}</span>
-                <span class="wgs-summary-pill">${_t("Con cumpleaños")}: ${counts.birthday}</span>
+                <span class="wgs-summary-pill">${_t("Con cumpleanos")}: ${counts.birthday}</span>
                 <span class="wgs-summary-pill">${_t("Mostrando")}: ${filtered.length}</span>
             `;
 
             if (!filtered.length) {
-                tbody.innerHTML = `<tr><td colspan="14">${_t("No hay resultados para el filtro actual.")}</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="13">${_t("No hay resultados para el filtro actual.")}</td></tr>`;
                 return;
             }
 
-            tbody.innerHTML = filtered
-                .map((row) => {
-                    const stateClass = row.state === "valid"
-                        ? "wgs-state-valid"
-                        : row.state === "expired"
-                            ? "wgs-state-expired"
-                            : "wgs-state-none";
-                    const paymentStatus = row.payment_status || "none";
-                    const paymentLabel = row.payment_status_label || paymentStatusLabel[paymentStatus] || paymentStatusLabel.none;
-                    const paymentClass = `wgs-payment-${this._escapeHtml(paymentStatus)}`;
-                    const canRenew = !!(row.can_charge_renewal && row.subscription_id && row.renewal_product_id);
-                    return `
-                        <tr>
-                            <td>
-                                <img class="wgs-partner-avatar" src="${this._escapeHtml(row.image_url || "")}" alt="${this._escapeHtml(row.name || "")}" loading="lazy" />
-                            </td>
-                            <td class="wgs-cell-name">${this._escapeHtml(row.name || "-")}</td>
-                            <td><span class="${stateClass}">${this._escapeHtml(stateLabel[row.state] || stateLabel.none)}</span></td>
-                            <td>${this._escapeHtml(row.package_label || "-")}</td>
-                            <td>${this._escapeHtml(row.plan_name || "-")}</td>
-                            <td>${this._escapeHtml(this._formatDateDisplay(row.start_date) || "-")}</td>
-                            <td>${this._escapeHtml(this._formatDateDisplay(row.valid_until) || "-")}</td>
-                            <td>
-                                <span class="wgs-payment-badge ${paymentClass}">${this._escapeHtml(paymentLabel)}</span>
-                            </td>
-                            <td>${this._escapeHtml(row.gender || "-")}</td>
-                            <td>${this._escapeHtml(this._formatDateDisplay(row.birthday) || "-")}</td>
-                            <td>${this._escapeHtml(this._formatDateTimeDisplay(row.last_access) || "-")}</td>
-                            <td>${this._escapeHtml(row.phone || "-")}</td>
-                            <td>${this._escapeHtml(row.email || "-")}</td>
-                            <td>
-                                ${
-                                    canRenew
-                                        ? `<button type="button" class="wgs-renew-btn"
-                                            data-partner-id="${Number(row.id) || 0}"
-                                            data-subscription-id="${Number(row.subscription_id) || 0}"
-                                            data-product-id="${Number(row.renewal_product_id) || 0}"
-                                            data-plan-id="${Number(row.renewal_plan_id) || 0}"
-                                            data-pricing-id="${Number(row.renewal_pricing_id) || 0}"
-                                            data-amount="${Number(row.renewal_amount) || 0}">
-                                            ${this._escapeHtml(_t("Cobrar"))}
-                                        </button>`
-                                        : "-"
-                                }
-                            </td>
-                        </tr>
-                    `;
-                })
-                .join("");
-
-            tbody.querySelectorAll(".wgs-renew-btn").forEach((button) => {
-                button.addEventListener("click", async (event) => {
-                    const target = event.currentTarget;
-                    const partnerId = Number.parseInt(target.dataset.partnerId || "0", 10) || 0;
-                    const subscriptionId = Number.parseInt(target.dataset.subscriptionId || "0", 10) || 0;
-                    const productId = Number.parseInt(target.dataset.productId || "0", 10) || 0;
-                    const planId = Number.parseInt(target.dataset.planId || "0", 10) || false;
-                    const pricingId = Number.parseInt(target.dataset.pricingId || "0", 10) || false;
-                    const amount = Number.parseFloat(target.dataset.amount || "0") || 0;
-
-                    await this._queueRenewalToCurrentOrder({
-                        partnerId,
-                        subscriptionId,
-                        productId,
-                        planId,
-                        pricingId,
-                        amount,
-                    });
-                });
-            });
+            tbody.innerHTML = filtered.map((row) => {
+                const stateClass = row.state === "valid"
+                    ? "wgs-state-valid"
+                    : row.state === "expired"
+                        ? "wgs-state-expired"
+                        : "wgs-state-none";
+                const paymentStatus = row.payment_status || "none";
+                const paymentLabel = row.payment_status_label || paymentStatusLabel[paymentStatus] || paymentStatusLabel.none;
+                const paymentClass = `wgs-payment-${this._escapeHtml(paymentStatus)}`;
+                return `
+                    <tr>
+                        <td>
+                            <img class="wgs-partner-avatar" src="${this._escapeHtml(row.image_url || "")}" alt="${this._escapeHtml(row.name || "")}" loading="lazy" />
+                        </td>
+                        <td class="wgs-cell-name">${this._escapeHtml(row.name || "-")}</td>
+                        <td><span class="${stateClass}">${this._escapeHtml(stateLabel[row.state] || stateLabel.none)}</span></td>
+                        <td>${this._escapeHtml(row.package_label || "-")}</td>
+                        <td>${this._escapeHtml(row.plan_name || "-")}</td>
+                        <td>${this._escapeHtml(this._formatDateDisplay(row.start_date) || "-")}</td>
+                        <td>${this._escapeHtml(this._formatDateDisplay(row.valid_until) || "-")}</td>
+                        <td><span class="wgs-payment-badge ${paymentClass}">${this._escapeHtml(paymentLabel)}</span></td>
+                        <td>${this._escapeHtml(row.gender || "-")}</td>
+                        <td>${this._escapeHtml(this._formatDateDisplay(row.birthday) || "-")}</td>
+                        <td>${this._escapeHtml(this._formatDateTimeDisplay(row.last_access) || "-")}</td>
+                        <td>${this._escapeHtml(row.phone || "-")}</td>
+                        <td>${this._escapeHtml(row.email || "-")}</td>
+                    </tr>
+                `;
+            }).join("");
         };
 
         searchInput.addEventListener("input", render);
@@ -2262,85 +465,6 @@ patch(ControlButtons.prototype, {
             this._downloadDirectoryAsXls(filteredSnapshot);
         });
         render();
-    },
-
-    async _queueRenewalToCurrentOrder({ partnerId, subscriptionId, productId, planId, pricingId, amount }) {
-        if (!partnerId || !subscriptionId || !productId) {
-            this._showSimpleInfoModal(
-                _t("Datos incompletos"),
-                _t("No se pudo preparar el cobro recurrente por falta de datos de suscripción.")
-            );
-            return;
-        }
-
-        const pos = getPos(this);
-        let order = getCurrentOrder(this);
-        if (!order && pos && typeof pos.add_new_order === "function") {
-            pos.add_new_order();
-            order = getCurrentOrder(this);
-        }
-        if (!order) {
-            this._showSimpleInfoModal(
-                _t("Sin orden"),
-                _t("No hay una orden activa para agregar el cobro recurrente.")
-            );
-            return;
-        }
-
-        const partner = getPartnerById(this, partnerId);
-        if (!partner || !partner.id) {
-            this._showSimpleInfoModal(
-                _t("Cliente no disponible"),
-                _t("El cliente no está disponible en esta sesión de POS.")
-            );
-            return;
-        }
-
-        const currentPartner = getCurrentPartner(this, order);
-        const orderLines = getOrderlines(order).filter((line) => getLineQuantity(line) > 0);
-        if (currentPartner && currentPartner.id && Number(currentPartner.id) !== Number(partner.id) && orderLines.length) {
-            this._showSimpleInfoModal(
-                _t("Orden con otro cliente"),
-                _t("Cierra o limpia la orden actual antes de cobrar la renovación de otro cliente.")
-            );
-            return;
-        }
-
-        setOrderPartner(order, partner);
-
-        const product = getProductById(this, productId);
-        if (!product) {
-            this._showSimpleInfoModal(
-                _t("Producto no disponible"),
-                _t("El producto recurrente no está cargado en esta sesión de POS.")
-            );
-            return;
-        }
-
-        const line = addProductToOrder(this, order, product, { merge: false, quantity: 1 });
-        if (!line) {
-            this._showSimpleInfoModal(
-                _t("No se pudo agregar"),
-                _t("No se pudo agregar la línea de renovación al ticket actual.")
-            );
-            return;
-        }
-
-        setLineSubscriptionSelection(line, planId || false, pricingId || false);
-        setLineSubscriptionFlow(line, "renewal", subscriptionId);
-        setLineSubscriptionStartDate(line, false);
-        setLineSubscriptionEndDate(line, false);
-        setLineParticipantIds(line, [partner.id]);
-        if (Number.isFinite(Number(amount)) && Number(amount) >= 0) {
-            setLineUnitPrice(line, Number(amount));
-        }
-
-        await this._wgsEnsureRecurringPriceOnLine(line, product, { is_subscription: true });
-
-        this._showSimpleInfoModal(
-            _t("Renovación agregada"),
-            _t("Se agregó el cobro recurrente al ticket. Continúa al pago para confirmar la renovación.")
-        );
     },
 
     _toTimestamp(value) {
@@ -2432,26 +556,24 @@ patch(ControlButtons.prototype, {
     _downloadDirectoryAsXls(rows) {
         const dataRows = Array.isArray(rows) ? rows : [];
         const filenameDate = new Date().toISOString().slice(0, 10);
-        const filename = `directorio_vigencias_${filenameDate}.xls`;
+        const filename = `directorio_control_acceso_${filenameDate}.xls`;
 
-        const tableRows = dataRows
-            .map((row) => `
-                <tr>
-                    <td>${this._escapeHtml(row.name || "-")}</td>
-                    <td>${this._escapeHtml(row.state === "valid" ? _t("Vigente") : row.state === "expired" ? _t("Sin vigencia") : _t("Sin paquete"))}</td>
-                    <td>${this._escapeHtml(row.package_label || "-")}</td>
-                    <td>${this._escapeHtml(row.plan_name || "-")}</td>
-                    <td>${this._escapeHtml(this._formatDateDisplay(row.start_date) || "-")}</td>
-                    <td>${this._escapeHtml(this._formatDateDisplay(row.valid_until) || "-")}</td>
-                    <td>${this._escapeHtml(row.payment_status_label || "-")}</td>
-                    <td>${this._escapeHtml(row.gender || "-")}</td>
-                    <td>${this._escapeHtml(this._formatDateDisplay(row.birthday) || "-")}</td>
-                    <td>${this._escapeHtml(this._formatDateTimeDisplay(row.last_access) || "-")}</td>
-                    <td>${this._escapeHtml(row.phone || "-")}</td>
-                    <td>${this._escapeHtml(row.email || "-")}</td>
-                </tr>
-            `)
-            .join("");
+        const tableRows = dataRows.map((row) => `
+            <tr>
+                <td>${this._escapeHtml(row.name || "-")}</td>
+                <td>${this._escapeHtml(row.state === "valid" ? _t("Vigente") : row.state === "expired" ? _t("Sin vigencia") : _t("Sin paquete"))}</td>
+                <td>${this._escapeHtml(row.package_label || "-")}</td>
+                <td>${this._escapeHtml(row.plan_name || "-")}</td>
+                <td>${this._escapeHtml(this._formatDateDisplay(row.start_date) || "-")}</td>
+                <td>${this._escapeHtml(this._formatDateDisplay(row.valid_until) || "-")}</td>
+                <td>${this._escapeHtml(row.payment_status_label || "-")}</td>
+                <td>${this._escapeHtml(row.gender || "-")}</td>
+                <td>${this._escapeHtml(this._formatDateDisplay(row.birthday) || "-")}</td>
+                <td>${this._escapeHtml(this._formatDateTimeDisplay(row.last_access) || "-")}</td>
+                <td>${this._escapeHtml(row.phone || "-")}</td>
+                <td>${this._escapeHtml(row.email || "-")}</td>
+            </tr>
+        `).join("");
 
         const html = `
             <html>
@@ -2474,10 +596,10 @@ patch(ControlButtons.prototype, {
                                 <th>${this._escapeHtml(_t("Inicio"))}</th>
                                 <th>${this._escapeHtml(_t("Vencimiento"))}</th>
                                 <th>${this._escapeHtml(_t("Cobro"))}</th>
-                                <th>${this._escapeHtml(_t("Género"))}</th>
-                                <th>${this._escapeHtml(_t("Cumpleaños"))}</th>
-                                <th>${this._escapeHtml(_t("Último acceso"))}</th>
-                                <th>${this._escapeHtml(_t("Teléfono"))}</th>
+                                <th>${this._escapeHtml(_t("Genero"))}</th>
+                                <th>${this._escapeHtml(_t("Cumpleanos"))}</th>
+                                <th>${this._escapeHtml(_t("Ultimo acceso"))}</th>
+                                <th>${this._escapeHtml(_t("Telefono"))}</th>
                                 <th>${this._escapeHtml(_t("Email"))}</th>
                             </tr>
                         </thead>
@@ -2620,11 +742,6 @@ patch(ControlButtons.prototype, {
                 background: #fff;
                 color: #111827;
             }
-            .wgs-inline-note {
-                color: #475569;
-                font-size: 0.82rem;
-                white-space: nowrap;
-            }
             .wgs-status-summary {
                 padding: 0.55rem 1.2rem;
                 border-bottom: 1px solid #e5e7eb;
@@ -2691,9 +808,6 @@ patch(ControlButtons.prototype, {
                 font-weight: 600;
                 cursor: pointer;
             }
-            .wgs-btn-muted {
-                background: #64748b;
-            }
             .wgs-btn-export {
                 background: #0369a1;
                 white-space: nowrap;
@@ -2719,30 +833,6 @@ patch(ControlButtons.prototype, {
                 color: #374151;
                 text-transform: uppercase;
                 letter-spacing: 0.03em;
-            }
-            .wgs-status-badge {
-                border-radius: 999px;
-                padding: 0.12rem 0.5rem;
-                font-size: 0.72rem;
-                font-weight: 700;
-                text-transform: uppercase;
-                letter-spacing: 0.03em;
-                white-space: nowrap;
-            }
-            .wgs-badge-valid {
-                background: #daf5e8;
-                color: #0f7b4b;
-                border: 1px solid #8ad9b5;
-            }
-            .wgs-badge-expired {
-                background: #ffe4e6;
-                color: #9f1239;
-                border: 1px solid #fda4af;
-            }
-            .wgs-badge-none {
-                background: #f1f5f9;
-                color: #475569;
-                border: 1px solid #cbd5e1;
             }
             .wgs-partner-avatar {
                 width: 38px;
@@ -2804,50 +894,9 @@ patch(ControlButtons.prototype, {
                 background: #f1f5f9;
                 color: #475569;
             }
-            .wgs-renew-btn {
-                border: 1px solid #0284c7;
-                border-radius: 0.4rem;
-                background: #0284c7;
-                color: #fff;
-                padding: 0.24rem 0.5rem;
-                font-size: 0.74rem;
-                font-weight: 700;
-                cursor: pointer;
-                white-space: nowrap;
-            }
-            .wgs-participant-list {
-                padding: 0.75rem 1rem;
-                display: flex;
-                flex-direction: column;
-                gap: 0.35rem;
-                max-height: 58vh;
-                overflow: auto;
-            }
-            .wgs-participant-row {
-                display: grid;
-                grid-template-columns: 24px 1fr auto;
-                gap: 0.6rem;
-                align-items: center;
-                border: 1px solid #e2e8f0;
-                border-radius: 0.55rem;
-                padding: 0.45rem 0.65rem;
-                background: #fff;
-            }
-            .wgs-participant-name {
-                font-size: 0.88rem;
-                color: #111827;
-                font-weight: 600;
-            }
-            .wgs-participant-meta {
-                font-size: 0.8rem;
-                color: #64748b;
-            }
             @media (max-width: 900px) {
                 .wgs-status-toolbar {
                     grid-template-columns: 1fr;
-                }
-                .wgs-control-buttons-row {
-                    flex-direction: column;
                 }
             }
         `;
