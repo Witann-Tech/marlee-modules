@@ -21,8 +21,6 @@
                 <field name="active"/>
                 <field name="global_user_id"/>
                 <field name="site_ids" widget="many2many_tags"/>
-                <field name="partner_face_image" widget="image" readonly="1"/>
-                <field name="has_face_pic" readonly="1"/>
               </list>
               <form string="Persona de acceso">
                 <sheet>
@@ -30,10 +28,6 @@
                     <field name="active" widget="boolean_toggle"/>
                     <field name="global_user_id"/>
                     <field name="site_ids" widget="many2many_tags"/>
-                    <field name="has_face_pic" readonly="1"/>
-                  </group>
-                  <group string="Foto de rostro (sincronizada desde Contacto)">
-                    <field name="partner_face_image" widget="image" readonly="1" class="oe_avatar"/>
                     <field name="face_pic_b64" invisible="1"/>
                   </group>
                 </sheet>

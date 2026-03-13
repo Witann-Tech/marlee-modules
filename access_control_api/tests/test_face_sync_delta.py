@@ -4,6 +4,7 @@ import io
 from unittest.mock import patch
 
 from odoo.tests.common import TransactionCase
+from odoo.exceptions import ValidationError
 
 from odoo.addons.access_control_api.controllers.main import AccessControlApi
 from odoo.addons.access_control_api.models import res_partner as res_partner_module
@@ -179,6 +180,24 @@ class TestFaceSyncDelta(TransactionCase):
         original = self._make_image_b64()
         normalized = self.Partner._normalize_image_b64(original.encode())
         self.assertEqual(normalized, self.Partner._normalize_image_b64(original))
+
+    def test_person_is_unique_per_partner(self):
+        partner = self.Partner.create({"name": "Partner único"})
+        self.Person.create(
+            {
+                "partner_id": partner.id,
+                "global_user_id": 9991,
+                "active": False,
+            }
+        )
+        with self.assertRaises(ValidationError):
+            self.Person.create(
+                {
+                    "partner_id": partner.id,
+                    "global_user_id": 9992,
+                    "active": False,
+                }
+            )
 
     def test_invalid_image_is_rejected(self):
         result = self.Partner._prepare_biometric_face_b64("esto-no-es-una-imagen", log_context="test_invalid")

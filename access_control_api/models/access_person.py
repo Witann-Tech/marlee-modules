@@ -107,6 +107,7 @@ class AccessPerson(models.Model):
 
     _sql_constraints = [
         ("uniq_global_user_id", "unique(global_user_id)", "El ID global debe ser único."),
+        ("uniq_partner_id", "unique(partner_id)", "Solo puede existir una persona de control de acceso por contacto."),
         (
             "check_global_user_id_range",
             "CHECK(global_user_id IS NULL OR (global_user_id >= 1 AND global_user_id <= 10000))",
@@ -121,6 +122,21 @@ class AccessPerson(models.Model):
                 raise ValidationError("Las personas activas deben tener un ID global (1..10000).")
             if rec.active and not rec.site_ids:
                 raise ValidationError("Las personas activas deben estar asignadas a al menos un sitio.")
+
+    @api.constrains("partner_id")
+    def _check_unique_partner_id(self):
+        for rec in self:
+            if not rec.partner_id:
+                continue
+            duplicate = self.search(
+                [
+                    ("partner_id", "=", rec.partner_id.id),
+                    ("id", "!=", rec.id),
+                ],
+                limit=1,
+            )
+            if duplicate:
+                raise ValidationError("Solo puede existir una persona de control de acceso por contacto.")
 
     @api.model_create_multi
     def create(self, vals_list):

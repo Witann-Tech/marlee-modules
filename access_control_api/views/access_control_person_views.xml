@@ -10,7 +10,6 @@
           <field name="partner_id"/>
           <field name="global_user_id" readonly="active"/>
           <field name="site_ids" widget="many2many_tags"/>
-          <field name="has_face_pic"/>
         </list>
       </field>
     </record>
@@ -31,10 +30,6 @@
               <field name="partner_id" required="1"/>
               <field name="global_user_id" readonly="active"/>
               <field name="site_ids" widget="many2many_tags" options="{'no_create_edit': False}"/>
-              <field name="has_face_pic" readonly="1"/>
-            </group>
-            <group string="Foto de rostro">
-              <field name="face_image" widget="image" readonly="1" class="oe_avatar"/>
               <field name="face_pic_b64" invisible="1"/>
             </group>
           </sheet>
