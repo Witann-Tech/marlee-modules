@@ -9,16 +9,13 @@
         <xpath expr="//field[@name='image_1920'][1]" position="attributes">
           <attribute name="widget">image</attribute>
         </xpath>
-        <xpath expr="//field[@name='image_1920'][1]" position="after">
-          <field name="camera_capture_helper" widget="face_camera_button" nolabel="1"/>
+        <xpath expr="//field[@name='image_1920'][1]/.." position="inside">
+          <div class="mt-2">
+            <field name="camera_capture_helper" widget="face_camera_button" nolabel="1"/>
+          </div>
         </xpath>
         <xpath expr="//notebook" position="inside">
           <page string="Control de Acceso">
-            <group>
-              <div class="text-muted">
-                La foto del contacto se captura en su ubicación original y se sincroniza a la foto biométrica de la persona.
-              </div>
-            </group>
             <field name="access_person_ids" context="{'default_partner_id': id}" nolabel="1">
               <list editable="bottom" string="Personas de acceso">
                 <field name="active"/>
