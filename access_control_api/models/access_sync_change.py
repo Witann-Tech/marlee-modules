@@ -15,6 +15,8 @@ class AccessSyncChange(models.Model):
         required=True,
         index=True,
     )
+    include_face_pic = fields.Boolean(default=False)
+    clear_face_pic = fields.Boolean(default=False)
     reason = fields.Char()
 
     @api.model
@@ -28,7 +30,14 @@ class AccessSyncChange(models.Model):
         return [int(x) for x in site_ids if x]
 
     @api.model
-    def queue_upsert_for_person(self, person, site_ids=None, reason="person_update"):
+    def queue_upsert_for_person(
+        self,
+        person,
+        site_ids=None,
+        reason="person_update",
+        include_face_pic=False,
+        clear_face_pic=False,
+    ):
         if not person or not person.global_user_id:
             return False
         resolved_site_ids = self._to_site_ids(site_ids) or person.site_ids.ids
@@ -42,6 +51,8 @@ class AccessSyncChange(models.Model):
                     "person_id": person.id,
                     "global_user_id": person.global_user_id,
                     "action": "upsert",
+                    "include_face_pic": bool(include_face_pic),
+                    "clear_face_pic": bool(clear_face_pic),
                     "reason": reason,
                 }
             )

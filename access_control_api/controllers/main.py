@@ -69,16 +69,18 @@ class AccessControlApi(http.Controller):
             return m
         return None
 
-    def _person_sync_payload(self, person):
-        face_b64 = "".join(str(person.face_pic_b64 or person.partner_id.image_1920 or "").split()) or None
-
-        return {
+    def _person_sync_payload(self, person, include_face_pic=True, clear_face_pic=False):
+        payload = {
             "globalUserId": person.global_user_id,
             "name": person.name or "",
             "active": bool(person.active),
             "accessGroup": 1,
-            "facePicB64": face_b64,
         }
+        if clear_face_pic:
+            payload["facePicB64"] = None
+        elif include_face_pic:
+            payload["facePicB64"] = "".join(str(person.face_pic_b64 or "").split()) or None
+        return payload
 
     @http.route(
         "/api/access/validate",
@@ -257,7 +259,7 @@ class AccessControlApi(http.Controller):
                 ],
                 order="global_user_id asc",
             )
-            upserts = [self._person_sync_payload(p) for p in persons]
+            upserts = [self._person_sync_payload(p, include_face_pic=True, clear_face_pic=not bool(p.face_pic_b64)) for p in persons]
             max_cursor = Change.search([], order="id desc", limit=1).id or 0
             return {
                 "ok": True,
@@ -309,7 +311,13 @@ class AccessControlApi(http.Controller):
                 deletes.append({"globalUserId": gid})
                 continue
 
-            upserts.append(self._person_sync_payload(person))
+            upserts.append(
+                self._person_sync_payload(
+                    person,
+                    include_face_pic=bool(change.include_face_pic),
+                    clear_face_pic=bool(change.clear_face_pic),
+                )
+            )
 
         next_cursor = changes[-1].id
         has_more = len(changes) >= limit

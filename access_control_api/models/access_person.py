@@ -86,7 +86,10 @@ class AccessPerson(models.Model):
             return data
         partner = self.env["res.partner"].sudo().browse(partner_id)
         if partner.exists() and partner.image_1920:
-            img = "".join(str(partner.image_1920).split())
+            img = self.env["res.partner"]._prepare_biometric_face_b64(
+                partner.image_1920,
+                log_context=f"person_fill_partner:{partner.id}",
+            )
             data["face_image"] = img
             data["face_pic_b64"] = img
         return data
@@ -95,8 +98,12 @@ class AccessPerson(models.Model):
     def _onchange_partner_id_copy_face(self):
         for rec in self:
             if rec.partner_id and not rec.face_image and rec.partner_id.image_1920:
-                rec.face_image = rec.partner_id.image_1920
-                rec.face_pic_b64 = rec.partner_id.image_1920
+                img = self.env["res.partner"]._prepare_biometric_face_b64(
+                    rec.partner_id.image_1920,
+                    log_context=f"person_onchange_partner:{rec.partner_id.id or 'new'}",
+                )
+                rec.face_image = img
+                rec.face_pic_b64 = img
 
     _sql_constraints = [
         ("uniq_global_user_id", "unique(global_user_id)", "El ID global debe ser único."),
@@ -134,7 +141,12 @@ class AccessPerson(models.Model):
         Change = self.env["access_control.sync_change"].sudo()
         for rec in records:
             if rec.active and rec.global_user_id and rec.site_ids:
-                Change.queue_upsert_for_person(rec, reason="person_create")
+                Change.queue_upsert_for_person(
+                    rec,
+                    reason="person_create",
+                    include_face_pic=bool(rec.face_pic_b64),
+                    clear_face_pic=not bool(rec.face_pic_b64),
+                )
         return records
 
     def write(self, vals):
@@ -148,6 +160,7 @@ class AccessPerson(models.Model):
                 "active": rec.active,
                 "global_user_id": rec.global_user_id,
                 "site_ids": set(rec.site_ids.ids),
+                "face_pic_b64": rec.face_pic_b64 or False,
             }
             for rec in self
         }
@@ -162,10 +175,13 @@ class AccessPerson(models.Model):
             prev_active = prev["active"]
             prev_gid = prev["global_user_id"]
             prev_sites = prev["site_ids"]
+            prev_face = prev["face_pic_b64"] or False
 
             new_active = rec.active
             new_gid = rec.global_user_id
             new_sites = set(rec.site_ids.ids)
+            new_face = rec.face_pic_b64 or False
+            face_changed = prev_face != new_face
 
             prev_sync_sites = {sid for sid in prev_sites if prev_active and prev_gid}
             new_sync_sites = {sid for sid in new_sites if new_active and new_gid}
@@ -187,10 +203,14 @@ class AccessPerson(models.Model):
 
             # Any valid current state should be upserted for current sync sites.
             for site_id in sorted(new_sync_sites):
+                include_face_pic = bool(new_face) and (face_changed or site_id not in prev_sync_sites)
+                clear_face_pic = (not new_face) and (face_changed or site_id not in prev_sync_sites)
                 Change.queue_upsert_for_person(
                     rec,
                     site_ids=Site.browse(site_id),
                     reason="person_write_upsert",
+                    include_face_pic=include_face_pic,
+                    clear_face_pic=clear_face_pic,
                 )
 
         return res
