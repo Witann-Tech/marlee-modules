@@ -96,7 +96,7 @@ class SaleOrder(models.Model):
         if not partner_ids:
             return {}
 
-        partners = self.env['res.partner'].browse(partner_ids).exists()
+        partners = self.env['res.partner'].sudo().with_context(active_test=False).browse(partner_ids).exists()
         if not partners:
             return {}
 
@@ -210,7 +210,12 @@ class SaleOrder(models.Model):
         if limit < 1:
             limit = 500
 
-        partners = self.env['res.partner'].search([], order='display_name asc', offset=max(offset, 0), limit=limit)
+        partners = self.env['res.partner'].sudo().with_context(active_test=False).search(
+            [],
+            order='name asc, id asc',
+            offset=max(offset, 0),
+            limit=limit,
+        )
         if not partners:
             return []
 
@@ -222,11 +227,14 @@ class SaleOrder(models.Model):
         rows = []
         for partner in partners:
             status = status_map.get(partner.id, {})
+            phone_fallback = False
+            if 'phone' in partner._fields:
+                phone_fallback = partner.phone or False
             rows.append({
                 'id': partner.id,
                 'name': status.get('partner_name') or partner.display_name,
                 'email': status.get('email') or partner.email or False,
-                'phone': status.get('phone') or getattr(partner, 'phone', False) or False,
+                'phone': status.get('phone') or phone_fallback,
                 'state': status.get('state') or 'none',
                 'payment_status': status.get('payment_status') or 'none',
                 'payment_status_label': status.get('payment_status_label') or False,
