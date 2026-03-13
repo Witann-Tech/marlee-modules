@@ -1,8 +1,15 @@
 # -*- coding: utf-8 -*-
 import base64
 import binascii
+import io
 import re
 from odoo import models, fields, api
+
+try:
+    from PIL import Image, ImageOps
+except ImportError:  # pragma: no cover - depends on server runtime
+    Image = None
+    ImageOps = None
 
 
 class ResPartner(models.Model):
@@ -35,6 +42,30 @@ class ResPartner(models.Model):
             raw = base64.b64decode(value, validate=True)
         except (binascii.Error, ValueError):
             return False
+        if Image and ImageOps:
+            try:
+                with Image.open(io.BytesIO(raw)) as img:
+                    img = ImageOps.exif_transpose(img)
+                    if img.mode not in ("RGB", "L"):
+                        img = img.convert("RGBA")
+                    if img.mode == "RGBA":
+                        background = Image.new("RGB", img.size, (255, 255, 255))
+                        background.paste(img, mask=img.split()[-1])
+                        img = background
+                    elif img.mode != "RGB":
+                        img = img.convert("RGB")
+
+                    crop_size = min(img.size)
+                    left = max(0, (img.width - crop_size) // 2)
+                    top = max(0, (img.height - crop_size) // 2)
+                    img = img.crop((left, top, left + crop_size, top + crop_size))
+                    img = img.resize((1024, 1024), Image.Resampling.LANCZOS)
+
+                    output = io.BytesIO()
+                    img.save(output, format="JPEG", quality=90, optimize=True)
+                    raw = output.getvalue()
+            except Exception:
+                pass
         return base64.b64encode(raw).decode()
 
     def _compute_camera_capture_helper(self):
