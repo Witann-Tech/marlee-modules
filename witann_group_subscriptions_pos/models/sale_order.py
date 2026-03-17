@@ -509,6 +509,19 @@ class SaleOrder(models.Model):
         recurring_lines = self._get_recurring_lines()
         if not recurring_lines:
             return False
+        primary_recurring_line = recurring_lines.sorted(key=lambda line: line.id)[:1]
+        renewal_product = primary_recurring_line.product_id if primary_recurring_line else self.env['product.product']
+        renewal_plan_id = False
+        renewal_pricing_id = False
+        if primary_recurring_line:
+            for field_name in ('subscription_plan_id', 'plan_id', 'recurring_plan_id'):
+                if field_name in primary_recurring_line._fields and primary_recurring_line[field_name]:
+                    renewal_plan_id = primary_recurring_line[field_name].id
+                    break
+            for field_name in ('subscription_pricing_id', 'pricing_id', 'recurring_pricing_id'):
+                if field_name in primary_recurring_line._fields and primary_recurring_line[field_name]:
+                    renewal_pricing_id = primary_recurring_line[field_name].id
+                    break
 
         is_valid = False
         reason = _('La suscripción no está vigente para control de acceso.')
@@ -553,8 +566,14 @@ class SaleOrder(models.Model):
             'access_state': access_state or False,
             'native_state_key': native_state_key,
             'native_state_label': native_state_label,
+            'holder_partner_id': self.partner_id.id or False,
+            'holder_partner_name': self.partner_id.display_name or False,
             'package_names': sorted(set(recurring_lines.mapped('product_id.display_name'))),
             'plan_name': plan_name,
+            'renewal_product_id': renewal_product.id or False,
+            'renewal_product_name': renewal_product.display_name or False,
+            'renewal_plan_id': renewal_plan_id,
+            'renewal_pricing_id': renewal_pricing_id,
             'start_date': start_date.isoformat() if start_date else False,
             'period_start': period_start.isoformat() if period_start else False,
             'valid_until': valid_until.isoformat() if valid_until else False,

@@ -520,6 +520,14 @@ patch(ControlButtons.prototype, {
         });
     },
 
+    async _fetchSubscriptionRenewalCharge(subscriptionId, productId = false, planId = false, pricingId = false) {
+        return this.orm.call(
+            "pos.order",
+            "wgs_get_subscription_renewal_charge_for_pos",
+            [subscriptionId, productId || false, planId || false, pricingId || false]
+        );
+    },
+
     _showSubscriptionsModal(rows) {
         const previous = document.getElementById(MODAL_ID);
         if (previous) {
@@ -657,6 +665,7 @@ patch(ControlButtons.prototype, {
         let formNotice = "";
         let catalogLoading = false;
         let productCatalog = [];
+        let renewalForm = null;
         const detailCache = new Map();
         let newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
 
@@ -692,6 +701,7 @@ patch(ControlButtons.prototype, {
             formMode = "new";
             formError = "";
             formNotice = "";
+            renewalForm = null;
             newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
             renderDetail(currentDetail);
             if (productCatalog.length || catalogLoading) {
@@ -714,6 +724,52 @@ patch(ControlButtons.prototype, {
                 catalogLoading = false;
                 renderDetail(currentDetail);
             }
+        };
+
+        const openRenewalForm = async (item) => {
+            if (!item || !item.subscription_id) {
+                return;
+            }
+            formMode = "renewal";
+            formError = "";
+            formNotice = "";
+            renewalForm = {
+                subscriptionId: Number(item.subscription_id || 0) || false,
+                subscriptionName: item.subscription_name || "",
+                holderPartnerId: Number(item.holder_partner_id || 0) || false,
+                holderPartnerName: item.holder_partner_name || "",
+                productId: Number(item.renewal_product_id || 0) || false,
+                productName: item.renewal_product_name || "",
+                planId: Number(item.renewal_plan_id || 0) || false,
+                pricingId: Number(item.renewal_pricing_id || 0) || false,
+                amount: 0,
+                nextInvoiceDate: item.next_invoice_date || false,
+                loading: true,
+            };
+            renderDetail(currentDetail);
+            try {
+                const charge = await this._fetchSubscriptionRenewalCharge(
+                    renewalForm.subscriptionId,
+                    renewalForm.productId,
+                    renewalForm.planId,
+                    renewalForm.pricingId
+                );
+                renewalForm = {
+                    ...renewalForm,
+                    loading: false,
+                    amount: Number(charge && charge.charge_now ? charge.charge_now : 0),
+                    planId: Number(charge && charge.plan_id ? charge.plan_id : renewalForm.planId) || false,
+                    pricingId: Number(charge && charge.pricing_id ? charge.pricing_id : renewalForm.pricingId) || false,
+                };
+            } catch (error) {
+                console.error("Error al consultar cobro de renovación POS", error);
+                formError = _t("No se pudo consultar el cobro de renovación para esta suscripción.");
+                renewalForm = {
+                    ...renewalForm,
+                    loading: false,
+                };
+            }
+            renderDetail(currentDetail);
         };
 
         const applySelectedProduct = (productId) => {
@@ -839,6 +895,38 @@ patch(ControlButtons.prototype, {
             `;
         };
 
+        const renderRenewalForm = (item) => {
+            if (
+                formMode !== "renewal"
+                || !renewalForm
+                || Number(renewalForm.subscriptionId || 0) !== Number(item.subscription_id || 0)
+            ) {
+                return "";
+            }
+            return `
+                <div class="wgs-inline-form-card">
+                    <div class="wgs-inline-form-header">
+                        <strong>${this._escapeHtml(_t("Renovar suscripción"))}</strong>
+                        <button type="button" class="wgs-inline-close-btn" data-action="cancel-renewal">${this._escapeHtml(_t("Cancelar"))}</button>
+                    </div>
+                    ${formError ? `<div class="wgs-inline-error">${this._escapeHtml(formError)}</div>` : ""}
+                    ${formNotice ? `<div class="wgs-inline-notice">${this._escapeHtml(formNotice)}</div>` : ""}
+                    ${renewalForm.loading ? `<div class="wgs-inline-loading">${this._escapeHtml(_t("Calculando importe de renovación..."))}</div>` : ""}
+                    <div class="wgs-inline-form-meta">
+                        <div><span>${this._escapeHtml(_t("Suscripción"))}</span><strong>${this._escapeHtml(renewalForm.subscriptionName || "-")}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Titular"))}</span><strong>${this._escapeHtml(renewalForm.holderPartnerName || "-")}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Producto"))}</span><strong>${this._escapeHtml(renewalForm.productName || "-")}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Próxima fecha"))}</span><strong>${this._escapeHtml(this._formatDateDisplay(renewalForm.nextInvoiceDate) || "-")}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Importe a cobrar"))}</span><strong>${this._escapeHtml(this._formatMoney(renewalForm.amount || 0))}</strong></div>
+                    </div>
+                    <div class="wgs-inline-actions">
+                        <button type="button" class="wgs-primary-action-btn" data-action="save-renewal" ${renewalForm.loading ? "disabled" : ""}>${this._escapeHtml(_t("Agregar al ticket"))}</button>
+                        <button type="button" class="wgs-secondary-action-btn" data-action="cancel-renewal">${this._escapeHtml(_t("Cancelar"))}</button>
+                    </div>
+                </div>
+            `;
+        };
+
         const renderDetail = (detail) => {
             currentDetail = detail || null;
             if (!detail || !detail.partner_id) {
@@ -879,10 +967,17 @@ patch(ControlButtons.prototype, {
                                 <p>${participantNames}</p>
                             </div>
                             <div class="wgs-subscription-actions">
-                                <button type="button" class="wgs-action-btn" disabled>${this._escapeHtml(_t("Renovar"))}</button>
+                                <button
+                                    type="button"
+                                    class="wgs-action-btn"
+                                    data-action="open-renewal"
+                                    data-subscription-id="${this._escapeHtml(String(item.subscription_id || 0))}"
+                                    ${item.access_state === "enabled" ? "" : "disabled"}
+                                >${this._escapeHtml(_t("Renovar"))}</button>
                                 <button type="button" class="wgs-action-btn" disabled>${this._escapeHtml(_t("Cobrar pendiente"))}</button>
                                 <button type="button" class="wgs-action-btn" disabled>${this._escapeHtml(_t("Editar participantes"))}</button>
                             </div>
+                            ${renderRenewalForm(item)}
                         </div>
                     `;
                 }).join("")
@@ -1092,6 +1187,7 @@ patch(ControlButtons.prototype, {
                 formMode = null;
                 formError = "";
                 formNotice = "";
+                renewalForm = null;
                 newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
             }
 
@@ -1127,6 +1223,7 @@ patch(ControlButtons.prototype, {
             formMode = null;
             formError = "";
             formNotice = "";
+            renewalForm = null;
             newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
             render();
         });
@@ -1145,6 +1242,23 @@ patch(ControlButtons.prototype, {
                 formMode = null;
                 formError = "";
                 formNotice = "";
+                renewalForm = null;
+                renderDetail(currentDetail);
+                return;
+            }
+            if (action === "open-renewal") {
+                const subscriptionId = Number(actionButton.dataset.subscriptionId || 0);
+                const item = (currentDetail && Array.isArray(currentDetail.items) ? currentDetail.items : []).find(
+                    (row) => Number(row.subscription_id || 0) === subscriptionId
+                );
+                await openRenewalForm(item);
+                return;
+            }
+            if (action === "cancel-renewal") {
+                formMode = null;
+                formError = "";
+                formNotice = "";
+                renewalForm = null;
                 renderDetail(currentDetail);
                 return;
             }
@@ -1275,6 +1389,107 @@ patch(ControlButtons.prototype, {
                 formMode = null;
                 formError = "";
                 formNotice = _t("Suscripcion agregada al ticket. Puedes continuar al cobro normal del POS.");
+                renderDetail(currentDetail);
+                return;
+            }
+            if (action === "save-renewal") {
+                formError = "";
+                formNotice = "";
+                if (!renewalForm || !renewalForm.subscriptionId || !renewalForm.productId) {
+                    formError = _t("La renovación seleccionada no tiene datos suficientes para agregarse al ticket.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+
+                const order = getCurrentOrder(this);
+                if (!order) {
+                    formError = _t("No hay una orden POS activa para agregar la renovación.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+
+                const holderPartnerId = Number(renewalForm.holderPartnerId || 0) || false;
+                const partnerOnOrderId = getPartnerIdFromOrder(order);
+                if (partnerOnOrderId !== holderPartnerId) {
+                    const partnerRecord = findPartnerInPos(this, holderPartnerId);
+                    if (partnerRecord && setPartnerOnCurrentOrder(this, partnerRecord)) {
+                        // Partner aligned locally in POS.
+                    } else if (partnerOnOrderId) {
+                        formError = _t("La orden actual ya tiene otro cliente y no se pudo reemplazar desde esta sesión. Usa un solo cliente por ticket.");
+                        renderDetail(currentDetail);
+                        return;
+                    } else {
+                        formNotice = _t("El titular no está cargado en la sesión local del POS. La renovación se vinculará al confirmar el pago.");
+                    }
+                }
+
+                const productRecord = findProductInPos(this, renewalForm.productId);
+                if (!productRecord) {
+                    formError = _t("El producto recurrente de esta suscripción no está cargado en la sesión actual del POS.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+
+                const beforeLines = getOrderLines(order);
+                const beforeCount = beforeLines.length;
+                const beforeSet = new Set(beforeLines);
+                const beforeSelectedLine = getSelectedOrderLine(this, order);
+                let targetLine = null;
+                try {
+                    const addResult = await addProductToOrder(this, order, productRecord, {
+                        quantity: 1,
+                        merge: false,
+                        price: Number(renewalForm.amount || 0),
+                    });
+                    await waitForNextTick();
+                    await waitForNextTick();
+                    const afterLines = getOrderLines(order);
+                    targetLine = afterLines.find((line) => !beforeSet.has(line)) || null;
+                    if (!targetLine && addResult && typeof addResult === "object") {
+                        targetLine = addResult;
+                    }
+                    if (!targetLine) {
+                        const selectedAfter = getSelectedOrderLine(this, order);
+                        if (selectedAfter && selectedAfter !== beforeSelectedLine) {
+                            targetLine = selectedAfter;
+                        }
+                    }
+                    if (!targetLine && afterLines.length <= beforeCount) {
+                        formError = _t("No se pudo agregar la renovación al ticket actual.");
+                        renderDetail(currentDetail);
+                        return;
+                    }
+                } catch (error) {
+                    console.error("Error al agregar renovación al ticket POS", error);
+                    formError = _t("No se pudo agregar la renovación al ticket actual.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+
+                if (!targetLine) {
+                    formError = _t("No se pudo identificar la línea de renovación agregada al ticket.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+
+                setLineUnitPrice(targetLine, Number(renewalForm.amount || 0));
+                targetLine.wgsSubscriptionConfig = {
+                    flow: "renewal",
+                    partner_id: holderPartnerId || false,
+                    participant_ids: [],
+                    plan_id: Number(renewalForm.planId || 0) || false,
+                    pricing_id: Number(renewalForm.pricingId || 0) || false,
+                    start_date: false,
+                    end_date: false,
+                    product_id: Number(renewalForm.productId || 0) || false,
+                    product_name: renewalForm.productName || false,
+                    source_subscription_id: Number(renewalForm.subscriptionId || 0) || false,
+                };
+
+                formMode = null;
+                formError = "";
+                formNotice = _t("Renovación agregada al ticket. Puedes continuar al cobro normal del POS.");
+                renewalForm = null;
                 renderDetail(currentDetail);
                 return;
             }

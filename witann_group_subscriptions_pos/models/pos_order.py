@@ -715,6 +715,10 @@ class PosOrder(models.Model):
             participant_ids = line.wgs_get_participant_ids()
             if participant_ids:
                 partner_ids.add(int(participant_ids[0]))
+                continue
+            source_order = line.wgs_subscription_source_id
+            if source_order and source_order.partner_id:
+                partner_ids.add(source_order.partner_id.id)
 
         if not partner_ids:
             return
