@@ -1072,11 +1072,17 @@ patch(ControlButtons.prototype, {
 
                 const beforeLines = getOrderLines(order);
                 const beforeCount = beforeLines.length;
-                const added = addProductToOrder(order, productRecord, {
-                    quantity: 1,
-                    merge: false,
-                    price: Number(newSubscriptionForm.price || 0),
-                });
+                let added = false;
+                try {
+                    added = addProductToOrder(order, productRecord, {
+                        quantity: 1,
+                        merge: false,
+                        price: Number(newSubscriptionForm.price || 0),
+                    });
+                } catch (error) {
+                    console.error("Error al agregar producto de suscripcion al ticket POS", error);
+                    added = false;
+                }
                 if (!added) {
                     formError = _t("No se pudo agregar el producto al ticket actual.");
                     renderDetail(currentDetail);
@@ -1085,7 +1091,7 @@ patch(ControlButtons.prototype, {
 
                 const afterLines = getOrderLines(order);
                 const targetLine = afterLines[afterLines.length - 1] || null;
-                if (!targetLine || afterLines.length < beforeCount) {
+                if (!targetLine || afterLines.length <= beforeCount) {
                     formError = _t("No se pudo identificar la linea agregada al ticket.");
                     renderDetail(currentDetail);
                     return;
