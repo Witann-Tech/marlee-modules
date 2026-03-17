@@ -346,6 +346,28 @@ function getAllLocalPosProducts(source) {
     return [];
 }
 
+function getCandidateMethodNames(target) {
+    if (!target) {
+        return [];
+    }
+    const keys = new Set();
+    let current = target;
+    let depth = 0;
+    while (current && depth < 4) {
+        for (const key of Object.getOwnPropertyNames(current)) {
+            if (key === "constructor") {
+                continue;
+            }
+            keys.add(key);
+        }
+        current = Object.getPrototypeOf(current);
+        depth += 1;
+    }
+    return [...keys]
+        .filter((key) => /add|line|order|product|select|current/i.test(key))
+        .sort();
+}
+
 function collectSubscriptionConfigsFromOrder(order) {
     const output = [];
     for (const line of getOrderLines(order)) {
@@ -1252,6 +1274,8 @@ patch(ControlButtons.prototype, {
                     target_line_found: Boolean(targetLine),
                     target_line_product_id: getProductIdFromLine(targetLine) || false,
                     add_error_message: addErrorMessage || false,
+                    order_candidate_methods: getCandidateMethodNames(order),
+                    pos_candidate_methods: getCandidateMethodNames(getPos(this)),
                 };
                 if (!added && !targetLine && afterLines.length <= beforeCount) {
                     formError = _t("No se pudo agregar el producto al ticket actual.");
