@@ -368,28 +368,6 @@ function getAllLocalPosProducts(source) {
     return [];
 }
 
-function getCandidateMethodNames(target) {
-    if (!target) {
-        return [];
-    }
-    const keys = new Set();
-    let current = target;
-    let depth = 0;
-    while (current && depth < 4) {
-        for (const key of Object.getOwnPropertyNames(current)) {
-            if (key === "constructor") {
-                continue;
-            }
-            keys.add(key);
-        }
-        current = Object.getPrototypeOf(current);
-        depth += 1;
-    }
-    return [...keys]
-        .filter((key) => /add|line|order|product|select|current/i.test(key))
-        .sort();
-}
-
 function collectSubscriptionConfigsFromOrder(order) {
     const output = [];
     for (const line of getOrderLines(order)) {
@@ -677,7 +655,6 @@ patch(ControlButtons.prototype, {
         let formMode = null;
         let formError = "";
         let formNotice = "";
-        let formDebug = null;
         let catalogLoading = false;
         let productCatalog = [];
         const detailCache = new Map();
@@ -715,7 +692,6 @@ patch(ControlButtons.prototype, {
             formMode = "new";
             formError = "";
             formNotice = "";
-            formDebug = null;
             newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
             renderDetail(currentDetail);
             if (productCatalog.length || catalogLoading) {
@@ -820,7 +796,6 @@ patch(ControlButtons.prototype, {
                     </div>
                     ${formError ? `<div class="wgs-inline-error">${this._escapeHtml(formError)}</div>` : ""}
                     ${formNotice ? `<div class="wgs-inline-notice">${this._escapeHtml(formNotice)}</div>` : ""}
-                    ${formDebug ? `<pre class="wgs-inline-debug">${this._escapeHtml(JSON.stringify(formDebug, null, 2))}</pre>` : ""}
                     ${catalogLoading ? `<div class="wgs-inline-loading">${this._escapeHtml(_t("Cargando productos de suscripcion..."))}</div>` : ""}
                     <div class="wgs-inline-form-grid">
                         <label>
@@ -1170,14 +1145,12 @@ patch(ControlButtons.prototype, {
                 formMode = null;
                 formError = "";
                 formNotice = "";
-                formDebug = null;
                 renderDetail(currentDetail);
                 return;
             }
             if (action === "save-new") {
                 formError = "";
                 formNotice = "";
-                formDebug = null;
                 const selectedPlan = getSelectedPlan();
                 if (!selectedPartnerId) {
                     formError = _t("Selecciona un cliente para agregar la suscripcion al ticket.");
@@ -1275,33 +1248,6 @@ patch(ControlButtons.prototype, {
                         targetLine = selectedAfter;
                     }
                 }
-                formDebug = {
-                    order_uid: getOrderUid(order) || false,
-                    partner_on_order_id: partnerOnOrderId || false,
-                    selected_partner_id: selectedPartnerId || false,
-                    product_id: Number(newSubscriptionForm.productId || 0) || false,
-                    product_found_locally: Boolean(productRecord),
-                    product_record_keys: productRecord ? Object.keys(productRecord).slice(0, 15) : [],
-                    product_record_class: productRecord && productRecord.constructor ? productRecord.constructor.name : false,
-                    has_pos_addLineToCurrentOrder: typeof getPos(this)?.addLineToCurrentOrder === "function",
-                    has_pos_addLineToOrder: typeof getPos(this)?.addLineToOrder === "function",
-                    has_pos_setPartnerToCurrentOrder: typeof getPos(this)?.setPartnerToCurrentOrder === "function",
-                    has_add_product: typeof order.add_product === "function",
-                    has_addProduct: typeof order.addProduct === "function",
-                    has_get_orderlines: typeof order.get_orderlines === "function",
-                    has_getOrderlines: typeof order.getOrderlines === "function",
-                    before_count: beforeCount,
-                    after_count: afterLines.length,
-                    add_result_type: addResult === null ? "null" : typeof addResult,
-                    add_result_class: addResult && addResult.constructor ? addResult.constructor.name : false,
-                    selected_before_product_id: getProductIdFromLine(beforeSelectedLine) || false,
-                    selected_after_product_id: getProductIdFromLine(selectedAfter) || false,
-                    target_line_found: Boolean(targetLine),
-                    target_line_product_id: getProductIdFromLine(targetLine) || false,
-                    add_error_message: addErrorMessage || false,
-                    order_candidate_methods: getCandidateMethodNames(order),
-                    pos_candidate_methods: getCandidateMethodNames(getPos(this)),
-                };
                 if (!added && !targetLine && afterLines.length <= beforeCount) {
                     formError = _t("No se pudo agregar el producto al ticket actual.");
                     renderDetail(currentDetail);
@@ -1341,7 +1287,6 @@ patch(ControlButtons.prototype, {
             }
             formError = "";
             formNotice = "";
-            formDebug = null;
             if (field === "product_id") {
                 applySelectedProduct(event.target.value);
             } else if (field === "plan_choice") {
@@ -1929,18 +1874,6 @@ patch(ControlButtons.prototype, {
             .wgs-inline-loading {
                 color: #475569;
                 font-size: 0.84rem;
-            }
-            .wgs-inline-debug {
-                margin: 0;
-                border: 1px solid #cbd5e1;
-                background: #f8fafc;
-                color: #0f172a;
-                border-radius: 0.65rem;
-                padding: 0.65rem 0.75rem;
-                font-size: 0.76rem;
-                line-height: 1.4;
-                white-space: pre-wrap;
-                word-break: break-word;
             }
             .wgs-inline-participant-list {
                 max-height: 220px;
