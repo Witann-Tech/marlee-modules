@@ -8,6 +8,17 @@ import { onWillUnmount } from "@odoo/owl";
 
 const MODAL_ID = "wgs-subscription-status-modal";
 const STYLE_ID = "wgs-subscription-status-style";
+const STATE_SORT_RANK = {
+    progress: 0,
+    renew: 1,
+    paused: 2,
+    draft: 3,
+    cancel: 4,
+    closed: 5,
+    upsell: 6,
+    other: 7,
+    none: 8,
+};
 
 function parseISODate(value) {
     if (!value || typeof value !== "string") {
@@ -51,10 +62,10 @@ patch(ControlButtons.prototype, {
             rows = await this._fetchPartnerDirectoryRows();
         } catch (error) {
             this._showSimpleInfoModal(
-                _t("Error al consultar vigencia"),
+                _t("Error al consultar suscripciones"),
                 _t("No se pudo consultar la informacion en este momento.")
             );
-            console.error("Error al consultar control de acceso en POS", error);
+            console.error("Error al consultar suscripciones en POS", error);
             return;
         }
 
@@ -66,7 +77,7 @@ patch(ControlButtons.prototype, {
             return;
         }
 
-        this._showDirectoryModal(rows);
+        this._showSubscriptionsModal(rows);
     },
 
     async _fetchPartnerDirectoryRows() {
@@ -93,7 +104,11 @@ patch(ControlButtons.prototype, {
         return rows;
     },
 
-    _showDirectoryModal(rows) {
+    async _fetchPartnerSubscriptionDetail(partnerId) {
+        return this.orm.call("sale.order", "get_partner_subscription_detail_for_pos", [partnerId]);
+    },
+
+    _showSubscriptionsModal(rows) {
         const previous = document.getElementById(MODAL_ID);
         if (previous) {
             previous.remove();
@@ -109,8 +124,8 @@ patch(ControlButtons.prototype, {
         const header = document.createElement("div");
         header.className = "wgs-status-modal-header";
         header.innerHTML = `
-            <h3>${this._escapeHtml(_t("Directorio de Control de Acceso"))}</h3>
-            <p class="wgs-subtitle">${this._escapeHtml(_t("Listado general de titulares y participantes, con vigencia y datos clave."))}</p>
+            <h3>${this._escapeHtml(_t("Suscripciones"))}</h3>
+            <p class="wgs-subtitle">${this._escapeHtml(_t("Directorio de clientes con detalle de suscripciones nativas, participantes y datos clave."))}</p>
         `;
 
         const toolbar = document.createElement("div");
@@ -119,9 +134,14 @@ patch(ControlButtons.prototype, {
             <input type="text" class="wgs-filter-search" placeholder="${_t("Buscar por cliente, paquete, telefono o email")}" />
             <select class="wgs-filter-state">
                 <option value="all">${_t("Estado: Todos")}</option>
-                <option value="valid">${_t("Estado: Vigentes")}</option>
-                <option value="expired">${_t("Estado: Sin vigencia")}</option>
-                <option value="none">${_t("Estado: Sin paquete")}</option>
+                <option value="progress">${_t("Estado: En progreso")}</option>
+                <option value="renew">${_t("Estado: Por renovar")}</option>
+                <option value="paused">${_t("Estado: Pausada")}</option>
+                <option value="draft">${_t("Estado: Borrador")}</option>
+                <option value="cancel">${_t("Estado: Cancelada")}</option>
+                <option value="closed">${_t("Estado: Cerrada")}</option>
+                <option value="other">${_t("Estado: Otros")}</option>
+                <option value="none">${_t("Estado: Sin suscripcion")}</option>
             </select>
             <select class="wgs-filter-birthday">
                 <option value="all">${_t("Cumpleanos: Todos")}</option>
@@ -148,8 +168,13 @@ patch(ControlButtons.prototype, {
         const body = document.createElement("div");
         body.className = "wgs-status-modal-body";
 
+        const layout = document.createElement("div");
+        layout.className = "wgs-subscription-layout";
+
+        const listPane = document.createElement("div");
+        listPane.className = "wgs-subscription-list-pane";
         const table = document.createElement("table");
-        table.className = "wgs-status-table";
+        table.className = "wgs-status-table wgs-subscription-table";
         table.innerHTML = `
             <thead>
                 <tr>
@@ -158,18 +183,26 @@ patch(ControlButtons.prototype, {
                     <th>${_t("Estado")}</th>
                     <th>${_t("Paquete")}</th>
                     <th>${_t("Plan")}</th>
-                    <th>${_t("Inicio")}</th>
                     <th>${_t("Vencimiento")}</th>
-                    <th>${_t("Genero")}</th>
-                    <th>${_t("Cumpleanos")}</th>
                     <th>${_t("Ultimo acceso")}</th>
-                    <th>${_t("Telefono")}</th>
-                    <th>${_t("Email")}</th>
                 </tr>
             </thead>
             <tbody></tbody>
         `;
-        body.appendChild(table);
+        listPane.appendChild(table);
+
+        const detailPane = document.createElement("div");
+        detailPane.className = "wgs-subscription-detail-pane";
+        detailPane.innerHTML = `
+            <div class="wgs-detail-empty">
+                <strong>${this._escapeHtml(_t("Selecciona un cliente"))}</strong>
+                <p>${this._escapeHtml(_t("Aqui veras sus suscripciones nativas, participantes y acciones disponibles."))}</p>
+            </div>
+        `;
+
+        layout.appendChild(listPane);
+        layout.appendChild(detailPane);
+        body.appendChild(layout);
 
         const footer = document.createElement("div");
         footer.className = "wgs-status-modal-footer";
@@ -177,7 +210,6 @@ patch(ControlButtons.prototype, {
         closeButton.type = "button";
         closeButton.className = "wgs-status-close-btn";
         closeButton.textContent = _t("Cerrar");
-
         const closeModal = () => overlay.remove();
         closeButton.addEventListener("click", closeModal);
         footer.appendChild(closeButton);
@@ -204,18 +236,152 @@ patch(ControlButtons.prototype, {
         const exportButton = toolbar.querySelector(".wgs-btn-export");
         const tbody = table.querySelector("tbody");
 
-        const stateLabel = {
-            valid: _t("Vigente"),
-            expired: _t("Sin vigencia"),
-            none: _t("Sin paquete"),
-        };
-        const stateRank = {
-            valid: 0,
-            expired: 1,
-            none: 2,
+        let filteredSnapshot = [...rows];
+        let selectedPartnerId = rows[0] ? rows[0].id : false;
+        let detailRequestToken = 0;
+        const detailCache = new Map();
+
+        const renderDetailEmpty = (title, message) => {
+            detailPane.innerHTML = `
+                <div class="wgs-detail-empty">
+                    <strong>${this._escapeHtml(title)}</strong>
+                    <p>${this._escapeHtml(message)}</p>
+                </div>
+            `;
         };
 
-        let filteredSnapshot = [...rows];
+        const renderDetailLoading = () => {
+            detailPane.innerHTML = `
+                <div class="wgs-detail-empty">
+                    <strong>${this._escapeHtml(_t("Cargando detalle"))}</strong>
+                    <p>${this._escapeHtml(_t("Estamos consultando las suscripciones del cliente seleccionado."))}</p>
+                </div>
+            `;
+        };
+
+        const renderDetail = (detail) => {
+            if (!detail || !detail.partner_id) {
+                renderDetailEmpty(
+                    _t("Sin detalle"),
+                    _t("No se pudo cargar la informacion del cliente seleccionado.")
+                );
+                return;
+            }
+
+            const subscriptions = Array.isArray(detail.items) ? detail.items : [];
+            const summaryStateClass = this._getStateClass(detail.state);
+            const subscriptionsHtml = subscriptions.length
+                ? subscriptions.map((item) => {
+                    const stateClass = this._getStateClass(item.native_state_key);
+                    const participantNames = (item.participant_names || []).length
+                        ? item.participant_names.map((name) => this._escapeHtml(name)).join(", ")
+                        : this._escapeHtml(_t("Sin participantes"));
+                    return `
+                        <div class="wgs-subscription-card">
+                            <div class="wgs-subscription-card-header">
+                                <div>
+                                    <strong>${this._escapeHtml(item.subscription_name || "-")}</strong>
+                                    <div class="wgs-subscription-card-meta">${this._escapeHtml(item.partner_role_label || "-")}</div>
+                                </div>
+                                <span class="wgs-state-badge ${stateClass}">${this._escapeHtml(item.native_state_label || _t("Sin estado"))}</span>
+                            </div>
+                            <div class="wgs-subscription-grid">
+                                <div><span>${this._escapeHtml(_t("Paquete"))}</span><strong>${this._escapeHtml((item.package_names || []).join(", ") || "-")}</strong></div>
+                                <div><span>${this._escapeHtml(_t("Plan"))}</span><strong>${this._escapeHtml(item.plan_name || "-")}</strong></div>
+                                <div><span>${this._escapeHtml(_t("Inicio"))}</span><strong>${this._escapeHtml(this._formatDateDisplay(item.start_date) || "-")}</strong></div>
+                                <div><span>${this._escapeHtml(_t("Vencimiento"))}</span><strong>${this._escapeHtml(this._formatDateDisplay(item.valid_until) || "-")}</strong></div>
+                                <div><span>${this._escapeHtml(_t("Proxima fecha"))}</span><strong>${this._escapeHtml(this._formatDateDisplay(item.next_invoice_date) || "-")}</strong></div>
+                                <div><span>${this._escapeHtml(_t("Participantes"))}</span><strong>${this._escapeHtml(String(item.participant_count || 0))}</strong></div>
+                            </div>
+                            <div class="wgs-subscription-participants">
+                                <span>${this._escapeHtml(_t("Listado de participantes"))}</span>
+                                <p>${participantNames}</p>
+                            </div>
+                            <div class="wgs-subscription-actions">
+                                <button type="button" class="wgs-action-btn" disabled>${this._escapeHtml(_t("Nueva suscripcion"))}</button>
+                                <button type="button" class="wgs-action-btn" disabled>${this._escapeHtml(_t("Renovar"))}</button>
+                                <button type="button" class="wgs-action-btn" disabled>${this._escapeHtml(_t("Cobrar pendiente"))}</button>
+                                <button type="button" class="wgs-action-btn" disabled>${this._escapeHtml(_t("Editar participantes"))}</button>
+                            </div>
+                        </div>
+                    `;
+                }).join("")
+                : `
+                    <div class="wgs-detail-empty wgs-detail-empty-inline">
+                        <strong>${this._escapeHtml(_t("Sin suscripciones relacionadas"))}</strong>
+                        <p>${this._escapeHtml(_t("Este cliente no tiene suscripciones nativas vigentes o historicas visibles para POS."))}</p>
+                    </div>
+                `;
+
+            detailPane.innerHTML = `
+                <div class="wgs-detail-header-card">
+                    <img class="wgs-detail-avatar" src="${this._escapeHtml(detail.image_url || "")}" alt="${this._escapeHtml(detail.partner_name || "")}" loading="lazy" />
+                    <div class="wgs-detail-header-text">
+                        <div class="wgs-detail-title-row">
+                            <h4>${this._escapeHtml(detail.partner_name || "-")}</h4>
+                            <span class="wgs-state-badge ${summaryStateClass}">${this._escapeHtml(detail.state_label || _t("Sin suscripcion"))}</span>
+                        </div>
+                        <div class="wgs-detail-contact-grid">
+                            <div><span>${this._escapeHtml(_t("Telefono"))}</span><strong>${this._escapeHtml(detail.phone || "-")}</strong></div>
+                            <div><span>${this._escapeHtml(_t("Email"))}</span><strong>${this._escapeHtml(detail.email || "-")}</strong></div>
+                            <div><span>${this._escapeHtml(_t("Genero"))}</span><strong>${this._escapeHtml(detail.gender || "-")}</strong></div>
+                            <div><span>${this._escapeHtml(_t("Cumpleanos"))}</span><strong>${this._escapeHtml(this._formatDateDisplay(detail.birthday) || "-")}</strong></div>
+                            <div><span>${this._escapeHtml(_t("Ultimo acceso"))}</span><strong>${this._escapeHtml(this._formatDateTimeDisplay(detail.last_access) || "-")}</strong></div>
+                            <div><span>${this._escapeHtml(_t("Resumen"))}</span><strong>${this._escapeHtml(detail.package_label || _t("Sin suscripcion"))}</strong></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="wgs-detail-actions-bar">
+                    <button type="button" class="wgs-primary-action-btn" disabled>${this._escapeHtml(_t("Nueva suscripcion"))}</button>
+                    <button type="button" class="wgs-secondary-action-btn" disabled>${this._escapeHtml(_t("Renovar"))}</button>
+                    <button type="button" class="wgs-secondary-action-btn" disabled>${this._escapeHtml(_t("Cobrar pendiente"))}</button>
+                    <button type="button" class="wgs-secondary-action-btn" disabled>${this._escapeHtml(_t("Participantes"))}</button>
+                </div>
+                <div class="wgs-detail-note">${this._escapeHtml(_t("Las acciones de venta, renovacion y cobro se integraran en esta misma vista en la siguiente fase."))}</div>
+                <div class="wgs-detail-section">
+                    <div class="wgs-detail-section-title">${this._escapeHtml(_t("Suscripciones del cliente"))}</div>
+                    <div class="wgs-subscription-cards">${subscriptionsHtml}</div>
+                </div>
+            `;
+        };
+
+        const loadDetail = async (partnerId) => {
+            if (!partnerId) {
+                renderDetailEmpty(
+                    _t("Selecciona un cliente"),
+                    _t("Aqui veras sus suscripciones nativas, participantes y acciones disponibles.")
+                );
+                return;
+            }
+            if (detailCache.has(partnerId)) {
+                renderDetail(detailCache.get(partnerId));
+                return;
+            }
+
+            renderDetailLoading();
+            const requestId = ++detailRequestToken;
+            try {
+                const detail = await this._fetchPartnerSubscriptionDetail(partnerId);
+                if (requestId !== detailRequestToken) {
+                    return;
+                }
+                detailCache.set(partnerId, detail);
+                if (selectedPartnerId === partnerId) {
+                    renderDetail(detail);
+                }
+            } catch (error) {
+                if (requestId !== detailRequestToken) {
+                    return;
+                }
+                detailPane.innerHTML = `
+                    <div class="wgs-detail-empty">
+                        <strong>${this._escapeHtml(_t("Error al cargar detalle"))}</strong>
+                        <p>${this._escapeHtml(_t("No se pudo consultar el detalle de suscripciones para este cliente."))}</p>
+                    </div>
+                `;
+                console.error("Error al consultar detalle de suscripciones en POS", error);
+            }
+        };
 
         const render = () => {
             const query = (searchInput.value || "").trim().toLowerCase();
@@ -224,7 +390,7 @@ patch(ControlButtons.prototype, {
             const sortMode = sortSelect.value;
 
             let filtered = rows.filter((row) => {
-                if (stateFilter !== "all" && row.state !== stateFilter) {
+                if (stateFilter !== "all" && (row.state || "none") !== stateFilter) {
                     return false;
                 }
                 if (!this._matchesBirthdayFilter(row.birthday, birthdayFilter)) {
@@ -233,7 +399,7 @@ patch(ControlButtons.prototype, {
                 if (!query) {
                     return true;
                 }
-                const haystack = `${row.name || ""} ${row.phone || ""} ${row.email || ""} ${row.package_label || ""} ${row.plan_name || ""}`.toLowerCase();
+                const haystack = `${row.name || ""} ${row.phone || ""} ${row.email || ""} ${row.package_label || ""} ${row.plan_name || ""} ${row.state_label || ""}`.toLowerCase();
                 return haystack.includes(query);
             });
 
@@ -242,7 +408,7 @@ patch(ControlButtons.prototype, {
                     return (b.name || "").localeCompare(a.name || "", "es");
                 }
                 if (sortMode === "state") {
-                    const diff = (stateRank[a.state] ?? 9) - (stateRank[b.state] ?? 9);
+                    const diff = this._getStateRank(a.state) - this._getStateRank(b.state);
                     if (diff !== 0) {
                         return diff;
                     }
@@ -305,56 +471,74 @@ patch(ControlButtons.prototype, {
 
             const counts = rows.reduce(
                 (acc, row) => {
+                    const state = row.state || "none";
                     acc.total += 1;
-                    if (row.state === "valid") acc.valid += 1;
-                    else if (row.state === "expired") acc.expired += 1;
-                    else acc.none += 1;
-                    if (row.birthday) acc.birthday += 1;
+                    acc[state] = (acc[state] || 0) + 1;
+                    if (row.birthday) {
+                        acc.birthday += 1;
+                    }
                     return acc;
                 },
-                { total: 0, valid: 0, expired: 0, none: 0, birthday: 0 }
+                { total: 0, birthday: 0 }
             );
 
             summary.innerHTML = `
-                <span class="wgs-summary-pill">${_t("Total")}: ${counts.total}</span>
-                <span class="wgs-summary-pill wgs-summary-valid">${_t("Vigentes")}: ${counts.valid}</span>
-                <span class="wgs-summary-pill wgs-summary-expired">${_t("Sin vigencia")}: ${counts.expired}</span>
-                <span class="wgs-summary-pill wgs-summary-none">${_t("Sin paquete")}: ${counts.none}</span>
-                <span class="wgs-summary-pill">${_t("Con cumpleanos")}: ${counts.birthday}</span>
+                <span class="wgs-summary-pill">${_t("Total")}: ${counts.total || 0}</span>
+                <span class="wgs-summary-pill wgs-summary-positive">${_t("En progreso")}: ${counts.progress || 0}</span>
+                <span class="wgs-summary-pill wgs-summary-positive">${_t("Por renovar")}: ${counts.renew || 0}</span>
+                <span class="wgs-summary-pill wgs-summary-warning">${_t("Pausadas")}: ${counts.paused || 0}</span>
+                <span class="wgs-summary-pill wgs-summary-negative">${_t("Canceladas")}: ${counts.cancel || 0}</span>
+                <span class="wgs-summary-pill wgs-summary-none">${_t("Sin suscripcion")}: ${counts.none || 0}</span>
+                <span class="wgs-summary-pill">${_t("Con cumpleanos")}: ${counts.birthday || 0}</span>
                 <span class="wgs-summary-pill">${_t("Mostrando")}: ${filtered.length}</span>
             `;
 
             if (!filtered.length) {
-                tbody.innerHTML = `<tr><td colspan="12">${_t("No hay resultados para el filtro actual.")}</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="7">${_t("No hay resultados para el filtro actual.")}</td></tr>`;
+                selectedPartnerId = false;
+                renderDetailEmpty(
+                    _t("Sin resultados"),
+                    _t("Ajusta los filtros para volver a cargar clientes en el directorio.")
+                );
                 return;
             }
 
+            const filteredIds = filtered.map((row) => row.id);
+            if (!selectedPartnerId || !filteredIds.includes(selectedPartnerId)) {
+                selectedPartnerId = filtered[0].id;
+            }
+
             tbody.innerHTML = filtered.map((row) => {
-                const stateClass = row.state === "valid"
-                    ? "wgs-state-valid"
-                    : row.state === "expired"
-                        ? "wgs-state-expired"
-                        : "wgs-state-none";
+                const rowClass = row.id === selectedPartnerId ? "wgs-selected-row" : "";
+                const stateClass = this._getStateClass(row.state);
                 return `
-                    <tr>
-                        <td>
-                            <img class="wgs-partner-avatar" src="${this._escapeHtml(row.image_url || "")}" alt="${this._escapeHtml(row.name || "")}" loading="lazy" />
-                        </td>
+                    <tr class="${rowClass}" data-partner-id="${this._escapeHtml(String(row.id))}">
+                        <td><img class="wgs-partner-avatar" src="${this._escapeHtml(row.image_url || "")}" alt="${this._escapeHtml(row.name || "")}" loading="lazy" /></td>
                         <td class="wgs-cell-name">${this._escapeHtml(row.name || "-")}</td>
-                        <td><span class="${stateClass}">${this._escapeHtml(stateLabel[row.state] || stateLabel.none)}</span></td>
+                        <td><span class="wgs-state-badge ${stateClass}">${this._escapeHtml(row.state_label || _t("Sin suscripcion"))}</span></td>
                         <td>${this._escapeHtml(row.package_label || "-")}</td>
                         <td>${this._escapeHtml(row.plan_name || "-")}</td>
-                        <td>${this._escapeHtml(this._formatDateDisplay(row.start_date) || "-")}</td>
                         <td>${this._escapeHtml(this._formatDateDisplay(row.valid_until) || "-")}</td>
-                        <td>${this._escapeHtml(row.gender || "-")}</td>
-                        <td>${this._escapeHtml(this._formatDateDisplay(row.birthday) || "-")}</td>
                         <td>${this._escapeHtml(this._formatDateTimeDisplay(row.last_access) || "-")}</td>
-                        <td>${this._escapeHtml(row.phone || "-")}</td>
-                        <td>${this._escapeHtml(row.email || "-")}</td>
                     </tr>
                 `;
             }).join("");
+
+            loadDetail(selectedPartnerId);
         };
+
+        tbody.addEventListener("click", (event) => {
+            const rowElement = event.target.closest("tr[data-partner-id]");
+            if (!rowElement) {
+                return;
+            }
+            const partnerId = Number(rowElement.dataset.partnerId || 0);
+            if (!partnerId || partnerId === selectedPartnerId) {
+                return;
+            }
+            selectedPartnerId = partnerId;
+            render();
+        });
 
         searchInput.addEventListener("input", render);
         stateSelect.addEventListener("change", render);
@@ -363,7 +547,26 @@ patch(ControlButtons.prototype, {
         exportButton.addEventListener("click", () => {
             this._downloadDirectoryAsXls(filteredSnapshot);
         });
+
         render();
+    },
+
+    _getStateRank(state) {
+        return STATE_SORT_RANK[state || "other"] ?? STATE_SORT_RANK.other;
+    },
+
+    _getStateClass(state) {
+        const value = state || "none";
+        if (value === "progress" || value === "renew") {
+            return "wgs-state-positive";
+        }
+        if (value === "paused" || value === "draft" || value === "upsell") {
+            return "wgs-state-warning";
+        }
+        if (value === "cancel" || value === "closed") {
+            return "wgs-state-negative";
+        }
+        return "wgs-state-neutral";
     },
 
     _toTimestamp(value) {
@@ -455,12 +658,12 @@ patch(ControlButtons.prototype, {
     _downloadDirectoryAsXls(rows) {
         const dataRows = Array.isArray(rows) ? rows : [];
         const filenameDate = new Date().toISOString().slice(0, 10);
-        const filename = `directorio_control_acceso_${filenameDate}.xls`;
+        const filename = `suscripciones_pos_${filenameDate}.xls`;
 
         const tableRows = dataRows.map((row) => `
             <tr>
                 <td>${this._escapeHtml(row.name || "-")}</td>
-                <td>${this._escapeHtml(row.state === "valid" ? _t("Vigente") : row.state === "expired" ? _t("Sin vigencia") : _t("Sin paquete"))}</td>
+                <td>${this._escapeHtml(row.state_label || _t("Sin suscripcion"))}</td>
                 <td>${this._escapeHtml(row.package_label || "-")}</td>
                 <td>${this._escapeHtml(row.plan_name || "-")}</td>
                 <td>${this._escapeHtml(this._formatDateDisplay(row.start_date) || "-")}</td>
@@ -588,7 +791,7 @@ patch(ControlButtons.prototype, {
                 flex-direction: column;
             }
             .wgs-directory-modal {
-                width: min(1500px, 99vw);
+                width: min(1580px, 99vw);
             }
             .control-buttons {
                 flex-wrap: wrap !important;
@@ -623,7 +826,7 @@ patch(ControlButtons.prototype, {
             .wgs-status-toolbar {
                 padding: 0.8rem 1.2rem;
                 display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+                grid-template-columns: 2fr repeat(4, minmax(160px, 1fr));
                 gap: 0.6rem;
                 border-bottom: 1px solid #e5e7eb;
                 align-items: center;
@@ -655,12 +858,17 @@ patch(ControlButtons.prototype, {
                 color: #374151;
                 background: #f9fafb;
             }
-            .wgs-summary-valid {
+            .wgs-summary-positive {
                 border-color: #8ad9b5;
                 color: #0f7b4b;
                 background: #daf5e8;
             }
-            .wgs-summary-expired {
+            .wgs-summary-warning {
+                border-color: #fcd34d;
+                color: #92400e;
+                background: #fef3c7;
+            }
+            .wgs-summary-negative {
                 border-color: #fda4af;
                 color: #9f1239;
                 background: #ffe4e6;
@@ -675,8 +883,174 @@ patch(ControlButtons.prototype, {
                 overflow: auto;
                 color: #1f2937;
             }
-            .wgs-simple-message {
-                padding: 1rem 1.2rem;
+            .wgs-subscription-layout {
+                display: grid;
+                grid-template-columns: minmax(620px, 1.2fr) minmax(380px, 0.8fr);
+                min-height: 60vh;
+            }
+            .wgs-subscription-list-pane {
+                border-right: 1px solid #e5e7eb;
+                overflow: auto;
+            }
+            .wgs-subscription-detail-pane {
+                overflow: auto;
+                background: #f8fafc;
+                padding: 1rem;
+            }
+            .wgs-detail-empty {
+                border: 1px dashed #cbd5e1;
+                border-radius: 0.75rem;
+                background: #ffffff;
+                padding: 1rem;
+                color: #475569;
+            }
+            .wgs-detail-empty strong {
+                display: block;
+                color: #0f172a;
+                margin-bottom: 0.3rem;
+            }
+            .wgs-detail-empty-inline {
+                margin-top: 0.4rem;
+            }
+            .wgs-detail-header-card {
+                display: grid;
+                grid-template-columns: 72px 1fr;
+                gap: 0.9rem;
+                background: #ffffff;
+                border: 1px solid #e5e7eb;
+                border-radius: 0.85rem;
+                padding: 1rem;
+                margin-bottom: 0.85rem;
+            }
+            .wgs-detail-avatar {
+                width: 72px;
+                height: 72px;
+                border-radius: 16px;
+                object-fit: cover;
+                background: #e2e8f0;
+                border: 1px solid #d1d5db;
+            }
+            .wgs-detail-title-row {
+                display: flex;
+                justify-content: space-between;
+                gap: 0.6rem;
+                align-items: center;
+                margin-bottom: 0.75rem;
+            }
+            .wgs-detail-title-row h4 {
+                margin: 0;
+                color: #0f172a;
+                font-size: 1.05rem;
+            }
+            .wgs-detail-contact-grid {
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 0.75rem;
+            }
+            .wgs-detail-contact-grid div,
+            .wgs-subscription-grid div {
+                display: flex;
+                flex-direction: column;
+                gap: 0.18rem;
+            }
+            .wgs-detail-contact-grid span,
+            .wgs-subscription-grid span,
+            .wgs-subscription-participants span {
+                font-size: 0.72rem;
+                text-transform: uppercase;
+                letter-spacing: 0.04em;
+                color: #64748b;
+                font-weight: 700;
+            }
+            .wgs-detail-contact-grid strong,
+            .wgs-subscription-grid strong {
+                color: #0f172a;
+                font-size: 0.9rem;
+            }
+            .wgs-detail-actions-bar {
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 0.55rem;
+                margin-bottom: 0.65rem;
+            }
+            .wgs-primary-action-btn,
+            .wgs-secondary-action-btn,
+            .wgs-action-btn {
+                border-radius: 0.65rem;
+                padding: 0.65rem 0.8rem;
+                font-weight: 700;
+                font-size: 0.84rem;
+                border: 1px solid #cbd5e1;
+                background: #ffffff;
+                color: #334155;
+            }
+            .wgs-primary-action-btn:disabled,
+            .wgs-secondary-action-btn:disabled,
+            .wgs-action-btn:disabled {
+                opacity: 0.7;
+                cursor: not-allowed;
+            }
+            .wgs-primary-action-btn {
+                background: #0f766e;
+                color: #ffffff;
+                border-color: #0f766e;
+            }
+            .wgs-detail-note {
+                font-size: 0.8rem;
+                color: #475569;
+                margin-bottom: 0.9rem;
+            }
+            .wgs-detail-section {
+                display: flex;
+                flex-direction: column;
+                gap: 0.6rem;
+            }
+            .wgs-detail-section-title {
+                font-size: 0.84rem;
+                font-weight: 800;
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+                color: #334155;
+            }
+            .wgs-subscription-cards {
+                display: flex;
+                flex-direction: column;
+                gap: 0.75rem;
+            }
+            .wgs-subscription-card {
+                background: #ffffff;
+                border: 1px solid #e5e7eb;
+                border-radius: 0.85rem;
+                padding: 0.9rem;
+                display: flex;
+                flex-direction: column;
+                gap: 0.75rem;
+            }
+            .wgs-subscription-card-header {
+                display: flex;
+                justify-content: space-between;
+                gap: 0.6rem;
+                align-items: flex-start;
+            }
+            .wgs-subscription-card-meta {
+                margin-top: 0.2rem;
+                color: #64748b;
+                font-size: 0.78rem;
+            }
+            .wgs-subscription-grid {
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 0.7rem;
+            }
+            .wgs-subscription-participants p {
+                margin: 0.25rem 0 0;
+                color: #0f172a;
+                line-height: 1.45;
+            }
+            .wgs-subscription-actions {
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 0.5rem;
             }
             .wgs-status-modal-footer {
                 padding: 0.8rem 1.2rem;
@@ -706,17 +1080,26 @@ patch(ControlButtons.prototype, {
             .wgs-status-table th,
             .wgs-status-table td {
                 border-bottom: 1px solid #e5e7eb;
-                padding: 0.55rem 0.6rem;
+                padding: 0.6rem 0.65rem;
                 text-align: left;
                 vertical-align: middle;
-                font-size: 0.86rem;
+                font-size: 0.84rem;
+            }
+            .wgs-status-table tbody tr {
+                cursor: pointer;
+            }
+            .wgs-status-table tbody tr:hover {
+                background: #f8fafc;
+            }
+            .wgs-selected-row {
+                background: #ecfeff !important;
             }
             .wgs-status-table th {
                 position: sticky;
                 top: 0;
                 z-index: 1;
                 background: #f8fafc;
-                font-size: 0.76rem;
+                font-size: 0.74rem;
                 color: #374151;
                 text-transform: uppercase;
                 letter-spacing: 0.03em;
@@ -731,25 +1114,70 @@ patch(ControlButtons.prototype, {
                 background: #f1f5f9;
             }
             .wgs-cell-name {
-                font-weight: 600;
+                font-weight: 700;
                 color: #0f172a;
-                min-width: 180px;
+                min-width: 190px;
             }
-            .wgs-state-valid {
+            .wgs-state-badge {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                border-radius: 999px;
+                padding: 0.18rem 0.55rem;
+                font-size: 0.74rem;
+                font-weight: 700;
+                border: 1px solid #d1d5db;
+                white-space: nowrap;
+            }
+            .wgs-state-positive {
+                border-color: #8ad9b5;
                 color: #0f7b4b;
-                font-weight: 700;
+                background: #daf5e8;
             }
-            .wgs-state-expired {
+            .wgs-state-warning {
+                border-color: #fcd34d;
+                color: #92400e;
+                background: #fef3c7;
+            }
+            .wgs-state-negative {
+                border-color: #fda4af;
                 color: #9f1239;
-                font-weight: 700;
+                background: #ffe4e6;
             }
-            .wgs-state-none {
+            .wgs-state-neutral {
+                border-color: #cbd5e1;
                 color: #475569;
-                font-weight: 700;
+                background: #f1f5f9;
+            }
+            .wgs-simple-message {
+                padding: 1rem 1.2rem;
+            }
+            @media (max-width: 1250px) {
+                .wgs-subscription-layout {
+                    grid-template-columns: 1fr;
+                }
+                .wgs-subscription-list-pane {
+                    border-right: none;
+                    border-bottom: 1px solid #e5e7eb;
+                    max-height: 42vh;
+                }
             }
             @media (max-width: 900px) {
                 .wgs-status-toolbar {
                     grid-template-columns: 1fr;
+                }
+                .wgs-detail-contact-grid,
+                .wgs-subscription-grid,
+                .wgs-detail-actions-bar,
+                .wgs-subscription-actions {
+                    grid-template-columns: 1fr;
+                }
+                .wgs-detail-header-card {
+                    grid-template-columns: 1fr;
+                }
+                .wgs-detail-avatar {
+                    width: 64px;
+                    height: 64px;
                 }
             }
         `;

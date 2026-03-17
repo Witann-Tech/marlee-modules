@@ -7,8 +7,8 @@
         <xpath expr="//SelectPartnerButton" position="after">
             <div class="wgs-control-buttons-row">
                 <button class="btn btn-light rounded-0 fw-bolder wgs-control-button" t-on-click="onClickSubscriptionStatus" type="button">
-                    <i class="fa fa-id-card me-1"/>
-                    Control de acceso
+                    <i class="fa fa-address-card me-1"/>
+                    Suscripciones
                 </button>
             </div>
         </xpath>

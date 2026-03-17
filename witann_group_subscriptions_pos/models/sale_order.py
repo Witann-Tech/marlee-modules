@@ -13,6 +13,17 @@ _logger = logging.getLogger(__name__)
 
 class SaleOrder(models.Model):
     _inherit = 'sale.order'
+    _WGS_POS_SUBSCRIPTION_STATE_PRIORITY = {
+        'progress': 0,
+        'renew': 1,
+        'paused': 2,
+        'draft': 3,
+        'cancel': 4,
+        'closed': 5,
+        'upsell': 6,
+        'other': 7,
+        'none': 8,
+    }
     _WGS_ACCESS_ENABLED_STATE_TOKENS = (
         'progress',
         'in progress',
@@ -107,6 +118,70 @@ class SaleOrder(models.Model):
         }
 
     @api.model
+    def get_partner_subscription_detail_for_pos(self, partner_id):
+        if not self.env.user.has_group('point_of_sale.group_pos_user'):
+            raise AccessError(_('No tienes permisos para consultar suscripciones desde Punto de Venta.'))
+
+        partner = self.env['res.partner'].sudo().with_context(active_test=False).browse(int(partner_id or 0)).exists()
+        if not partner:
+            return {'partner_id': False, 'items': []}
+
+        today = fields.Date.context_today(self)
+        subscriptions = self._get_pos_subscription_orders(partner)
+        items = []
+        for subscription in subscriptions:
+            try:
+                item = subscription._build_pos_subscription_status_item(today)
+            except Exception as error:
+                _logger.warning(
+                    'WGS POS: could not build subscription detail item (so=%s, partner=%s, error=%s)',
+                    subscription.id,
+                    partner.id,
+                    error,
+                )
+                item = False
+            if item:
+                item['is_owner'] = bool(subscription.partner_id and subscription.partner_id.id == partner.id)
+                item['partner_role_label'] = _('Titular') if item['is_owner'] else _('Participante')
+                item['participant_names'] = subscription.participant_ids.mapped('display_name')
+                item['participant_count'] = len(subscription.participant_ids)
+                items.append(item)
+
+        items = sorted(items, key=self._sort_subscription_status_item_key_for_pos)
+        status_map = self.get_partner_subscription_status_map_for_pos([partner.id])
+        summary = status_map.get(partner.id, {})
+
+        birthday_value = summary.get('birthday') or self._get_partner_field_value_for_pos(
+            partner, self._PARTNER_BIRTHDAY_FIELD_CANDIDATES
+        )
+        gender_value = summary.get('gender') or self._get_partner_field_value_for_pos(
+            partner, self._PARTNER_GENDER_FIELD_CANDIDATES
+        )
+        last_access_value = summary.get('last_access') or self._get_partner_field_value_for_pos(
+            partner, self._PARTNER_LAST_ACCESS_FIELD_CANDIDATES
+        )
+        phone_value = summary.get('phone') or self._get_partner_field_value_for_pos(partner, ('phone', 'mobile'))
+        email_value = summary.get('email') or self._get_partner_field_value_for_pos(partner, ('email',))
+
+        return {
+            'partner_id': partner.id,
+            'partner_name': partner.display_name,
+            'state': summary.get('state') or 'none',
+            'state_label': summary.get('state_label') or _('Sin suscripción'),
+            'package_label': summary.get('package_label') or False,
+            'plan_name': summary.get('plan_name') or False,
+            'start_date': summary.get('start_date') or False,
+            'valid_until': summary.get('valid_until') or False,
+            'phone': phone_value or False,
+            'email': email_value or False,
+            'gender': gender_value or False,
+            'birthday': birthday_value or False,
+            'last_access': last_access_value or False,
+            'image_url': summary.get('image_url') or ('/web/image/res.partner/%s/image_128' % partner.id),
+            'items': items,
+        }
+
+    @api.model
     def get_partner_subscription_status_map_for_pos(self, partner_ids):
         if not self.env.user.has_group('point_of_sale.group_pos_user'):
             raise AccessError(_('No tienes permisos para consultar vigencia desde Punto de Venta.'))
@@ -183,6 +258,7 @@ class SaleOrder(models.Model):
 
             result[partner.id] = {
                 'state': summary.get('state') or 'none',
+                'state_label': summary.get('state_label') or _('Sin suscripción'),
                 'short_label': summary.get('short_label') or False,
                 'valid_until': summary.get('valid_until') or False,
                 'start_date': summary.get('start_date') or False,
@@ -245,6 +321,7 @@ class SaleOrder(models.Model):
                 'email': status.get('email') or partner.email or False,
                 'phone': status.get('phone') or phone_fallback,
                 'state': status.get('state') or 'none',
+                'state_label': status.get('state_label') or _('Sin suscripción'),
                 'package_label': status.get('package_label') or False,
                 'plan_name': status.get('plan_name') or False,
                 'start_date': status.get('start_date') or False,
@@ -260,6 +337,7 @@ class SaleOrder(models.Model):
         if not items:
             return {
                 'state': 'none',
+                'state_label': _('Sin suscripción'),
                 'short_label': False,
                 'valid_until': False,
                 'start_date': False,
@@ -271,34 +349,15 @@ class SaleOrder(models.Model):
                 'subscription_name': False,
             }
 
-        valid_items = [row for row in items if row.get('is_valid')]
-        if valid_items:
-            prioritized = sorted(
-                valid_items,
-                key=lambda row: (
-                    row.get('valid_until') or '9999-12-31',
-                    row.get('start_date') or row.get('period_start') or '9999-12-31',
-                    row.get('subscription_name') or '',
-                ),
-            )
-            state = 'valid'
-            short_label = '[VIGENTE]'
-            package_source_items = valid_items
-        else:
-            prioritized = sorted(
-                items,
-                key=lambda row: (
-                    row.get('valid_until') or '',
-                    row.get('start_date') or row.get('period_start') or '',
-                    row.get('subscription_name') or '',
-                ),
-                reverse=True,
-            )
-            state = 'expired'
-            short_label = '[SIN VIGENCIA]'
-            package_source_items = prioritized[:1]
-
+        prioritized = sorted(items, key=self._sort_subscription_status_item_key_for_pos)
         primary = prioritized[0]
+        state = primary.get('native_state_key') or 'other'
+        state_label = primary.get('native_state_label') or _('Sin suscripción')
+        short_label = '[%s]' % state_label.upper()
+
+        access_enabled_items = [row for row in items if row.get('access_state') == 'enabled']
+        package_source_items = access_enabled_items or prioritized[:1]
+
         package_names = sorted(
             {
                 package_name
@@ -311,6 +370,7 @@ class SaleOrder(models.Model):
 
         return {
             'state': state,
+            'state_label': state_label,
             'short_label': short_label,
             'valid_until': primary.get('valid_until') or False,
             'start_date': primary.get('start_date') or primary.get('period_start') or False,
@@ -454,6 +514,7 @@ class SaleOrder(models.Model):
         reason = _('La suscripción no está vigente para control de acceso.')
         plan_name = self._get_subscription_plan_name_for_pos(recurring_lines)
         access_state = self._classify_subscription_access_state_for_pos()
+        native_state_key, native_state_label = self._get_native_subscription_state_info_for_pos()
 
         start_date = self._get_first_available_date(
             ('wgs_effective_start_date', 'start_date', 'date_start', 'subscription_start_date', 'date_order')
@@ -489,15 +550,31 @@ class SaleOrder(models.Model):
             'subscription_id': self.id,
             'subscription_name': self.name,
             'state': self.subscription_state if 'subscription_state' in self._fields else False,
+            'access_state': access_state or False,
+            'native_state_key': native_state_key,
+            'native_state_label': native_state_label,
             'package_names': sorted(set(recurring_lines.mapped('product_id.display_name'))),
             'plan_name': plan_name,
             'start_date': start_date.isoformat() if start_date else False,
             'period_start': period_start.isoformat() if period_start else False,
             'valid_until': valid_until.isoformat() if valid_until else False,
+            'next_invoice_date': next_invoice_date.isoformat() if next_invoice_date else False,
             'is_valid': is_valid,
             'status_label': _('Vigente') if is_valid else _('Sin vigencia'),
             'reason': reason,
         }
+
+    def _sort_subscription_status_item_key_for_pos(self, row):
+        state_rank = self._WGS_POS_SUBSCRIPTION_STATE_PRIORITY.get(
+            row.get('native_state_key') or 'other',
+            self._WGS_POS_SUBSCRIPTION_STATE_PRIORITY['other'],
+        )
+        return (
+            state_rank,
+            row.get('valid_until') or '9999-12-31',
+            row.get('start_date') or row.get('period_start') or '9999-12-31',
+            row.get('subscription_name') or '',
+        )
 
     def _get_recurring_lines(self):
         self.ensure_one()
@@ -542,6 +619,37 @@ class SaleOrder(models.Model):
         if any(token in state_value for token in self._WGS_ACCESS_DISABLED_STATE_TOKENS):
             return False
         return False
+
+    def _get_native_subscription_state_info_for_pos(self):
+        self.ensure_one()
+        display_label = self._get_subscription_state_display_for_pos()
+        state_value = (self.subscription_state or '').strip().lower() if 'subscription_state' in self._fields else ''
+        haystack = ' '.join(filter(None, [state_value, (display_label or '').strip().lower()]))
+
+        if not haystack:
+            return 'other', _('Sin estado')
+        if any(token in haystack for token in ('progress', 'in progress', 'in_progress', 'en progreso')):
+            return 'progress', display_label or _('En progreso')
+        if any(token in haystack for token in ('renew', 'to renew', 'por renovar')):
+            return 'renew', display_label or _('Por renovar')
+        if any(token in haystack for token in self._WGS_ACCESS_SUSPENDED_STATE_TOKENS):
+            return 'paused', display_label or _('Pausada')
+        if any(token in haystack for token in ('draft', 'borrador')):
+            return 'draft', display_label or _('Borrador')
+        if any(token in haystack for token in ('cancel', 'cancelled', 'canceled', 'cancelada')):
+            return 'cancel', display_label or _('Cancelada')
+        if any(token in haystack for token in ('close', 'closed', 'cerrada')):
+            return 'closed', display_label or _('Cerrada')
+        if 'upsell' in haystack:
+            return 'upsell', display_label or _('Upsell')
+        return 'other', display_label or (self.subscription_state if 'subscription_state' in self._fields else _('Sin estado'))
+
+    def _get_subscription_state_display_for_pos(self):
+        self.ensure_one()
+        field = self._fields.get('subscription_state')
+        if not field:
+            return False
+        return self._format_value_for_pos(self.subscription_state, field)
 
     def _get_first_available_date(self, field_names):
         self.ensure_one()
