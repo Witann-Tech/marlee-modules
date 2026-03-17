@@ -281,6 +281,10 @@ function getSubscriptionPartnerIdsFromOrder(order) {
     return [...new Set(ids)];
 }
 
+function waitForNextTick() {
+    return new Promise((resolve) => window.setTimeout(resolve, 0));
+}
+
 async function stageSubscriptionConfigsForOrder(orm, order) {
     const configs = collectSubscriptionConfigsFromOrder(order);
     if (!configs.length) {
@@ -1101,6 +1105,8 @@ patch(ControlButtons.prototype, {
                     console.error("Error al agregar producto de suscripcion al ticket POS", error);
                     added = false;
                 }
+                await waitForNextTick();
+                await waitForNextTick();
                 const afterLines = getOrderLines(order);
                 let targetLine = afterLines.find((line) => !beforeSet.has(line)) || null;
                 if (!targetLine && addResult && typeof addResult === "object") {
