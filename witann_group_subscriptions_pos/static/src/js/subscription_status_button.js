@@ -259,7 +259,6 @@ function findProductInPos(source, productId) {
             return pos.db.product_by_id[numericId];
         }
     }
-    const productCollection = pos.models && pos.models["product.product"];
     if (productCollection) {
         if (typeof productCollection.get === "function") {
             const product = productCollection.get(numericId);
@@ -304,7 +303,6 @@ function findPartnerInPos(source, partnerId) {
             return pos.db.partner_by_id[numericId];
         }
     }
-    const partnerCollection = pos.models && pos.models["res.partner"];
     if (partnerCollection) {
         if (typeof partnerCollection.get === "function") {
             const partner = partnerCollection.get(numericId);
