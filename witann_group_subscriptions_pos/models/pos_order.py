@@ -587,6 +587,7 @@ class PosOrder(models.Model):
             pos_order._wgs_apply_subscription_line_configs(ui_configs)
         else:
             pos_order._wgs_apply_ui_subscription_line_config(order)
+        pos_order._wgs_align_partner_from_subscription_lines()
         pos_order._wgs_sync_subscription_sales()
         return pos_order_id
 
@@ -705,6 +706,26 @@ class PosOrder(models.Model):
                     write_values,
                 )
             unmatched_lines -= target_line
+
+    def _wgs_align_partner_from_subscription_lines(self):
+        self.ensure_one()
+
+        partner_ids = set()
+        for line in self.lines.filtered(lambda item: item.qty > 0 and item.wgs_has_subscription_configuration()):
+            participant_ids = line.wgs_get_participant_ids()
+            if participant_ids:
+                partner_ids.add(int(participant_ids[0]))
+
+        if not partner_ids:
+            return
+        if len(partner_ids) > 1:
+            raise UserError(
+                _('La orden POS contiene configuraciones de suscripción para más de un cliente. Usa un solo titular por ticket.')
+            )
+
+        partner = self.env['res.partner'].browse(next(iter(partner_ids))).exists()
+        if partner and self.partner_id != partner:
+            self.partner_id = partner.id
 
     @api.model
     def _wgs_extract_ui_subscription_line_configs(self, ui_order):

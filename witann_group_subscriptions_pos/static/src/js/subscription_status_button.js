@@ -256,6 +256,17 @@ function collectSubscriptionConfigsFromOrder(order) {
     return output;
 }
 
+function getSubscriptionPartnerIdsFromOrder(order) {
+    const ids = [];
+    for (const config of collectSubscriptionConfigsFromOrder(order)) {
+        const partnerId = Number(config.partner_id || 0);
+        if (partnerId > 0) {
+            ids.push(partnerId);
+        }
+    }
+    return [...new Set(ids)];
+}
+
 async function stageSubscriptionConfigsForOrder(orm, order) {
     const configs = collectSubscriptionConfigsFromOrder(order);
     if (!configs.length) {
@@ -1010,6 +1021,12 @@ patch(ControlButtons.prototype, {
                     renderDetail(currentDetail);
                     return;
                 }
+                const existingSubscriptionPartnerIds = getSubscriptionPartnerIdsFromOrder(getCurrentOrder(this.pos));
+                if (existingSubscriptionPartnerIds.length && !existingSubscriptionPartnerIds.includes(selectedPartnerId)) {
+                    formError = _t("La orden actual ya contiene suscripciones configuradas para otro cliente. Usa un solo titular por ticket.");
+                    renderDetail(currentDetail);
+                    return;
+                }
                 const participantIds = [...new Set((newSubscriptionForm.participantIds || []).map((value) => Number(value || 0)).filter((value) => value > 0))];
                 if (!participantIds.includes(selectedPartnerId)) {
                     participantIds.unshift(selectedPartnerId);
@@ -1035,10 +1052,14 @@ patch(ControlButtons.prototype, {
                 const partnerOnOrderId = getPartnerIdFromOrder(order);
                 if (partnerOnOrderId !== selectedPartnerId) {
                     const partnerRecord = findPartnerInPos(this.pos, selectedPartnerId);
-                    if (!partnerRecord || !setOrderPartner(order, partnerRecord)) {
-                        formError = _t("No se pudo establecer este cliente en la orden actual del POS. Seleccionalo en el ticket e intenta de nuevo.");
+                    if (partnerRecord && setOrderPartner(order, partnerRecord)) {
+                        // Partner aligned locally in POS.
+                    } else if (partnerOnOrderId) {
+                        formError = _t("La orden actual ya tiene otro cliente y no se pudo reemplazar desde esta sesion. Usa un solo cliente por ticket.");
                         renderDetail(currentDetail);
                         return;
+                    } else {
+                        formNotice = _t("El cliente no esta cargado en la sesion local del POS. La suscripcion se vinculara al titular al confirmar el pago.");
                     }
                 }
 
