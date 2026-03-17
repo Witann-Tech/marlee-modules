@@ -149,6 +149,19 @@ function setOrderPartner(order, partner) {
     return true;
 }
 
+function setPartnerOnCurrentOrder(source, partner) {
+    const pos = getPos(source);
+    const order = getCurrentOrder(source);
+    if (!partner || !partner.id) {
+        return false;
+    }
+    if (pos && typeof pos.setPartnerToCurrentOrder === "function") {
+        pos.setPartnerToCurrentOrder(partner);
+        return true;
+    }
+    return setOrderPartner(order, partner);
+}
+
 function getProductIdFromLine(line) {
     if (!line) {
         return 0;
@@ -215,8 +228,9 @@ function getSelectedOrderLine(source, maybeOrder = null) {
     return order.selected_orderline || order.selectedOrderline || order.selectedOrderLine || null;
 }
 
-function addProductToOrder(source, order, product, options = {}) {
-    if (!order || !product) {
+async function addProductToOrder(source, order, product, options = {}) {
+    const pos = getPos(source);
+    if (!order || !product || !pos) {
         return null;
     }
     const payload = {
@@ -224,6 +238,14 @@ function addProductToOrder(source, order, product, options = {}) {
         merge: false,
         ...options,
     };
+    if (typeof pos.addLineToCurrentOrder === "function") {
+        const line = await pos.addLineToCurrentOrder({ product_id: product }, payload);
+        return line || getSelectedOrderLine(source, order);
+    }
+    if (typeof pos.addLineToOrder === "function") {
+        const line = await pos.addLineToOrder(order, { product_id: product }, payload);
+        return line || getSelectedOrderLine(source, order);
+    }
     if (typeof order.add_product === "function") {
         order.add_product(product, payload);
         return getSelectedOrderLine(source, order);
@@ -1203,7 +1225,7 @@ patch(ControlButtons.prototype, {
                 const partnerOnOrderId = getPartnerIdFromOrder(order);
                 if (partnerOnOrderId !== selectedPartnerId) {
                     const partnerRecord = findPartnerInPos(this, selectedPartnerId);
-                    if (partnerRecord && setOrderPartner(order, partnerRecord)) {
+                    if (partnerRecord && setPartnerOnCurrentOrder(this, partnerRecord)) {
                         // Partner aligned locally in POS.
                     } else if (partnerOnOrderId) {
                         formError = _t("La orden actual ya tiene otro cliente y no se pudo reemplazar desde esta sesion. Usa un solo cliente por ticket.");
@@ -1229,7 +1251,7 @@ patch(ControlButtons.prototype, {
                 let addResult = null;
                 let addErrorMessage = "";
                 try {
-                    addResult = addProductToOrder(this, order, productRecord, {
+                    addResult = await addProductToOrder(this, order, productRecord, {
                         quantity: 1,
                         merge: false,
                         price: Number(newSubscriptionForm.price || 0),
@@ -1261,6 +1283,9 @@ patch(ControlButtons.prototype, {
                     product_found_locally: Boolean(productRecord),
                     product_record_keys: productRecord ? Object.keys(productRecord).slice(0, 15) : [],
                     product_record_class: productRecord && productRecord.constructor ? productRecord.constructor.name : false,
+                    has_pos_addLineToCurrentOrder: typeof getPos(this)?.addLineToCurrentOrder === "function",
+                    has_pos_addLineToOrder: typeof getPos(this)?.addLineToOrder === "function",
+                    has_pos_setPartnerToCurrentOrder: typeof getPos(this)?.setPartnerToCurrentOrder === "function",
                     has_add_product: typeof order.add_product === "function",
                     has_addProduct: typeof order.addProduct === "function",
                     has_get_orderlines: typeof order.get_orderlines === "function",
