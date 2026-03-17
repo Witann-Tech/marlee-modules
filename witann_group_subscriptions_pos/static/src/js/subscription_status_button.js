@@ -47,7 +47,21 @@ function formatTodayISO() {
     return new Date().toISOString().slice(0, 10);
 }
 
-function getCurrentOrder(pos) {
+function getPos(source) {
+    if (!source) {
+        return null;
+    }
+    if (source.pos) {
+        return source.pos;
+    }
+    if (source.env && source.env.pos) {
+        return source.env.pos;
+    }
+    return source;
+}
+
+function getCurrentOrder(source) {
+    const pos = getPos(source);
     if (!pos) {
         return null;
     }
@@ -77,6 +91,18 @@ function getOrderLines(order) {
     if (typeof order.getOrderlines === "function") {
         return order.getOrderlines() || [];
     }
+    if (Array.isArray(order.lines)) {
+        return order.lines;
+    }
+    if (order.lines && Array.isArray(order.lines.models)) {
+        return order.lines.models;
+    }
+    if (order.lines && typeof order.lines.toArray === "function") {
+        const values = order.lines.toArray();
+        if (Array.isArray(values)) {
+            return values;
+        }
+    }
     if (Array.isArray(order.orderlines)) {
         return order.orderlines;
     }
@@ -99,7 +125,7 @@ function getPartnerIdFromOrder(order) {
 }
 
 function setOrderPartner(order, partner) {
-    if (!order || !partner) {
+    if (!order || !partner || !partner.id) {
         return false;
     }
     if (typeof order.set_partner === "function") {
@@ -110,7 +136,17 @@ function setOrderPartner(order, partner) {
         order.setPartner(partner);
         return true;
     }
-    return false;
+    if (typeof order.set_client === "function") {
+        order.set_client(partner);
+        return true;
+    }
+    if (typeof order.setClient === "function") {
+        order.setClient(partner);
+        return true;
+    }
+    order.partner = partner;
+    order.partner_id = partner.id;
+    return true;
 }
 
 function getProductIdFromLine(line) {
@@ -159,7 +195,8 @@ function setLineUnitPrice(line, price) {
     line.price_unit = price;
 }
 
-function getSelectedOrderLine(order) {
+function getSelectedOrderLine(source, maybeOrder = null) {
+    const order = maybeOrder || getCurrentOrder(source);
     if (!order) {
         return null;
     }
@@ -172,27 +209,45 @@ function getSelectedOrderLine(order) {
     if (typeof order.get_selected_order_line === "function") {
         return order.get_selected_order_line();
     }
-    return order.selected_orderline || order.selectedOrderline || null;
+    if (typeof order.getSelectedOrderLine === "function") {
+        return order.getSelectedOrderLine();
+    }
+    return order.selected_orderline || order.selectedOrderline || order.selectedOrderLine || null;
 }
 
-function addProductToOrder(order, product, options) {
+function addProductToOrder(source, order, product, options = {}) {
     if (!order || !product) {
-        return false;
+        return null;
     }
+    const payload = {
+        quantity: 1,
+        merge: false,
+        ...options,
+    };
     if (typeof order.add_product === "function") {
-        return order.add_product(product, options || {});
+        order.add_product(product, payload);
+        return getSelectedOrderLine(source, order);
     }
     if (typeof order.addProduct === "function") {
-        return order.addProduct(product, options || {});
+        order.addProduct(product, payload);
+        return getSelectedOrderLine(source, order);
     }
-    return false;
+    return null;
 }
 
-function findProductInPos(pos, productId) {
+function findProductInPos(source, productId) {
+    const pos = getPos(source);
     if (!pos || !productId) {
         return null;
     }
     const numericId = Number(productId);
+    const productCollection = pos.models && pos.models["product.product"];
+    if (productCollection && typeof productCollection.get === "function") {
+        const product = productCollection.get(numericId);
+        if (product) {
+            return product;
+        }
+    }
     if (pos.db) {
         if (typeof pos.db.get_product_by_id === "function") {
             const product = pos.db.get_product_by_id(numericId);
@@ -219,14 +274,25 @@ function findProductInPos(pos, productId) {
             return productCollection.find((item) => Number(item.id) === numericId) || null;
         }
     }
+    if (Array.isArray(pos.products)) {
+        return pos.products.find((item) => Number(item.id) === numericId) || null;
+    }
     return null;
 }
 
-function findPartnerInPos(pos, partnerId) {
+function findPartnerInPos(source, partnerId) {
+    const pos = getPos(source);
     if (!pos || !partnerId) {
         return null;
     }
     const numericId = Number(partnerId);
+    const partnerCollection = pos.models && pos.models["res.partner"];
+    if (partnerCollection && typeof partnerCollection.get === "function") {
+        const partner = partnerCollection.get(numericId);
+        if (partner) {
+            return partner;
+        }
+    }
     if (pos.db) {
         if (typeof pos.db.get_partner_by_id === "function") {
             const partner = pos.db.get_partner_by_id(numericId);
@@ -254,6 +320,32 @@ function findPartnerInPos(pos, partnerId) {
         }
     }
     return null;
+}
+
+function getAllLocalPosProducts(source) {
+    const pos = getPos(source);
+    if (!pos) {
+        return [];
+    }
+    const productCollection = pos.models && pos.models["product.product"];
+    if (productCollection) {
+        if (typeof productCollection.getAll === "function") {
+            return productCollection.getAll() || [];
+        }
+        if (Array.isArray(productCollection.records)) {
+            return productCollection.records;
+        }
+        if (Array.isArray(productCollection)) {
+            return productCollection;
+        }
+    }
+    if (pos.db && pos.db.product_by_id) {
+        return Object.values(pos.db.product_by_id);
+    }
+    if (Array.isArray(pos.products)) {
+        return pos.products;
+    }
+    return [];
 }
 
 function collectSubscriptionConfigsFromOrder(order) {
@@ -392,7 +484,20 @@ patch(ControlButtons.prototype, {
     },
 
     async _fetchSubscriptionProductCatalog(searchTerm = "") {
-        return this.orm.call("pos.order", "wgs_get_subscription_product_catalog_for_pos", [searchTerm, 200]);
+        const backendCatalog = await this.orm.call(
+            "pos.order",
+            "wgs_get_subscription_product_catalog_for_pos",
+            [searchTerm, 200]
+        );
+        const localProducts = getAllLocalPosProducts(this);
+        const localIds = new Set(
+            (localProducts || [])
+                .map((product) => Number(product && product.id ? product.id : 0))
+                .filter((id) => id > 0)
+        );
+        return (Array.isArray(backendCatalog) ? backendCatalog : []).filter((item) => {
+            return localIds.has(Number(item && item.id ? item.id : 0));
+        });
     },
 
     _showSubscriptionsModal(rows) {
@@ -578,6 +683,9 @@ patch(ControlButtons.prototype, {
                 productCatalog = await this._fetchSubscriptionProductCatalog("");
                 if (!Array.isArray(productCatalog)) {
                     productCatalog = [];
+                }
+                if (!productCatalog.length) {
+                    formError = _t("No hay productos de suscripción cargados en esta sesión del POS.");
                 }
             } catch (error) {
                 console.error("Error al consultar catalogo de suscripciones en POS", error);
@@ -1039,7 +1147,7 @@ patch(ControlButtons.prototype, {
                     renderDetail(currentDetail);
                     return;
                 }
-                const existingSubscriptionPartnerIds = getSubscriptionPartnerIdsFromOrder(getCurrentOrder(this.pos));
+                const existingSubscriptionPartnerIds = getSubscriptionPartnerIdsFromOrder(getCurrentOrder(this));
                 if (existingSubscriptionPartnerIds.length && !existingSubscriptionPartnerIds.includes(selectedPartnerId)) {
                     formError = _t("La orden actual ya contiene suscripciones configuradas para otro cliente. Usa un solo titular por ticket.");
                     renderDetail(currentDetail);
@@ -1061,7 +1169,7 @@ patch(ControlButtons.prototype, {
                     return;
                 }
 
-                const order = getCurrentOrder(this.pos);
+                const order = getCurrentOrder(this);
                 if (!order) {
                     formError = _t("No hay una orden POS activa para agregar la suscripcion.");
                     renderDetail(currentDetail);
@@ -1069,7 +1177,7 @@ patch(ControlButtons.prototype, {
                 }
                 const partnerOnOrderId = getPartnerIdFromOrder(order);
                 if (partnerOnOrderId !== selectedPartnerId) {
-                    const partnerRecord = findPartnerInPos(this.pos, selectedPartnerId);
+                    const partnerRecord = findPartnerInPos(this, selectedPartnerId);
                     if (partnerRecord && setOrderPartner(order, partnerRecord)) {
                         // Partner aligned locally in POS.
                     } else if (partnerOnOrderId) {
@@ -1081,9 +1189,9 @@ patch(ControlButtons.prototype, {
                     }
                 }
 
-                const productRecord = findProductInPos(this.pos, newSubscriptionForm.productId);
+                const productRecord = findProductInPos(this, newSubscriptionForm.productId);
                 if (!productRecord) {
-                    formError = _t("El producto no esta cargado en la sesion actual del POS.");
+                    formError = _t("El producto seleccionado no está cargado en la sesión actual del POS.");
                     renderDetail(currentDetail);
                     return;
                 }
@@ -1091,11 +1199,11 @@ patch(ControlButtons.prototype, {
                 const beforeLines = getOrderLines(order);
                 const beforeCount = beforeLines.length;
                 const beforeSet = new Set(beforeLines);
-                const beforeSelectedLine = getSelectedOrderLine(order);
+                const beforeSelectedLine = getSelectedOrderLine(this, order);
                 let added = false;
                 let addResult = null;
                 try {
-                    addResult = addProductToOrder(order, productRecord, {
+                    addResult = addProductToOrder(this, order, productRecord, {
                         quantity: 1,
                         merge: false,
                         price: Number(newSubscriptionForm.price || 0),
@@ -1113,7 +1221,7 @@ patch(ControlButtons.prototype, {
                     targetLine = addResult;
                 }
                 if (!targetLine) {
-                    const selectedAfter = getSelectedOrderLine(order);
+                    const selectedAfter = getSelectedOrderLine(this, order);
                     if (selectedAfter && selectedAfter !== beforeSelectedLine) {
                         targetLine = selectedAfter;
                     }
