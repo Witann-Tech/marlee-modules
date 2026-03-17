@@ -159,17 +159,31 @@ function setLineUnitPrice(line, price) {
     line.price_unit = price;
 }
 
+function getSelectedOrderLine(order) {
+    if (!order) {
+        return null;
+    }
+    if (typeof order.get_selected_orderline === "function") {
+        return order.get_selected_orderline();
+    }
+    if (typeof order.getSelectedOrderline === "function") {
+        return order.getSelectedOrderline();
+    }
+    if (typeof order.get_selected_order_line === "function") {
+        return order.get_selected_order_line();
+    }
+    return order.selected_orderline || order.selectedOrderline || null;
+}
+
 function addProductToOrder(order, product, options) {
     if (!order || !product) {
         return false;
     }
     if (typeof order.add_product === "function") {
-        order.add_product(product, options || {});
-        return true;
+        return order.add_product(product, options || {});
     }
     if (typeof order.addProduct === "function") {
-        order.addProduct(product, options || {});
-        return true;
+        return order.addProduct(product, options || {});
     }
     return false;
 }
@@ -1072,26 +1086,38 @@ patch(ControlButtons.prototype, {
 
                 const beforeLines = getOrderLines(order);
                 const beforeCount = beforeLines.length;
+                const beforeSet = new Set(beforeLines);
+                const beforeSelectedLine = getSelectedOrderLine(order);
                 let added = false;
+                let addResult = null;
                 try {
-                    added = addProductToOrder(order, productRecord, {
+                    addResult = addProductToOrder(order, productRecord, {
                         quantity: 1,
                         merge: false,
                         price: Number(newSubscriptionForm.price || 0),
                     });
+                    added = Boolean(addResult);
                 } catch (error) {
                     console.error("Error al agregar producto de suscripcion al ticket POS", error);
                     added = false;
                 }
-                if (!added) {
+                const afterLines = getOrderLines(order);
+                let targetLine = afterLines.find((line) => !beforeSet.has(line)) || null;
+                if (!targetLine && addResult && typeof addResult === "object") {
+                    targetLine = addResult;
+                }
+                if (!targetLine) {
+                    const selectedAfter = getSelectedOrderLine(order);
+                    if (selectedAfter && selectedAfter !== beforeSelectedLine) {
+                        targetLine = selectedAfter;
+                    }
+                }
+                if (!added && !targetLine && afterLines.length <= beforeCount) {
                     formError = _t("No se pudo agregar el producto al ticket actual.");
                     renderDetail(currentDetail);
                     return;
                 }
-
-                const afterLines = getOrderLines(order);
-                const targetLine = afterLines[afterLines.length - 1] || null;
-                if (!targetLine || afterLines.length <= beforeCount) {
+                if (!targetLine) {
                     formError = _t("No se pudo identificar la linea agregada al ticket.");
                     renderDetail(currentDetail);
                     return;
