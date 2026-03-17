@@ -1,6 +1,7 @@
 /** @odoo-module **/
 
 import { ControlButtons } from "@point_of_sale/app/screens/product_screen/control_buttons/control_buttons";
+import { PaymentScreen } from "@point_of_sale/app/screens/payment_screen/payment_screen";
 import { _t } from "@web/core/l10n/translation";
 import { useService } from "@web/core/utils/hooks";
 import { patch } from "@web/core/utils/patch";
@@ -40,6 +41,259 @@ function parseISODate(value) {
         return null;
     }
     return date;
+}
+
+function formatTodayISO() {
+    return new Date().toISOString().slice(0, 10);
+}
+
+function getCurrentOrder(pos) {
+    if (!pos) {
+        return null;
+    }
+    if (typeof pos.get_order === "function") {
+        return pos.get_order();
+    }
+    if (typeof pos.getOrder === "function") {
+        return pos.getOrder();
+    }
+    return pos.selectedOrder || pos.order || null;
+}
+
+function getOrderUid(order) {
+    if (!order) {
+        return null;
+    }
+    return order.uuid || order.uid || order.order_uuid || order.orderUid || null;
+}
+
+function getOrderLines(order) {
+    if (!order) {
+        return [];
+    }
+    if (typeof order.get_orderlines === "function") {
+        return order.get_orderlines() || [];
+    }
+    if (typeof order.getOrderlines === "function") {
+        return order.getOrderlines() || [];
+    }
+    if (Array.isArray(order.orderlines)) {
+        return order.orderlines;
+    }
+    if (order.orderlines && Array.isArray(order.orderlines.models)) {
+        return order.orderlines.models;
+    }
+    return [];
+}
+
+function getPartnerIdFromOrder(order) {
+    if (!order) {
+        return 0;
+    }
+    const partner = typeof order.get_partner === "function"
+        ? order.get_partner()
+        : typeof order.getPartner === "function"
+            ? order.getPartner()
+            : order.partner || null;
+    return Number(partner && partner.id ? partner.id : 0);
+}
+
+function setOrderPartner(order, partner) {
+    if (!order || !partner) {
+        return false;
+    }
+    if (typeof order.set_partner === "function") {
+        order.set_partner(partner);
+        return true;
+    }
+    if (typeof order.setPartner === "function") {
+        order.setPartner(partner);
+        return true;
+    }
+    return false;
+}
+
+function getProductIdFromLine(line) {
+    if (!line) {
+        return 0;
+    }
+    if (typeof line.get_product === "function") {
+        const product = line.get_product();
+        return Number(product && product.id ? product.id : 0);
+    }
+    if (line.product && line.product.id) {
+        return Number(line.product.id);
+    }
+    if (line.product_id && Array.isArray(line.product_id)) {
+        return Number(line.product_id[0] || 0);
+    }
+    return Number(line.product_id || 0);
+}
+
+function getLineQty(line) {
+    if (!line) {
+        return 0;
+    }
+    if (typeof line.get_quantity === "function") {
+        return Number(line.get_quantity() || 0);
+    }
+    if (typeof line.getQuantity === "function") {
+        return Number(line.getQuantity() || 0);
+    }
+    return Number(line.quantity || line.qty || 0);
+}
+
+function setLineUnitPrice(line, price) {
+    if (!line) {
+        return;
+    }
+    if (typeof line.set_unit_price === "function") {
+        line.set_unit_price(price);
+        return;
+    }
+    if (typeof line.setUnitPrice === "function") {
+        line.setUnitPrice(price);
+        return;
+    }
+    line.price = price;
+    line.price_unit = price;
+}
+
+function addProductToOrder(order, product, options) {
+    if (!order || !product) {
+        return false;
+    }
+    if (typeof order.add_product === "function") {
+        order.add_product(product, options || {});
+        return true;
+    }
+    if (typeof order.addProduct === "function") {
+        order.addProduct(product, options || {});
+        return true;
+    }
+    return false;
+}
+
+function findProductInPos(pos, productId) {
+    if (!pos || !productId) {
+        return null;
+    }
+    const numericId = Number(productId);
+    if (pos.db) {
+        if (typeof pos.db.get_product_by_id === "function") {
+            const product = pos.db.get_product_by_id(numericId);
+            if (product) {
+                return product;
+            }
+        }
+        if (pos.db.product_by_id && pos.db.product_by_id[numericId]) {
+            return pos.db.product_by_id[numericId];
+        }
+    }
+    const productCollection = pos.models && pos.models["product.product"];
+    if (productCollection) {
+        if (typeof productCollection.get === "function") {
+            const product = productCollection.get(numericId);
+            if (product) {
+                return product;
+            }
+        }
+        if (typeof productCollection.getAll === "function") {
+            return (productCollection.getAll() || []).find((item) => Number(item.id) === numericId) || null;
+        }
+        if (Array.isArray(productCollection)) {
+            return productCollection.find((item) => Number(item.id) === numericId) || null;
+        }
+    }
+    return null;
+}
+
+function findPartnerInPos(pos, partnerId) {
+    if (!pos || !partnerId) {
+        return null;
+    }
+    const numericId = Number(partnerId);
+    if (pos.db) {
+        if (typeof pos.db.get_partner_by_id === "function") {
+            const partner = pos.db.get_partner_by_id(numericId);
+            if (partner) {
+                return partner;
+            }
+        }
+        if (pos.db.partner_by_id && pos.db.partner_by_id[numericId]) {
+            return pos.db.partner_by_id[numericId];
+        }
+    }
+    const partnerCollection = pos.models && pos.models["res.partner"];
+    if (partnerCollection) {
+        if (typeof partnerCollection.get === "function") {
+            const partner = partnerCollection.get(numericId);
+            if (partner) {
+                return partner;
+            }
+        }
+        if (typeof partnerCollection.getAll === "function") {
+            return (partnerCollection.getAll() || []).find((item) => Number(item.id) === numericId) || null;
+        }
+        if (Array.isArray(partnerCollection)) {
+            return partnerCollection.find((item) => Number(item.id) === numericId) || null;
+        }
+    }
+    return null;
+}
+
+function collectSubscriptionConfigsFromOrder(order) {
+    const output = [];
+    for (const line of getOrderLines(order)) {
+        if (!line || !line.wgsSubscriptionConfig) {
+            continue;
+        }
+        const config = { ...line.wgsSubscriptionConfig };
+        config.product_id = getProductIdFromLine(line) || config.product_id || false;
+        config.quantity = Math.abs(getLineQty(line) || 1);
+        output.push(config);
+    }
+    return output;
+}
+
+async function stageSubscriptionConfigsForOrder(orm, order) {
+    const configs = collectSubscriptionConfigsFromOrder(order);
+    if (!configs.length) {
+        return { ok: true, skipped: true };
+    }
+    const rawIds = [getOrderUid(order), order && order.uid, order && order.uuid].filter(Boolean);
+    const orderIds = [...new Set(rawIds.map((value) => String(value).trim()).filter(Boolean))];
+    if (!orderIds.length) {
+        return { ok: false, reason: "missing_uuid" };
+    }
+    let lastResult = { ok: true };
+    for (const orderId of orderIds) {
+        lastResult = await orm.call("pos.order", "wgs_stage_subscription_config_for_uuid", [orderId, configs]);
+        if (!lastResult || !lastResult.ok) {
+            return lastResult || { ok: false, reason: "unknown" };
+        }
+    }
+    return lastResult;
+}
+
+function addPeriodToDate(dateValue, intervalValue, intervalUnit) {
+    const parsed = parseISODate(String(dateValue || "").trim());
+    if (!parsed) {
+        return "";
+    }
+    const date = new Date(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate());
+    const value = Math.max(1, Number(intervalValue || 1));
+    const unit = String(intervalUnit || "month").toLowerCase();
+    if (unit.includes("day")) {
+        date.setDate(date.getDate() + value);
+    } else if (unit.includes("week")) {
+        date.setDate(date.getDate() + (value * 7));
+    } else if (unit.includes("year")) {
+        date.setFullYear(date.getFullYear() + value);
+    } else {
+        date.setMonth(date.getMonth() + value);
+    }
+    return date.toISOString().slice(0, 10);
 }
 
 patch(ControlButtons.prototype, {
@@ -106,6 +360,10 @@ patch(ControlButtons.prototype, {
 
     async _fetchPartnerSubscriptionDetail(partnerId) {
         return this.orm.call("sale.order", "get_partner_subscription_detail_for_pos", [partnerId]);
+    },
+
+    async _fetchSubscriptionProductCatalog(searchTerm = "") {
+        return this.orm.call("pos.order", "wgs_get_subscription_product_catalog_for_pos", [searchTerm, 200]);
     },
 
     _showSubscriptionsModal(rows) {
@@ -239,7 +497,14 @@ patch(ControlButtons.prototype, {
         let filteredSnapshot = [...rows];
         let selectedPartnerId = rows[0] ? rows[0].id : false;
         let detailRequestToken = 0;
+        let currentDetail = null;
+        let formMode = null;
+        let formError = "";
+        let formNotice = "";
+        let catalogLoading = false;
+        let productCatalog = [];
         const detailCache = new Map();
+        let newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
 
         const renderDetailEmpty = (title, message) => {
             detailPane.innerHTML = `
@@ -259,7 +524,166 @@ patch(ControlButtons.prototype, {
             `;
         };
 
+        const getSelectedPlan = () => {
+            const planKey = String(newSubscriptionForm.planChoice || "");
+            return (newSubscriptionForm.plans || []).find((item) => {
+                return `${Number(item.plan_id || 0)}:${Number(item.pricing_id || 0)}` === planKey;
+            }) || null;
+        };
+
+        const openNewSubscriptionForm = async () => {
+            if (!selectedPartnerId) {
+                return;
+            }
+            formMode = "new";
+            formError = "";
+            formNotice = "";
+            newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
+            renderDetail(currentDetail);
+            if (productCatalog.length || catalogLoading) {
+                return;
+            }
+            catalogLoading = true;
+            renderDetail(currentDetail);
+            try {
+                productCatalog = await this._fetchSubscriptionProductCatalog("");
+                if (!Array.isArray(productCatalog)) {
+                    productCatalog = [];
+                }
+            } catch (error) {
+                console.error("Error al consultar catalogo de suscripciones en POS", error);
+                formError = _t("No se pudo cargar el catalogo de productos de suscripcion.");
+            } finally {
+                catalogLoading = false;
+                renderDetail(currentDetail);
+            }
+        };
+
+        const applySelectedProduct = (productId) => {
+            const numericProductId = Number(productId || 0);
+            const product = productCatalog.find((item) => Number(item.id) === numericProductId) || null;
+            newSubscriptionForm.productId = numericProductId;
+            newSubscriptionForm.productName = product ? product.name || "" : "";
+            newSubscriptionForm.maxParticipantsTotal = product ? Number(product.max_participants_total || 1) : 1;
+            newSubscriptionForm.plans = product ? [...(product.plans || [])] : [];
+            const defaultPlanId = product ? Number(product.default_plan_id || 0) : 0;
+            const defaultPricingId = product ? Number(product.default_pricing_id || 0) : 0;
+            const defaultChoice = newSubscriptionForm.plans.find((item) => {
+                return Number(item.plan_id || 0) === defaultPlanId && Number(item.pricing_id || 0) === defaultPricingId;
+            }) || newSubscriptionForm.plans[0] || null;
+            if (defaultChoice) {
+                newSubscriptionForm.planChoice = `${Number(defaultChoice.plan_id || 0)}:${Number(defaultChoice.pricing_id || 0)}`;
+                newSubscriptionForm.price = Number(defaultChoice.price || 0);
+            } else {
+                newSubscriptionForm.planChoice = "";
+                newSubscriptionForm.price = Number(product ? product.default_price || 0 : 0);
+            }
+        };
+
+        const updateSelectedPlan = (planChoice) => {
+            newSubscriptionForm.planChoice = String(planChoice || "");
+            const plan = getSelectedPlan();
+            if (plan) {
+                newSubscriptionForm.price = Number(plan.price || 0);
+            }
+        };
+
+        const toggleParticipant = (partnerId, checked) => {
+            const numericPartnerId = Number(partnerId || 0);
+            let values = [...(newSubscriptionForm.participantIds || [])].map((item) => Number(item));
+            values = values.filter((item) => item > 0 && item !== selectedPartnerId);
+            if (checked && numericPartnerId > 0 && numericPartnerId !== selectedPartnerId) {
+                values.push(numericPartnerId);
+            }
+            newSubscriptionForm.participantIds = [selectedPartnerId, ...new Set(values)];
+        };
+
+        const renderNewSubscriptionForm = () => {
+            if (formMode !== "new") {
+                return "";
+            }
+            const plan = getSelectedPlan();
+            const minEndDate = plan
+                ? addPeriodToDate(newSubscriptionForm.startDate, plan.interval_value, plan.interval_unit)
+                : "";
+            const participantOptions = rows
+                .slice()
+                .sort((a, b) => (a.name || "").localeCompare(b.name || "", "es"))
+                .map((row) => {
+                    const rowId = Number(row.id || 0);
+                    const selected = (newSubscriptionForm.participantIds || []).includes(rowId);
+                    const isOwner = rowId === selectedPartnerId;
+                    return `
+                        <label class="wgs-checkbox-option ${isOwner ? "wgs-checkbox-owner" : ""}">
+                            <input type="checkbox" data-field="participant_toggle" value="${this._escapeHtml(String(rowId))}" ${selected ? "checked" : ""} ${isOwner ? "disabled" : ""} />
+                            <span>${this._escapeHtml(row.name || "-")}${isOwner ? ` ${this._escapeHtml(_t("(Titular)"))}` : ""}</span>
+                        </label>
+                    `;
+                }).join("");
+            const productOptions = productCatalog.map((product) => {
+                const selected = Number(product.id) === Number(newSubscriptionForm.productId) ? "selected" : "";
+                return `<option value="${this._escapeHtml(String(product.id))}" ${selected}>${this._escapeHtml(product.name || "-")}</option>`;
+            }).join("");
+            const planOptions = (newSubscriptionForm.plans || []).map((item) => {
+                const value = `${Number(item.plan_id || 0)}:${Number(item.pricing_id || 0)}`;
+                const selected = value === String(newSubscriptionForm.planChoice || "") ? "selected" : "";
+                const label = `${item.plan_name || _t("Plan recurrente")} | ${this._formatMoney(item.price || 0)}${item.interval_label ? ` | ${item.interval_label}` : ""}`;
+                return `<option value="${this._escapeHtml(value)}" ${selected}>${this._escapeHtml(label)}</option>`;
+            }).join("");
+
+            return `
+                <div class="wgs-inline-form-card">
+                    <div class="wgs-inline-form-header">
+                        <strong>${this._escapeHtml(_t("Nueva suscripcion"))}</strong>
+                        <button type="button" class="wgs-inline-close-btn" data-action="cancel-new">${this._escapeHtml(_t("Cancelar"))}</button>
+                    </div>
+                    ${formError ? `<div class="wgs-inline-error">${this._escapeHtml(formError)}</div>` : ""}
+                    ${formNotice ? `<div class="wgs-inline-notice">${this._escapeHtml(formNotice)}</div>` : ""}
+                    ${catalogLoading ? `<div class="wgs-inline-loading">${this._escapeHtml(_t("Cargando productos de suscripcion..."))}</div>` : ""}
+                    <div class="wgs-inline-form-grid">
+                        <label>
+                            <span>${this._escapeHtml(_t("Producto"))}</span>
+                            <select data-field="product_id">
+                                <option value="">${this._escapeHtml(_t("Selecciona un producto"))}</option>
+                                ${productOptions}
+                            </select>
+                        </label>
+                        <label>
+                            <span>${this._escapeHtml(_t("Plan recurrente"))}</span>
+                            <select data-field="plan_choice" ${newSubscriptionForm.plans.length ? "" : "disabled"}>
+                                <option value="">${this._escapeHtml(_t("Selecciona un plan"))}</option>
+                                ${planOptions}
+                            </select>
+                        </label>
+                        <label>
+                            <span>${this._escapeHtml(_t("Fecha de inicio"))}</span>
+                            <input type="date" data-field="start_date" value="${this._escapeHtml(newSubscriptionForm.startDate || formatTodayISO())}" />
+                        </label>
+                        <label>
+                            <span>${this._escapeHtml(_t("Fecha de fin (opcional)"))}</span>
+                            <input type="date" data-field="end_date" value="${this._escapeHtml(newSubscriptionForm.endDate || "")}" />
+                        </label>
+                    </div>
+                    <div class="wgs-inline-form-meta">
+                        <div><span>${this._escapeHtml(_t("Precio"))}</span><strong>${this._escapeHtml(this._formatMoney(newSubscriptionForm.price || 0))}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Cupo total"))}</span><strong>${this._escapeHtml(String(newSubscriptionForm.maxParticipantsTotal || 1))}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Participantes seleccionados"))}</span><strong>${this._escapeHtml(String((newSubscriptionForm.participantIds || []).length || 0))}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Fin minimo sugerido"))}</span><strong>${this._escapeHtml(this._formatDateDisplay(minEndDate) || "-")}</strong></div>
+                    </div>
+                    <div class="wgs-inline-participants">
+                        <span class="wgs-inline-section-title">${this._escapeHtml(_t("Participantes permitidos"))}</span>
+                        <div class="wgs-inline-participant-list">${participantOptions}</div>
+                    </div>
+                    <div class="wgs-inline-actions">
+                        <button type="button" class="wgs-primary-action-btn" data-action="save-new">${this._escapeHtml(_t("Agregar al ticket"))}</button>
+                        <button type="button" class="wgs-secondary-action-btn" data-action="cancel-new">${this._escapeHtml(_t("Cancelar"))}</button>
+                    </div>
+                </div>
+            `;
+        };
+
         const renderDetail = (detail) => {
+            currentDetail = detail || null;
             if (!detail || !detail.partner_id) {
                 renderDetailEmpty(
                     _t("Sin detalle"),
@@ -298,7 +722,6 @@ patch(ControlButtons.prototype, {
                                 <p>${participantNames}</p>
                             </div>
                             <div class="wgs-subscription-actions">
-                                <button type="button" class="wgs-action-btn" disabled>${this._escapeHtml(_t("Nueva suscripcion"))}</button>
                                 <button type="button" class="wgs-action-btn" disabled>${this._escapeHtml(_t("Renovar"))}</button>
                                 <button type="button" class="wgs-action-btn" disabled>${this._escapeHtml(_t("Cobrar pendiente"))}</button>
                                 <button type="button" class="wgs-action-btn" disabled>${this._escapeHtml(_t("Editar participantes"))}</button>
@@ -332,12 +755,13 @@ patch(ControlButtons.prototype, {
                     </div>
                 </div>
                 <div class="wgs-detail-actions-bar">
-                    <button type="button" class="wgs-primary-action-btn" disabled>${this._escapeHtml(_t("Nueva suscripcion"))}</button>
+                    <button type="button" class="wgs-primary-action-btn" data-action="open-new">${this._escapeHtml(_t("Nueva suscripcion"))}</button>
                     <button type="button" class="wgs-secondary-action-btn" disabled>${this._escapeHtml(_t("Renovar"))}</button>
                     <button type="button" class="wgs-secondary-action-btn" disabled>${this._escapeHtml(_t("Cobrar pendiente"))}</button>
                     <button type="button" class="wgs-secondary-action-btn" disabled>${this._escapeHtml(_t("Participantes"))}</button>
                 </div>
-                <div class="wgs-detail-note">${this._escapeHtml(_t("Las acciones de venta, renovacion y cobro se integraran en esta misma vista en la siguiente fase."))}</div>
+                ${renderNewSubscriptionForm()}
+                <div class="wgs-detail-note">${this._escapeHtml(_t("Las acciones de renovacion y cobro pendiente se integraran en esta misma vista en la siguiente fase."))}</div>
                 <div class="wgs-detail-section">
                     <div class="wgs-detail-section-title">${this._escapeHtml(_t("Suscripciones del cliente"))}</div>
                     <div class="wgs-subscription-cards">${subscriptionsHtml}</div>
@@ -496,6 +920,8 @@ patch(ControlButtons.prototype, {
             if (!filtered.length) {
                 tbody.innerHTML = `<tr><td colspan="7">${_t("No hay resultados para el filtro actual.")}</td></tr>`;
                 selectedPartnerId = false;
+                currentDetail = null;
+                formMode = null;
                 renderDetailEmpty(
                     _t("Sin resultados"),
                     _t("Ajusta los filtros para volver a cargar clientes en el directorio.")
@@ -506,6 +932,10 @@ patch(ControlButtons.prototype, {
             const filteredIds = filtered.map((row) => row.id);
             if (!selectedPartnerId || !filteredIds.includes(selectedPartnerId)) {
                 selectedPartnerId = filtered[0].id;
+                formMode = null;
+                formError = "";
+                formNotice = "";
+                newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
             }
 
             tbody.innerHTML = filtered.map((row) => {
@@ -537,7 +967,149 @@ patch(ControlButtons.prototype, {
                 return;
             }
             selectedPartnerId = partnerId;
+            formMode = null;
+            formError = "";
+            formNotice = "";
+            newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
             render();
+        });
+
+        detailPane.addEventListener("click", async (event) => {
+            const actionButton = event.target.closest("[data-action]");
+            if (!actionButton) {
+                return;
+            }
+            const action = actionButton.dataset.action;
+            if (action === "open-new") {
+                await openNewSubscriptionForm();
+                return;
+            }
+            if (action === "cancel-new") {
+                formMode = null;
+                formError = "";
+                formNotice = "";
+                renderDetail(currentDetail);
+                return;
+            }
+            if (action === "save-new") {
+                formError = "";
+                formNotice = "";
+                const selectedPlan = getSelectedPlan();
+                if (!selectedPartnerId) {
+                    formError = _t("Selecciona un cliente para agregar la suscripcion al ticket.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+                if (!newSubscriptionForm.productId) {
+                    formError = _t("Selecciona un producto de suscripcion.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+                if (!selectedPlan) {
+                    formError = _t("Selecciona un plan recurrente.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+                const participantIds = [...new Set((newSubscriptionForm.participantIds || []).map((value) => Number(value || 0)).filter((value) => value > 0))];
+                if (!participantIds.includes(selectedPartnerId)) {
+                    participantIds.unshift(selectedPartnerId);
+                }
+                if (participantIds.length > Number(newSubscriptionForm.maxParticipantsTotal || 1)) {
+                    formError = _t("Estas excediendo el cupo maximo de participantes para este paquete.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+                const minEndDate = addPeriodToDate(newSubscriptionForm.startDate, selectedPlan.interval_value, selectedPlan.interval_unit);
+                if (newSubscriptionForm.endDate && minEndDate && newSubscriptionForm.endDate < minEndDate) {
+                    formError = _t("La fecha fin debe ser posterior al primer periodo del plan seleccionado.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+
+                const order = getCurrentOrder(this.pos);
+                if (!order) {
+                    formError = _t("No hay una orden POS activa para agregar la suscripcion.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+                const partnerOnOrderId = getPartnerIdFromOrder(order);
+                if (partnerOnOrderId !== selectedPartnerId) {
+                    const partnerRecord = findPartnerInPos(this.pos, selectedPartnerId);
+                    if (!partnerRecord || !setOrderPartner(order, partnerRecord)) {
+                        formError = _t("No se pudo establecer este cliente en la orden actual del POS. Seleccionalo en el ticket e intenta de nuevo.");
+                        renderDetail(currentDetail);
+                        return;
+                    }
+                }
+
+                const productRecord = findProductInPos(this.pos, newSubscriptionForm.productId);
+                if (!productRecord) {
+                    formError = _t("El producto no esta cargado en la sesion actual del POS.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+
+                const beforeLines = getOrderLines(order);
+                const beforeCount = beforeLines.length;
+                const added = addProductToOrder(order, productRecord, {
+                    quantity: 1,
+                    merge: false,
+                    price: Number(newSubscriptionForm.price || 0),
+                });
+                if (!added) {
+                    formError = _t("No se pudo agregar el producto al ticket actual.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+
+                const afterLines = getOrderLines(order);
+                const targetLine = afterLines[afterLines.length - 1] || null;
+                if (!targetLine || afterLines.length < beforeCount) {
+                    formError = _t("No se pudo identificar la linea agregada al ticket.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+
+                setLineUnitPrice(targetLine, Number(newSubscriptionForm.price || 0));
+                targetLine.wgsSubscriptionConfig = {
+                    flow: "new",
+                    partner_id: selectedPartnerId,
+                    participant_ids: participantIds,
+                    plan_id: Number(selectedPlan.plan_id || 0) || false,
+                    pricing_id: Number(selectedPlan.pricing_id || 0) || false,
+                    start_date: newSubscriptionForm.startDate || formatTodayISO(),
+                    end_date: newSubscriptionForm.endDate || false,
+                    product_id: Number(newSubscriptionForm.productId || 0) || false,
+                    product_name: newSubscriptionForm.productName || false,
+                };
+
+                formMode = null;
+                formError = "";
+                formNotice = _t("Suscripcion agregada al ticket. Puedes continuar al cobro normal del POS.");
+                renderDetail(currentDetail);
+                return;
+            }
+        });
+
+        detailPane.addEventListener("change", (event) => {
+            const field = event.target.dataset.field;
+            if (formMode !== "new" || !field) {
+                return;
+            }
+            formError = "";
+            formNotice = "";
+            if (field === "product_id") {
+                applySelectedProduct(event.target.value);
+            } else if (field === "plan_choice") {
+                updateSelectedPlan(event.target.value);
+            } else if (field === "start_date") {
+                newSubscriptionForm.startDate = event.target.value || formatTodayISO();
+            } else if (field === "end_date") {
+                newSubscriptionForm.endDate = event.target.value || "";
+            } else if (field === "participant_toggle") {
+                toggleParticipant(event.target.value, event.target.checked);
+            }
+            renderDetail(currentDetail);
         });
 
         searchInput.addEventListener("input", render);
@@ -549,6 +1121,24 @@ patch(ControlButtons.prototype, {
         });
 
         render();
+    },
+
+    _getDefaultNewSubscriptionForm(partnerId) {
+        const participantIds = [];
+        if (partnerId) {
+            participantIds.push(Number(partnerId));
+        }
+        return {
+            productId: 0,
+            productName: "",
+            planChoice: "",
+            plans: [],
+            price: 0,
+            startDate: formatTodayISO(),
+            endDate: "",
+            maxParticipantsTotal: 1,
+            participantIds,
+        };
     },
 
     _getStateRank(state) {
@@ -567,6 +1157,19 @@ patch(ControlButtons.prototype, {
             return "wgs-state-negative";
         }
         return "wgs-state-neutral";
+    },
+
+    _formatMoney(value) {
+        const amount = Number(value || 0);
+        try {
+            return new Intl.NumberFormat("es-MX", {
+                style: "currency",
+                currency: "MXN",
+                minimumFractionDigits: 2,
+            }).format(amount);
+        } catch {
+            return `$ ${amount.toFixed(2)}`;
+        }
     },
 
     _toTimestamp(value) {
@@ -833,7 +1436,9 @@ patch(ControlButtons.prototype, {
             }
             .wgs-status-toolbar input,
             .wgs-status-toolbar select,
-            .wgs-status-toolbar button {
+            .wgs-status-toolbar button,
+            .wgs-inline-form-grid input,
+            .wgs-inline-form-grid select {
                 width: 100%;
                 border: 1px solid #d1d5db;
                 border-radius: 0.45rem;
@@ -885,7 +1490,7 @@ patch(ControlButtons.prototype, {
             }
             .wgs-subscription-layout {
                 display: grid;
-                grid-template-columns: minmax(620px, 1.2fr) minmax(380px, 0.8fr);
+                grid-template-columns: minmax(620px, 1.2fr) minmax(420px, 0.8fr);
                 min-height: 60vh;
             }
             .wgs-subscription-list-pane {
@@ -948,14 +1553,18 @@ patch(ControlButtons.prototype, {
                 gap: 0.75rem;
             }
             .wgs-detail-contact-grid div,
-            .wgs-subscription-grid div {
+            .wgs-subscription-grid div,
+            .wgs-inline-form-meta div {
                 display: flex;
                 flex-direction: column;
                 gap: 0.18rem;
             }
             .wgs-detail-contact-grid span,
             .wgs-subscription-grid span,
-            .wgs-subscription-participants span {
+            .wgs-subscription-participants span,
+            .wgs-inline-form-grid label span,
+            .wgs-inline-form-meta span,
+            .wgs-inline-section-title {
                 font-size: 0.72rem;
                 text-transform: uppercase;
                 letter-spacing: 0.04em;
@@ -963,19 +1572,22 @@ patch(ControlButtons.prototype, {
                 font-weight: 700;
             }
             .wgs-detail-contact-grid strong,
-            .wgs-subscription-grid strong {
+            .wgs-subscription-grid strong,
+            .wgs-inline-form-meta strong {
                 color: #0f172a;
                 font-size: 0.9rem;
             }
-            .wgs-detail-actions-bar {
+            .wgs-detail-actions-bar,
+            .wgs-subscription-actions,
+            .wgs-inline-actions {
                 display: grid;
                 grid-template-columns: repeat(2, minmax(0, 1fr));
                 gap: 0.55rem;
-                margin-bottom: 0.65rem;
             }
             .wgs-primary-action-btn,
             .wgs-secondary-action-btn,
-            .wgs-action-btn {
+            .wgs-action-btn,
+            .wgs-inline-close-btn {
                 border-radius: 0.65rem;
                 padding: 0.65rem 0.8rem;
                 font-weight: 700;
@@ -984,16 +1596,16 @@ patch(ControlButtons.prototype, {
                 background: #ffffff;
                 color: #334155;
             }
+            .wgs-primary-action-btn {
+                background: #0f766e;
+                color: #ffffff;
+                border-color: #0f766e;
+            }
             .wgs-primary-action-btn:disabled,
             .wgs-secondary-action-btn:disabled,
             .wgs-action-btn:disabled {
                 opacity: 0.7;
                 cursor: not-allowed;
-            }
-            .wgs-primary-action-btn {
-                background: #0f766e;
-                color: #ffffff;
-                border-color: #0f766e;
             }
             .wgs-detail-note {
                 font-size: 0.8rem;
@@ -1017,7 +1629,8 @@ patch(ControlButtons.prototype, {
                 flex-direction: column;
                 gap: 0.75rem;
             }
-            .wgs-subscription-card {
+            .wgs-subscription-card,
+            .wgs-inline-form-card {
                 background: #ffffff;
                 border: 1px solid #e5e7eb;
                 border-radius: 0.85rem;
@@ -1025,8 +1638,10 @@ patch(ControlButtons.prototype, {
                 display: flex;
                 flex-direction: column;
                 gap: 0.75rem;
+                margin-bottom: 0.85rem;
             }
-            .wgs-subscription-card-header {
+            .wgs-subscription-card-header,
+            .wgs-inline-form-header {
                 display: flex;
                 justify-content: space-between;
                 gap: 0.6rem;
@@ -1037,7 +1652,9 @@ patch(ControlButtons.prototype, {
                 color: #64748b;
                 font-size: 0.78rem;
             }
-            .wgs-subscription-grid {
+            .wgs-subscription-grid,
+            .wgs-inline-form-grid,
+            .wgs-inline-form-meta {
                 display: grid;
                 grid-template-columns: repeat(2, minmax(0, 1fr));
                 gap: 0.7rem;
@@ -1047,10 +1664,48 @@ patch(ControlButtons.prototype, {
                 color: #0f172a;
                 line-height: 1.45;
             }
-            .wgs-subscription-actions {
+            .wgs-inline-error {
+                border: 1px solid #fda4af;
+                background: #fff1f2;
+                color: #9f1239;
+                border-radius: 0.65rem;
+                padding: 0.65rem 0.75rem;
+                font-size: 0.84rem;
+                font-weight: 600;
+            }
+            .wgs-inline-notice {
+                border: 1px solid #8ad9b5;
+                background: #ecfdf5;
+                color: #0f7b4b;
+                border-radius: 0.65rem;
+                padding: 0.65rem 0.75rem;
+                font-size: 0.84rem;
+                font-weight: 600;
+            }
+            .wgs-inline-loading {
+                color: #475569;
+                font-size: 0.84rem;
+            }
+            .wgs-inline-participant-list {
+                max-height: 220px;
+                overflow: auto;
                 display: grid;
-                grid-template-columns: repeat(2, minmax(0, 1fr));
-                gap: 0.5rem;
+                grid-template-columns: 1fr;
+                gap: 0.35rem;
+                border: 1px solid #e5e7eb;
+                border-radius: 0.65rem;
+                padding: 0.55rem;
+                background: #f8fafc;
+            }
+            .wgs-checkbox-option {
+                display: flex;
+                gap: 0.55rem;
+                align-items: center;
+                color: #0f172a;
+                font-size: 0.84rem;
+            }
+            .wgs-checkbox-owner {
+                font-weight: 700;
             }
             .wgs-status-modal-footer {
                 padding: 0.8rem 1.2rem;
@@ -1163,13 +1818,14 @@ patch(ControlButtons.prototype, {
                 }
             }
             @media (max-width: 900px) {
-                .wgs-status-toolbar {
-                    grid-template-columns: 1fr;
-                }
+                .wgs-status-toolbar,
                 .wgs-detail-contact-grid,
                 .wgs-subscription-grid,
                 .wgs-detail-actions-bar,
-                .wgs-subscription-actions {
+                .wgs-subscription-actions,
+                .wgs-inline-form-grid,
+                .wgs-inline-form-meta,
+                .wgs-inline-actions {
                     grid-template-columns: 1fr;
                 }
                 .wgs-detail-header-card {
@@ -1182,5 +1838,28 @@ patch(ControlButtons.prototype, {
             }
         `;
         document.head.appendChild(style);
+    },
+});
+
+patch(PaymentScreen.prototype, {
+    setup() {
+        super.setup(...arguments);
+        this.orm = this.orm || useService("orm");
+    },
+
+    async validateOrder(isForceValidate) {
+        const order = getCurrentOrder(this.pos);
+        try {
+            const result = await stageSubscriptionConfigsForOrder(this.orm, order);
+            if (result && result.ok === false) {
+                window.alert(_t("No se pudo preparar la configuracion de suscripcion para esta venta. Actualiza el modulo y vuelve a intentar."));
+                return;
+            }
+        } catch (error) {
+            console.error("Error al preparar configuracion de suscripcion antes del cobro POS", error);
+            window.alert(_t("No se pudo preparar la configuracion de suscripcion antes del cobro."));
+            return;
+        }
+        return super.validateOrder(...arguments);
     },
 });

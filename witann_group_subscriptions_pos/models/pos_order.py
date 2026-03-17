@@ -89,6 +89,17 @@ class PosOrderLine(models.Model):
             return False
         return fields.Date.to_date(self.wgs_subscription_start_date)
 
+    def wgs_has_subscription_configuration(self):
+        self.ensure_one()
+        return bool(
+            self.wgs_participant_ids_json
+            or self.wgs_subscription_plan_id
+            or self.wgs_subscription_pricing_id
+            or self.wgs_subscription_start_date
+            or self.wgs_subscription_end_date
+            or self.wgs_subscription_source_id
+        )
+
 
 class PosOrder(models.Model):
     _inherit = 'pos.order'
@@ -132,7 +143,6 @@ class PosOrder(models.Model):
 
         if not isinstance(configs, list):
             configs = []
-        payload_json = json.dumps(configs)
         if not self._wgs_is_subscription_buffer_ready():
             _logger.warning(
                 'WGS POS: subscription buffer table is not ready yet. Skipping stage for uuid=%s',
@@ -143,6 +153,12 @@ class PosOrder(models.Model):
         try:
             buffer_model = self.env['wgs.pos.subscription.buffer'].sudo()
             existing = buffer_model.search([('order_uuid', '=', order_uuid)], limit=1, order='id desc')
+            if not configs:
+                if existing:
+                    existing.unlink()
+                return {'ok': True, 'cleared': True}
+
+            payload_json = json.dumps(configs)
             if existing:
                 existing.write({'payload_json': payload_json})
             else:
@@ -348,6 +364,49 @@ class PosOrder(models.Model):
                 for row in candidates
             ],
         }
+
+    @api.model
+    def wgs_get_subscription_product_catalog_for_pos(self, search_term=False, limit=80):
+        if not self.env.user.has_group('point_of_sale.group_pos_user'):
+            raise UserError(_('No tienes permisos para consultar productos de suscripción desde Punto de Venta.'))
+
+        product_model = self.env['product.product']
+        domain = [('sale_ok', '=', True)]
+        if 'active' in product_model._fields:
+            domain.append(('active', '=', True))
+        recurring_domain = ['|', ('recurring_invoice', '=', True), ('product_tmpl_id.recurring_invoice', '=', True)]
+        domain = domain + recurring_domain
+
+        if 'available_in_pos' in product_model._fields:
+            domain.append(('available_in_pos', '=', True))
+        elif 'available_in_pos' in self.env['product.template']._fields:
+            domain.append(('product_tmpl_id.available_in_pos', '=', True))
+
+        search_term = (search_term or '').strip()
+        if search_term:
+            domain += ['|', ('display_name', 'ilike', search_term), ('default_code', 'ilike', search_term)]
+
+        try:
+            limit = max(1, int(limit or 80))
+        except (TypeError, ValueError):
+            limit = 80
+        products = product_model.search(domain, order='name asc, id asc', limit=limit)
+        output = []
+        for product in products:
+            context = self.wgs_get_subscription_product_context_for_pos(product.id, fallback=product.lst_price)
+            if not context.get('is_subscription'):
+                continue
+            output.append({
+                'id': product.id,
+                'name': product.display_name,
+                'default_code': product.default_code or False,
+                'max_participants_total': int(context.get('max_participants_total') or 1),
+                'default_plan_id': context.get('default_plan_id') or False,
+                'default_pricing_id': context.get('default_pricing_id') or False,
+                'default_price': float(context.get('default_price') or 0.0),
+                'plans': context.get('plans') or [],
+            })
+        return output
 
     @api.model
     def _order_line_fields(self, line, session_id=None):
@@ -766,7 +825,12 @@ class PosOrder(models.Model):
         for pos_order in self:
             if not pos_order.partner_id:
                 subscription_lines = pos_order.lines.filtered(
-                    lambda line: line.qty > 0 and line.product_id and line.product_id.product_tmpl_id.recurring_invoice
+                    lambda line: (
+                        line.qty > 0
+                        and line.product_id
+                        and line.product_id.product_tmpl_id.recurring_invoice
+                        and line.wgs_has_subscription_configuration()
+                    )
                 )
                 if subscription_lines:
                     raise UserError(
@@ -775,7 +839,12 @@ class PosOrder(models.Model):
 
             # 1) Create subscription sales for normal/positive subscription lines.
             for line in pos_order.lines.filtered(
-                lambda item: item.qty > 0 and item.product_id and item.product_id.product_tmpl_id.recurring_invoice
+                lambda item: (
+                    item.qty > 0
+                    and item.product_id
+                    and item.product_id.product_tmpl_id.recurring_invoice
+                    and item.wgs_has_subscription_configuration()
+                )
             ):
                 if line.wgs_subscription_flow == 'renewal':
                     if line.wgs_subscription_source_id and line.wgs_sale_order_id == line.wgs_subscription_source_id:
