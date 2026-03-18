@@ -45,6 +45,17 @@ class SaleOrder(models.Model):
         copy=True,
         help='Fecha efectiva de inicio de vigencia para operación en POS y control de acceso.',
     )
+    wgs_import_source_key = fields.Char(
+        string='Llave de importación WGS',
+        copy=False,
+        index=True,
+        help='Identificador idempotente para evitar duplicados al reimportar suscripciones.',
+    )
+    wgs_import_batch_name = fields.Char(
+        string='Lote de importación WGS',
+        copy=False,
+        help='Nombre del lote que originó esta suscripción.',
+    )
     participant_ids = fields.Many2many(
         'res.partner',
         'sale_order_subscription_participant_rel',
