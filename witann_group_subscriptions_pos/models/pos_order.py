@@ -1906,6 +1906,8 @@ class PosOrder(models.Model):
         product.ensure_one()
         base_price = float(base_price or 0.0)
         taxes = product.taxes_id
+        if not taxes and 'taxes_id' in product.product_tmpl_id._fields:
+            taxes = product.product_tmpl_id.taxes_id
         company = company or self.company_id or self.env.company
         if company:
             taxes = taxes.filtered(lambda tax: not tax.company_id or tax.company_id == company)
