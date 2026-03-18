@@ -1911,11 +1911,6 @@ class PosOrder(models.Model):
         company = company or self.company_id or self.env.company
         if company:
             taxes = taxes.filtered(lambda tax: not tax.company_id or tax.company_id == company)
-        if not taxes and 'account.tax' in self.env:
-            fallback_domain = [('type_tax_use', '=', 'sale'), ('active', '=', True)]
-            if company:
-                fallback_domain.append(('company_id', '=', company.id))
-            taxes = self.env['account.tax'].search(fallback_domain, order='sequence asc, id asc', limit=1)
         if not taxes:
             return round(max(base_price, 0.0), 2)
         if fiscal_position and hasattr(fiscal_position, 'map_tax'):
