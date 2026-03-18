@@ -146,6 +146,9 @@ class SaleOrder(models.Model):
                 item['participant_ids'] = subscription.participant_ids.ids
                 item['participant_names'] = subscription.participant_ids.mapped('display_name')
                 item['participant_count'] = len(subscription.participant_ids)
+                item['max_participants_total'] = int(
+                    getattr(subscription, 'subscription_max_participants_total', 0) or item['participant_count'] or 1
+                )
                 items.append(item)
 
         items = sorted(items, key=self._sort_subscription_status_item_key_for_pos)
@@ -180,6 +183,46 @@ class SaleOrder(models.Model):
             'last_access': last_access_value or False,
             'image_url': summary.get('image_url') or ('/web/image/res.partner/%s/image_128' % partner.id),
             'items': items,
+        }
+
+    @api.model
+    def wgs_update_subscription_participants_for_pos(self, subscription_id, participant_ids):
+        if not self.env.user.has_group('point_of_sale.group_pos_user'):
+            raise AccessError(_('No tienes permisos para actualizar participantes desde Punto de Venta.'))
+
+        subscription = self.sudo().browse(int(subscription_id or 0)).exists()
+        if not subscription:
+            raise AccessError(_('La suscripción seleccionada no existe.'))
+        if not subscription._is_subscription_record_for_pos():
+            raise AccessError(_('La orden seleccionada no corresponde a una suscripción válida.'))
+        if 'participant_ids' not in subscription._fields:
+            raise AccessError(_('La suscripción no expone participantes editables en este entorno.'))
+
+        cleaned_ids = []
+        for value in participant_ids or []:
+            try:
+                participant_id = int(value)
+            except (TypeError, ValueError):
+                continue
+            if participant_id > 0:
+                cleaned_ids.append(participant_id)
+        cleaned_ids = list(dict.fromkeys(cleaned_ids))
+
+        owner_id = subscription.partner_id.id if subscription.partner_id else False
+        if owner_id and owner_id not in cleaned_ids:
+            cleaned_ids.insert(0, owner_id)
+
+        participants = self.env['res.partner'].sudo().with_context(active_test=False).browse(cleaned_ids).exists()
+        subscription.write({'participant_ids': [fields.Command.set(participants.ids)]})
+        subscription._ensure_subscription_owner_is_participant()
+
+        return {
+            'ok': True,
+            'subscription_id': subscription.id,
+            'participant_ids': subscription.participant_ids.ids,
+            'participant_names': subscription.participant_ids.mapped('display_name'),
+            'participant_count': len(subscription.participant_ids),
+            'max_participants_total': int(getattr(subscription, 'subscription_max_participants_total', 0) or 0),
         }
 
     @api.model

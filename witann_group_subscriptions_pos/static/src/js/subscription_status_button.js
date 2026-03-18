@@ -544,6 +544,14 @@ patch(ControlButtons.prototype, {
         );
     },
 
+    async _saveSubscriptionParticipants(subscriptionId, participantIds) {
+        return this.orm.call(
+            "sale.order",
+            "wgs_update_subscription_participants_for_pos",
+            [subscriptionId, participantIds || []]
+        );
+    },
+
     _showSubscriptionsModal(rows) {
         const previous = document.getElementById(MODAL_ID);
         if (previous) {
@@ -684,6 +692,7 @@ patch(ControlButtons.prototype, {
         let renewalForm = null;
         let upsaleForm = null;
         let pendingChargeForm = null;
+        let participantEditForm = null;
         const detailCache = new Map();
         let newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
 
@@ -747,6 +756,7 @@ patch(ControlButtons.prototype, {
             renewalForm = null;
             upsaleForm = null;
             pendingChargeForm = null;
+            participantEditForm = null;
             newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
             renderDetail(currentDetail);
             if (productCatalog.length || catalogLoading) {
@@ -779,6 +789,7 @@ patch(ControlButtons.prototype, {
             formError = "";
             formNotice = "";
             pendingChargeForm = null;
+            participantEditForm = null;
             renewalForm = {
                 subscriptionId: Number(item.subscription_id || 0) || false,
                 subscriptionName: item.subscription_name || "",
@@ -1063,6 +1074,7 @@ patch(ControlButtons.prototype, {
             renewalForm = null;
             upsaleForm = this._getDefaultUpsaleForm(item);
             pendingChargeForm = null;
+            participantEditForm = null;
             renderDetail(currentDetail);
             if (!productCatalog.length && !catalogLoading) {
                 catalogLoading = true;
@@ -1082,6 +1094,38 @@ patch(ControlButtons.prototype, {
                     catalogLoading = false;
                 }
             }
+            renderDetail(currentDetail);
+        };
+
+        const toggleEditedParticipant = (partnerId, checked) => {
+            if (!participantEditForm) {
+                return;
+            }
+            const numericPartnerId = Number(partnerId || 0);
+            const holderPartnerId = Number(participantEditForm.holderPartnerId || 0);
+            let values = [...(participantEditForm.participantIds || [])].map((item) => Number(item));
+            values = values.filter((item) => item > 0 && item !== holderPartnerId && item !== numericPartnerId);
+            if (checked && numericPartnerId > 0 && numericPartnerId !== holderPartnerId) {
+                values.push(numericPartnerId);
+            }
+            participantEditForm.participantIds = clampParticipantIds(
+                holderPartnerId ? [holderPartnerId, ...new Set(values)] : [...new Set(values)],
+                holderPartnerId,
+                participantEditForm.maxParticipantsTotal
+            );
+        };
+
+        const openParticipantEditForm = async (item) => {
+            if (!item || !item.subscription_id) {
+                return;
+            }
+            formMode = "participants";
+            formError = "";
+            formNotice = "";
+            renewalForm = null;
+            upsaleForm = null;
+            pendingChargeForm = null;
+            participantEditForm = this._getDefaultParticipantEditForm(item);
             renderDetail(currentDetail);
         };
 
@@ -1296,6 +1340,61 @@ patch(ControlButtons.prototype, {
             `;
         };
 
+        const renderParticipantEditForm = (item) => {
+            if (
+                formMode !== "participants"
+                || !participantEditForm
+                || Number(participantEditForm.subscriptionId || 0) !== Number(item.subscription_id || 0)
+            ) {
+                return "";
+            }
+            const holderPartnerId = Number(participantEditForm.holderPartnerId || 0);
+            const participantOptions = Number(participantEditForm.maxParticipantsTotal || 1) > 1
+                ? rows
+                    .slice()
+                    .sort((a, b) => (a.name || "").localeCompare(b.name || "", "es"))
+                    .map((row) => {
+                        const rowId = Number(row.id || 0);
+                        const selected = (participantEditForm.participantIds || []).includes(rowId);
+                        const isOwner = rowId === holderPartnerId;
+                        return `
+                            <label class="wgs-checkbox-option ${isOwner ? "wgs-checkbox-owner" : ""}">
+                                <input type="checkbox" data-field="edit_participant_toggle" value="${this._escapeHtml(String(rowId))}" ${selected ? "checked" : ""} ${isOwner ? "disabled" : ""} />
+                                <span>${this._escapeHtml(row.name || "-")}${isOwner ? ` ${this._escapeHtml(_t("(Titular)"))}` : ""}</span>
+                            </label>
+                        `;
+                    }).join("")
+                : "";
+            return `
+                <div class="wgs-inline-form-card">
+                    <div class="wgs-inline-form-header">
+                        <strong>${this._escapeHtml(_t("Editar participantes"))}</strong>
+                        <button type="button" class="wgs-inline-close-btn" data-action="cancel-participants">${this._escapeHtml(_t("Cancelar"))}</button>
+                    </div>
+                    ${formError ? `<div class="wgs-inline-error">${this._escapeHtml(formError)}</div>` : ""}
+                    ${formNotice ? `<div class="wgs-inline-notice">${this._escapeHtml(formNotice)}</div>` : ""}
+                    <div class="wgs-inline-form-meta">
+                        <div><span>${this._escapeHtml(_t("Suscripción"))}</span><strong>${this._escapeHtml(participantEditForm.subscriptionName || "-")}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Titular"))}</span><strong>${this._escapeHtml(participantEditForm.holderPartnerName || "-")}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Cupo total"))}</span><strong>${this._escapeHtml(String(participantEditForm.maxParticipantsTotal || 1))}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Seleccionados"))}</span><strong>${this._escapeHtml(String((participantEditForm.participantIds || []).length || 0))}</strong></div>
+                    </div>
+                    ${Number(participantEditForm.maxParticipantsTotal || 1) > 1 ? `
+                        <div class="wgs-inline-participants">
+                            <span class="wgs-inline-section-title">${this._escapeHtml(_t("Participantes permitidos"))}</span>
+                            <div class="wgs-inline-participant-list">${participantOptions}</div>
+                        </div>
+                    ` : `
+                        <div class="wgs-inline-notice">${this._escapeHtml(_t("Este paquete solo permite al titular. No hay participantes adicionales configurables."))}</div>
+                    `}
+                    <div class="wgs-inline-actions">
+                        <button type="button" class="wgs-primary-action-btn" data-action="save-participants">${this._escapeHtml(_t("Guardar participantes"))}</button>
+                        <button type="button" class="wgs-secondary-action-btn" data-action="cancel-participants">${this._escapeHtml(_t("Cancelar"))}</button>
+                    </div>
+                </div>
+            `;
+        };
+
         const renderUpsaleForm = (item) => {
             if (
                 formMode !== "upsale"
@@ -1442,7 +1541,12 @@ patch(ControlButtons.prototype, {
                                     data-subscription-id="${this._escapeHtml(String(item.subscription_id || 0))}"
                                     ${item.has_pending_document ? "" : "disabled"}
                                 >${this._escapeHtml(_t("Cobrar pendiente"))}</button>
-                                <button type="button" class="wgs-action-btn" disabled>${this._escapeHtml(_t("Editar participantes"))}</button>
+                                <button
+                                    type="button"
+                                    class="wgs-action-btn"
+                                    data-action="open-participants"
+                                    data-subscription-id="${this._escapeHtml(String(item.subscription_id || 0))}"
+                                >${this._escapeHtml(_t("Editar participantes"))}</button>
                             </div>
                             ${item.has_pending_document ? `
                                 <div class="wgs-subscription-participants">
@@ -1450,6 +1554,7 @@ patch(ControlButtons.prototype, {
                                     <p>${this._escapeHtml(item.pending_document_name || "-")} · ${this._escapeHtml(this._formatMoney(item.pending_amount_total || 0))}</p>
                                 </div>
                             ` : ""}
+                            ${renderParticipantEditForm(item)}
                             ${renderPendingChargeForm(item)}
                             ${renderRenewalForm(item)}
                             ${renderUpsaleForm(item)}
@@ -1493,7 +1598,8 @@ patch(ControlButtons.prototype, {
             `;
         };
 
-        const loadDetail = async (partnerId) => {
+        const loadDetail = async (partnerId, options = {}) => {
+            const force = Boolean(options && options.force);
             if (!partnerId) {
                 renderDetailEmpty(
                     _t("Selecciona un cliente"),
@@ -1501,7 +1607,7 @@ patch(ControlButtons.prototype, {
                 );
                 return;
             }
-            if (detailCache.has(partnerId)) {
+            if (!force && detailCache.has(partnerId)) {
                 renderDetail(detailCache.get(partnerId));
                 return;
             }
@@ -1740,6 +1846,14 @@ patch(ControlButtons.prototype, {
                 await openUpsaleForm(item);
                 return;
             }
+            if (action === "open-participants") {
+                const subscriptionId = Number(actionButton.dataset.subscriptionId || 0);
+                const item = (currentDetail && Array.isArray(currentDetail.items) ? currentDetail.items : []).find(
+                    (row) => Number(row.subscription_id || 0) === subscriptionId
+                );
+                await openParticipantEditForm(item);
+                return;
+            }
             if (action === "open-pending") {
                 const subscriptionId = Number(actionButton.dataset.subscriptionId || 0);
                 const item = (currentDetail && Array.isArray(currentDetail.items) ? currentDetail.items : []).find(
@@ -1755,6 +1869,7 @@ patch(ControlButtons.prototype, {
                 renewalForm = null;
                 upsaleForm = null;
                 pendingChargeForm = null;
+                participantEditForm = null;
                 renderDetail(currentDetail);
                 return;
             }
@@ -1765,6 +1880,7 @@ patch(ControlButtons.prototype, {
                 renewalForm = null;
                 upsaleForm = null;
                 pendingChargeForm = null;
+                participantEditForm = null;
                 renderDetail(currentDetail);
                 return;
             }
@@ -1775,6 +1891,18 @@ patch(ControlButtons.prototype, {
                 renewalForm = null;
                 upsaleForm = null;
                 pendingChargeForm = null;
+                participantEditForm = null;
+                renderDetail(currentDetail);
+                return;
+            }
+            if (action === "cancel-participants") {
+                formMode = null;
+                formError = "";
+                formNotice = "";
+                renewalForm = null;
+                upsaleForm = null;
+                pendingChargeForm = null;
+                participantEditForm = null;
                 renderDetail(currentDetail);
                 return;
             }
@@ -2009,7 +2137,52 @@ patch(ControlButtons.prototype, {
                 renewalForm = null;
                 upsaleForm = null;
                 pendingChargeForm = null;
+                participantEditForm = null;
                 renderDetail(currentDetail);
+                return;
+            }
+            if (action === "save-participants") {
+                formError = "";
+                formNotice = "";
+                if (!participantEditForm || !participantEditForm.subscriptionId) {
+                    formError = _t("La suscripción seleccionada no tiene datos suficientes para editar participantes.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+                const participantIds = [...new Set((participantEditForm.participantIds || []).map((value) => Number(value || 0)).filter((value) => value > 0))];
+                const holderPartnerId = Number(participantEditForm.holderPartnerId || 0) || false;
+                if (holderPartnerId && !participantIds.includes(holderPartnerId)) {
+                    participantIds.unshift(holderPartnerId);
+                }
+                if (participantIds.length > Number(participantEditForm.maxParticipantsTotal || 1)) {
+                    formError = _t("Estas excediendo el cupo máximo de participantes para este paquete.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+                try {
+                    const result = await this._saveSubscriptionParticipants(
+                        participantEditForm.subscriptionId,
+                        participantIds
+                    );
+                    formMode = null;
+                    participantEditForm = null;
+                    renewalForm = null;
+                    upsaleForm = null;
+                    pendingChargeForm = null;
+                    formNotice = _t("Participantes actualizados correctamente.");
+                    if (currentDetail && Array.isArray(currentDetail.items)) {
+                        detailCache.delete(Number(currentDetail.partner_id || 0));
+                    }
+                    await loadDetail(selectedPartnerId, { force: true });
+                    if (result && result.ok) {
+                        return;
+                    }
+                } catch (error) {
+                    console.error("Error al actualizar participantes de suscripción POS", error);
+                    formError = (error && error.message) ? error.message : _t("No se pudieron guardar los participantes de la suscripción.");
+                    renderDetail(currentDetail);
+                    return;
+                }
                 return;
             }
             if (action === "save-upsale") {
@@ -2132,6 +2305,7 @@ patch(ControlButtons.prototype, {
                 renewalForm = null;
                 upsaleForm = null;
                 pendingChargeForm = null;
+                participantEditForm = null;
                 renderDetail(currentDetail);
                 return;
             }
@@ -2235,6 +2409,7 @@ patch(ControlButtons.prototype, {
                 renewalForm = null;
                 upsaleForm = null;
                 pendingChargeForm = null;
+                participantEditForm = null;
                 renderDetail(currentDetail);
                 return;
             }
@@ -2263,6 +2438,8 @@ patch(ControlButtons.prototype, {
                 await updateSelectedUpsalePlan(event.target.value);
             } else if (formMode === "upsale" && field === "upsale_participant_toggle") {
                 toggleUpsaleParticipant(event.target.value, event.target.checked);
+            } else if (formMode === "participants" && field === "edit_participant_toggle") {
+                toggleEditedParticipant(event.target.value, event.target.checked);
             }
             renderDetail(currentDetail);
         });
@@ -2327,6 +2504,25 @@ patch(ControlButtons.prototype, {
             maxParticipantsTotal: 1,
             participantIds,
             loading: false,
+        };
+    },
+
+    _getDefaultParticipantEditForm(item = null) {
+        const subscriptionId = Number(item && item.subscription_id ? item.subscription_id : 0) || false;
+        const holderPartnerId = Number(item && item.holder_partner_id ? item.holder_partner_id : 0) || false;
+        const participantIds = Array.isArray(item && item.participant_ids)
+            ? [...new Set(item.participant_ids.map((value) => Number(value || 0)).filter((value) => value > 0))]
+            : [];
+        if (holderPartnerId && !participantIds.includes(holderPartnerId)) {
+            participantIds.unshift(holderPartnerId);
+        }
+        return {
+            subscriptionId,
+            subscriptionName: item && item.subscription_name ? item.subscription_name : "",
+            holderPartnerId,
+            holderPartnerName: item && item.holder_partner_name ? item.holder_partner_name : "",
+            participantIds,
+            maxParticipantsTotal: Number(item && item.max_participants_total ? item.max_participants_total : 1),
         };
     },
 
