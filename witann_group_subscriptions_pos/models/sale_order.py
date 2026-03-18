@@ -149,6 +149,7 @@ class SaleOrder(models.Model):
                 item['max_participants_total'] = int(
                     getattr(subscription, 'subscription_max_participants_total', 0) or item['participant_count'] or 1
                 )
+                item['access_people_summary'] = subscription._wgs_get_access_people_summary_for_pos()
                 items.append(item)
 
         items = sorted(items, key=self._sort_subscription_status_item_key_for_pos)
@@ -223,6 +224,98 @@ class SaleOrder(models.Model):
             'participant_names': subscription.participant_ids.mapped('display_name'),
             'participant_count': len(subscription.participant_ids),
             'max_participants_total': int(getattr(subscription, 'subscription_max_participants_total', 0) or 0),
+        }
+
+    @api.model
+    def wgs_resync_subscription_access_for_pos(self, subscription_id):
+        if not self.env.user.has_group('point_of_sale.group_pos_user'):
+            raise AccessError(_('No tienes permisos para resincronizar acceso desde Punto de Venta.'))
+
+        subscription = self.sudo().browse(int(subscription_id or 0)).exists()
+        if not subscription:
+            raise AccessError(_('La suscripción seleccionada no existe.'))
+        if not subscription._is_subscription_record_for_pos():
+            raise AccessError(_('La orden seleccionada no corresponde a una suscripción válida.'))
+
+        if hasattr(subscription, '_ensure_subscription_owner_is_participant'):
+            subscription._ensure_subscription_owner_is_participant()
+        if hasattr(subscription, '_wgs_sync_access_control_people'):
+            subscription._wgs_sync_access_control_people()
+
+        partners = self.env['res.partner'].sudo().browse(sorted(subscription._wgs_get_access_related_partner_ids())).exists()
+        if partners and hasattr(partners, '_sync_access_person_face'):
+            partners._sync_access_person_face()
+
+        return {
+            'ok': True,
+            'subscription_id': subscription.id,
+            'access_summary': subscription._wgs_get_access_people_summary_for_pos(),
+        }
+
+    def _wgs_get_access_people_summary_for_pos(self):
+        self.ensure_one()
+        partner_ids = sorted(self._wgs_get_access_related_partner_ids())
+        if not partner_ids:
+            return {
+                'person_count': 0,
+                'active_count': 0,
+                'suspended_count': 0,
+                'missing_count': 0,
+                'site_names': [],
+                'people': [],
+            }
+
+        partners = self.env['res.partner'].sudo().with_context(active_test=False).browse(partner_ids).exists()
+        Person = self.env['access_control.person'].sudo()
+        people = Person.search([('partner_id', 'in', partners.ids)], order='partner_id asc, id asc')
+        people_by_partner = {person.partner_id.id: person for person in people}
+
+        rows = []
+        site_names = set()
+        active_count = 0
+        suspended_count = 0
+        missing_count = 0
+
+        for partner in partners:
+            person = people_by_partner.get(partner.id)
+            if not person:
+                missing_count += 1
+                rows.append({
+                    'partner_id': partner.id,
+                    'partner_name': partner.display_name,
+                    'person_id': False,
+                    'active': False,
+                    'access_state': False,
+                    'global_user_id': False,
+                    'site_names': [],
+                    'managed_by_subscription': False,
+                })
+                continue
+
+            current_site_names = person.site_ids.mapped('name')
+            site_names.update(current_site_names)
+            if person.active:
+                active_count += 1
+            elif person.access_state == 'suspended':
+                suspended_count += 1
+            rows.append({
+                'partner_id': partner.id,
+                'partner_name': partner.display_name,
+                'person_id': person.id,
+                'active': bool(person.active),
+                'access_state': person.access_state or False,
+                'global_user_id': person.global_user_id or False,
+                'site_names': current_site_names,
+                'managed_by_subscription': bool(person.managed_by_subscription),
+            })
+
+        return {
+            'person_count': len(people),
+            'active_count': active_count,
+            'suspended_count': suspended_count,
+            'missing_count': missing_count,
+            'site_names': sorted(site_names),
+            'people': rows,
         }
 
     @api.model

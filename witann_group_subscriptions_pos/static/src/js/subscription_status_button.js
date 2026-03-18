@@ -552,6 +552,14 @@ patch(ControlButtons.prototype, {
         );
     },
 
+    async _resyncSubscriptionAccess(subscriptionId) {
+        return this.orm.call(
+            "sale.order",
+            "wgs_resync_subscription_access_for_pos",
+            [subscriptionId]
+        );
+    },
+
     _showSubscriptionsModal(rows) {
         const previous = document.getElementById(MODAL_ID);
         if (previous) {
@@ -1498,6 +1506,10 @@ patch(ControlButtons.prototype, {
                     const participantNames = (item.participant_names || []).length
                         ? item.participant_names.map((name) => this._escapeHtml(name)).join(", ")
                         : this._escapeHtml(_t("Sin participantes"));
+                    const accessSummary = item.access_people_summary || {};
+                    const accessSiteLabel = (accessSummary.site_names || []).length
+                        ? this._escapeHtml((accessSummary.site_names || []).join(", "))
+                        : this._escapeHtml(_t("Sin sitios"));
                     return `
                         <div class="wgs-subscription-card">
                             <div class="wgs-subscription-card-header">
@@ -1518,6 +1530,11 @@ patch(ControlButtons.prototype, {
                             <div class="wgs-subscription-participants">
                                 <span>${this._escapeHtml(_t("Listado de participantes"))}</span>
                                 <p>${participantNames}</p>
+                            </div>
+                            <div class="wgs-subscription-participants">
+                                <span>${this._escapeHtml(_t("Control de acceso"))}</span>
+                                <p>${this._escapeHtml(_t("Personas"))}: ${this._escapeHtml(String(accessSummary.person_count || 0))} · ${this._escapeHtml(_t("Activas"))}: ${this._escapeHtml(String(accessSummary.active_count || 0))} · ${this._escapeHtml(_t("Sin person"))}: ${this._escapeHtml(String(accessSummary.missing_count || 0))}</p>
+                                <p>${this._escapeHtml(_t("Sitios"))}: ${accessSiteLabel}</p>
                             </div>
                             <div class="wgs-subscription-actions">
                                 <button
@@ -1547,6 +1564,12 @@ patch(ControlButtons.prototype, {
                                     data-action="open-participants"
                                     data-subscription-id="${this._escapeHtml(String(item.subscription_id || 0))}"
                                 >${this._escapeHtml(_t("Editar participantes"))}</button>
+                                <button
+                                    type="button"
+                                    class="wgs-action-btn"
+                                    data-action="resync-access"
+                                    data-subscription-id="${this._escapeHtml(String(item.subscription_id || 0))}"
+                                >${this._escapeHtml(_t("Resincronizar acceso"))}</button>
                             </div>
                             ${item.has_pending_document ? `
                                 <div class="wgs-subscription-participants">
@@ -1852,6 +1875,28 @@ patch(ControlButtons.prototype, {
                     (row) => Number(row.subscription_id || 0) === subscriptionId
                 );
                 await openParticipantEditForm(item);
+                return;
+            }
+            if (action === "resync-access") {
+                const subscriptionId = Number(actionButton.dataset.subscriptionId || 0);
+                if (!subscriptionId) {
+                    return;
+                }
+                formError = "";
+                formNotice = "";
+                try {
+                    const result = await this._resyncSubscriptionAccess(subscriptionId);
+                    const summary = result && result.access_summary ? result.access_summary : {};
+                    formNotice = _t("Acceso resincronizado. Personas activas: %s. Personas sin registro: %s.").replace("%s", String(summary.active_count || 0)).replace("%s", String(summary.missing_count || 0));
+                    if (currentDetail && currentDetail.partner_id) {
+                        detailCache.delete(Number(currentDetail.partner_id || 0));
+                    }
+                    await loadDetail(selectedPartnerId, { force: true });
+                } catch (error) {
+                    console.error("Error al resincronizar acceso desde POS", error);
+                    formError = (error && error.message) ? error.message : _t("No se pudo resincronizar el acceso de esta suscripción.");
+                    renderDetail(currentDetail);
+                }
                 return;
             }
             if (action === "open-pending") {
