@@ -1789,6 +1789,7 @@ patch(ControlButtons.prototype, {
             }
             .wgs-status-modal {
                 width: min(1180px, 98vw);
+                height: min(92vh, 980px);
                 max-height: 92vh;
                 overflow: hidden;
                 background: #ffffff;
