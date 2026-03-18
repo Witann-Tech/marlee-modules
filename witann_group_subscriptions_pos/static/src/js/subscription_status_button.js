@@ -536,6 +536,14 @@ patch(ControlButtons.prototype, {
         );
     },
 
+    async _fetchSubscriptionPendingCharge(subscriptionId, pendingMoveId = false) {
+        return this.orm.call(
+            "pos.order",
+            "wgs_get_subscription_pending_charge_for_pos",
+            [subscriptionId, pendingMoveId || false]
+        );
+    },
+
     _showSubscriptionsModal(rows) {
         const previous = document.getElementById(MODAL_ID);
         if (previous) {
@@ -675,6 +683,7 @@ patch(ControlButtons.prototype, {
         let productCatalog = [];
         let renewalForm = null;
         let upsaleForm = null;
+        let pendingChargeForm = null;
         const detailCache = new Map();
         let newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
 
@@ -737,6 +746,7 @@ patch(ControlButtons.prototype, {
             formNotice = "";
             renewalForm = null;
             upsaleForm = null;
+            pendingChargeForm = null;
             newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
             renderDetail(currentDetail);
             if (productCatalog.length || catalogLoading) {
@@ -768,6 +778,7 @@ patch(ControlButtons.prototype, {
             formMode = "renewal";
             formError = "";
             formNotice = "";
+            pendingChargeForm = null;
             renewalForm = {
                 subscriptionId: Number(item.subscription_id || 0) || false,
                 subscriptionName: item.subscription_name || "",
@@ -807,6 +818,76 @@ patch(ControlButtons.prototype, {
                 formError = _t("No se pudo consultar el cobro de renovación para esta suscripción.");
                 renewalForm = {
                     ...renewalForm,
+                    loading: false,
+                };
+            }
+            renderDetail(currentDetail);
+        };
+
+        const openPendingChargeForm = async (item) => {
+            if (!item || !item.subscription_id) {
+                return;
+            }
+            const pendingDocuments = Array.isArray(item.pending_documents) ? item.pending_documents : [];
+            if (!pendingDocuments.length) {
+                formError = _t("Esta suscripción no tiene documentos pendientes por cobrar.");
+                renderDetail(currentDetail);
+                return;
+            }
+            const firstPending = pendingDocuments[0];
+            formMode = "pending";
+            formError = "";
+            formNotice = "";
+            renewalForm = null;
+            upsaleForm = null;
+            pendingChargeForm = {
+                subscriptionId: Number(item.subscription_id || 0) || false,
+                subscriptionName: item.subscription_name || "",
+                holderPartnerId: Number(item.holder_partner_id || 0) || false,
+                holderPartnerName: item.holder_partner_name || "",
+                productId: Number(item.renewal_product_id || 0) || false,
+                productName: item.renewal_product_name || "",
+                pendingMoveId: Number(firstPending.document_id || 0) || false,
+                pendingMoveName: firstPending.name || "",
+                invoiceDate: firstPending.invoice_date || false,
+                invoiceDateDue: firstPending.invoice_date_due || false,
+                amount: 0,
+                displayAmount: 0,
+                amountTotal: Number(firstPending.amount_total || 0),
+                displayAmountTotal: Number(firstPending.amount_total || 0),
+                loading: true,
+            };
+            renderDetail(currentDetail);
+            try {
+                const charge = await this._fetchSubscriptionPendingCharge(
+                    pendingChargeForm.subscriptionId,
+                    pendingChargeForm.pendingMoveId
+                );
+                pendingChargeForm = {
+                    ...pendingChargeForm,
+                    loading: false,
+                    pendingMoveId: Number(charge && charge.pending_move_id ? charge.pending_move_id : pendingChargeForm.pendingMoveId) || false,
+                    pendingMoveName: charge && charge.pending_move_name ? charge.pending_move_name : pendingChargeForm.pendingMoveName,
+                    invoiceDate: charge && charge.invoice_date ? charge.invoice_date : pendingChargeForm.invoiceDate,
+                    invoiceDateDue: charge && charge.invoice_date_due ? charge.invoice_date_due : pendingChargeForm.invoiceDateDue,
+                    amount: Number(charge && charge.charge_now ? charge.charge_now : 0),
+                    displayAmount: Number(
+                        charge && charge.display_charge_now !== undefined
+                            ? charge.display_charge_now
+                            : (charge && charge.charge_now ? charge.charge_now : 0)
+                    ),
+                    amountTotal: Number(charge && charge.amount_total ? charge.amount_total : pendingChargeForm.amountTotal || 0),
+                    displayAmountTotal: Number(
+                        charge && charge.display_amount_total !== undefined
+                            ? charge.display_amount_total
+                            : (charge && charge.amount_total ? charge.amount_total : pendingChargeForm.amountTotal || 0)
+                    ),
+                };
+            } catch (error) {
+                console.error("Error al consultar cobro pendiente POS", error);
+                formError = _t("No se pudo consultar el documento pendiente para esta suscripción.");
+                pendingChargeForm = {
+                    ...pendingChargeForm,
                     loading: false,
                 };
             }
@@ -981,6 +1062,7 @@ patch(ControlButtons.prototype, {
             formNotice = "";
             renewalForm = null;
             upsaleForm = this._getDefaultUpsaleForm(item);
+            pendingChargeForm = null;
             renderDetail(currentDetail);
             if (!productCatalog.length && !catalogLoading) {
                 catalogLoading = true;
@@ -1180,6 +1262,40 @@ patch(ControlButtons.prototype, {
             `;
         };
 
+        const renderPendingChargeForm = (item) => {
+            if (
+                formMode !== "pending"
+                || !pendingChargeForm
+                || Number(pendingChargeForm.subscriptionId || 0) !== Number(item.subscription_id || 0)
+            ) {
+                return "";
+            }
+            return `
+                <div class="wgs-inline-form-card">
+                    <div class="wgs-inline-form-header">
+                        <strong>${this._escapeHtml(_t("Cobrar pendiente"))}</strong>
+                        <button type="button" class="wgs-inline-close-btn" data-action="cancel-pending">${this._escapeHtml(_t("Cancelar"))}</button>
+                    </div>
+                    ${formError ? `<div class="wgs-inline-error">${this._escapeHtml(formError)}</div>` : ""}
+                    ${formNotice ? `<div class="wgs-inline-notice">${this._escapeHtml(formNotice)}</div>` : ""}
+                    ${pendingChargeForm.loading ? `<div class="wgs-inline-loading">${this._escapeHtml(_t("Consultando factura pendiente..."))}</div>` : ""}
+                    <div class="wgs-inline-form-meta">
+                        <div><span>${this._escapeHtml(_t("Suscripción"))}</span><strong>${this._escapeHtml(pendingChargeForm.subscriptionName || "-")}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Titular"))}</span><strong>${this._escapeHtml(pendingChargeForm.holderPartnerName || "-")}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Documento"))}</span><strong>${this._escapeHtml(pendingChargeForm.pendingMoveName || "-")}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Fecha factura"))}</span><strong>${this._escapeHtml(this._formatDateDisplay(pendingChargeForm.invoiceDate) || "-")}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Vencimiento"))}</span><strong>${this._escapeHtml(this._formatDateDisplay(pendingChargeForm.invoiceDateDue) || "-")}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Total documento"))}</span><strong>${this._escapeHtml(this._formatMoney(pendingChargeForm.displayAmountTotal || pendingChargeForm.amountTotal || 0))}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Saldo pendiente"))}</span><strong>${this._escapeHtml(this._formatMoney(pendingChargeForm.displayAmount || pendingChargeForm.amount || 0))}</strong></div>
+                    </div>
+                    <div class="wgs-inline-actions">
+                        <button type="button" class="wgs-primary-action-btn" data-action="save-pending" ${pendingChargeForm.loading ? "disabled" : ""}>${this._escapeHtml(_t("Agregar al ticket"))}</button>
+                        <button type="button" class="wgs-secondary-action-btn" data-action="cancel-pending">${this._escapeHtml(_t("Cancelar"))}</button>
+                    </div>
+                </div>
+            `;
+        };
+
         const renderUpsaleForm = (item) => {
             if (
                 formMode !== "upsale"
@@ -1319,9 +1435,22 @@ patch(ControlButtons.prototype, {
                                     data-subscription-id="${this._escapeHtml(String(item.subscription_id || 0))}"
                                     ${item.access_state === "enabled" ? "" : "disabled"}
                                 >${this._escapeHtml(_t("Upsale"))}</button>
-                                <button type="button" class="wgs-action-btn" disabled>${this._escapeHtml(_t("Cobrar pendiente"))}</button>
+                                <button
+                                    type="button"
+                                    class="wgs-action-btn"
+                                    data-action="open-pending"
+                                    data-subscription-id="${this._escapeHtml(String(item.subscription_id || 0))}"
+                                    ${item.has_pending_document ? "" : "disabled"}
+                                >${this._escapeHtml(_t("Cobrar pendiente"))}</button>
                                 <button type="button" class="wgs-action-btn" disabled>${this._escapeHtml(_t("Editar participantes"))}</button>
                             </div>
+                            ${item.has_pending_document ? `
+                                <div class="wgs-subscription-participants">
+                                    <span>${this._escapeHtml(_t("Documento pendiente"))}</span>
+                                    <p>${this._escapeHtml(item.pending_document_name || "-")} · ${this._escapeHtml(this._formatMoney(item.pending_amount_total || 0))}</p>
+                                </div>
+                            ` : ""}
+                            ${renderPendingChargeForm(item)}
                             ${renderRenewalForm(item)}
                             ${renderUpsaleForm(item)}
                         </div>
@@ -1591,6 +1720,7 @@ patch(ControlButtons.prototype, {
                 formNotice = "";
                 renewalForm = null;
                 upsaleForm = null;
+                pendingChargeForm = null;
                 renderDetail(currentDetail);
                 return;
             }
@@ -1610,12 +1740,21 @@ patch(ControlButtons.prototype, {
                 await openUpsaleForm(item);
                 return;
             }
+            if (action === "open-pending") {
+                const subscriptionId = Number(actionButton.dataset.subscriptionId || 0);
+                const item = (currentDetail && Array.isArray(currentDetail.items) ? currentDetail.items : []).find(
+                    (row) => Number(row.subscription_id || 0) === subscriptionId
+                );
+                await openPendingChargeForm(item);
+                return;
+            }
             if (action === "cancel-renewal") {
                 formMode = null;
                 formError = "";
                 formNotice = "";
                 renewalForm = null;
                 upsaleForm = null;
+                pendingChargeForm = null;
                 renderDetail(currentDetail);
                 return;
             }
@@ -1625,6 +1764,17 @@ patch(ControlButtons.prototype, {
                 formNotice = "";
                 renewalForm = null;
                 upsaleForm = null;
+                pendingChargeForm = null;
+                renderDetail(currentDetail);
+                return;
+            }
+            if (action === "cancel-pending") {
+                formMode = null;
+                formError = "";
+                formNotice = "";
+                renewalForm = null;
+                upsaleForm = null;
+                pendingChargeForm = null;
                 renderDetail(currentDetail);
                 return;
             }
@@ -1758,6 +1908,110 @@ patch(ControlButtons.prototype, {
                 renderDetail(currentDetail);
                 return;
             }
+            if (action === "save-pending") {
+                formError = "";
+                formNotice = "";
+                if (!pendingChargeForm || !pendingChargeForm.subscriptionId || !pendingChargeForm.pendingMoveId || !pendingChargeForm.productId) {
+                    formError = _t("El documento pendiente seleccionado no tiene datos suficientes para agregarse al ticket.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+
+                const order = getCurrentOrder(this);
+                if (!order) {
+                    formError = _t("No hay una orden POS activa para agregar el cobro pendiente.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+
+                const holderPartnerId = Number(pendingChargeForm.holderPartnerId || 0) || false;
+                const partnerOnOrderId = getPartnerIdFromOrder(order);
+                if (partnerOnOrderId !== holderPartnerId) {
+                    const partnerRecord = findPartnerInPos(this, holderPartnerId);
+                    if (partnerRecord && setPartnerOnCurrentOrder(this, partnerRecord)) {
+                        // Partner aligned locally in POS.
+                    } else if (partnerOnOrderId) {
+                        formError = _t("La orden actual ya tiene otro cliente y no se pudo reemplazar desde esta sesión. Usa un solo cliente por ticket.");
+                        renderDetail(currentDetail);
+                        return;
+                    } else {
+                        formNotice = _t("El titular no está cargado en la sesión local del POS. El cobro pendiente se vinculará al confirmar el pago.");
+                    }
+                }
+
+                const productRecord = findProductInPos(this, pendingChargeForm.productId);
+                if (!productRecord) {
+                    formError = _t("El producto recurrente de esta suscripción no está cargado en la sesión actual del POS.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+
+                const beforeLines = getOrderLines(order);
+                const beforeCount = beforeLines.length;
+                const beforeSet = new Set(beforeLines);
+                const beforeSelectedLine = getSelectedOrderLine(this, order);
+                let targetLine = null;
+                try {
+                    const addResult = await addProductToOrder(this, order, productRecord, {
+                        quantity: 1,
+                        merge: false,
+                        price: Number(pendingChargeForm.amount || 0),
+                    });
+                    await waitForNextTick();
+                    await waitForNextTick();
+                    const afterLines = getOrderLines(order);
+                    targetLine = afterLines.find((line) => !beforeSet.has(line)) || null;
+                    if (!targetLine && addResult && typeof addResult === "object") {
+                        targetLine = addResult;
+                    }
+                    if (!targetLine) {
+                        const selectedAfter = getSelectedOrderLine(this, order);
+                        if (selectedAfter && selectedAfter !== beforeSelectedLine) {
+                            targetLine = selectedAfter;
+                        }
+                    }
+                    if (!targetLine && afterLines.length <= beforeCount) {
+                        formError = _t("No se pudo agregar el cobro pendiente al ticket actual.");
+                        renderDetail(currentDetail);
+                        return;
+                    }
+                } catch (error) {
+                    console.error("Error al agregar cobro pendiente al ticket POS", error);
+                    formError = _t("No se pudo agregar el cobro pendiente al ticket actual.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+
+                if (!targetLine) {
+                    formError = _t("No se pudo identificar la línea de cobro pendiente agregada al ticket.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+
+                setLineUnitPrice(targetLine, Number(pendingChargeForm.amount || 0));
+                targetLine.wgsSubscriptionConfig = {
+                    flow: "pending_charge",
+                    partner_id: holderPartnerId || false,
+                    participant_ids: [],
+                    plan_id: false,
+                    pricing_id: false,
+                    start_date: false,
+                    end_date: false,
+                    product_id: Number(pendingChargeForm.productId || 0) || false,
+                    product_name: pendingChargeForm.productName || false,
+                    source_subscription_id: Number(pendingChargeForm.subscriptionId || 0) || false,
+                    pending_move_id: Number(pendingChargeForm.pendingMoveId || 0) || false,
+                };
+
+                formMode = null;
+                formError = "";
+                formNotice = _t("Cobro pendiente agregado al ticket. Puedes continuar al cobro normal del POS.");
+                renewalForm = null;
+                upsaleForm = null;
+                pendingChargeForm = null;
+                renderDetail(currentDetail);
+                return;
+            }
             if (action === "save-upsale") {
                 formError = "";
                 formNotice = "";
@@ -1877,6 +2131,7 @@ patch(ControlButtons.prototype, {
                 formNotice = _t("Upsale agregado al ticket. Puedes continuar al cobro normal del POS.");
                 renewalForm = null;
                 upsaleForm = null;
+                pendingChargeForm = null;
                 renderDetail(currentDetail);
                 return;
             }
@@ -1979,6 +2234,7 @@ patch(ControlButtons.prototype, {
                 formNotice = _t("Renovación agregada al ticket. Puedes continuar al cobro normal del POS.");
                 renewalForm = null;
                 upsaleForm = null;
+                pendingChargeForm = null;
                 renderDetail(currentDetail);
                 return;
             }

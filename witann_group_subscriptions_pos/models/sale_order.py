@@ -568,6 +568,24 @@ class SaleOrder(models.Model):
         else:
             reason = _('La suscripción no está en progreso ni en renovación.')
 
+        pending_documents = []
+        for move in self._wgs_get_pending_invoice_records_for_pos():
+            amount_total = float(getattr(move, 'amount_total', 0.0) or 0.0)
+            amount_residual = float(getattr(move, 'amount_residual', 0.0) or 0.0)
+            pending_documents.append({
+                'document_model': move._name,
+                'document_id': move.id,
+                'name': move.name or move.display_name or False,
+                'invoice_date': fields.Date.to_string(move.invoice_date) if getattr(move, 'invoice_date', False) else False,
+                'invoice_date_due': fields.Date.to_string(move.invoice_date_due) if getattr(move, 'invoice_date_due', False) else False,
+                'amount_total': round(max(amount_total, 0.0), 2),
+                'amount_residual': round(max(amount_residual, 0.0), 2),
+                'currency_symbol': move.currency_id.symbol if getattr(move, 'currency_id', False) else False,
+                'payment_state': getattr(move, 'payment_state', False) or False,
+                'state': getattr(move, 'state', False) or False,
+            })
+        first_pending = pending_documents[:1]
+
         return {
             'subscription_id': self.id,
             'subscription_name': self.name,
@@ -590,7 +608,54 @@ class SaleOrder(models.Model):
             'is_valid': is_valid,
             'status_label': _('Vigente') if is_valid else _('Sin vigencia'),
             'reason': reason,
+            'pending_documents': pending_documents,
+            'pending_document_count': len(pending_documents),
+            'has_pending_document': bool(pending_documents),
+            'pending_amount_total': first_pending[0]['amount_residual'] if first_pending else 0.0,
+            'pending_document_name': first_pending[0]['name'] if first_pending else False,
         }
+
+    def _wgs_get_pending_invoice_records_for_pos(self):
+        self.ensure_one()
+        account_move_model = self.env['account.move'].sudo()
+        moves = account_move_model.browse()
+
+        if 'invoice_ids' in self._fields:
+            moves |= self.invoice_ids.sudo()
+
+        if not moves and self.name and 'invoice_origin' in account_move_model._fields:
+            search_domain = [
+                ('move_type', 'in', ('out_invoice', 'out_receipt')),
+                ('state', '=', 'posted'),
+                ('invoice_origin', '=', self.name),
+            ]
+            if self.partner_id and 'partner_id' in account_move_model._fields:
+                search_domain.append(('partner_id', '=', self.partner_id.id))
+            moves |= account_move_model.search(search_domain, order='invoice_date_due asc, invoice_date asc, id asc')
+
+        if not moves and self.partner_id:
+            fallback_domain = [
+                ('move_type', 'in', ('out_invoice', 'out_receipt')),
+                ('state', '=', 'posted'),
+                ('partner_id', '=', self.partner_id.id),
+                ('payment_state', 'not in', ('paid', 'in_payment', 'reversed')),
+            ]
+            if 'invoice_origin' in account_move_model._fields and self.name:
+                fallback_domain.append(('invoice_origin', 'ilike', self.name))
+            moves |= account_move_model.search(fallback_domain, order='invoice_date_due asc, invoice_date asc, id asc')
+
+        moves = moves.filtered(
+            lambda move: (
+                getattr(move, 'move_type', False) in ('out_invoice', 'out_receipt')
+                and getattr(move, 'state', False) == 'posted'
+                and float(getattr(move, 'amount_residual', 0.0) or 0.0) > 0.00001
+                and getattr(move, 'payment_state', False) not in ('paid', 'in_payment', 'reversed')
+            )
+        )
+        return moves.sorted(key=lambda move: (
+            fields.Date.to_string(getattr(move, 'invoice_date_due', False) or getattr(move, 'invoice_date', False) or date.max),
+            move.id,
+        ))
 
     def _sort_subscription_status_item_key_for_pos(self, row):
         state_rank = self._WGS_POS_SUBSCRIPTION_STATE_PRIORITY.get(

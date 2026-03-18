@@ -44,6 +44,7 @@ class PosOrderLine(models.Model):
             ('new', 'Nueva suscripción'),
             ('renewal', 'Renovación recurrente'),
             ('upsale', 'Upsale inmediato'),
+            ('pending_charge', 'Cobro pendiente'),
         ],
         string='Flujo suscripción (POS)',
         default='new',
@@ -52,6 +53,11 @@ class PosOrderLine(models.Model):
     wgs_subscription_source_id = fields.Many2one(
         'sale.order',
         string='Suscripción origen (POS)',
+        copy=False,
+    )
+    wgs_subscription_pending_move_id = fields.Many2one(
+        'account.move',
+        string='Documento pendiente (POS)',
         copy=False,
     )
 
@@ -99,6 +105,7 @@ class PosOrderLine(models.Model):
             or self.wgs_subscription_start_date
             or self.wgs_subscription_end_date
             or self.wgs_subscription_source_id
+            or self.wgs_subscription_pending_move_id
         )
 
 
@@ -392,6 +399,40 @@ class PosOrder(models.Model):
         }
 
     @api.model
+    def wgs_get_subscription_pending_charge_for_pos(self, subscription_id, pending_move_id=False):
+        if not self.env.user.has_group('point_of_sale.group_pos_user'):
+            raise UserError(_('No tienes permisos para consultar cobro pendiente desde Punto de Venta.'))
+
+        try:
+            subscription_id = int(subscription_id or 0)
+        except (TypeError, ValueError):
+            subscription_id = 0
+        source_order = self.env['sale.order'].browse(subscription_id).exists()
+        if not source_order:
+            raise UserError(_('La suscripción origen no existe.'))
+        if not self._wgs_order_has_subscription_signal(source_order):
+            raise UserError(_('La orden origen no corresponde a una suscripción válida.'))
+
+        pending_invoice = self._wgs_get_pending_invoice_from_subscription(source_order, pending_move_id=pending_move_id)
+        if not pending_invoice:
+            raise UserError(_('La suscripción seleccionada no tiene facturas pendientes por cobrar.'))
+
+        amount_residual = round(max(float(getattr(pending_invoice, 'amount_residual', 0.0) or 0.0), 0.0), 2)
+        amount_total = round(max(float(getattr(pending_invoice, 'amount_total', 0.0) or 0.0), 0.0), 2)
+        return {
+            'charge_now': amount_residual,
+            'display_charge_now': amount_residual,
+            'amount_total': amount_total,
+            'display_amount_total': amount_total,
+            'pending_move_id': pending_invoice.id,
+            'pending_move_name': pending_invoice.name or pending_invoice.display_name or False,
+            'invoice_date': fields.Date.to_string(pending_invoice.invoice_date) if getattr(pending_invoice, 'invoice_date', False) else False,
+            'invoice_date_due': fields.Date.to_string(pending_invoice.invoice_date_due) if getattr(pending_invoice, 'invoice_date_due', False) else False,
+            'source_subscription_id': source_order.id,
+            'source_subscription_name': source_order.name,
+        }
+
+    @api.model
     def wgs_get_subscription_product_context_for_pos(self, product_id, fallback=0.0):
         if not self.env.user.has_group('point_of_sale.group_pos_user'):
             raise UserError(_('No tienes permisos para consultar contexto de suscripción desde Punto de Venta.'))
@@ -527,11 +568,14 @@ class PosOrder(models.Model):
                 values['wgs_subscription_start_date'] = start_date
 
         flow_value = str(config_payload.get('flow') or 'new').strip().lower()
-        values['wgs_subscription_flow'] = flow_value if flow_value in ('renewal', 'upsale') else 'new'
+        values['wgs_subscription_flow'] = flow_value if flow_value in ('renewal', 'upsale', 'pending_charge') else 'new'
 
         source_subscription_id = self._wgs_to_int(config_payload.get('source_subscription_id'))
         if source_subscription_id > 0:
             values['wgs_subscription_source_id'] = source_subscription_id
+        pending_move_id = self._wgs_to_int(config_payload.get('pending_move_id'))
+        if pending_move_id > 0:
+            values['wgs_subscription_pending_move_id'] = pending_move_id
 
         return values
 
@@ -563,6 +607,7 @@ class PosOrder(models.Model):
             'end_date': False,
             'flow': 'new',
             'source_subscription_id': False,
+            'pending_move_id': False,
         }
         if not isinstance(ui_line, dict):
             return data
@@ -631,6 +676,13 @@ class PosOrder(models.Model):
             or ui_line.get('wgsSubscriptionSourceId')
             or raw_config.get('source_subscription_id')
             or raw_config.get('sourceSubscriptionId')
+            or False
+        )
+        data['pending_move_id'] = (
+            ui_line.get('wgs_subscription_pending_move_id')
+            or ui_line.get('wgsSubscriptionPendingMoveId')
+            or raw_config.get('pending_move_id')
+            or raw_config.get('pendingMoveId')
             or False
         )
 
@@ -769,11 +821,14 @@ class PosOrder(models.Model):
                     write_values['wgs_subscription_start_date'] = start_date
 
             flow_value = str(config.get('flow') or 'new').strip().lower()
-            write_values['wgs_subscription_flow'] = flow_value if flow_value in ('renewal', 'upsale') else 'new'
+            write_values['wgs_subscription_flow'] = flow_value if flow_value in ('renewal', 'upsale', 'pending_charge') else 'new'
 
             source_subscription_id = self._wgs_to_int(config.get('source_subscription_id'))
             if source_subscription_id > 0:
                 write_values['wgs_subscription_source_id'] = source_subscription_id
+            pending_move_id = self._wgs_to_int(config.get('pending_move_id'))
+            if pending_move_id > 0:
+                write_values['wgs_subscription_pending_move_id'] = pending_move_id
 
             if write_values:
                 target_line.write(write_values)
@@ -842,8 +897,9 @@ class PosOrder(models.Model):
                 continue
             config = self._wgs_extract_subscription_config_payload(payload)
             has_renewal_metadata = (
-                str(config.get('flow') or '').strip().lower() == 'renewal'
+                str(config.get('flow') or '').strip().lower() in ('renewal', 'pending_charge')
                 or self._wgs_to_int(config.get('source_subscription_id')) > 0
+                or self._wgs_to_int(config.get('pending_move_id')) > 0
             )
             if not (
                 config.get('participant_ids')
@@ -953,6 +1009,9 @@ class PosOrder(models.Model):
                         continue
                     pos_order._wgs_process_subscription_renewal_line(line)
                     continue
+                if line.wgs_subscription_flow == 'pending_charge':
+                    pos_order._wgs_process_subscription_pending_charge_line(line)
+                    continue
                 if line.wgs_sale_order_id:
                     continue
                 sale_order = pos_order._wgs_create_subscription_sale_order_from_line(line)
@@ -1034,6 +1093,154 @@ class PosOrder(models.Model):
             amount_paid,
         )
         return source_order
+
+    def _wgs_process_subscription_pending_charge_line(self, line):
+        self.ensure_one()
+
+        source_order = line.wgs_subscription_source_id or line.wgs_sale_order_id
+        if not source_order and self.partner_id:
+            source_order = self._wgs_find_active_subscription_for_partner(self.partner_id, company=self.company_id)[:1]
+        source_order = source_order.exists() if source_order else self.env['sale.order']
+        if not source_order:
+            raise UserError(_('No se encontró la suscripción origen para cobrar el pendiente en POS.'))
+        if not self._wgs_order_has_subscription_signal(source_order):
+            raise UserError(_('La orden origen no corresponde a una suscripción válida para cobro pendiente.'))
+
+        pending_invoice = line.wgs_subscription_pending_move_id
+        if pending_invoice:
+            pending_invoice = pending_invoice.exists()
+        if not pending_invoice:
+            pending_invoice = self._wgs_get_pending_invoice_from_subscription(source_order)
+        if not pending_invoice:
+            raise UserError(_('La suscripción origen no tiene facturas pendientes por cobrar.'))
+
+        self._wgs_reconcile_pending_invoice_from_pos_order(pending_invoice, amount=abs(float(line.price_unit or 0.0) * float(line.qty or 0.0)))
+        self._wgs_link_pos_and_sale_records(pos_line=line, sale_order=source_order)
+        line.write({
+            'wgs_sale_order_id': source_order.id,
+            'wgs_subscription_flow': 'pending_charge',
+            'wgs_subscription_source_id': source_order.id,
+            'wgs_subscription_pending_move_id': pending_invoice.id,
+        })
+
+        if hasattr(pending_invoice, 'message_post'):
+            pending_invoice.message_post(
+                body=_('Pago de factura pendiente recibido en POS %(pos)s por %(amount).2f.') % {
+                    'pos': self.pos_reference or self.name,
+                    'amount': abs(float(line.price_unit or 0.0) * float(line.qty or 0.0)),
+                }
+            )
+        if hasattr(source_order, 'message_post'):
+            source_order.message_post(
+                body=_('Cobro pendiente aplicado en POS a la factura %(invoice)s.') % {
+                    'invoice': pending_invoice.name or pending_invoice.display_name,
+                }
+            )
+        _logger.info(
+            'WGS POS: pending charge synced for subscription %s invoice %s from POS %s line %s',
+            source_order.name,
+            pending_invoice.name or pending_invoice.id,
+            self.pos_reference or self.name,
+            line.id,
+        )
+        return source_order
+
+    def _wgs_get_pending_invoice_from_subscription(self, source_order, pending_move_id=False):
+        self.ensure_one()
+        invoice_model = self.env['account.move'].sudo()
+        source_order = source_order.exists() if source_order else self.env['sale.order']
+        if not source_order:
+            return invoice_model
+
+        pending_moves = source_order._wgs_get_pending_invoice_records_for_pos()
+        try:
+            pending_move_id = int(pending_move_id or 0)
+        except (TypeError, ValueError):
+            pending_move_id = 0
+        if pending_move_id > 0:
+            return pending_moves.filtered(lambda move: move.id == pending_move_id)[:1]
+        return pending_moves[:1]
+
+    def _wgs_reconcile_pending_invoice_from_pos_order(self, invoice, amount=False):
+        self.ensure_one()
+        invoice = invoice.sudo().exists()
+        if not invoice:
+            raise UserError(_('La factura pendiente ya no existe.'))
+
+        target_amount = round(max(float(amount or 0.0), 0.0), 2)
+        residual_amount = round(max(float(getattr(invoice, 'amount_residual', 0.0) or 0.0), 0.0), 2)
+        if target_amount > 0.0 and residual_amount > 0.0 and target_amount - residual_amount > 0.01:
+            raise UserError(_('El cobro POS supera el saldo pendiente de la factura seleccionada.'))
+
+        invoice_lines = invoice.line_ids.filtered(
+            lambda move_line: (
+                getattr(move_line.account_id, 'account_type', False) == 'asset_receivable'
+                and not move_line.reconciled
+            )
+        )
+        if not invoice_lines:
+            raise UserError(_('No se encontraron líneas contables por cobrar en la factura pendiente.'))
+
+        pos_receivable_lines = self._wgs_get_pos_receivable_move_lines(invoice.partner_id)
+        if not pos_receivable_lines:
+            raise UserError(_('No se encontraron líneas contables del ticket POS para aplicar el cobro pendiente.'))
+
+        target_account_ids = set(invoice_lines.mapped('account_id').ids)
+        if target_account_ids:
+            same_account_lines = pos_receivable_lines.filtered(lambda move_line: move_line.account_id.id in target_account_ids)
+            if same_account_lines:
+                pos_receivable_lines = same_account_lines
+
+        (invoice_lines | pos_receivable_lines).reconcile()
+        return True
+
+    def _wgs_get_pos_receivable_move_lines(self, partner=False):
+        self.ensure_one()
+        account_move_model = self.env['account.move'].sudo()
+        pos_payment_model = self.env['pos.payment'].sudo() if 'pos.payment' in self.env.registry else self.env['pos.order']
+
+        related_moves = account_move_model.browse()
+        for field_name, field in self._fields.items():
+            if getattr(field, 'comodel_name', '') != 'account.move':
+                continue
+            value = self[field_name]
+            if field.type == 'many2one':
+                if value:
+                    related_moves |= value.sudo()
+            else:
+                related_moves |= value.sudo()
+
+        payment_records = pos_payment_model.browse()
+        for field_name, field in self._fields.items():
+            if getattr(field, 'comodel_name', '') != 'pos.payment':
+                continue
+            value = self[field_name]
+            if field.type == 'many2one':
+                if value:
+                    payment_records |= value.sudo()
+            else:
+                payment_records |= value.sudo()
+
+        for payment in payment_records:
+            for field_name, field in payment._fields.items():
+                if getattr(field, 'comodel_name', '') != 'account.move':
+                    continue
+                value = payment[field_name]
+                if field.type == 'many2one':
+                    if value:
+                        related_moves |= value.sudo()
+                else:
+                    related_moves |= value.sudo()
+
+        receivable_lines = related_moves.mapped('line_ids').filtered(
+            lambda move_line: (
+                getattr(move_line.account_id, 'account_type', False) == 'asset_receivable'
+                and not move_line.reconciled
+            )
+        )
+        if partner:
+            receivable_lines = receivable_lines.filtered(lambda move_line: move_line.partner_id == partner)
+        return receivable_lines.sorted(key=lambda move_line: (move_line.date or fields.Date.today(), move_line.id))
 
     def _wgs_resolve_upsell_source_order_for_line(self, line):
         self.ensure_one()
@@ -2792,8 +2999,8 @@ class PosOrder(models.Model):
 
         if not original_line or not original_line.wgs_sale_order_id:
             return
-        if original_line.wgs_subscription_flow == 'renewal':
-            # Renewal refunds should not cancel the underlying subscription contract.
+        if original_line.wgs_subscription_flow in ('renewal', 'pending_charge'):
+            # Renewal/pending-charge refunds should not cancel the underlying subscription contract.
             line.wgs_sale_order_id = original_line.wgs_sale_order_id.id
             return
 
@@ -2817,7 +3024,7 @@ class PosOrder(models.Model):
         result = super_method() if super_method else True
         for order in self:
             sale_orders = order.lines.filtered(
-                lambda line: line.wgs_subscription_flow != 'renewal'
+                lambda line: line.wgs_subscription_flow not in ('renewal', 'pending_charge')
             ).mapped('wgs_sale_order_id').filtered(lambda so: so and so.state != 'cancel')
             for sale_order in sale_orders:
                 sale_order.action_cancel()
