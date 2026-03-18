@@ -1889,22 +1889,27 @@ patch(ControlButtons.prototype, {
             }
             .wgs-status-modal-body {
                 padding: 0;
-                overflow: auto;
+                overflow: hidden;
                 color: #1f2937;
+                flex: 1 1 auto;
+                min-height: 0;
             }
             .wgs-subscription-layout {
                 display: grid;
                 grid-template-columns: minmax(620px, 1.2fr) minmax(420px, 0.8fr);
-                min-height: 60vh;
+                height: 100%;
+                min-height: 0;
             }
             .wgs-subscription-list-pane {
                 border-right: 1px solid #e5e7eb;
                 overflow: auto;
+                min-height: 0;
             }
             .wgs-subscription-detail-pane {
                 overflow: auto;
                 background: #f8fafc;
                 padding: 1rem;
+                min-height: 0;
             }
             .wgs-detail-empty {
                 border: 1px dashed #cbd5e1;
@@ -2214,6 +2219,7 @@ patch(ControlButtons.prototype, {
             @media (max-width: 1250px) {
                 .wgs-subscription-layout {
                     grid-template-columns: 1fr;
+                    height: auto;
                 }
                 .wgs-subscription-list-pane {
                     border-right: none;
