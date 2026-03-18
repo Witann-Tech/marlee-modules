@@ -666,6 +666,7 @@ patch(ControlButtons.prototype, {
         let catalogLoading = false;
         let productCatalog = [];
         let renewalForm = null;
+        let upsaleForm = null;
         const detailCache = new Map();
         let newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
 
@@ -702,6 +703,7 @@ patch(ControlButtons.prototype, {
             formError = "";
             formNotice = "";
             renewalForm = null;
+            upsaleForm = null;
             newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
             renderDetail(currentDetail);
             if (productCatalog.length || catalogLoading) {
@@ -927,6 +929,33 @@ patch(ControlButtons.prototype, {
             `;
         };
 
+        const renderUpsalePlaceholder = (item) => {
+            if (
+                formMode !== "upsale"
+                || !upsaleForm
+                || Number(upsaleForm.subscriptionId || 0) !== Number(item.subscription_id || 0)
+            ) {
+                return "";
+            }
+            return `
+                <div class="wgs-inline-form-card">
+                    <div class="wgs-inline-form-header">
+                        <strong>${this._escapeHtml(_t("Upsale de suscripción"))}</strong>
+                        <button type="button" class="wgs-inline-close-btn" data-action="cancel-upsale">${this._escapeHtml(_t("Cancelar"))}</button>
+                    </div>
+                    <div class="wgs-inline-notice">
+                        ${this._escapeHtml(_t("El flujo de upsale se integrará en esta misma tarjeta usando la suscripción origen seleccionada."))}
+                    </div>
+                    <div class="wgs-inline-form-meta">
+                        <div><span>${this._escapeHtml(_t("Suscripción"))}</span><strong>${this._escapeHtml(upsaleForm.subscriptionName || "-")}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Titular"))}</span><strong>${this._escapeHtml(upsaleForm.holderPartnerName || "-")}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Paquete actual"))}</span><strong>${this._escapeHtml((item.package_names || []).join(", ") || "-")}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Plan actual"))}</span><strong>${this._escapeHtml(item.plan_name || "-")}</strong></div>
+                    </div>
+                </div>
+            `;
+        };
+
         const renderDetail = (detail) => {
             currentDetail = detail || null;
             if (!detail || !detail.partner_id) {
@@ -974,10 +1003,18 @@ patch(ControlButtons.prototype, {
                                     data-subscription-id="${this._escapeHtml(String(item.subscription_id || 0))}"
                                     ${item.access_state === "enabled" ? "" : "disabled"}
                                 >${this._escapeHtml(_t("Renovar"))}</button>
+                                <button
+                                    type="button"
+                                    class="wgs-action-btn"
+                                    data-action="open-upsale"
+                                    data-subscription-id="${this._escapeHtml(String(item.subscription_id || 0))}"
+                                    ${item.access_state === "enabled" ? "" : "disabled"}
+                                >${this._escapeHtml(_t("Upsale"))}</button>
                                 <button type="button" class="wgs-action-btn" disabled>${this._escapeHtml(_t("Cobrar pendiente"))}</button>
                                 <button type="button" class="wgs-action-btn" disabled>${this._escapeHtml(_t("Editar participantes"))}</button>
                             </div>
                             ${renderRenewalForm(item)}
+                            ${renderUpsalePlaceholder(item)}
                         </div>
                     `;
                 }).join("")
@@ -1008,12 +1045,9 @@ patch(ControlButtons.prototype, {
                 </div>
                 <div class="wgs-detail-actions-bar">
                     <button type="button" class="wgs-primary-action-btn" data-action="open-new">${this._escapeHtml(_t("Nueva suscripcion"))}</button>
-                    <button type="button" class="wgs-secondary-action-btn" disabled>${this._escapeHtml(_t("Renovar"))}</button>
-                    <button type="button" class="wgs-secondary-action-btn" disabled>${this._escapeHtml(_t("Cobrar pendiente"))}</button>
-                    <button type="button" class="wgs-secondary-action-btn" disabled>${this._escapeHtml(_t("Participantes"))}</button>
                 </div>
                 ${renderNewSubscriptionForm()}
-                <div class="wgs-detail-note">${this._escapeHtml(_t("Las acciones de renovacion y cobro pendiente se integraran en esta misma vista en la siguiente fase."))}</div>
+                <div class="wgs-detail-note">${this._escapeHtml(_t("Renovación, upsale, cobro pendiente y participantes se operan desde cada tarjeta de suscripción."))}</div>
                 <div class="wgs-detail-section">
                     <div class="wgs-detail-section-title">${this._escapeHtml(_t("Suscripciones del cliente"))}</div>
                     <div class="wgs-subscription-cards">${subscriptionsHtml}</div>
@@ -1243,6 +1277,7 @@ patch(ControlButtons.prototype, {
                 formError = "";
                 formNotice = "";
                 renewalForm = null;
+                upsaleForm = null;
                 renderDetail(currentDetail);
                 return;
             }
@@ -1254,11 +1289,42 @@ patch(ControlButtons.prototype, {
                 await openRenewalForm(item);
                 return;
             }
+            if (action === "open-upsale") {
+                const subscriptionId = Number(actionButton.dataset.subscriptionId || 0);
+                const item = (currentDetail && Array.isArray(currentDetail.items) ? currentDetail.items : []).find(
+                    (row) => Number(row.subscription_id || 0) === subscriptionId
+                );
+                if (!item) {
+                    return;
+                }
+                formMode = "upsale";
+                formError = "";
+                formNotice = "";
+                renewalForm = null;
+                upsaleForm = {
+                    subscriptionId: Number(item.subscription_id || 0) || false,
+                    subscriptionName: item.subscription_name || "",
+                    holderPartnerId: Number(item.holder_partner_id || 0) || false,
+                    holderPartnerName: item.holder_partner_name || "",
+                };
+                renderDetail(currentDetail);
+                return;
+            }
             if (action === "cancel-renewal") {
                 formMode = null;
                 formError = "";
                 formNotice = "";
                 renewalForm = null;
+                upsaleForm = null;
+                renderDetail(currentDetail);
+                return;
+            }
+            if (action === "cancel-upsale") {
+                formMode = null;
+                formError = "";
+                formNotice = "";
+                renewalForm = null;
+                upsaleForm = null;
                 renderDetail(currentDetail);
                 return;
             }
@@ -1490,6 +1556,7 @@ patch(ControlButtons.prototype, {
                 formError = "";
                 formNotice = _t("Renovación agregada al ticket. Puedes continuar al cobro normal del POS.");
                 renewalForm = null;
+                upsaleForm = null;
                 renderDetail(currentDetail);
                 return;
             }
