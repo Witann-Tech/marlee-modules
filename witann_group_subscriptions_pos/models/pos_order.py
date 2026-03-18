@@ -188,8 +188,10 @@ class PosOrder(models.Model):
             preferred_plan_id=preferred_plan_id,
             preferred_pricing_id=preferred_pricing_id,
         )
+        display_price = self._wgs_get_price_with_taxes_for_pos(product, choice.get('price') or 0.0)
         return {
             'price': float(choice.get('price') or 0.0),
+            'display_price': float(display_price),
             'plan_id': choice.get('plan_id') or False,
             'pricing_id': choice.get('pricing_id') or False,
         }
@@ -229,10 +231,16 @@ class PosOrder(models.Model):
                 credit_amount = self._wgs_compute_upgrade_credit_amount(source_order)
 
         charge_now = max(recurring_price - credit_amount, 0.0)
+        display_recurring_price = self._wgs_get_price_with_taxes_for_pos(product, recurring_price, partner=partner)
+        display_credit_amount = self._wgs_compute_upgrade_credit_amount(source_order, tax_included=True) if source_order else 0.0
+        display_charge_now = max(display_recurring_price - display_credit_amount, 0.0)
         return {
             'charge_now': float(charge_now),
             'credit_amount': float(credit_amount),
             'recurring_price': float(recurring_price),
+            'display_charge_now': float(display_charge_now),
+            'display_credit_amount': float(display_credit_amount),
+            'display_recurring_price': float(display_recurring_price),
             'plan_id': plan_id,
             'pricing_id': pricing_id,
             'is_upgrade': bool(source_order),
@@ -278,11 +286,14 @@ class PosOrder(models.Model):
             recurring_line = recurring_lines.sorted(key=lambda so_line: so_line.id)[:1]
 
         recurring_price = self._wgs_get_order_recurring_total_amount(source_order)
+        display_recurring_price = self._wgs_get_order_recurring_total_amount(source_order, include_taxes=True)
         if recurring_line:
             qty = abs(self._wgs_get_so_line_qty(recurring_line))
             discount = float(recurring_line.discount or 0.0) if 'discount' in recurring_line._fields else 0.0
             recurring_price = qty * float(recurring_line.price_unit or 0.0) * (1 - (discount / 100.0))
+            display_recurring_price = self._wgs_get_sale_order_line_total_with_tax(recurring_line, qty_override=qty)
         recurring_price = round(max(float(recurring_price or 0.0), 0.0), 2)
+        display_recurring_price = round(max(float(display_recurring_price or 0.0), 0.0), 2)
 
         plan_id = False
         pricing_id = False
@@ -311,6 +322,9 @@ class PosOrder(models.Model):
             'charge_now': float(recurring_price),
             'credit_amount': 0.0,
             'recurring_price': float(recurring_price),
+            'display_charge_now': float(display_recurring_price),
+            'display_credit_amount': 0.0,
+            'display_recurring_price': float(display_recurring_price),
             'plan_id': resolved_plan_id,
             'pricing_id': resolved_pricing_id,
             'is_upgrade': False,
@@ -352,11 +366,23 @@ class PosOrder(models.Model):
         recurring_price = float(choice.get('price') or 0.0)
         credit_amount = self._wgs_compute_upgrade_credit_amount(source_order)
         charge_now = max(recurring_price - credit_amount, 0.0)
+        display_recurring_price = self._wgs_get_price_with_taxes_for_pos(
+            product,
+            recurring_price,
+            partner=source_order.partner_id if 'partner_id' in source_order._fields else False,
+            company=source_order.company_id if 'company_id' in source_order._fields else False,
+            fiscal_position=source_order.fiscal_position_id if 'fiscal_position_id' in source_order._fields else False,
+        )
+        display_credit_amount = self._wgs_compute_upgrade_credit_amount(source_order, tax_included=True)
+        display_charge_now = max(display_recurring_price - display_credit_amount, 0.0)
 
         return {
             'charge_now': float(charge_now),
             'credit_amount': float(credit_amount),
             'recurring_price': float(recurring_price),
+            'display_charge_now': float(display_charge_now),
+            'display_credit_amount': float(display_credit_amount),
+            'display_recurring_price': float(display_recurring_price),
             'plan_id': choice.get('plan_id') or False,
             'pricing_id': choice.get('pricing_id') or False,
             'is_upgrade': True,
@@ -391,6 +417,7 @@ class PosOrder(models.Model):
         choice = self._wgs_get_recurring_pricing_choice(product, fallback=fallback)
         default_plan_id = choice.get('plan_id') or False
         default_pricing_id = choice.get('pricing_id') or False
+        default_display_price = self._wgs_get_price_with_taxes_for_pos(product, choice.get('price') or fallback or 0.0)
 
         return {
             'is_subscription': is_subscription,
@@ -398,12 +425,14 @@ class PosOrder(models.Model):
             'default_plan_id': default_plan_id,
             'default_pricing_id': default_pricing_id,
             'default_price': float(choice.get('price') or fallback or 0.0),
+            'default_display_price': float(default_display_price),
             'plans': [
                 {
                     'plan_id': row.get('plan_id') or False,
                     'plan_name': row.get('plan_name') or _('Plan recurrente'),
                     'pricing_id': row.get('pricing_id') or False,
                     'price': float(row.get('price') or 0.0),
+                    'display_price': float(self._wgs_get_price_with_taxes_for_pos(product, row.get('price') or 0.0)),
                     'interval_label': row.get('interval_label') or '',
                     'interval_value': int(row.get('interval_value') or 1),
                     'interval_unit': row.get('interval_unit') or 'month',
@@ -451,6 +480,7 @@ class PosOrder(models.Model):
                 'default_plan_id': context.get('default_plan_id') or False,
                 'default_pricing_id': context.get('default_pricing_id') or False,
                 'default_price': float(context.get('default_price') or 0.0),
+                'default_display_price': float(context.get('default_display_price') or 0.0),
                 'plans': context.get('plans') or [],
             })
         return output
@@ -1818,10 +1848,10 @@ class PosOrder(models.Model):
 
         return sale_order_model.browse()
 
-    def _wgs_compute_upgrade_credit_amount(self, source_order, today=False):
+    def _wgs_compute_upgrade_credit_amount(self, source_order, today=False, tax_included=False):
         source_order.ensure_one()
 
-        recurring_total = self._wgs_get_order_recurring_total_amount(source_order)
+        recurring_total = self._wgs_get_order_recurring_total_amount(source_order, include_taxes=tax_included)
         if recurring_total <= 0:
             return 0.0
 
@@ -1840,7 +1870,7 @@ class PosOrder(models.Model):
         credit_amount = recurring_total * (remaining_days / total_days)
         return round(max(credit_amount, 0.0), 2)
 
-    def _wgs_get_order_recurring_total_amount(self, sale_order):
+    def _wgs_get_order_recurring_total_amount(self, sale_order, include_taxes=False):
         sale_order.ensure_one()
         recurring_lines = sale_order.order_line.filtered(
             lambda so_line: self._wgs_is_recurring_so_line(so_line) and abs(self._wgs_get_so_line_qty(so_line)) > 0
@@ -1848,9 +1878,44 @@ class PosOrder(models.Model):
         total = 0.0
         for so_line in recurring_lines:
             qty = abs(self._wgs_get_so_line_qty(so_line))
-            discount = float(so_line.discount or 0.0) if 'discount' in so_line._fields else 0.0
-            total += qty * float(so_line.price_unit or 0.0) * (1 - (discount / 100.0))
+            if include_taxes:
+                total += self._wgs_get_sale_order_line_total_with_tax(so_line, qty_override=qty)
+            else:
+                discount = float(so_line.discount or 0.0) if 'discount' in so_line._fields else 0.0
+                total += qty * float(so_line.price_unit or 0.0) * (1 - (discount / 100.0))
         return max(total, 0.0)
+
+    def _wgs_get_sale_order_line_total_with_tax(self, so_line, qty_override=False):
+        so_line.ensure_one()
+        qty = abs(float(qty_override if qty_override is not False else self._wgs_get_so_line_qty(so_line)))
+        discount = float(so_line.discount or 0.0) if 'discount' in so_line._fields else 0.0
+        unit_price = float(so_line.price_unit or 0.0) * (1 - (discount / 100.0))
+        taxes = self.env['account.tax']
+        for field_name in ('tax_id', 'tax_ids'):
+            if field_name in so_line._fields and so_line[field_name]:
+                taxes = so_line[field_name]
+                break
+        if not taxes:
+            return round(max(unit_price * qty, 0.0), 2)
+        currency = so_line.order_id.currency_id if 'currency_id' in so_line.order_id._fields else False
+        partner = so_line.order_id.partner_id if 'partner_id' in so_line.order_id._fields else False
+        result = taxes.compute_all(unit_price, currency=currency, quantity=qty, product=so_line.product_id, partner=partner)
+        return round(max(float(result.get('total_included') or 0.0), 0.0), 2)
+
+    def _wgs_get_price_with_taxes_for_pos(self, product, base_price, partner=False, company=False, fiscal_position=False):
+        product.ensure_one()
+        base_price = float(base_price or 0.0)
+        taxes = product.taxes_id
+        company = company or self.company_id or self.env.company
+        if company:
+            taxes = taxes.filtered(lambda tax: not tax.company_id or tax.company_id == company)
+        if not taxes:
+            return round(max(base_price, 0.0), 2)
+        if fiscal_position and hasattr(fiscal_position, 'map_tax'):
+            taxes = fiscal_position.map_tax(taxes, product=product, partner=partner or False)
+        currency = company.currency_id if company and getattr(company, 'currency_id', False) else False
+        result = taxes.compute_all(base_price, currency=currency, quantity=1.0, product=product, partner=partner or False)
+        return round(max(float(result.get('total_included') or 0.0), 0.0), 2)
 
     def _wgs_is_recurring_so_line(self, so_line):
         so_line.ensure_one()

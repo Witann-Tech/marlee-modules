@@ -710,6 +710,24 @@ patch(ControlButtons.prototype, {
             }) || null;
         };
 
+        const clampParticipantIds = (participantIds, ownerId, maxTotal) => {
+            const numericOwnerId = Number(ownerId || 0) || false;
+            const limit = Math.max(1, Number(maxTotal || 1));
+            const cleaned = [...new Set((participantIds || []).map((value) => Number(value || 0)).filter((value) => value > 0))];
+            const withoutOwner = cleaned.filter((value) => value !== numericOwnerId);
+            const result = [];
+            if (numericOwnerId) {
+                result.push(numericOwnerId);
+            }
+            for (const partnerId of withoutOwner) {
+                if (result.length >= limit) {
+                    break;
+                }
+                result.push(partnerId);
+            }
+            return result;
+        };
+
         const openNewSubscriptionForm = async () => {
             if (!selectedPartnerId) {
                 return;
@@ -760,6 +778,7 @@ patch(ControlButtons.prototype, {
                 planId: Number(item.renewal_plan_id || 0) || false,
                 pricingId: Number(item.renewal_pricing_id || 0) || false,
                 amount: 0,
+                displayAmount: 0,
                 nextInvoiceDate: item.next_invoice_date || false,
                 loading: true,
             };
@@ -775,6 +794,11 @@ patch(ControlButtons.prototype, {
                     ...renewalForm,
                     loading: false,
                     amount: Number(charge && charge.charge_now ? charge.charge_now : 0),
+                    displayAmount: Number(
+                        charge && charge.display_charge_now !== undefined
+                            ? charge.display_charge_now
+                            : (charge && charge.charge_now ? charge.charge_now : 0)
+                    ),
                     planId: Number(charge && charge.plan_id ? charge.plan_id : renewalForm.planId) || false,
                     pricingId: Number(charge && charge.pricing_id ? charge.pricing_id : renewalForm.pricingId) || false,
                 };
@@ -801,8 +825,16 @@ patch(ControlButtons.prototype, {
             upsaleForm.plans = product ? [...(product.plans || [])] : [];
             upsaleForm.planChoice = "";
             upsaleForm.recurringPrice = 0;
+            upsaleForm.displayRecurringPrice = 0;
             upsaleForm.creditAmount = 0;
+            upsaleForm.displayCreditAmount = 0;
             upsaleForm.chargeNow = 0;
+            upsaleForm.displayChargeNow = 0;
+            upsaleForm.participantIds = clampParticipantIds(
+                upsaleForm.participantIds,
+                upsaleForm.holderPartnerId,
+                upsaleForm.maxParticipantsTotal
+            );
 
             if (!product || !upsaleForm.plans.length) {
                 renderDetail(currentDetail);
@@ -832,8 +864,23 @@ patch(ControlButtons.prototype, {
                     ...upsaleForm,
                     loading: false,
                     recurringPrice: Number(charge && charge.recurring_price ? charge.recurring_price : 0),
+                    displayRecurringPrice: Number(
+                        charge && charge.display_recurring_price !== undefined
+                            ? charge.display_recurring_price
+                            : (charge && charge.recurring_price ? charge.recurring_price : 0)
+                    ),
                     creditAmount: Number(charge && charge.credit_amount ? charge.credit_amount : 0),
+                    displayCreditAmount: Number(
+                        charge && charge.display_credit_amount !== undefined
+                            ? charge.display_credit_amount
+                            : (charge && charge.credit_amount ? charge.credit_amount : 0)
+                    ),
                     chargeNow: Number(charge && charge.charge_now ? charge.charge_now : 0),
+                    displayChargeNow: Number(
+                        charge && charge.display_charge_now !== undefined
+                            ? charge.display_charge_now
+                            : (charge && charge.charge_now ? charge.charge_now : 0)
+                    ),
                     planChoice: `${Number(charge && charge.plan_id ? charge.plan_id : (selectedPlan && selectedPlan.plan_id) || 0)}:${Number(charge && charge.pricing_id ? charge.pricing_id : (selectedPlan && selectedPlan.pricing_id) || 0)}`,
                 };
             } catch (error) {
@@ -843,8 +890,11 @@ patch(ControlButtons.prototype, {
                     ...upsaleForm,
                     loading: false,
                     recurringPrice: 0,
+                    displayRecurringPrice: 0,
                     creditAmount: 0,
+                    displayCreditAmount: 0,
                     chargeNow: 0,
+                    displayChargeNow: 0,
                 };
             }
             renderDetail(currentDetail);
@@ -874,8 +924,23 @@ patch(ControlButtons.prototype, {
                     ...upsaleForm,
                     loading: false,
                     recurringPrice: Number(charge && charge.recurring_price ? charge.recurring_price : 0),
+                    displayRecurringPrice: Number(
+                        charge && charge.display_recurring_price !== undefined
+                            ? charge.display_recurring_price
+                            : (charge && charge.recurring_price ? charge.recurring_price : 0)
+                    ),
                     creditAmount: Number(charge && charge.credit_amount ? charge.credit_amount : 0),
+                    displayCreditAmount: Number(
+                        charge && charge.display_credit_amount !== undefined
+                            ? charge.display_credit_amount
+                            : (charge && charge.credit_amount ? charge.credit_amount : 0)
+                    ),
                     chargeNow: Number(charge && charge.charge_now ? charge.charge_now : 0),
+                    displayChargeNow: Number(
+                        charge && charge.display_charge_now !== undefined
+                            ? charge.display_charge_now
+                            : (charge && charge.charge_now ? charge.charge_now : 0)
+                    ),
                     planChoice: `${Number(charge && charge.plan_id ? charge.plan_id : selectedPlan.plan_id || 0)}:${Number(charge && charge.pricing_id ? charge.pricing_id : selectedPlan.pricing_id || 0)}`,
                 };
             } catch (error) {
@@ -896,11 +961,15 @@ patch(ControlButtons.prototype, {
             const numericPartnerId = Number(partnerId || 0);
             const holderPartnerId = Number(upsaleForm.holderPartnerId || 0);
             let values = [...(upsaleForm.participantIds || [])].map((item) => Number(item));
-            values = values.filter((item) => item > 0 && item !== holderPartnerId);
+            values = values.filter((item) => item > 0 && item !== holderPartnerId && item !== numericPartnerId);
             if (checked && numericPartnerId > 0 && numericPartnerId !== holderPartnerId) {
                 values.push(numericPartnerId);
             }
-            upsaleForm.participantIds = holderPartnerId ? [holderPartnerId, ...new Set(values)] : [...new Set(values)];
+            upsaleForm.participantIds = clampParticipantIds(
+                holderPartnerId ? [holderPartnerId, ...new Set(values)] : [...new Set(values)],
+                holderPartnerId,
+                upsaleForm.maxParticipantsTotal
+            );
         };
 
         const openUpsaleForm = async (item) => {
@@ -949,10 +1018,21 @@ patch(ControlButtons.prototype, {
             if (defaultChoice) {
                 newSubscriptionForm.planChoice = `${Number(defaultChoice.plan_id || 0)}:${Number(defaultChoice.pricing_id || 0)}`;
                 newSubscriptionForm.price = Number(defaultChoice.price || 0);
+                newSubscriptionForm.displayPrice = Number(
+                    defaultChoice.display_price !== undefined ? defaultChoice.display_price : (defaultChoice.price || 0)
+                );
             } else {
                 newSubscriptionForm.planChoice = "";
                 newSubscriptionForm.price = Number(product ? product.default_price || 0 : 0);
+                newSubscriptionForm.displayPrice = Number(
+                    product ? (product.default_display_price !== undefined ? product.default_display_price : (product.default_price || 0)) : 0
+                );
             }
+            newSubscriptionForm.participantIds = clampParticipantIds(
+                newSubscriptionForm.participantIds,
+                selectedPartnerId,
+                newSubscriptionForm.maxParticipantsTotal
+            );
         };
 
         const updateSelectedPlan = (planChoice) => {
@@ -960,17 +1040,24 @@ patch(ControlButtons.prototype, {
             const plan = getSelectedPlan();
             if (plan) {
                 newSubscriptionForm.price = Number(plan.price || 0);
+                newSubscriptionForm.displayPrice = Number(
+                    plan.display_price !== undefined ? plan.display_price : (plan.price || 0)
+                );
             }
         };
 
         const toggleParticipant = (partnerId, checked) => {
             const numericPartnerId = Number(partnerId || 0);
             let values = [...(newSubscriptionForm.participantIds || [])].map((item) => Number(item));
-            values = values.filter((item) => item > 0 && item !== selectedPartnerId);
+            values = values.filter((item) => item > 0 && item !== selectedPartnerId && item !== numericPartnerId);
             if (checked && numericPartnerId > 0 && numericPartnerId !== selectedPartnerId) {
                 values.push(numericPartnerId);
             }
-            newSubscriptionForm.participantIds = [selectedPartnerId, ...new Set(values)];
+            newSubscriptionForm.participantIds = clampParticipantIds(
+                [selectedPartnerId, ...new Set(values)],
+                selectedPartnerId,
+                newSubscriptionForm.maxParticipantsTotal
+            );
         };
 
         const renderNewSubscriptionForm = () => {
@@ -981,20 +1068,22 @@ patch(ControlButtons.prototype, {
             const minEndDate = plan
                 ? addPeriodToDate(newSubscriptionForm.startDate, plan.interval_value, plan.interval_unit)
                 : "";
-            const participantOptions = rows
-                .slice()
-                .sort((a, b) => (a.name || "").localeCompare(b.name || "", "es"))
-                .map((row) => {
-                    const rowId = Number(row.id || 0);
-                    const selected = (newSubscriptionForm.participantIds || []).includes(rowId);
-                    const isOwner = rowId === selectedPartnerId;
-                    return `
-                        <label class="wgs-checkbox-option ${isOwner ? "wgs-checkbox-owner" : ""}">
-                            <input type="checkbox" data-field="participant_toggle" value="${this._escapeHtml(String(rowId))}" ${selected ? "checked" : ""} ${isOwner ? "disabled" : ""} />
-                            <span>${this._escapeHtml(row.name || "-")}${isOwner ? ` ${this._escapeHtml(_t("(Titular)"))}` : ""}</span>
-                        </label>
-                    `;
-                }).join("");
+            const participantOptions = Number(newSubscriptionForm.maxParticipantsTotal || 1) > 1
+                ? rows
+                    .slice()
+                    .sort((a, b) => (a.name || "").localeCompare(b.name || "", "es"))
+                    .map((row) => {
+                        const rowId = Number(row.id || 0);
+                        const selected = (newSubscriptionForm.participantIds || []).includes(rowId);
+                        const isOwner = rowId === selectedPartnerId;
+                        return `
+                            <label class="wgs-checkbox-option ${isOwner ? "wgs-checkbox-owner" : ""}">
+                                <input type="checkbox" data-field="participant_toggle" value="${this._escapeHtml(String(rowId))}" ${selected ? "checked" : ""} ${isOwner ? "disabled" : ""} />
+                                <span>${this._escapeHtml(row.name || "-")}${isOwner ? ` ${this._escapeHtml(_t("(Titular)"))}` : ""}</span>
+                            </label>
+                        `;
+                    }).join("")
+                : "";
             const productOptions = productCatalog.map((product) => {
                 const selected = Number(product.id) === Number(newSubscriptionForm.productId) ? "selected" : "";
                 return `<option value="${this._escapeHtml(String(product.id))}" ${selected}>${this._escapeHtml(product.name || "-")}</option>`;
@@ -1040,15 +1129,17 @@ patch(ControlButtons.prototype, {
                         </label>
                     </div>
                     <div class="wgs-inline-form-meta">
-                        <div><span>${this._escapeHtml(_t("Precio"))}</span><strong>${this._escapeHtml(this._formatMoney(newSubscriptionForm.price || 0))}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Precio"))}</span><strong>${this._escapeHtml(this._formatMoney(newSubscriptionForm.displayPrice || newSubscriptionForm.price || 0))}</strong></div>
                         <div><span>${this._escapeHtml(_t("Cupo total"))}</span><strong>${this._escapeHtml(String(newSubscriptionForm.maxParticipantsTotal || 1))}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Participantes seleccionados"))}</span><strong>${this._escapeHtml(String((newSubscriptionForm.participantIds || []).length || 0))}</strong></div>
+                        ${Number(newSubscriptionForm.maxParticipantsTotal || 1) > 1 ? `<div><span>${this._escapeHtml(_t("Participantes seleccionados"))}</span><strong>${this._escapeHtml(String((newSubscriptionForm.participantIds || []).length || 0))}</strong></div>` : ""}
                         <div><span>${this._escapeHtml(_t("Fin minimo sugerido"))}</span><strong>${this._escapeHtml(this._formatDateDisplay(minEndDate) || "-")}</strong></div>
                     </div>
-                    <div class="wgs-inline-participants">
-                        <span class="wgs-inline-section-title">${this._escapeHtml(_t("Participantes permitidos"))}</span>
-                        <div class="wgs-inline-participant-list">${participantOptions}</div>
-                    </div>
+                    ${Number(newSubscriptionForm.maxParticipantsTotal || 1) > 1 ? `
+                        <div class="wgs-inline-participants">
+                            <span class="wgs-inline-section-title">${this._escapeHtml(_t("Participantes permitidos"))}</span>
+                            <div class="wgs-inline-participant-list">${participantOptions}</div>
+                        </div>
+                    ` : ""}
                     <div class="wgs-inline-actions">
                         <button type="button" class="wgs-primary-action-btn" data-action="save-new">${this._escapeHtml(_t("Agregar al ticket"))}</button>
                         <button type="button" class="wgs-secondary-action-btn" data-action="cancel-new">${this._escapeHtml(_t("Cancelar"))}</button>
@@ -1079,7 +1170,7 @@ patch(ControlButtons.prototype, {
                         <div><span>${this._escapeHtml(_t("Titular"))}</span><strong>${this._escapeHtml(renewalForm.holderPartnerName || "-")}</strong></div>
                         <div><span>${this._escapeHtml(_t("Producto"))}</span><strong>${this._escapeHtml(renewalForm.productName || "-")}</strong></div>
                         <div><span>${this._escapeHtml(_t("Próxima fecha"))}</span><strong>${this._escapeHtml(this._formatDateDisplay(renewalForm.nextInvoiceDate) || "-")}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Importe a cobrar"))}</span><strong>${this._escapeHtml(this._formatMoney(renewalForm.amount || 0))}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Importe a cobrar"))}</span><strong>${this._escapeHtml(this._formatMoney(renewalForm.displayAmount || renewalForm.amount || 0))}</strong></div>
                     </div>
                     <div class="wgs-inline-actions">
                         <button type="button" class="wgs-primary-action-btn" data-action="save-renewal" ${renewalForm.loading ? "disabled" : ""}>${this._escapeHtml(_t("Agregar al ticket"))}</button>
@@ -1108,20 +1199,22 @@ patch(ControlButtons.prototype, {
                 const label = `${itemPlan.plan_name || _t("Plan recurrente")} | ${this._formatMoney(itemPlan.price || 0)}${itemPlan.interval_label ? ` | ${itemPlan.interval_label}` : ""}`;
                 return `<option value="${this._escapeHtml(value)}" ${selected}>${this._escapeHtml(label)}</option>`;
             }).join("");
-            const participantOptions = rows
-                .slice()
-                .sort((a, b) => (a.name || "").localeCompare(b.name || "", "es"))
-                .map((row) => {
-                    const rowId = Number(row.id || 0);
-                    const selected = (upsaleForm.participantIds || []).includes(rowId);
-                    const isOwner = rowId === holderPartnerId;
-                    return `
-                        <label class="wgs-checkbox-option ${isOwner ? "wgs-checkbox-owner" : ""}">
-                            <input type="checkbox" data-field="upsale_participant_toggle" value="${this._escapeHtml(String(rowId))}" ${selected ? "checked" : ""} ${isOwner ? "disabled" : ""} />
-                            <span>${this._escapeHtml(row.name || "-")}${isOwner ? ` ${this._escapeHtml(_t("(Titular)"))}` : ""}</span>
-                        </label>
-                    `;
-                }).join("");
+            const participantOptions = Number(upsaleForm.maxParticipantsTotal || 1) > 1
+                ? rows
+                    .slice()
+                    .sort((a, b) => (a.name || "").localeCompare(b.name || "", "es"))
+                    .map((row) => {
+                        const rowId = Number(row.id || 0);
+                        const selected = (upsaleForm.participantIds || []).includes(rowId);
+                        const isOwner = rowId === holderPartnerId;
+                        return `
+                            <label class="wgs-checkbox-option ${isOwner ? "wgs-checkbox-owner" : ""}">
+                                <input type="checkbox" data-field="upsale_participant_toggle" value="${this._escapeHtml(String(rowId))}" ${selected ? "checked" : ""} ${isOwner ? "disabled" : ""} />
+                                <span>${this._escapeHtml(row.name || "-")}${isOwner ? ` ${this._escapeHtml(_t("(Titular)"))}` : ""}</span>
+                            </label>
+                        `;
+                    }).join("")
+                : "";
             return `
                 <div class="wgs-inline-form-card">
                     <div class="wgs-inline-form-header">
@@ -1153,15 +1246,17 @@ patch(ControlButtons.prototype, {
                         <div><span>${this._escapeHtml(_t("Titular"))}</span><strong>${this._escapeHtml(upsaleForm.holderPartnerName || "-")}</strong></div>
                         <div><span>${this._escapeHtml(_t("Paquete actual"))}</span><strong>${this._escapeHtml((item.package_names || []).join(", ") || "-")}</strong></div>
                         <div><span>${this._escapeHtml(_t("Plan actual"))}</span><strong>${this._escapeHtml(upsaleForm.sourcePlanName || item.plan_name || "-")}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Nuevo recurrente"))}</span><strong>${this._escapeHtml(this._formatMoney(upsaleForm.recurringPrice || 0))}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Bonificación"))}</span><strong>${this._escapeHtml(this._formatMoney(upsaleForm.creditAmount || 0))}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Cobro ahora"))}</span><strong>${this._escapeHtml(this._formatMoney(upsaleForm.chargeNow || 0))}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Nuevo recurrente"))}</span><strong>${this._escapeHtml(this._formatMoney(upsaleForm.displayRecurringPrice || upsaleForm.recurringPrice || 0))}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Bonificación"))}</span><strong>${this._escapeHtml(this._formatMoney(upsaleForm.displayCreditAmount || upsaleForm.creditAmount || 0))}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Cobro ahora"))}</span><strong>${this._escapeHtml(this._formatMoney(upsaleForm.displayChargeNow || upsaleForm.chargeNow || 0))}</strong></div>
                         <div><span>${this._escapeHtml(_t("Cupo destino"))}</span><strong>${this._escapeHtml(String(upsaleForm.maxParticipantsTotal || 1))}</strong></div>
                     </div>
-                    <div class="wgs-inline-participants">
-                        <span class="wgs-inline-section-title">${this._escapeHtml(_t("Participantes resultantes"))}</span>
-                        <div class="wgs-inline-participant-list">${participantOptions}</div>
-                    </div>
+                    ${Number(upsaleForm.maxParticipantsTotal || 1) > 1 ? `
+                        <div class="wgs-inline-participants">
+                            <span class="wgs-inline-section-title">${this._escapeHtml(_t("Participantes resultantes"))}</span>
+                            <div class="wgs-inline-participant-list">${participantOptions}</div>
+                        </div>
+                    ` : ""}
                     <div class="wgs-inline-actions">
                         <button type="button" class="wgs-primary-action-btn" data-action="save-upsale" ${upsaleForm.loading ? "disabled" : ""}>${this._escapeHtml(_t("Agregar al ticket"))}</button>
                         <button type="button" class="wgs-secondary-action-btn" data-action="cancel-upsale">${this._escapeHtml(_t("Cancelar"))}</button>
@@ -1938,6 +2033,7 @@ patch(ControlButtons.prototype, {
             planChoice: "",
             plans: [],
             price: 0,
+            displayPrice: 0,
             startDate: formatTodayISO(),
             endDate: "",
             maxParticipantsTotal: 1,
@@ -1967,8 +2063,11 @@ patch(ControlButtons.prototype, {
             planChoice: "",
             plans: [],
             recurringPrice: 0,
+            displayRecurringPrice: 0,
             creditAmount: 0,
+            displayCreditAmount: 0,
             chargeNow: 0,
+            displayChargeNow: 0,
             maxParticipantsTotal: 1,
             participantIds,
             loading: false,

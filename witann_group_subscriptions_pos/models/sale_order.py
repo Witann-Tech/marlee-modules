@@ -552,6 +552,14 @@ class SaleOrder(models.Model):
         if hard_end_date and (not valid_until or hard_end_date < valid_until):
             valid_until = hard_end_date
 
+        if hard_end_date and hard_end_date < today:
+            access_state = False
+            is_valid = False
+            reason = _('La suscripción ya terminó y no debe contarse como vigente.')
+        elif start_date and start_date > today:
+            access_state = False
+            is_valid = False
+            reason = _('La suscripción todavía no inicia.')
         if access_state == 'enabled':
             is_valid = True
             reason = _('Suscripción en progreso o en renovación.')
