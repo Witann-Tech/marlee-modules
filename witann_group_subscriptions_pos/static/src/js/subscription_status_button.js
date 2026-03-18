@@ -528,6 +528,14 @@ patch(ControlButtons.prototype, {
         );
     },
 
+    async _fetchSubscriptionUpsaleCharge(subscriptionId, productId, fallback = 0, planId = false, pricingId = false) {
+        return this.orm.call(
+            "pos.order",
+            "wgs_get_subscription_upsale_charge_for_pos",
+            [subscriptionId, productId, fallback || 0, planId || false, pricingId || false]
+        );
+    },
+
     _showSubscriptionsModal(rows) {
         const previous = document.getElementById(MODAL_ID);
         if (previous) {
@@ -695,6 +703,13 @@ patch(ControlButtons.prototype, {
             }) || null;
         };
 
+        const getSelectedUpsalePlan = () => {
+            const planKey = String(upsaleForm && upsaleForm.planChoice ? upsaleForm.planChoice : "");
+            return (upsaleForm && Array.isArray(upsaleForm.plans) ? upsaleForm.plans : []).find((item) => {
+                return `${Number(item.plan_id || 0)}:${Number(item.pricing_id || 0)}` === planKey;
+            }) || null;
+        };
+
         const openNewSubscriptionForm = async () => {
             if (!selectedPartnerId) {
                 return;
@@ -770,6 +785,151 @@ patch(ControlButtons.prototype, {
                     ...renewalForm,
                     loading: false,
                 };
+            }
+            renderDetail(currentDetail);
+        };
+
+        const applySelectedUpsaleProduct = async (productId) => {
+            if (!upsaleForm) {
+                return;
+            }
+            const numericProductId = Number(productId || 0);
+            const product = productCatalog.find((item) => Number(item.id) === numericProductId) || null;
+            upsaleForm.productId = numericProductId;
+            upsaleForm.productName = product ? product.name || "" : "";
+            upsaleForm.maxParticipantsTotal = product ? Number(product.max_participants_total || 1) : 1;
+            upsaleForm.plans = product ? [...(product.plans || [])] : [];
+            upsaleForm.planChoice = "";
+            upsaleForm.recurringPrice = 0;
+            upsaleForm.creditAmount = 0;
+            upsaleForm.chargeNow = 0;
+
+            if (!product || !upsaleForm.plans.length) {
+                renderDetail(currentDetail);
+                return;
+            }
+
+            const defaultPlanId = Number(product.default_plan_id || 0);
+            const defaultPricingId = Number(product.default_pricing_id || 0);
+            const defaultChoice = upsaleForm.plans.find((item) => {
+                return Number(item.plan_id || 0) === defaultPlanId && Number(item.pricing_id || 0) === defaultPricingId;
+            }) || upsaleForm.plans[0] || null;
+            if (defaultChoice) {
+                upsaleForm.planChoice = `${Number(defaultChoice.plan_id || 0)}:${Number(defaultChoice.pricing_id || 0)}`;
+            }
+            upsaleForm.loading = true;
+            renderDetail(currentDetail);
+            try {
+                const selectedPlan = getSelectedUpsalePlan();
+                const charge = await this._fetchSubscriptionUpsaleCharge(
+                    upsaleForm.subscriptionId,
+                    upsaleForm.productId,
+                    Number(defaultChoice && defaultChoice.price ? defaultChoice.price : 0),
+                    selectedPlan ? Number(selectedPlan.plan_id || 0) || false : false,
+                    selectedPlan ? Number(selectedPlan.pricing_id || 0) || false : false
+                );
+                upsaleForm = {
+                    ...upsaleForm,
+                    loading: false,
+                    recurringPrice: Number(charge && charge.recurring_price ? charge.recurring_price : 0),
+                    creditAmount: Number(charge && charge.credit_amount ? charge.credit_amount : 0),
+                    chargeNow: Number(charge && charge.charge_now ? charge.charge_now : 0),
+                    planChoice: `${Number(charge && charge.plan_id ? charge.plan_id : (selectedPlan && selectedPlan.plan_id) || 0)}:${Number(charge && charge.pricing_id ? charge.pricing_id : (selectedPlan && selectedPlan.pricing_id) || 0)}`,
+                };
+            } catch (error) {
+                console.error("Error al consultar cobro de upsale POS", error);
+                formError = _t("No se pudo calcular el cobro del upsale para esta suscripción.");
+                upsaleForm = {
+                    ...upsaleForm,
+                    loading: false,
+                    recurringPrice: 0,
+                    creditAmount: 0,
+                    chargeNow: 0,
+                };
+            }
+            renderDetail(currentDetail);
+        };
+
+        const updateSelectedUpsalePlan = async (planChoice) => {
+            if (!upsaleForm) {
+                return;
+            }
+            upsaleForm.planChoice = String(planChoice || "");
+            const selectedPlan = getSelectedUpsalePlan();
+            if (!selectedPlan || !upsaleForm.productId || !upsaleForm.subscriptionId) {
+                renderDetail(currentDetail);
+                return;
+            }
+            upsaleForm.loading = true;
+            renderDetail(currentDetail);
+            try {
+                const charge = await this._fetchSubscriptionUpsaleCharge(
+                    upsaleForm.subscriptionId,
+                    upsaleForm.productId,
+                    Number(selectedPlan.price || 0),
+                    Number(selectedPlan.plan_id || 0) || false,
+                    Number(selectedPlan.pricing_id || 0) || false
+                );
+                upsaleForm = {
+                    ...upsaleForm,
+                    loading: false,
+                    recurringPrice: Number(charge && charge.recurring_price ? charge.recurring_price : 0),
+                    creditAmount: Number(charge && charge.credit_amount ? charge.credit_amount : 0),
+                    chargeNow: Number(charge && charge.charge_now ? charge.charge_now : 0),
+                    planChoice: `${Number(charge && charge.plan_id ? charge.plan_id : selectedPlan.plan_id || 0)}:${Number(charge && charge.pricing_id ? charge.pricing_id : selectedPlan.pricing_id || 0)}`,
+                };
+            } catch (error) {
+                console.error("Error al actualizar cobro de upsale POS", error);
+                formError = _t("No se pudo recalcular el cobro del upsale.");
+                upsaleForm = {
+                    ...upsaleForm,
+                    loading: false,
+                };
+            }
+            renderDetail(currentDetail);
+        };
+
+        const toggleUpsaleParticipant = (partnerId, checked) => {
+            if (!upsaleForm) {
+                return;
+            }
+            const numericPartnerId = Number(partnerId || 0);
+            const holderPartnerId = Number(upsaleForm.holderPartnerId || 0);
+            let values = [...(upsaleForm.participantIds || [])].map((item) => Number(item));
+            values = values.filter((item) => item > 0 && item !== holderPartnerId);
+            if (checked && numericPartnerId > 0 && numericPartnerId !== holderPartnerId) {
+                values.push(numericPartnerId);
+            }
+            upsaleForm.participantIds = holderPartnerId ? [holderPartnerId, ...new Set(values)] : [...new Set(values)];
+        };
+
+        const openUpsaleForm = async (item) => {
+            if (!item || !item.subscription_id) {
+                return;
+            }
+            formMode = "upsale";
+            formError = "";
+            formNotice = "";
+            renewalForm = null;
+            upsaleForm = this._getDefaultUpsaleForm(item);
+            renderDetail(currentDetail);
+            if (!productCatalog.length && !catalogLoading) {
+                catalogLoading = true;
+                renderDetail(currentDetail);
+                try {
+                    productCatalog = await this._fetchSubscriptionProductCatalog("");
+                    if (!Array.isArray(productCatalog)) {
+                        productCatalog = [];
+                    }
+                    if (!productCatalog.length) {
+                        formError = _t("No hay productos de suscripción cargados en esta sesión del POS.");
+                    }
+                } catch (error) {
+                    console.error("Error al consultar catalogo de upsale en POS", error);
+                    formError = _t("No se pudo cargar el catalogo de productos para upsale.");
+                } finally {
+                    catalogLoading = false;
+                }
             }
             renderDetail(currentDetail);
         };
@@ -929,7 +1089,7 @@ patch(ControlButtons.prototype, {
             `;
         };
 
-        const renderUpsalePlaceholder = (item) => {
+        const renderUpsaleForm = (item) => {
             if (
                 formMode !== "upsale"
                 || !upsaleForm
@@ -937,20 +1097,74 @@ patch(ControlButtons.prototype, {
             ) {
                 return "";
             }
+            const holderPartnerId = Number(upsaleForm.holderPartnerId || 0);
+            const productOptions = productCatalog.map((product) => {
+                const selected = Number(product.id) === Number(upsaleForm.productId || 0) ? "selected" : "";
+                return `<option value="${this._escapeHtml(String(product.id))}" ${selected}>${this._escapeHtml(product.name || "-")}</option>`;
+            }).join("");
+            const planOptions = (upsaleForm.plans || []).map((itemPlan) => {
+                const value = `${Number(itemPlan.plan_id || 0)}:${Number(itemPlan.pricing_id || 0)}`;
+                const selected = value === String(upsaleForm.planChoice || "") ? "selected" : "";
+                const label = `${itemPlan.plan_name || _t("Plan recurrente")} | ${this._formatMoney(itemPlan.price || 0)}${itemPlan.interval_label ? ` | ${itemPlan.interval_label}` : ""}`;
+                return `<option value="${this._escapeHtml(value)}" ${selected}>${this._escapeHtml(label)}</option>`;
+            }).join("");
+            const participantOptions = rows
+                .slice()
+                .sort((a, b) => (a.name || "").localeCompare(b.name || "", "es"))
+                .map((row) => {
+                    const rowId = Number(row.id || 0);
+                    const selected = (upsaleForm.participantIds || []).includes(rowId);
+                    const isOwner = rowId === holderPartnerId;
+                    return `
+                        <label class="wgs-checkbox-option ${isOwner ? "wgs-checkbox-owner" : ""}">
+                            <input type="checkbox" data-field="upsale_participant_toggle" value="${this._escapeHtml(String(rowId))}" ${selected ? "checked" : ""} ${isOwner ? "disabled" : ""} />
+                            <span>${this._escapeHtml(row.name || "-")}${isOwner ? ` ${this._escapeHtml(_t("(Titular)"))}` : ""}</span>
+                        </label>
+                    `;
+                }).join("");
             return `
                 <div class="wgs-inline-form-card">
                     <div class="wgs-inline-form-header">
                         <strong>${this._escapeHtml(_t("Upsale de suscripción"))}</strong>
                         <button type="button" class="wgs-inline-close-btn" data-action="cancel-upsale">${this._escapeHtml(_t("Cancelar"))}</button>
                     </div>
-                    <div class="wgs-inline-notice">
-                        ${this._escapeHtml(_t("El flujo de upsale se integrará en esta misma tarjeta usando la suscripción origen seleccionada."))}
+                    ${formError ? `<div class="wgs-inline-error">${this._escapeHtml(formError)}</div>` : ""}
+                    ${formNotice ? `<div class="wgs-inline-notice">${this._escapeHtml(formNotice)}</div>` : ""}
+                    ${catalogLoading ? `<div class="wgs-inline-loading">${this._escapeHtml(_t("Cargando productos de suscripción..."))}</div>` : ""}
+                    ${upsaleForm.loading ? `<div class="wgs-inline-loading">${this._escapeHtml(_t("Calculando bonificación e importe del upsale..."))}</div>` : ""}
+                    <div class="wgs-inline-form-grid">
+                        <label>
+                            <span>${this._escapeHtml(_t("Producto destino"))}</span>
+                            <select data-field="upsale_product_id">
+                                <option value="">${this._escapeHtml(_t("Selecciona un producto"))}</option>
+                                ${productOptions}
+                            </select>
+                        </label>
+                        <label>
+                            <span>${this._escapeHtml(_t("Plan destino"))}</span>
+                            <select data-field="upsale_plan_choice" ${(upsaleForm.plans || []).length ? "" : "disabled"}>
+                                <option value="">${this._escapeHtml(_t("Selecciona un plan"))}</option>
+                                ${planOptions}
+                            </select>
+                        </label>
                     </div>
                     <div class="wgs-inline-form-meta">
                         <div><span>${this._escapeHtml(_t("Suscripción"))}</span><strong>${this._escapeHtml(upsaleForm.subscriptionName || "-")}</strong></div>
                         <div><span>${this._escapeHtml(_t("Titular"))}</span><strong>${this._escapeHtml(upsaleForm.holderPartnerName || "-")}</strong></div>
                         <div><span>${this._escapeHtml(_t("Paquete actual"))}</span><strong>${this._escapeHtml((item.package_names || []).join(", ") || "-")}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Plan actual"))}</span><strong>${this._escapeHtml(item.plan_name || "-")}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Plan actual"))}</span><strong>${this._escapeHtml(upsaleForm.sourcePlanName || item.plan_name || "-")}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Nuevo recurrente"))}</span><strong>${this._escapeHtml(this._formatMoney(upsaleForm.recurringPrice || 0))}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Bonificación"))}</span><strong>${this._escapeHtml(this._formatMoney(upsaleForm.creditAmount || 0))}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Cobro ahora"))}</span><strong>${this._escapeHtml(this._formatMoney(upsaleForm.chargeNow || 0))}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Cupo destino"))}</span><strong>${this._escapeHtml(String(upsaleForm.maxParticipantsTotal || 1))}</strong></div>
+                    </div>
+                    <div class="wgs-inline-participants">
+                        <span class="wgs-inline-section-title">${this._escapeHtml(_t("Participantes resultantes"))}</span>
+                        <div class="wgs-inline-participant-list">${participantOptions}</div>
+                    </div>
+                    <div class="wgs-inline-actions">
+                        <button type="button" class="wgs-primary-action-btn" data-action="save-upsale" ${upsaleForm.loading ? "disabled" : ""}>${this._escapeHtml(_t("Agregar al ticket"))}</button>
+                        <button type="button" class="wgs-secondary-action-btn" data-action="cancel-upsale">${this._escapeHtml(_t("Cancelar"))}</button>
                     </div>
                 </div>
             `;
@@ -1014,7 +1228,7 @@ patch(ControlButtons.prototype, {
                                 <button type="button" class="wgs-action-btn" disabled>${this._escapeHtml(_t("Editar participantes"))}</button>
                             </div>
                             ${renderRenewalForm(item)}
-                            ${renderUpsalePlaceholder(item)}
+                            ${renderUpsaleForm(item)}
                         </div>
                     `;
                 }).join("")
@@ -1208,6 +1422,8 @@ patch(ControlButtons.prototype, {
                 selectedPartnerId = false;
                 currentDetail = null;
                 formMode = null;
+                renewalForm = null;
+                upsaleForm = null;
                 renderDetailEmpty(
                     _t("Sin resultados"),
                     _t("Ajusta los filtros para volver a cargar clientes en el directorio.")
@@ -1222,6 +1438,7 @@ patch(ControlButtons.prototype, {
                 formError = "";
                 formNotice = "";
                 renewalForm = null;
+                upsaleForm = null;
                 newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
             }
 
@@ -1258,6 +1475,7 @@ patch(ControlButtons.prototype, {
             formError = "";
             formNotice = "";
             renewalForm = null;
+            upsaleForm = null;
             newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
             render();
         });
@@ -1294,20 +1512,7 @@ patch(ControlButtons.prototype, {
                 const item = (currentDetail && Array.isArray(currentDetail.items) ? currentDetail.items : []).find(
                     (row) => Number(row.subscription_id || 0) === subscriptionId
                 );
-                if (!item) {
-                    return;
-                }
-                formMode = "upsale";
-                formError = "";
-                formNotice = "";
-                renewalForm = null;
-                upsaleForm = {
-                    subscriptionId: Number(item.subscription_id || 0) || false,
-                    subscriptionName: item.subscription_name || "",
-                    holderPartnerId: Number(item.holder_partner_id || 0) || false,
-                    holderPartnerName: item.holder_partner_name || "",
-                };
-                renderDetail(currentDetail);
+                await openUpsaleForm(item);
                 return;
             }
             if (action === "cancel-renewal") {
@@ -1458,6 +1663,128 @@ patch(ControlButtons.prototype, {
                 renderDetail(currentDetail);
                 return;
             }
+            if (action === "save-upsale") {
+                formError = "";
+                formNotice = "";
+                if (!upsaleForm || !upsaleForm.subscriptionId || !upsaleForm.productId) {
+                    formError = _t("Selecciona el paquete destino para agregar el upsale al ticket.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+                const selectedUpsalePlan = getSelectedUpsalePlan();
+                if (!selectedUpsalePlan) {
+                    formError = _t("Selecciona el plan destino para el upsale.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+                const participantIds = [...new Set((upsaleForm.participantIds || []).map((value) => Number(value || 0)).filter((value) => value > 0))];
+                const holderPartnerId = Number(upsaleForm.holderPartnerId || 0) || false;
+                if (holderPartnerId && !participantIds.includes(holderPartnerId)) {
+                    participantIds.unshift(holderPartnerId);
+                }
+                if (participantIds.length > Number(upsaleForm.maxParticipantsTotal || 1)) {
+                    formError = _t("Estas excediendo el cupo maximo permitido para el paquete destino.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+
+                const order = getCurrentOrder(this);
+                if (!order) {
+                    formError = _t("No hay una orden POS activa para agregar el upsale.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+                const existingSubscriptionPartnerIds = getSubscriptionPartnerIdsFromOrder(order);
+                if (existingSubscriptionPartnerIds.length && !existingSubscriptionPartnerIds.includes(holderPartnerId)) {
+                    formError = _t("La orden actual ya contiene suscripciones configuradas para otro cliente. Usa un solo titular por ticket.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+                const partnerOnOrderId = getPartnerIdFromOrder(order);
+                if (partnerOnOrderId !== holderPartnerId) {
+                    const partnerRecord = findPartnerInPos(this, holderPartnerId);
+                    if (partnerRecord && setPartnerOnCurrentOrder(this, partnerRecord)) {
+                        // Partner aligned locally in POS.
+                    } else if (partnerOnOrderId) {
+                        formError = _t("La orden actual ya tiene otro cliente y no se pudo reemplazar desde esta sesión. Usa un solo cliente por ticket.");
+                        renderDetail(currentDetail);
+                        return;
+                    } else {
+                        formNotice = _t("El titular no está cargado en la sesión local del POS. El upsale se vinculará al confirmar el pago.");
+                    }
+                }
+
+                const productRecord = findProductInPos(this, upsaleForm.productId);
+                if (!productRecord) {
+                    formError = _t("El producto destino no está cargado en la sesión actual del POS.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+
+                const beforeLines = getOrderLines(order);
+                const beforeCount = beforeLines.length;
+                const beforeSet = new Set(beforeLines);
+                const beforeSelectedLine = getSelectedOrderLine(this, order);
+                let targetLine = null;
+                try {
+                    const addResult = await addProductToOrder(this, order, productRecord, {
+                        quantity: 1,
+                        merge: false,
+                        price: Number(upsaleForm.chargeNow || 0),
+                    });
+                    await waitForNextTick();
+                    await waitForNextTick();
+                    const afterLines = getOrderLines(order);
+                    targetLine = afterLines.find((line) => !beforeSet.has(line)) || null;
+                    if (!targetLine && addResult && typeof addResult === "object") {
+                        targetLine = addResult;
+                    }
+                    if (!targetLine) {
+                        const selectedAfter = getSelectedOrderLine(this, order);
+                        if (selectedAfter && selectedAfter !== beforeSelectedLine) {
+                            targetLine = selectedAfter;
+                        }
+                    }
+                    if (!targetLine && afterLines.length <= beforeCount) {
+                        formError = _t("No se pudo agregar el upsale al ticket actual.");
+                        renderDetail(currentDetail);
+                        return;
+                    }
+                } catch (error) {
+                    console.error("Error al agregar upsale al ticket POS", error);
+                    formError = _t("No se pudo agregar el upsale al ticket actual.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+
+                if (!targetLine) {
+                    formError = _t("No se pudo identificar la línea de upsale agregada al ticket.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+
+                setLineUnitPrice(targetLine, Number(upsaleForm.chargeNow || 0));
+                targetLine.wgsSubscriptionConfig = {
+                    flow: "upsale",
+                    partner_id: holderPartnerId || false,
+                    participant_ids: participantIds,
+                    plan_id: Number(selectedUpsalePlan.plan_id || 0) || false,
+                    pricing_id: Number(selectedUpsalePlan.pricing_id || 0) || false,
+                    start_date: formatTodayISO(),
+                    end_date: false,
+                    product_id: Number(upsaleForm.productId || 0) || false,
+                    product_name: upsaleForm.productName || false,
+                    source_subscription_id: Number(upsaleForm.subscriptionId || 0) || false,
+                };
+
+                formMode = null;
+                formError = "";
+                formNotice = _t("Upsale agregado al ticket. Puedes continuar al cobro normal del POS.");
+                renewalForm = null;
+                upsaleForm = null;
+                renderDetail(currentDetail);
+                return;
+            }
             if (action === "save-renewal") {
                 formError = "";
                 formNotice = "";
@@ -1562,23 +1889,29 @@ patch(ControlButtons.prototype, {
             }
         });
 
-        detailPane.addEventListener("change", (event) => {
+        detailPane.addEventListener("change", async (event) => {
             const field = event.target.dataset.field;
-            if (formMode !== "new" || !field) {
+            if (!field) {
                 return;
             }
             formError = "";
             formNotice = "";
-            if (field === "product_id") {
+            if (formMode === "new" && field === "product_id") {
                 applySelectedProduct(event.target.value);
-            } else if (field === "plan_choice") {
+            } else if (formMode === "new" && field === "plan_choice") {
                 updateSelectedPlan(event.target.value);
-            } else if (field === "start_date") {
+            } else if (formMode === "new" && field === "start_date") {
                 newSubscriptionForm.startDate = event.target.value || formatTodayISO();
-            } else if (field === "end_date") {
+            } else if (formMode === "new" && field === "end_date") {
                 newSubscriptionForm.endDate = event.target.value || "";
-            } else if (field === "participant_toggle") {
+            } else if (formMode === "new" && field === "participant_toggle") {
                 toggleParticipant(event.target.value, event.target.checked);
+            } else if (formMode === "upsale" && field === "upsale_product_id") {
+                await applySelectedUpsaleProduct(event.target.value);
+            } else if (formMode === "upsale" && field === "upsale_plan_choice") {
+                await updateSelectedUpsalePlan(event.target.value);
+            } else if (formMode === "upsale" && field === "upsale_participant_toggle") {
+                toggleUpsaleParticipant(event.target.value, event.target.checked);
             }
             renderDetail(currentDetail);
         });
@@ -1609,6 +1942,36 @@ patch(ControlButtons.prototype, {
             endDate: "",
             maxParticipantsTotal: 1,
             participantIds,
+        };
+    },
+
+    _getDefaultUpsaleForm(item = null) {
+        const subscriptionId = Number(item && item.subscription_id ? item.subscription_id : 0) || false;
+        const holderPartnerId = Number(item && item.holder_partner_id ? item.holder_partner_id : 0) || false;
+        const participantIds = Array.isArray(item && item.participant_ids)
+            ? [...new Set(item.participant_ids.map((value) => Number(value || 0)).filter((value) => value > 0))]
+            : [];
+        if (holderPartnerId && !participantIds.includes(holderPartnerId)) {
+            participantIds.unshift(holderPartnerId);
+        }
+        return {
+            subscriptionId,
+            subscriptionName: item && item.subscription_name ? item.subscription_name : "",
+            holderPartnerId,
+            holderPartnerName: item && item.holder_partner_name ? item.holder_partner_name : "",
+            sourceProductId: Number(item && item.renewal_product_id ? item.renewal_product_id : 0) || false,
+            sourceProductName: item && item.renewal_product_name ? item.renewal_product_name : "",
+            sourcePlanName: item && item.plan_name ? item.plan_name : "",
+            productId: 0,
+            productName: "",
+            planChoice: "",
+            plans: [],
+            recurringPrice: 0,
+            creditAmount: 0,
+            chargeNow: 0,
+            maxParticipantsTotal: 1,
+            participantIds,
+            loading: false,
         };
     },
 

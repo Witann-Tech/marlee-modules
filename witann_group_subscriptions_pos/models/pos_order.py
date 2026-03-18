@@ -43,6 +43,7 @@ class PosOrderLine(models.Model):
         selection=[
             ('new', 'Nueva suscripción'),
             ('renewal', 'Renovación recurrente'),
+            ('upsale', 'Upsale inmediato'),
         ],
         string='Flujo suscripción (POS)',
         default='new',
@@ -319,6 +320,52 @@ class PosOrder(models.Model):
         }
 
     @api.model
+    def wgs_get_subscription_upsale_charge_for_pos(
+        self,
+        subscription_id,
+        product_id,
+        fallback=0.0,
+        preferred_plan_id=False,
+        preferred_pricing_id=False,
+    ):
+        if not self.env.user.has_group('point_of_sale.group_pos_user'):
+            raise UserError(_('No tienes permisos para consultar cobro de upsale desde Punto de Venta.'))
+
+        source_order = self.env['sale.order'].browse(int(subscription_id or 0)).exists()
+        if not source_order:
+            raise UserError(_('La suscripción origen no existe.'))
+        if not self._wgs_order_has_subscription_signal(source_order):
+            raise UserError(_('La orden origen no corresponde a una suscripción válida.'))
+        if not self._wgs_is_subscription_order_active_for_upsell(source_order):
+            raise UserError(_('La suscripción origen no está activa para upsale.'))
+
+        product = self.env['product.product'].browse(int(product_id or 0)).exists()
+        if not product:
+            raise UserError(_('El producto seleccionado no existe o no está disponible.'))
+
+        choice = self._wgs_get_recurring_pricing_choice(
+            product,
+            fallback=fallback,
+            preferred_plan_id=preferred_plan_id,
+            preferred_pricing_id=preferred_pricing_id,
+        )
+        recurring_price = float(choice.get('price') or 0.0)
+        credit_amount = self._wgs_compute_upgrade_credit_amount(source_order)
+        charge_now = max(recurring_price - credit_amount, 0.0)
+
+        return {
+            'charge_now': float(charge_now),
+            'credit_amount': float(credit_amount),
+            'recurring_price': float(recurring_price),
+            'plan_id': choice.get('plan_id') or False,
+            'pricing_id': choice.get('pricing_id') or False,
+            'is_upgrade': True,
+            'is_renewal': False,
+            'source_subscription_id': source_order.id,
+            'source_subscription_name': source_order.name,
+        }
+
+    @api.model
     def wgs_get_subscription_product_context_for_pos(self, product_id, fallback=0.0):
         if not self.env.user.has_group('point_of_sale.group_pos_user'):
             raise UserError(_('No tienes permisos para consultar contexto de suscripción desde Punto de Venta.'))
@@ -450,7 +497,7 @@ class PosOrder(models.Model):
                 values['wgs_subscription_start_date'] = start_date
 
         flow_value = str(config_payload.get('flow') or 'new').strip().lower()
-        values['wgs_subscription_flow'] = 'renewal' if flow_value == 'renewal' else 'new'
+        values['wgs_subscription_flow'] = flow_value if flow_value in ('renewal', 'upsale') else 'new'
 
         source_subscription_id = self._wgs_to_int(config_payload.get('source_subscription_id'))
         if source_subscription_id > 0:
@@ -692,7 +739,7 @@ class PosOrder(models.Model):
                     write_values['wgs_subscription_start_date'] = start_date
 
             flow_value = str(config.get('flow') or 'new').strip().lower()
-            write_values['wgs_subscription_flow'] = 'renewal' if flow_value == 'renewal' else 'new'
+            write_values['wgs_subscription_flow'] = flow_value if flow_value in ('renewal', 'upsale') else 'new'
 
             source_subscription_id = self._wgs_to_int(config.get('source_subscription_id'))
             if source_subscription_id > 0:
@@ -958,6 +1005,20 @@ class PosOrder(models.Model):
         )
         return source_order
 
+    def _wgs_resolve_upsell_source_order_for_line(self, line):
+        self.ensure_one()
+        source_order = line.wgs_subscription_source_id
+        if not source_order and self.partner_id:
+            source_order = self._wgs_find_active_subscription_for_partner(self.partner_id, company=self.company_id)[:1]
+        source_order = source_order.exists() if source_order else self.env['sale.order']
+        if not source_order:
+            raise UserError(_('No se encontró la suscripción origen para ejecutar el upsale en POS.'))
+        if not self._wgs_order_has_subscription_signal(source_order):
+            raise UserError(_('La orden origen no corresponde a una suscripción válida para upsale.'))
+        if not self._wgs_is_subscription_order_active_for_upsell(source_order):
+            raise UserError(_('La suscripción origen no está activa para upsale.'))
+        return source_order
+
     def _wgs_create_subscription_sale_order_from_line(self, line):
         self.ensure_one()
 
@@ -1084,7 +1145,11 @@ class PosOrder(models.Model):
             )
 
         contract_date = fields.Date.context_today(self)
-        upsell_source_order = self._wgs_find_partner_active_subscription_for_upsell()
+        upsell_source_order = self.env['sale.order']
+        if line.wgs_subscription_flow == 'upsale':
+            upsell_source_order = self._wgs_resolve_upsell_source_order_for_line(line)
+        else:
+            upsell_source_order = self._wgs_find_partner_active_subscription_for_upsell()
         if upsell_source_order:
             recurring_total = max(0.0, float(recurring_price_unit or 0.0) * float(qty or 0.0))
             paid_total = max(0.0, float(line.price_unit or 0.0) * float(qty or 0.0))

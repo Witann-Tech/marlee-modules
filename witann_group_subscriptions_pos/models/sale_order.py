@@ -143,6 +143,7 @@ class SaleOrder(models.Model):
             if item:
                 item['is_owner'] = bool(subscription.partner_id and subscription.partner_id.id == partner.id)
                 item['partner_role_label'] = _('Titular') if item['is_owner'] else _('Participante')
+                item['participant_ids'] = subscription.participant_ids.ids
                 item['participant_names'] = subscription.participant_ids.mapped('display_name')
                 item['participant_count'] = len(subscription.participant_ids)
                 items.append(item)
