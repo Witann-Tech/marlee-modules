@@ -1908,14 +1908,29 @@ class PosOrder(models.Model):
         taxes = product.taxes_id
         if not taxes and 'taxes_id' in product.product_tmpl_id._fields:
             taxes = product.product_tmpl_id.taxes_id
-        company = company or self.company_id or self.env.company
-        if company:
-            taxes = taxes.filtered(lambda tax: not tax.company_id or tax.company_id == company)
         if not taxes:
             return round(max(base_price, 0.0), 2)
+
+        requested_company = (
+            company
+            or getattr(product, 'company_id', False)
+            or getattr(product.product_tmpl_id, 'company_id', False)
+            or self.company_id
+            or self.env.company
+        )
+        if requested_company:
+            filtered_taxes = taxes.filtered(lambda tax: not tax.company_id or tax.company_id == requested_company)
+            if filtered_taxes:
+                taxes = filtered_taxes
+
         if fiscal_position and hasattr(fiscal_position, 'map_tax'):
             taxes = fiscal_position.map_tax(taxes, product=product, partner=partner or False)
-        currency = company.currency_id if company and getattr(company, 'currency_id', False) else False
+
+        currency_company = requested_company
+        tax_companies = taxes.mapped('company_id').filtered(bool)
+        if len(tax_companies) == 1:
+            currency_company = tax_companies[0]
+        currency = currency_company.currency_id if currency_company and getattr(currency_company, 'currency_id', False) else False
         result = taxes.compute_all(base_price, currency=currency, quantity=1.0, product=product, partner=partner or False)
         return round(max(float(result.get('total_included') or 0.0), 0.0), 2)
 
