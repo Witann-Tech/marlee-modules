@@ -1091,7 +1091,7 @@ patch(ControlButtons.prototype, {
             const planOptions = (newSubscriptionForm.plans || []).map((item) => {
                 const value = `${Number(item.plan_id || 0)}:${Number(item.pricing_id || 0)}`;
                 const selected = value === String(newSubscriptionForm.planChoice || "") ? "selected" : "";
-                const label = `${item.plan_name || _t("Plan recurrente")} | ${this._formatMoney(item.price || 0)}${item.interval_label ? ` | ${item.interval_label}` : ""}`;
+                const label = `${item.plan_name || _t("Plan recurrente")} | ${this._formatMoney(item.display_price !== undefined ? item.display_price : (item.price || 0))}${item.interval_label ? ` | ${item.interval_label}` : ""}`;
                 return `<option value="${this._escapeHtml(value)}" ${selected}>${this._escapeHtml(label)}</option>`;
             }).join("");
 
@@ -1196,7 +1196,7 @@ patch(ControlButtons.prototype, {
             const planOptions = (upsaleForm.plans || []).map((itemPlan) => {
                 const value = `${Number(itemPlan.plan_id || 0)}:${Number(itemPlan.pricing_id || 0)}`;
                 const selected = value === String(upsaleForm.planChoice || "") ? "selected" : "";
-                const label = `${itemPlan.plan_name || _t("Plan recurrente")} | ${this._formatMoney(itemPlan.price || 0)}${itemPlan.interval_label ? ` | ${itemPlan.interval_label}` : ""}`;
+                const label = `${itemPlan.plan_name || _t("Plan recurrente")} | ${this._formatMoney(itemPlan.display_price !== undefined ? itemPlan.display_price : (itemPlan.price || 0))}${itemPlan.interval_label ? ` | ${itemPlan.interval_label}` : ""}`;
                 return `<option value="${this._escapeHtml(value)}" ${selected}>${this._escapeHtml(label)}</option>`;
             }).join("");
             const participantOptions = Number(upsaleForm.maxParticipantsTotal || 1) > 1
