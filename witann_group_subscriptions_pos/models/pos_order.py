@@ -294,7 +294,7 @@ class PosOrder(models.Model):
             subscription_id = int(subscription_id or 0)
         except (TypeError, ValueError):
             subscription_id = 0
-        source_order = self.env['sale.order'].browse(subscription_id).exists()
+        source_order = self.env['sale.order'].sudo().browse(subscription_id).exists()
         if not source_order:
             raise UserError(_('La suscripción origen no existe.'))
         if not self._wgs_order_has_subscription_signal(source_order):
@@ -376,7 +376,7 @@ class PosOrder(models.Model):
         if not self.env.user.has_group('point_of_sale.group_pos_user'):
             raise UserError(_('No tienes permisos para consultar cobro de upsale desde Punto de Venta.'))
 
-        source_order = self.env['sale.order'].browse(int(subscription_id or 0)).exists()
+        source_order = self.env['sale.order'].sudo().browse(int(subscription_id or 0)).exists()
         if not source_order:
             raise UserError(_('La suscripción origen no existe.'))
         if not self._wgs_order_has_subscription_signal(source_order):
@@ -431,7 +431,7 @@ class PosOrder(models.Model):
             subscription_id = int(subscription_id or 0)
         except (TypeError, ValueError):
             subscription_id = 0
-        source_order = self.env['sale.order'].browse(subscription_id).exists()
+        source_order = self.env['sale.order'].sudo().browse(subscription_id).exists()
         if not source_order:
             raise UserError(_('La suscripción origen no existe.'))
         if not self._wgs_order_has_subscription_signal(source_order):
