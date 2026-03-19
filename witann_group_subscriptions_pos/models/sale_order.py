@@ -227,6 +227,54 @@ class SaleOrder(models.Model):
         }
 
     @api.model
+    def wgs_create_partner_for_pos(self, vals):
+        if not self.env.user.has_group('point_of_sale.group_pos_user'):
+            raise AccessError(_('No tienes permisos para crear clientes desde Punto de Venta.'))
+
+        values = dict(vals or {})
+        name = (values.get('name') or '').strip()
+        if not name:
+            raise AccessError(_('Debes capturar el nombre del cliente.'))
+
+        Partner = self.env['res.partner'].sudo().with_context(active_test=False)
+        create_vals = {
+            'name': name,
+            'company_type': 'person',
+            'type': 'contact',
+        }
+
+        phone = (values.get('phone') or '').strip()
+        email = (values.get('email') or '').strip()
+        image_1920 = values.get('image_1920') or False
+        birthday = values.get('birthday') or False
+        gender = values.get('gender') or False
+
+        if 'phone' in Partner._fields and phone:
+            create_vals['phone'] = phone
+        if 'mobile' in Partner._fields and phone:
+            create_vals['mobile'] = phone
+        if 'email' in Partner._fields and email:
+            create_vals['email'] = email
+        if 'image_1920' in Partner._fields and image_1920:
+            create_vals['image_1920'] = image_1920
+
+        self._assign_partner_field_for_pos(Partner, create_vals, self._PARTNER_BIRTHDAY_FIELD_CANDIDATES, birthday)
+        self._assign_partner_field_for_pos(Partner, create_vals, self._PARTNER_GENDER_FIELD_CANDIDATES, gender)
+
+        partner = Partner.create(create_vals)
+
+        return {
+            'ok': True,
+            'partner_id': partner.id,
+            'partner_name': partner.display_name,
+            'phone': self._get_partner_field_value_for_pos(partner, ('phone', 'mobile')) or False,
+            'email': self._get_partner_field_value_for_pos(partner, ('email',)) or False,
+            'gender': self._get_partner_field_value_for_pos(partner, self._PARTNER_GENDER_FIELD_CANDIDATES) or False,
+            'birthday': self._get_partner_field_value_for_pos(partner, self._PARTNER_BIRTHDAY_FIELD_CANDIDATES) or False,
+            'image_url': '/web/image/res.partner/%s/image_128' % partner.id,
+        }
+
+    @api.model
     def wgs_resync_subscription_access_for_pos(self, subscription_id):
         if not self.env.user.has_group('point_of_sale.group_pos_user'):
             raise AccessError(_('No tienes permisos para resincronizar acceso desde Punto de Venta.'))
@@ -936,6 +984,55 @@ class SaleOrder(models.Model):
             formatted = self._format_value_for_pos(value, field)
             if formatted:
                 return formatted
+        return False
+
+    def _assign_partner_field_for_pos(self, partner_model, values, field_candidates, raw_value):
+        raw_value = raw_value if raw_value not in (None, '') else False
+        if raw_value is False:
+            return False
+
+        for field_name in field_candidates:
+            field = partner_model._fields.get(field_name)
+            if not field:
+                continue
+
+            formatted_value = raw_value
+            if field.type == 'selection':
+                formatted_value = self._map_partner_selection_value_for_pos(field, raw_value)
+                if formatted_value in (False, None, ''):
+                    continue
+            elif field.type == 'date':
+                converted = fields.Date.to_date(raw_value)
+                if not converted:
+                    continue
+                formatted_value = fields.Date.to_string(converted)
+            elif field.type not in ('char', 'text'):
+                continue
+
+            values[field_name] = formatted_value
+            return field_name
+        return False
+
+    def _map_partner_selection_value_for_pos(self, field, raw_value):
+        normalized = str(raw_value or '').strip().lower()
+        if not normalized:
+            return False
+
+        selection = field._description_selection(self.env) if callable(field.selection) else field.selection
+        options = list(selection or [])
+        if not options:
+            return False
+
+        wanted_tokens = {
+            'male': ('male', 'masculino', 'hombre', 'varon', 'm'),
+            'female': ('female', 'femenino', 'mujer', 'f'),
+            'other': ('other', 'otro', 'otra', 'no binario', 'nobinario', 'x'),
+        }
+        target_tokens = wanted_tokens.get(normalized, (normalized,))
+        for key, label in options:
+            haystack = ' '.join(filter(None, [str(key).lower(), str(label).lower()]))
+            if any(token in haystack for token in target_tokens):
+                return key
         return False
 
     def _format_value_for_pos(self, value, field=False):

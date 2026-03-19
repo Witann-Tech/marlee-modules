@@ -503,6 +503,10 @@ patch(ControlButtons.prototype, {
         return this.orm.call("sale.order", "get_partner_subscription_detail_for_pos", [partnerId]);
     },
 
+    async _createPartnerForPos(values) {
+        return this.orm.call("sale.order", "wgs_create_partner_for_pos", [values || {}]);
+    },
+
     async _fetchSubscriptionProductCatalog(searchTerm = "") {
         const backendCatalog = await this.orm.call(
             "pos.order",
@@ -518,6 +522,14 @@ patch(ControlButtons.prototype, {
         return (Array.isArray(backendCatalog) ? backendCatalog : []).filter((item) => {
             return localIds.has(Number(item && item.id ? item.id : 0));
         });
+    },
+
+    async _fetchSubscriptionCharge(partnerId, productId, fallback = 0, planId = false, pricingId = false) {
+        return this.orm.call(
+            "pos.order",
+            "wgs_get_subscription_charge_for_pos",
+            [partnerId || false, productId, fallback || 0, planId || false, pricingId || false]
+        );
     },
 
     async _fetchSubscriptionRenewalCharge(subscriptionId, productId = false, planId = false, pricingId = false) {
@@ -561,6 +573,7 @@ patch(ControlButtons.prototype, {
     },
 
     _showSubscriptionsModal(rows) {
+        rows = Array.isArray(rows) ? [...rows] : [];
         const previous = document.getElementById(MODAL_ID);
         if (previous) {
             previous.remove();
@@ -656,13 +669,26 @@ patch(ControlButtons.prototype, {
         layout.appendChild(detailPane);
         body.appendChild(layout);
 
+        let activeCameraStream = null;
+        const stopPartnerCamera = () => {
+            if (activeCameraStream) {
+                for (const track of activeCameraStream.getTracks()) {
+                    track.stop();
+                }
+                activeCameraStream = null;
+            }
+        };
+
         const footer = document.createElement("div");
         footer.className = "wgs-status-modal-footer";
         const closeButton = document.createElement("button");
         closeButton.type = "button";
         closeButton.className = "wgs-status-close-btn";
         closeButton.textContent = _t("Cerrar");
-        const closeModal = () => overlay.remove();
+        const closeModal = () => {
+            stopPartnerCamera();
+            overlay.remove();
+        };
         closeButton.addEventListener("click", closeModal);
         footer.appendChild(closeButton);
 
@@ -701,8 +727,30 @@ patch(ControlButtons.prototype, {
         let upsaleForm = null;
         let pendingChargeForm = null;
         let participantEditForm = null;
+        let newPartnerForm = null;
         const detailCache = new Map();
         let newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
+
+        const syncPartnerCameraPreview = () => {
+            if (!activeCameraStream) {
+                return;
+            }
+            const video = detailPane.querySelector('[data-role="partner-camera-preview"]');
+            if (video && video.srcObject !== activeCameraStream) {
+                video.srcObject = activeCameraStream;
+                video.play().catch(() => {});
+            }
+        };
+
+        const reloadDirectoryRows = async (preferredPartnerId = false) => {
+            rows = await this._fetchPartnerDirectoryRows();
+            filteredSnapshot = [...rows];
+            detailCache.clear();
+            if (preferredPartnerId) {
+                selectedPartnerId = Number(preferredPartnerId || 0) || false;
+            }
+            render();
+        };
 
         const renderDetailEmpty = (title, message) => {
             detailPane.innerHTML = `
@@ -761,10 +809,12 @@ patch(ControlButtons.prototype, {
             formMode = "new";
             formError = "";
             formNotice = "";
+            stopPartnerCamera();
             renewalForm = null;
             upsaleForm = null;
             pendingChargeForm = null;
             participantEditForm = null;
+            newPartnerForm = null;
             newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
             renderDetail(currentDetail);
             if (productCatalog.length || catalogLoading) {
@@ -789,6 +839,20 @@ patch(ControlButtons.prototype, {
             }
         };
 
+        const openNewPartnerForm = () => {
+            formMode = "new_partner";
+            formError = "";
+            formNotice = "";
+            stopPartnerCamera();
+            renewalForm = null;
+            upsaleForm = null;
+            pendingChargeForm = null;
+            participantEditForm = null;
+            newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
+            newPartnerForm = this._getDefaultNewPartnerForm();
+            renderDetail(currentDetail);
+        };
+
         const openRenewalForm = async (item) => {
             if (!item || !item.subscription_id) {
                 return;
@@ -796,6 +860,8 @@ patch(ControlButtons.prototype, {
             formMode = "renewal";
             formError = "";
             formNotice = "";
+            stopPartnerCamera();
+            newPartnerForm = null;
             pendingChargeForm = null;
             participantEditForm = null;
             renewalForm = {
@@ -857,6 +923,8 @@ patch(ControlButtons.prototype, {
             formMode = "pending";
             formError = "";
             formNotice = "";
+            stopPartnerCamera();
+            newPartnerForm = null;
             renewalForm = null;
             upsaleForm = null;
             pendingChargeForm = {
@@ -911,6 +979,38 @@ patch(ControlButtons.prototype, {
                 };
             }
             renderDetail(currentDetail);
+        };
+
+        const recalculateNewSubscriptionCharge = async (product, preferredPlan = null) => {
+            if (!newSubscriptionForm || !product || !selectedPartnerId) {
+                return;
+            }
+            newSubscriptionForm.loading = true;
+            renderDetail(currentDetail);
+            try {
+                const charge = await this._fetchSubscriptionCharge(
+                    selectedPartnerId,
+                    Number(product.id || 0),
+                    Number(preferredPlan && preferredPlan.price ? preferredPlan.price : product.default_price || 0),
+                    preferredPlan ? Number(preferredPlan.plan_id || 0) || false : false,
+                    preferredPlan ? Number(preferredPlan.pricing_id || 0) || false : false
+                );
+                newSubscriptionForm.price = Number(charge && charge.recurring_price ? charge.recurring_price : 0);
+                newSubscriptionForm.displayPrice = Number(
+                    charge && charge.display_recurring_price !== undefined
+                        ? charge.display_recurring_price
+                        : (charge && charge.recurring_price ? charge.recurring_price : 0)
+                );
+                if (charge && (charge.plan_id || charge.pricing_id)) {
+                    newSubscriptionForm.planChoice = `${Number(charge.plan_id || 0)}:${Number(charge.pricing_id || 0)}`;
+                }
+            } catch (error) {
+                console.error("Error al recalcular cobro de suscripción POS", error);
+                formError = _t("No se pudo recalcular el precio de la suscripción.");
+            } finally {
+                newSubscriptionForm.loading = false;
+                renderDetail(currentDetail);
+            }
         };
 
         const applySelectedUpsaleProduct = async (productId) => {
@@ -1079,6 +1179,8 @@ patch(ControlButtons.prototype, {
             formMode = "upsale";
             formError = "";
             formNotice = "";
+            stopPartnerCamera();
+            newPartnerForm = null;
             renewalForm = null;
             upsaleForm = this._getDefaultUpsaleForm(item);
             pendingChargeForm = null;
@@ -1130,6 +1232,8 @@ patch(ControlButtons.prototype, {
             formMode = "participants";
             formError = "";
             formNotice = "";
+            stopPartnerCamera();
+            newPartnerForm = null;
             renewalForm = null;
             upsaleForm = null;
             pendingChargeForm = null;
@@ -1137,7 +1241,7 @@ patch(ControlButtons.prototype, {
             renderDetail(currentDetail);
         };
 
-        const applySelectedProduct = (productId) => {
+        const applySelectedProduct = async (productId) => {
             const numericProductId = Number(productId || 0);
             const product = productCatalog.find((item) => Number(item.id) === numericProductId) || null;
             newSubscriptionForm.productId = numericProductId;
@@ -1151,10 +1255,6 @@ patch(ControlButtons.prototype, {
             }) || newSubscriptionForm.plans[0] || null;
             if (defaultChoice) {
                 newSubscriptionForm.planChoice = `${Number(defaultChoice.plan_id || 0)}:${Number(defaultChoice.pricing_id || 0)}`;
-                newSubscriptionForm.price = Number(defaultChoice.price || 0);
-                newSubscriptionForm.displayPrice = Number(
-                    defaultChoice.display_price !== undefined ? defaultChoice.display_price : (defaultChoice.price || 0)
-                );
             } else {
                 newSubscriptionForm.planChoice = "";
                 newSubscriptionForm.price = Number(product ? product.default_price || 0 : 0);
@@ -1167,17 +1267,28 @@ patch(ControlButtons.prototype, {
                 selectedPartnerId,
                 newSubscriptionForm.maxParticipantsTotal
             );
+            if (product) {
+                await recalculateNewSubscriptionCharge(product, defaultChoice);
+                return;
+            }
+            renderDetail(currentDetail);
         };
 
-        const updateSelectedPlan = (planChoice) => {
+        const updateSelectedPlan = async (planChoice) => {
             newSubscriptionForm.planChoice = String(planChoice || "");
             const plan = getSelectedPlan();
+            const product = productCatalog.find((item) => Number(item.id) === Number(newSubscriptionForm.productId || 0)) || null;
             if (plan) {
                 newSubscriptionForm.price = Number(plan.price || 0);
                 newSubscriptionForm.displayPrice = Number(
                     plan.display_price !== undefined ? plan.display_price : (plan.price || 0)
                 );
             }
+            if (product && plan) {
+                await recalculateNewSubscriptionCharge(product, plan);
+                return;
+            }
+            renderDetail(currentDetail);
         };
 
         const toggleParticipant = (partnerId, checked) => {
@@ -1194,6 +1305,20 @@ patch(ControlButtons.prototype, {
             );
         };
 
+        const filterParticipantRows = (searchTerm = "") => {
+            const query = String(searchTerm || "").trim().toLowerCase();
+            const sourceRows = rows
+                .slice()
+                .sort((a, b) => (a.name || "").localeCompare(b.name || "", "es"));
+            if (!query) {
+                return sourceRows;
+            }
+            return sourceRows.filter((row) => {
+                const haystack = `${row.name || ""} ${row.phone || ""} ${row.email || ""}`.toLowerCase();
+                return haystack.includes(query);
+            });
+        };
+
         const renderNewSubscriptionForm = () => {
             if (formMode !== "new") {
                 return "";
@@ -1202,10 +1327,9 @@ patch(ControlButtons.prototype, {
             const minEndDate = plan
                 ? addPeriodToDate(newSubscriptionForm.startDate, plan.interval_value, plan.interval_unit)
                 : "";
+            const filteredParticipants = filterParticipantRows(newSubscriptionForm.participantSearch);
             const participantOptions = Number(newSubscriptionForm.maxParticipantsTotal || 1) > 1
-                ? rows
-                    .slice()
-                    .sort((a, b) => (a.name || "").localeCompare(b.name || "", "es"))
+                ? filteredParticipants
                     .map((row) => {
                         const rowId = Number(row.id || 0);
                         const selected = (newSubscriptionForm.participantIds || []).includes(rowId);
@@ -1238,6 +1362,7 @@ patch(ControlButtons.prototype, {
                     ${formError ? `<div class="wgs-inline-error">${this._escapeHtml(formError)}</div>` : ""}
                     ${formNotice ? `<div class="wgs-inline-notice">${this._escapeHtml(formNotice)}</div>` : ""}
                     ${catalogLoading ? `<div class="wgs-inline-loading">${this._escapeHtml(_t("Cargando productos de suscripcion..."))}</div>` : ""}
+                    ${newSubscriptionForm.loading ? `<div class="wgs-inline-loading">${this._escapeHtml(_t("Recalculando precio con IVA..."))}</div>` : ""}
                     <div class="wgs-inline-form-grid">
                         <label>
                             <span>${this._escapeHtml(_t("Producto"))}</span>
@@ -1271,12 +1396,86 @@ patch(ControlButtons.prototype, {
                     ${Number(newSubscriptionForm.maxParticipantsTotal || 1) > 1 ? `
                         <div class="wgs-inline-participants">
                             <span class="wgs-inline-section-title">${this._escapeHtml(_t("Participantes permitidos"))}</span>
+                            <input type="text" class="wgs-inline-search" data-field="participant_search" placeholder="${this._escapeHtml(_t("Buscar participante"))}" value="${this._escapeHtml(newSubscriptionForm.participantSearch || "")}" />
                             <div class="wgs-inline-participant-list">${participantOptions}</div>
                         </div>
                     ` : ""}
                     <div class="wgs-inline-actions">
-                        <button type="button" class="wgs-primary-action-btn" data-action="save-new">${this._escapeHtml(_t("Agregar al ticket"))}</button>
+                        <button type="button" class="wgs-primary-action-btn" data-action="save-new" ${newSubscriptionForm.loading ? "disabled" : ""}>${this._escapeHtml(_t("Agregar al ticket"))}</button>
                         <button type="button" class="wgs-secondary-action-btn" data-action="cancel-new">${this._escapeHtml(_t("Cancelar"))}</button>
+                    </div>
+                </div>
+            `;
+        };
+
+        const renderNewPartnerForm = () => {
+            if (formMode !== "new_partner" || !newPartnerForm) {
+                return "";
+            }
+            return `
+                <div class="wgs-inline-form-card">
+                    <div class="wgs-inline-form-header">
+                        <strong>${this._escapeHtml(_t("Nuevo cliente"))}</strong>
+                        <button type="button" class="wgs-inline-close-btn" data-action="cancel-new-partner">${this._escapeHtml(_t("Cancelar"))}</button>
+                    </div>
+                    ${formError ? `<div class="wgs-inline-error">${this._escapeHtml(formError)}</div>` : ""}
+                    ${formNotice ? `<div class="wgs-inline-notice">${this._escapeHtml(formNotice)}</div>` : ""}
+                    <div class="wgs-new-partner-layout">
+                        <div class="wgs-new-partner-photo">
+                            <div class="wgs-new-partner-preview">
+                                ${newPartnerForm.imageDataUrl
+                                    ? `<img src="${this._escapeHtml(newPartnerForm.imageDataUrl)}" alt="${this._escapeHtml(_t("Foto del cliente"))}" />`
+                                    : `<div class="wgs-new-partner-empty-photo">${this._escapeHtml(_t("Sin foto"))}</div>`
+                                }
+                            </div>
+                            ${newPartnerForm.cameraActive ? `
+                                <video class="wgs-camera-preview" data-role="partner-camera-preview" autoplay playsinline muted></video>
+                            ` : ""}
+                            <div class="wgs-inline-actions wgs-inline-actions-stacked">
+                                <label class="wgs-secondary-action-btn wgs-file-action-btn">
+                                    <span>${this._escapeHtml(_t("Subir foto"))}</span>
+                                    <input type="file" accept="image/*" data-field="partner_image_file" hidden />
+                                </label>
+                                ${!newPartnerForm.cameraActive
+                                    ? `<button type="button" class="wgs-secondary-action-btn" data-action="start-partner-camera">${this._escapeHtml(_t("Usar cámara"))}</button>`
+                                    : `
+                                        <button type="button" class="wgs-primary-action-btn" data-action="capture-partner-camera">${this._escapeHtml(_t("Capturar"))}</button>
+                                        <button type="button" class="wgs-secondary-action-btn" data-action="stop-partner-camera">${this._escapeHtml(_t("Apagar cámara"))}</button>
+                                    `
+                                }
+                            </div>
+                        </div>
+                        <div class="wgs-inline-form-grid">
+                            <label>
+                                <span>${this._escapeHtml(_t("Nombre"))}</span>
+                                <input type="text" data-field="partner_name" value="${this._escapeHtml(newPartnerForm.name || "")}" />
+                            </label>
+                            <label>
+                                <span>${this._escapeHtml(_t("Teléfono"))}</span>
+                                <input type="text" data-field="partner_phone" value="${this._escapeHtml(newPartnerForm.phone || "")}" />
+                            </label>
+                            <label>
+                                <span>${this._escapeHtml(_t("Email"))}</span>
+                                <input type="email" data-field="partner_email" value="${this._escapeHtml(newPartnerForm.email || "")}" />
+                            </label>
+                            <label>
+                                <span>${this._escapeHtml(_t("Género"))}</span>
+                                <select data-field="partner_gender">
+                                    <option value="">${this._escapeHtml(_t("Selecciona"))}</option>
+                                    <option value="male" ${newPartnerForm.gender === "male" ? "selected" : ""}>${this._escapeHtml(_t("Masculino"))}</option>
+                                    <option value="female" ${newPartnerForm.gender === "female" ? "selected" : ""}>${this._escapeHtml(_t("Femenino"))}</option>
+                                    <option value="other" ${newPartnerForm.gender === "other" ? "selected" : ""}>${this._escapeHtml(_t("Otro"))}</option>
+                                </select>
+                            </label>
+                            <label>
+                                <span>${this._escapeHtml(_t("Cumpleaños"))}</span>
+                                <input type="date" data-field="partner_birthday" value="${this._escapeHtml(newPartnerForm.birthday || "")}" />
+                            </label>
+                        </div>
+                    </div>
+                    <div class="wgs-inline-actions">
+                        <button type="button" class="wgs-primary-action-btn" data-action="save-new-partner">${this._escapeHtml(_t("Crear cliente"))}</button>
+                        <button type="button" class="wgs-secondary-action-btn" data-action="cancel-new-partner">${this._escapeHtml(_t("Cancelar"))}</button>
                     </div>
                 </div>
             `;
@@ -1357,10 +1556,9 @@ patch(ControlButtons.prototype, {
                 return "";
             }
             const holderPartnerId = Number(participantEditForm.holderPartnerId || 0);
+            const filteredParticipants = filterParticipantRows(participantEditForm.participantSearch);
             const participantOptions = Number(participantEditForm.maxParticipantsTotal || 1) > 1
-                ? rows
-                    .slice()
-                    .sort((a, b) => (a.name || "").localeCompare(b.name || "", "es"))
+                ? filteredParticipants
                     .map((row) => {
                         const rowId = Number(row.id || 0);
                         const selected = (participantEditForm.participantIds || []).includes(rowId);
@@ -1390,6 +1588,7 @@ patch(ControlButtons.prototype, {
                     ${Number(participantEditForm.maxParticipantsTotal || 1) > 1 ? `
                         <div class="wgs-inline-participants">
                             <span class="wgs-inline-section-title">${this._escapeHtml(_t("Participantes permitidos"))}</span>
+                            <input type="text" class="wgs-inline-search" data-field="edit_participant_search" placeholder="${this._escapeHtml(_t("Buscar participante"))}" value="${this._escapeHtml(participantEditForm.participantSearch || "")}" />
                             <div class="wgs-inline-participant-list">${participantOptions}</div>
                         </div>
                     ` : `
@@ -1422,10 +1621,9 @@ patch(ControlButtons.prototype, {
                 const label = `${itemPlan.plan_name || _t("Plan recurrente")} | ${this._formatMoney(itemPlan.display_price !== undefined ? itemPlan.display_price : (itemPlan.price || 0))}${itemPlan.interval_label ? ` | ${itemPlan.interval_label}` : ""}`;
                 return `<option value="${this._escapeHtml(value)}" ${selected}>${this._escapeHtml(label)}</option>`;
             }).join("");
+            const filteredParticipants = filterParticipantRows(upsaleForm.participantSearch);
             const participantOptions = Number(upsaleForm.maxParticipantsTotal || 1) > 1
-                ? rows
-                    .slice()
-                    .sort((a, b) => (a.name || "").localeCompare(b.name || "", "es"))
+                ? filteredParticipants
                     .map((row) => {
                         const rowId = Number(row.id || 0);
                         const selected = (upsaleForm.participantIds || []).includes(rowId);
@@ -1477,6 +1675,7 @@ patch(ControlButtons.prototype, {
                     ${Number(upsaleForm.maxParticipantsTotal || 1) > 1 ? `
                         <div class="wgs-inline-participants">
                             <span class="wgs-inline-section-title">${this._escapeHtml(_t("Participantes resultantes"))}</span>
+                            <input type="text" class="wgs-inline-search" data-field="upsale_participant_search" placeholder="${this._escapeHtml(_t("Buscar participante"))}" value="${this._escapeHtml(upsaleForm.participantSearch || "")}" />
                             <div class="wgs-inline-participant-list">${participantOptions}</div>
                         </div>
                     ` : ""}
@@ -1611,7 +1810,9 @@ patch(ControlButtons.prototype, {
                 </div>
                 <div class="wgs-detail-actions-bar">
                     <button type="button" class="wgs-primary-action-btn" data-action="open-new">${this._escapeHtml(_t("Nueva suscripcion"))}</button>
+                    <button type="button" class="wgs-secondary-action-btn" data-action="open-new-partner">${this._escapeHtml(_t("Nuevo cliente"))}</button>
                 </div>
+                ${renderNewPartnerForm()}
                 ${renderNewSubscriptionForm()}
                 <div class="wgs-detail-note">${this._escapeHtml(_t("Renovación, upsale, cobro pendiente y participantes se operan desde cada tarjeta de suscripción."))}</div>
                 <div class="wgs-detail-section">
@@ -1619,6 +1820,7 @@ patch(ControlButtons.prototype, {
                     <div class="wgs-subscription-cards">${subscriptionsHtml}</div>
                 </div>
             `;
+            syncPartnerCameraPreview();
         };
 
         const loadDetail = async (partnerId, options = {}) => {
@@ -1775,8 +1977,12 @@ patch(ControlButtons.prototype, {
                 selectedPartnerId = false;
                 currentDetail = null;
                 formMode = null;
+                stopPartnerCamera();
                 renewalForm = null;
                 upsaleForm = null;
+                pendingChargeForm = null;
+                participantEditForm = null;
+                newPartnerForm = null;
                 renderDetailEmpty(
                     _t("Sin resultados"),
                     _t("Ajusta los filtros para volver a cargar clientes en el directorio.")
@@ -1790,8 +1996,12 @@ patch(ControlButtons.prototype, {
                 formMode = null;
                 formError = "";
                 formNotice = "";
+                stopPartnerCamera();
                 renewalForm = null;
                 upsaleForm = null;
+                pendingChargeForm = null;
+                participantEditForm = null;
+                newPartnerForm = null;
                 newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
             }
 
@@ -1827,8 +2037,12 @@ patch(ControlButtons.prototype, {
             formMode = null;
             formError = "";
             formNotice = "";
+            stopPartnerCamera();
             renewalForm = null;
             upsaleForm = null;
+            pendingChargeForm = null;
+            participantEditForm = null;
+            newPartnerForm = null;
             newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
             render();
         });
@@ -1843,13 +2057,79 @@ patch(ControlButtons.prototype, {
                 await openNewSubscriptionForm();
                 return;
             }
+            if (action === "open-new-partner") {
+                openNewPartnerForm();
+                return;
+            }
             if (action === "cancel-new") {
                 formMode = null;
                 formError = "";
                 formNotice = "";
+                stopPartnerCamera();
                 renewalForm = null;
                 upsaleForm = null;
                 pendingChargeForm = null;
+                participantEditForm = null;
+                newPartnerForm = null;
+                renderDetail(currentDetail);
+                return;
+            }
+            if (action === "cancel-new-partner") {
+                formMode = null;
+                formError = "";
+                formNotice = "";
+                stopPartnerCamera();
+                newPartnerForm = null;
+                renderDetail(currentDetail);
+                return;
+            }
+            if (action === "start-partner-camera") {
+                if (!newPartnerForm || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                    formError = _t("La cámara no está disponible en este equipo o navegador.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+                try {
+                    stopPartnerCamera();
+                    activeCameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
+                    newPartnerForm.cameraActive = true;
+                    formError = "";
+                    renderDetail(currentDetail);
+                } catch (error) {
+                    console.error("Error al abrir cámara para partner POS", error);
+                    formError = _t("No se pudo acceder a la cámara del equipo.");
+                    renderDetail(currentDetail);
+                }
+                return;
+            }
+            if (action === "stop-partner-camera") {
+                stopPartnerCamera();
+                if (newPartnerForm) {
+                    newPartnerForm.cameraActive = false;
+                }
+                renderDetail(currentDetail);
+                return;
+            }
+            if (action === "capture-partner-camera") {
+                if (!newPartnerForm || !activeCameraStream) {
+                    return;
+                }
+                const video = detailPane.querySelector('[data-role="partner-camera-preview"]');
+                if (!video) {
+                    formError = _t("No se pudo leer la vista previa de la cámara.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+                const canvas = document.createElement("canvas");
+                canvas.width = video.videoWidth || 480;
+                canvas.height = video.videoHeight || 640;
+                const context = canvas.getContext("2d");
+                context.drawImage(video, 0, 0, canvas.width, canvas.height);
+                const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
+                newPartnerForm.imageDataUrl = dataUrl;
+                newPartnerForm.imageBase64 = this._stripDataUrlPrefix(dataUrl);
+                newPartnerForm.cameraActive = false;
+                stopPartnerCamera();
                 renderDetail(currentDetail);
                 return;
             }
@@ -2230,6 +2510,40 @@ patch(ControlButtons.prototype, {
                 }
                 return;
             }
+            if (action === "save-new-partner") {
+                formError = "";
+                formNotice = "";
+                if (!newPartnerForm || !String(newPartnerForm.name || "").trim()) {
+                    formError = _t("Debes capturar el nombre del cliente.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+                try {
+                    const result = await this._createPartnerForPos({
+                        name: newPartnerForm.name || "",
+                        phone: newPartnerForm.phone || "",
+                        email: newPartnerForm.email || "",
+                        gender: newPartnerForm.gender || false,
+                        birthday: newPartnerForm.birthday || false,
+                        image_1920: newPartnerForm.imageBase64 || false,
+                    });
+                    stopPartnerCamera();
+                    formMode = null;
+                    newPartnerForm = null;
+                    formError = "";
+                    formNotice = _t("Cliente creado correctamente.");
+                    await reloadDirectoryRows(result && result.partner_id ? result.partner_id : false);
+                    if (result && result.partner_id) {
+                        newSubscriptionForm = this._getDefaultNewSubscriptionForm(result.partner_id);
+                        await loadDetail(result.partner_id, { force: true });
+                    }
+                } catch (error) {
+                    console.error("Error al crear cliente desde POS", error);
+                    formError = (error && error.message) ? error.message : _t("No se pudo crear el cliente.");
+                    renderDetail(currentDetail);
+                }
+                return;
+            }
             if (action === "save-upsale") {
                 formError = "";
                 formNotice = "";
@@ -2468,15 +2782,31 @@ patch(ControlButtons.prototype, {
             formError = "";
             formNotice = "";
             if (formMode === "new" && field === "product_id") {
-                applySelectedProduct(event.target.value);
+                await applySelectedProduct(event.target.value);
             } else if (formMode === "new" && field === "plan_choice") {
-                updateSelectedPlan(event.target.value);
+                await updateSelectedPlan(event.target.value);
             } else if (formMode === "new" && field === "start_date") {
                 newSubscriptionForm.startDate = event.target.value || formatTodayISO();
             } else if (formMode === "new" && field === "end_date") {
                 newSubscriptionForm.endDate = event.target.value || "";
             } else if (formMode === "new" && field === "participant_toggle") {
                 toggleParticipant(event.target.value, event.target.checked);
+            } else if (formMode === "new_partner" && field === "partner_gender") {
+                newPartnerForm.gender = event.target.value || "";
+            } else if (formMode === "new_partner" && field === "partner_birthday") {
+                newPartnerForm.birthday = event.target.value || "";
+            } else if (formMode === "new_partner" && field === "partner_image_file") {
+                const file = event.target.files && event.target.files[0];
+                if (file) {
+                    try {
+                        const dataUrl = await this._readFileAsDataUrl(file);
+                        newPartnerForm.imageDataUrl = dataUrl;
+                        newPartnerForm.imageBase64 = this._stripDataUrlPrefix(dataUrl);
+                    } catch (error) {
+                        console.error("Error al leer foto de partner POS", error);
+                        formError = _t("No se pudo procesar la foto seleccionada.");
+                    }
+                }
             } else if (formMode === "upsale" && field === "upsale_product_id") {
                 await applySelectedUpsaleProduct(event.target.value);
             } else if (formMode === "upsale" && field === "upsale_plan_choice") {
@@ -2487,6 +2817,35 @@ patch(ControlButtons.prototype, {
                 toggleEditedParticipant(event.target.value, event.target.checked);
             }
             renderDetail(currentDetail);
+        });
+
+        detailPane.addEventListener("input", (event) => {
+            const field = event.target.dataset.field;
+            if (!field) {
+                return;
+            }
+            let shouldRender = false;
+            if (formMode === "new" && field === "participant_search") {
+                newSubscriptionForm.participantSearch = event.target.value || "";
+                shouldRender = true;
+            } else if (formMode === "new_partner" && field === "partner_name") {
+                newPartnerForm.name = event.target.value || "";
+            } else if (formMode === "new_partner" && field === "partner_phone") {
+                newPartnerForm.phone = event.target.value || "";
+            } else if (formMode === "new_partner" && field === "partner_email") {
+                newPartnerForm.email = event.target.value || "";
+            } else if (formMode === "upsale" && field === "upsale_participant_search") {
+                upsaleForm.participantSearch = event.target.value || "";
+                shouldRender = true;
+            } else if (formMode === "participants" && field === "edit_participant_search") {
+                participantEditForm.participantSearch = event.target.value || "";
+                shouldRender = true;
+            } else {
+                return;
+            }
+            if (shouldRender) {
+                renderDetail(currentDetail);
+            }
         });
 
         searchInput.addEventListener("input", render);
@@ -2516,6 +2875,21 @@ patch(ControlButtons.prototype, {
             endDate: "",
             maxParticipantsTotal: 1,
             participantIds,
+            participantSearch: "",
+            loading: false,
+        };
+    },
+
+    _getDefaultNewPartnerForm() {
+        return {
+            name: "",
+            phone: "",
+            email: "",
+            gender: "",
+            birthday: "",
+            imageDataUrl: "",
+            imageBase64: "",
+            cameraActive: false,
         };
     },
 
@@ -2548,6 +2922,7 @@ patch(ControlButtons.prototype, {
             displayChargeNow: 0,
             maxParticipantsTotal: 1,
             participantIds,
+            participantSearch: "",
             loading: false,
         };
     },
@@ -2568,6 +2943,7 @@ patch(ControlButtons.prototype, {
             holderPartnerName: item && item.holder_partner_name ? item.holder_partner_name : "",
             participantIds,
             maxParticipantsTotal: Number(item && item.max_participants_total ? item.max_participants_total : 1),
+            participantSearch: "",
         };
     },
 
@@ -2751,6 +3127,19 @@ patch(ControlButtons.prototype, {
         anchor.click();
         anchor.remove();
         setTimeout(() => URL.revokeObjectURL(url), 500);
+    },
+
+    _readFileAsDataUrl(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result || ""));
+            reader.onerror = () => reject(reader.error || new Error("file_read_error"));
+            reader.readAsDataURL(file);
+        });
+    },
+
+    _stripDataUrlPrefix(value) {
+        return String(value || "").replace(/^data:image\/[^;]+;base64,/i, "");
     },
 
     _showSimpleInfoModal(title, message) {
@@ -3122,6 +3511,15 @@ patch(ControlButtons.prototype, {
                 color: #475569;
                 font-size: 0.84rem;
             }
+            .wgs-inline-search {
+                width: 100%;
+                border: 1px solid #d1d5db;
+                border-radius: 0.45rem;
+                padding: 0.45rem 0.55rem;
+                font-size: 0.88rem;
+                background: #fff;
+                color: #111827;
+            }
             .wgs-inline-participant-list {
                 max-height: 220px;
                 overflow: auto;
@@ -3142,6 +3540,51 @@ patch(ControlButtons.prototype, {
             }
             .wgs-checkbox-owner {
                 font-weight: 700;
+            }
+            .wgs-new-partner-layout {
+                display: grid;
+                grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+                gap: 1rem;
+                align-items: start;
+            }
+            .wgs-new-partner-photo {
+                display: flex;
+                flex-direction: column;
+                gap: 0.75rem;
+            }
+            .wgs-new-partner-preview,
+            .wgs-camera-preview {
+                width: 100%;
+                aspect-ratio: 3 / 4;
+                border-radius: 0.85rem;
+                border: 1px solid #d7deea;
+                background: #eff6ff;
+                overflow: hidden;
+            }
+            .wgs-new-partner-preview img,
+            .wgs-camera-preview {
+                width: 100%;
+                height: 100%;
+                object-fit: cover;
+                display: block;
+            }
+            .wgs-new-partner-empty-photo {
+                width: 100%;
+                height: 100%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: #64748b;
+                font-weight: 700;
+            }
+            .wgs-inline-actions-stacked {
+                grid-template-columns: 1fr;
+            }
+            .wgs-file-action-btn {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                cursor: pointer;
             }
             .wgs-status-modal-footer {
                 padding: 0.8rem 1.2rem;
@@ -3266,6 +3709,9 @@ patch(ControlButtons.prototype, {
                     grid-template-columns: 1fr;
                 }
                 .wgs-detail-header-card {
+                    grid-template-columns: 1fr;
+                }
+                .wgs-new-partner-layout {
                     grid-template-columns: 1fr;
                 }
                 .wgs-detail-avatar {
