@@ -436,6 +436,15 @@ function restoreFocusState(root, state) {
     }
 }
 
+function isInteractiveModalField(target) {
+    if (!target || typeof target.closest !== "function") {
+        return false;
+    }
+    return Boolean(
+        target.closest("input, textarea, select, button, label, [contenteditable='true']")
+    );
+}
+
 async function stageSubscriptionConfigsForOrder(orm, order) {
     const configs = collectSubscriptionConfigsFromOrder(order);
     if (!configs.length) {
@@ -756,6 +765,14 @@ patch(ControlButtons.prototype, {
                 closeModal();
             }
         });
+        for (const eventName of ["keydown", "keypress", "keyup"]) {
+            modal.addEventListener(eventName, (event) => {
+                if (!isInteractiveModalField(event.target)) {
+                    return;
+                }
+                event.stopPropagation();
+            }, true);
+        }
 
         document.body.appendChild(overlay);
 
