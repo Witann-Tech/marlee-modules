@@ -1735,11 +1735,11 @@ patch(ControlButtons.prototype, {
             ) {
                 return "";
             }
+            const canRefund = Boolean(cancellationRefundForm.originPosLineId) && !cancellationRefundForm.loading;
             return `
                 <div class="wgs-inline-form-card">
                     <div class="wgs-inline-form-header">
                         <strong>${this._escapeHtml(_t("Cancelar suscripción"))}</strong>
-                        <button type="button" class="wgs-inline-close-btn" data-action="cancel-cancellation-refund">${this._escapeHtml(_t("Cancelar"))}</button>
                     </div>
                     ${formError ? `<div class="wgs-inline-error">${this._escapeHtml(formError)}</div>` : ""}
                     ${formNotice ? `<div class="wgs-inline-notice">${this._escapeHtml(formNotice)}</div>` : ""}
@@ -1754,7 +1754,7 @@ patch(ControlButtons.prototype, {
                     </div>
                     <div class="wgs-inline-notice">${this._escapeHtml(_t("La devolución solo se generará si corresponde exactamente a esta suscripción."))}</div>
                     <div class="wgs-inline-actions">
-                        <button type="button" class="wgs-primary-action-btn" data-action="save-cancellation-refund" ${cancellationRefundForm.loading ? "disabled" : ""}>${this._escapeHtml(_t("Agregar devolución al ticket"))}</button>
+                        <button type="button" class="wgs-primary-action-btn" data-action="save-cancellation-refund" ${canRefund ? "" : "disabled"}>${this._escapeHtml(_t("Agregar devolución al ticket"))}</button>
                         <button type="button" class="wgs-secondary-action-btn" data-action="cancel-cancellation-refund">${this._escapeHtml(_t("Cancelar"))}</button>
                     </div>
                 </div>
