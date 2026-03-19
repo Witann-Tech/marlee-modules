@@ -3112,13 +3112,9 @@ class PosOrder(models.Model):
         source_order.ensure_one()
 
         pos_line_model = self.env['pos.order.line'].sudo()
-        candidates = pos_line_model.search(
-            [
-                ('wgs_sale_order_id', '=', source_order.id),
-                ('qty', '>', 0),
-            ],
-            order='id desc',
-        )
+        candidates = self._wgs_get_pos_lines_linked_to_subscription(source_order).filtered(
+            lambda line: float(line.qty or 0.0) > 0.0
+        ).sorted(key=lambda line: line.id, reverse=True)
         if not candidates:
             return pos_line_model
 
@@ -3132,6 +3128,32 @@ class PosOrder(models.Model):
             if refunded_qty + 0.00001 < original_qty:
                 return candidate
         return pos_line_model
+
+    def _wgs_get_pos_lines_linked_to_subscription(self, source_order):
+        self.ensure_one()
+        source_order.ensure_one()
+
+        pos_line_model = self.env['pos.order.line'].sudo()
+        candidates = pos_line_model.search([('wgs_sale_order_id', '=', source_order.id)])
+
+        fields_map = pos_line_model._fields
+        generic_field_names = []
+        for field_name, field in fields_map.items():
+            if field.type != 'many2one':
+                continue
+            if getattr(field, 'comodel_name', '') != 'sale.order':
+                continue
+            if field_name == 'wgs_sale_order_id':
+                continue
+            generic_field_names.append(field_name)
+
+        for field_name in generic_field_names:
+            candidates |= pos_line_model.search([(field_name, '=', source_order.id)])
+
+        if not candidates:
+            return pos_line_model
+
+        return candidates.exists()
 
     def _wgs_get_pos_line_total_amount(self, line, include_taxes=False):
         line.ensure_one()
