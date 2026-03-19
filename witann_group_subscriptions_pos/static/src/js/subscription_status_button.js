@@ -507,6 +507,10 @@ patch(ControlButtons.prototype, {
         return this.orm.call("sale.order", "wgs_create_partner_for_pos", [values || {}]);
     },
 
+    async _updatePartnerPhotoForPos(partnerId, imageBase64) {
+        return this.orm.call("sale.order", "wgs_update_partner_photo_for_pos", [partnerId, imageBase64 || false]);
+    },
+
     async _fetchSubscriptionProductCatalog(searchTerm = "") {
         const backendCatalog = await this.orm.call(
             "pos.order",
@@ -638,6 +642,13 @@ patch(ControlButtons.prototype, {
 
         const listPane = document.createElement("div");
         listPane.className = "wgs-subscription-list-pane";
+        const listActions = document.createElement("div");
+        listActions.className = "wgs-list-actions-bar";
+        listActions.innerHTML = `
+            <button type="button" class="wgs-primary-action-btn" data-action="open-new-partner">${this._escapeHtml(_t("Nuevo cliente"))}</button>
+        `;
+        const listFormContainer = document.createElement("div");
+        listFormContainer.className = "wgs-list-form-container";
         const table = document.createElement("table");
         table.className = "wgs-status-table wgs-subscription-table";
         table.innerHTML = `
@@ -654,6 +665,8 @@ patch(ControlButtons.prototype, {
             </thead>
             <tbody></tbody>
         `;
+        listPane.appendChild(listActions);
+        listPane.appendChild(listFormContainer);
         listPane.appendChild(table);
 
         const detailPane = document.createElement("div");
@@ -728,6 +741,7 @@ patch(ControlButtons.prototype, {
         let pendingChargeForm = null;
         let participantEditForm = null;
         let newPartnerForm = null;
+        let partnerPhotoForm = null;
         const detailCache = new Map();
         let newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
 
@@ -735,10 +749,12 @@ patch(ControlButtons.prototype, {
             if (!activeCameraStream) {
                 return;
             }
-            const video = detailPane.querySelector('[data-role="partner-camera-preview"]');
-            if (video && video.srcObject !== activeCameraStream) {
-                video.srcObject = activeCameraStream;
-                video.play().catch(() => {});
+            const videos = overlay.querySelectorAll('[data-role="partner-camera-preview"]');
+            for (const video of videos) {
+                if (video && video.srcObject !== activeCameraStream) {
+                    video.srcObject = activeCameraStream;
+                    video.play().catch(() => {});
+                }
             }
         };
 
@@ -815,6 +831,7 @@ patch(ControlButtons.prototype, {
             pendingChargeForm = null;
             participantEditForm = null;
             newPartnerForm = null;
+            partnerPhotoForm = null;
             newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
             renderDetail(currentDetail);
             if (productCatalog.length || catalogLoading) {
@@ -850,6 +867,29 @@ patch(ControlButtons.prototype, {
             participantEditForm = null;
             newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
             newPartnerForm = this._getDefaultNewPartnerForm();
+            partnerPhotoForm = null;
+            renderDetail(currentDetail);
+        };
+
+        const openPartnerPhotoForm = () => {
+            if (!currentDetail || !currentDetail.partner_id) {
+                return;
+            }
+            formMode = "partner_photo";
+            formError = "";
+            formNotice = "";
+            stopPartnerCamera();
+            renewalForm = null;
+            upsaleForm = null;
+            pendingChargeForm = null;
+            participantEditForm = null;
+            newPartnerForm = null;
+            partnerPhotoForm = {
+                partnerId: Number(currentDetail.partner_id || 0) || false,
+                imageDataUrl: currentDetail.image_url || "",
+                imageBase64: "",
+                cameraActive: false,
+            };
             renderDetail(currentDetail);
         };
 
@@ -1481,6 +1521,49 @@ patch(ControlButtons.prototype, {
             `;
         };
 
+        const renderPartnerPhotoForm = () => {
+            if (formMode !== "partner_photo" || !partnerPhotoForm) {
+                return "";
+            }
+            return `
+                <div class="wgs-inline-form-card">
+                    <div class="wgs-inline-form-header">
+                        <strong>${this._escapeHtml(_t("Actualizar foto del cliente"))}</strong>
+                        <button type="button" class="wgs-inline-close-btn" data-action="cancel-partner-photo">${this._escapeHtml(_t("Cancelar"))}</button>
+                    </div>
+                    ${formError ? `<div class="wgs-inline-error">${this._escapeHtml(formError)}</div>` : ""}
+                    ${formNotice ? `<div class="wgs-inline-notice">${this._escapeHtml(formNotice)}</div>` : ""}
+                    <div class="wgs-new-partner-layout">
+                        <div class="wgs-new-partner-photo">
+                            <div class="wgs-new-partner-preview">
+                                ${partnerPhotoForm.imageDataUrl
+                                    ? `<img src="${this._escapeHtml(partnerPhotoForm.imageDataUrl)}" alt="${this._escapeHtml(_t("Foto del cliente"))}" />`
+                                    : `<div class="wgs-new-partner-empty-photo">${this._escapeHtml(_t("Sin foto"))}</div>`
+                                }
+                            </div>
+                            ${partnerPhotoForm.cameraActive ? `
+                                <video class="wgs-camera-preview" data-role="partner-camera-preview" autoplay playsinline muted></video>
+                            ` : ""}
+                        </div>
+                        <div class="wgs-inline-actions wgs-inline-actions-stacked">
+                            <label class="wgs-secondary-action-btn wgs-file-action-btn">
+                                <span>${this._escapeHtml(_t("Subir foto"))}</span>
+                                <input type="file" accept="image/*" data-field="existing_partner_image_file" hidden />
+                            </label>
+                            ${!partnerPhotoForm.cameraActive
+                                ? `<button type="button" class="wgs-secondary-action-btn" data-action="start-existing-partner-camera">${this._escapeHtml(_t("Usar cámara"))}</button>`
+                                : `
+                                    <button type="button" class="wgs-primary-action-btn" data-action="capture-existing-partner-camera">${this._escapeHtml(_t("Capturar"))}</button>
+                                    <button type="button" class="wgs-secondary-action-btn" data-action="stop-existing-partner-camera">${this._escapeHtml(_t("Apagar cámara"))}</button>
+                                `
+                            }
+                            <button type="button" class="wgs-primary-action-btn" data-action="save-partner-photo">${this._escapeHtml(_t("Guardar foto"))}</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        };
+
         const renderRenewalForm = (item) => {
             if (
                 formMode !== "renewal"
@@ -1792,7 +1875,10 @@ patch(ControlButtons.prototype, {
 
             detailPane.innerHTML = `
                 <div class="wgs-detail-header-card">
-                    <img class="wgs-detail-avatar" src="${this._escapeHtml(detail.image_url || "")}" alt="${this._escapeHtml(detail.partner_name || "")}" loading="lazy" />
+                    <div class="wgs-detail-avatar-stack">
+                        <img class="wgs-detail-avatar" src="${this._escapeHtml(detail.image_url || "")}" alt="${this._escapeHtml(detail.partner_name || "")}" loading="lazy" />
+                        <button type="button" class="wgs-secondary-action-btn wgs-avatar-edit-btn" data-action="open-partner-photo">${this._escapeHtml(_t("Editar foto"))}</button>
+                    </div>
                     <div class="wgs-detail-header-text">
                         <div class="wgs-detail-title-row">
                             <h4>${this._escapeHtml(detail.partner_name || "-")}</h4>
@@ -1810,9 +1896,8 @@ patch(ControlButtons.prototype, {
                 </div>
                 <div class="wgs-detail-actions-bar">
                     <button type="button" class="wgs-primary-action-btn" data-action="open-new">${this._escapeHtml(_t("Nueva suscripcion"))}</button>
-                    <button type="button" class="wgs-secondary-action-btn" data-action="open-new-partner">${this._escapeHtml(_t("Nuevo cliente"))}</button>
                 </div>
-                ${renderNewPartnerForm()}
+                ${renderPartnerPhotoForm()}
                 ${renderNewSubscriptionForm()}
                 <div class="wgs-detail-note">${this._escapeHtml(_t("Renovación, upsale, cobro pendiente y participantes se operan desde cada tarjeta de suscripción."))}</div>
                 <div class="wgs-detail-section">
@@ -1863,6 +1948,8 @@ patch(ControlButtons.prototype, {
         };
 
         const render = () => {
+            listFormContainer.innerHTML = renderNewPartnerForm();
+            syncPartnerCameraPreview();
             const query = (searchInput.value || "").trim().toLowerCase();
             const stateFilter = stateSelect.value;
             const birthdayFilter = birthdaySelect.value;
@@ -1983,6 +2070,7 @@ patch(ControlButtons.prototype, {
                 pendingChargeForm = null;
                 participantEditForm = null;
                 newPartnerForm = null;
+                partnerPhotoForm = null;
                 renderDetailEmpty(
                     _t("Sin resultados"),
                     _t("Ajusta los filtros para volver a cargar clientes en el directorio.")
@@ -2002,6 +2090,7 @@ patch(ControlButtons.prototype, {
                 pendingChargeForm = null;
                 participantEditForm = null;
                 newPartnerForm = null;
+                partnerPhotoForm = null;
                 newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
             }
 
@@ -2043,8 +2132,115 @@ patch(ControlButtons.prototype, {
             pendingChargeForm = null;
             participantEditForm = null;
             newPartnerForm = null;
+            partnerPhotoForm = null;
             newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
             render();
+        });
+
+        listPane.addEventListener("click", async (event) => {
+            const actionButton = event.target.closest("[data-action]");
+            if (!actionButton) {
+                return;
+            }
+            const action = actionButton.dataset.action;
+            if (action === "open-new-partner") {
+                openNewPartnerForm();
+                render();
+                return;
+            }
+            if (action === "cancel-new-partner") {
+                formMode = null;
+                formError = "";
+                formNotice = "";
+                stopPartnerCamera();
+                newPartnerForm = null;
+                render();
+                return;
+            }
+            if (action === "start-partner-camera") {
+                if (!newPartnerForm || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                    formError = _t("La cámara no está disponible en este equipo o navegador.");
+                    render();
+                    return;
+                }
+                try {
+                    stopPartnerCamera();
+                    activeCameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
+                    newPartnerForm.cameraActive = true;
+                    formError = "";
+                    render();
+                } catch (error) {
+                    console.error("Error al abrir cámara para partner POS", error);
+                    formError = _t("No se pudo acceder a la cámara del equipo.");
+                    render();
+                }
+                return;
+            }
+            if (action === "stop-partner-camera") {
+                stopPartnerCamera();
+                if (newPartnerForm) {
+                    newPartnerForm.cameraActive = false;
+                }
+                render();
+                return;
+            }
+            if (action === "capture-partner-camera") {
+                if (!newPartnerForm || !activeCameraStream) {
+                    return;
+                }
+                const video = overlay.querySelector('[data-role="partner-camera-preview"]');
+                if (!video) {
+                    formError = _t("No se pudo leer la vista previa de la cámara.");
+                    render();
+                    return;
+                }
+                const canvas = document.createElement("canvas");
+                canvas.width = video.videoWidth || 480;
+                canvas.height = video.videoHeight || 640;
+                const context = canvas.getContext("2d");
+                context.drawImage(video, 0, 0, canvas.width, canvas.height);
+                const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
+                newPartnerForm.imageDataUrl = dataUrl;
+                newPartnerForm.imageBase64 = this._stripDataUrlPrefix(dataUrl);
+                newPartnerForm.cameraActive = false;
+                stopPartnerCamera();
+                render();
+                return;
+            }
+            if (action === "save-new-partner") {
+                formError = "";
+                formNotice = "";
+                if (!newPartnerForm || !String(newPartnerForm.name || "").trim()) {
+                    formError = _t("Debes capturar el nombre del cliente.");
+                    render();
+                    return;
+                }
+                try {
+                    const result = await this._createPartnerForPos({
+                        name: newPartnerForm.name || "",
+                        phone: newPartnerForm.phone || "",
+                        email: newPartnerForm.email || "",
+                        gender: newPartnerForm.gender || false,
+                        birthday: newPartnerForm.birthday || false,
+                        image_1920: newPartnerForm.imageBase64 || false,
+                    });
+                    stopPartnerCamera();
+                    formMode = null;
+                    newPartnerForm = null;
+                    formError = "";
+                    formNotice = _t("Cliente creado correctamente.");
+                    await reloadDirectoryRows(result && result.partner_id ? result.partner_id : false);
+                    if (result && result.partner_id) {
+                        newSubscriptionForm = this._getDefaultNewSubscriptionForm(result.partner_id);
+                        await loadDetail(result.partner_id, { force: true });
+                    }
+                } catch (error) {
+                    console.error("Error al crear cliente desde POS", error);
+                    formError = (error && error.message) ? error.message : _t("No se pudo crear el cliente.");
+                    render();
+                }
+                return;
+            }
         });
 
         detailPane.addEventListener("click", async (event) => {
@@ -2071,6 +2267,7 @@ patch(ControlButtons.prototype, {
                 pendingChargeForm = null;
                 participantEditForm = null;
                 newPartnerForm = null;
+                partnerPhotoForm = null;
                 renderDetail(currentDetail);
                 return;
             }
@@ -2080,7 +2277,7 @@ patch(ControlButtons.prototype, {
                 formNotice = "";
                 stopPartnerCamera();
                 newPartnerForm = null;
-                renderDetail(currentDetail);
+                render();
                 return;
             }
             if (action === "start-partner-camera") {
@@ -2107,6 +2304,69 @@ patch(ControlButtons.prototype, {
                 if (newPartnerForm) {
                     newPartnerForm.cameraActive = false;
                 }
+                renderDetail(currentDetail);
+                return;
+            }
+            if (action === "open-partner-photo") {
+                openPartnerPhotoForm();
+                return;
+            }
+            if (action === "cancel-partner-photo") {
+                formMode = null;
+                formError = "";
+                formNotice = "";
+                stopPartnerCamera();
+                partnerPhotoForm = null;
+                renderDetail(currentDetail);
+                return;
+            }
+            if (action === "start-existing-partner-camera") {
+                if (!partnerPhotoForm || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                    formError = _t("La cámara no está disponible en este equipo o navegador.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+                try {
+                    stopPartnerCamera();
+                    activeCameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
+                    partnerPhotoForm.cameraActive = true;
+                    formError = "";
+                    renderDetail(currentDetail);
+                } catch (error) {
+                    console.error("Error al abrir cámara para editar foto POS", error);
+                    formError = _t("No se pudo acceder a la cámara del equipo.");
+                    renderDetail(currentDetail);
+                }
+                return;
+            }
+            if (action === "stop-existing-partner-camera") {
+                stopPartnerCamera();
+                if (partnerPhotoForm) {
+                    partnerPhotoForm.cameraActive = false;
+                }
+                renderDetail(currentDetail);
+                return;
+            }
+            if (action === "capture-existing-partner-camera") {
+                if (!partnerPhotoForm || !activeCameraStream) {
+                    return;
+                }
+                const video = overlay.querySelector('[data-role="partner-camera-preview"]');
+                if (!video) {
+                    formError = _t("No se pudo leer la vista previa de la cámara.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+                const canvas = document.createElement("canvas");
+                canvas.width = video.videoWidth || 480;
+                canvas.height = video.videoHeight || 640;
+                const context = canvas.getContext("2d");
+                context.drawImage(video, 0, 0, canvas.width, canvas.height);
+                const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
+                partnerPhotoForm.imageDataUrl = dataUrl;
+                partnerPhotoForm.imageBase64 = this._stripDataUrlPrefix(dataUrl);
+                partnerPhotoForm.cameraActive = false;
+                stopPartnerCamera();
                 renderDetail(currentDetail);
                 return;
             }
@@ -2544,6 +2804,30 @@ patch(ControlButtons.prototype, {
                 }
                 return;
             }
+            if (action === "save-partner-photo") {
+                formError = "";
+                formNotice = "";
+                if (!partnerPhotoForm || !partnerPhotoForm.partnerId || !partnerPhotoForm.imageBase64) {
+                    formError = _t("Debes seleccionar o capturar una foto antes de guardar.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+                try {
+                    const result = await this._updatePartnerPhotoForPos(partnerPhotoForm.partnerId, partnerPhotoForm.imageBase64);
+                    stopPartnerCamera();
+                    formMode = null;
+                    partnerPhotoForm = null;
+                    formNotice = _t("Foto actualizada correctamente.");
+                    detailCache.delete(Number(currentDetail && currentDetail.partner_id ? currentDetail.partner_id : 0));
+                    await reloadDirectoryRows(result && result.partner_id ? result.partner_id : false);
+                    await loadDetail(selectedPartnerId, { force: true });
+                } catch (error) {
+                    console.error("Error al actualizar foto de cliente POS", error);
+                    formError = (error && error.message) ? error.message : _t("No se pudo actualizar la foto del cliente.");
+                    renderDetail(currentDetail);
+                }
+                return;
+            }
             if (action === "save-upsale") {
                 formError = "";
                 formNotice = "";
@@ -2795,6 +3079,41 @@ patch(ControlButtons.prototype, {
                 newPartnerForm.gender = event.target.value || "";
             } else if (formMode === "new_partner" && field === "partner_birthday") {
                 newPartnerForm.birthday = event.target.value || "";
+            } else if (formMode === "upsale" && field === "upsale_product_id") {
+                await applySelectedUpsaleProduct(event.target.value);
+            } else if (formMode === "upsale" && field === "upsale_plan_choice") {
+                await updateSelectedUpsalePlan(event.target.value);
+            } else if (formMode === "upsale" && field === "upsale_participant_toggle") {
+                toggleUpsaleParticipant(event.target.value, event.target.checked);
+            } else if (formMode === "participants" && field === "edit_participant_toggle") {
+                toggleEditedParticipant(event.target.value, event.target.checked);
+            } else if (formMode === "partner_photo" && field === "existing_partner_image_file") {
+                const file = event.target.files && event.target.files[0];
+                if (file) {
+                    try {
+                        const dataUrl = await this._readFileAsDataUrl(file);
+                        partnerPhotoForm.imageDataUrl = dataUrl;
+                        partnerPhotoForm.imageBase64 = this._stripDataUrlPrefix(dataUrl);
+                    } catch (error) {
+                        console.error("Error al leer foto existente de partner POS", error);
+                        formError = _t("No se pudo procesar la foto seleccionada.");
+                    }
+                }
+            }
+            renderDetail(currentDetail);
+        });
+
+        listPane.addEventListener("change", async (event) => {
+            const field = event.target.dataset.field;
+            if (!field) {
+                return;
+            }
+            formError = "";
+            formNotice = "";
+            if (formMode === "new_partner" && field === "partner_gender") {
+                newPartnerForm.gender = event.target.value || "";
+            } else if (formMode === "new_partner" && field === "partner_birthday") {
+                newPartnerForm.birthday = event.target.value || "";
             } else if (formMode === "new_partner" && field === "partner_image_file") {
                 const file = event.target.files && event.target.files[0];
                 if (file) {
@@ -2807,16 +3126,24 @@ patch(ControlButtons.prototype, {
                         formError = _t("No se pudo procesar la foto seleccionada.");
                     }
                 }
-            } else if (formMode === "upsale" && field === "upsale_product_id") {
-                await applySelectedUpsaleProduct(event.target.value);
-            } else if (formMode === "upsale" && field === "upsale_plan_choice") {
-                await updateSelectedUpsalePlan(event.target.value);
-            } else if (formMode === "upsale" && field === "upsale_participant_toggle") {
-                toggleUpsaleParticipant(event.target.value, event.target.checked);
-            } else if (formMode === "participants" && field === "edit_participant_toggle") {
-                toggleEditedParticipant(event.target.value, event.target.checked);
             }
-            renderDetail(currentDetail);
+            render();
+        });
+
+        listPane.addEventListener("input", (event) => {
+            const field = event.target.dataset.field;
+            if (!field) {
+                return;
+            }
+            if (formMode === "new_partner" && field === "partner_name") {
+                newPartnerForm.name = event.target.value || "";
+            } else if (formMode === "new_partner" && field === "partner_phone") {
+                newPartnerForm.phone = event.target.value || "";
+            } else if (formMode === "new_partner" && field === "partner_email") {
+                newPartnerForm.email = event.target.value || "";
+            } else {
+                return;
+            }
         });
 
         detailPane.addEventListener("input", (event) => {
@@ -3321,6 +3648,13 @@ patch(ControlButtons.prototype, {
                 overflow: auto;
                 min-height: 0;
             }
+            .wgs-list-actions-bar,
+            .wgs-list-form-container {
+                padding: 0.85rem 1rem 0;
+            }
+            .wgs-list-form-container {
+                padding-top: 0.7rem;
+            }
             .wgs-subscription-detail-pane {
                 overflow: auto;
                 background: #f8fafc;
@@ -3359,6 +3693,16 @@ patch(ControlButtons.prototype, {
                 object-fit: cover;
                 background: #e2e8f0;
                 border: 1px solid #d1d5db;
+            }
+            .wgs-detail-avatar-stack {
+                display: flex;
+                flex-direction: column;
+                gap: 0.5rem;
+                align-items: flex-start;
+            }
+            .wgs-avatar-edit-btn {
+                width: 100%;
+                white-space: nowrap;
             }
             .wgs-detail-title-row {
                 display: flex;

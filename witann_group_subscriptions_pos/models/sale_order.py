@@ -275,6 +275,24 @@ class SaleOrder(models.Model):
         }
 
     @api.model
+    def wgs_update_partner_photo_for_pos(self, partner_id, image_1920):
+        if not self.env.user.has_group('point_of_sale.group_pos_user'):
+            raise AccessError(_('No tienes permisos para actualizar la foto desde Punto de Venta.'))
+
+        partner = self.env['res.partner'].sudo().with_context(active_test=False).browse(int(partner_id or 0)).exists()
+        if not partner:
+            raise AccessError(_('El cliente seleccionado no existe.'))
+        if 'image_1920' not in partner._fields:
+            raise AccessError(_('Este entorno no permite actualizar fotos de clientes.'))
+
+        partner.write({'image_1920': image_1920 or False})
+        return {
+            'ok': True,
+            'partner_id': partner.id,
+            'image_url': '/web/image/res.partner/%s/image_128?unique=%s' % (partner.id, fields.Datetime.now().timestamp()),
+        }
+
+    @api.model
     def wgs_resync_subscription_access_for_pos(self, subscription_id):
         if not self.env.user.has_group('point_of_sale.group_pos_user'):
             raise AccessError(_('No tienes permisos para resincronizar acceso desde Punto de Venta.'))
