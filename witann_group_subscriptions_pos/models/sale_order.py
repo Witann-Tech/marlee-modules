@@ -656,7 +656,7 @@ class SaleOrder(models.Model):
         for xmlid in xmlid_candidates:
             action = self.env.ref(xmlid, raise_if_not_found=False)
             if action and getattr(action, 'res_model', '') == 'sale.order':
-                return action
+                return action.sudo()
 
         return self.env['ir.actions.act_window'].sudo().search(
             [
@@ -669,6 +669,8 @@ class SaleOrder(models.Model):
 
     @api.model
     def _parse_action_domain_for_pos(self, domain_value):
+        if hasattr(domain_value, 'sudo'):
+            domain_value = domain_value.sudo()
         if not domain_value:
             return []
         if isinstance(domain_value, (list, tuple)):
@@ -680,7 +682,7 @@ class SaleOrder(models.Model):
                     domain_value,
                     {
                         'uid': self.env.uid,
-                        'user': self.env.user,
+                        'user': self.env.user.sudo(),
                         'context': dict(self.env.context),
                     },
                 )
