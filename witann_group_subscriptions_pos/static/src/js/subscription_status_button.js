@@ -1502,14 +1502,13 @@ patch(ControlButtons.prototype, {
                     <div class="wgs-new-partner-layout">
                         <div class="wgs-new-partner-photo">
                             <div class="wgs-new-partner-preview">
-                                ${newPartnerForm.imageDataUrl
+                                ${newPartnerForm.cameraActive
+                                    ? `<video class="wgs-camera-preview" data-role="partner-camera-preview" autoplay playsinline muted></video>`
+                                    : newPartnerForm.imageDataUrl
                                     ? `<img src="${this._escapeHtml(newPartnerForm.imageDataUrl)}" alt="${this._escapeHtml(_t("Foto del cliente"))}" />`
                                     : `<div class="wgs-new-partner-empty-photo">${this._escapeHtml(_t("Sin foto"))}</div>`
                                 }
                             </div>
-                            ${newPartnerForm.cameraActive ? `
-                                <video class="wgs-camera-preview" data-role="partner-camera-preview" autoplay playsinline muted></video>
-                            ` : ""}
                             <div class="wgs-inline-actions wgs-photo-actions-grid">
                                 <label class="wgs-secondary-action-btn wgs-file-action-btn">
                                     <span>${this._escapeHtml(_t("Subir foto"))}</span>
@@ -1575,14 +1574,13 @@ patch(ControlButtons.prototype, {
                     <div class="wgs-new-partner-layout">
                         <div class="wgs-new-partner-photo">
                             <div class="wgs-new-partner-preview">
-                                ${partnerPhotoForm.imageDataUrl
+                                ${partnerPhotoForm.cameraActive
+                                    ? `<video class="wgs-camera-preview" data-role="partner-camera-preview" autoplay playsinline muted></video>`
+                                    : partnerPhotoForm.imageDataUrl
                                     ? `<img src="${this._escapeHtml(partnerPhotoForm.imageDataUrl)}" alt="${this._escapeHtml(_t("Foto del cliente"))}" />`
                                     : `<div class="wgs-new-partner-empty-photo">${this._escapeHtml(_t("Sin foto"))}</div>`
                                 }
                             </div>
-                            ${partnerPhotoForm.cameraActive ? `
-                                <video class="wgs-camera-preview" data-role="partner-camera-preview" autoplay playsinline muted></video>
-                            ` : ""}
                         </div>
                         <div class="wgs-inline-actions wgs-photo-actions-grid">
                             <label class="wgs-secondary-action-btn wgs-file-action-btn">
@@ -3947,8 +3945,7 @@ patch(ControlButtons.prototype, {
                 flex-direction: column;
                 gap: 0.45rem;
             }
-            .wgs-new-partner-preview,
-            .wgs-camera-preview {
+            .wgs-new-partner-preview {
                 width: 100%;
                 max-width: 168px;
                 aspect-ratio: 1 / 1;
@@ -3963,6 +3960,13 @@ patch(ControlButtons.prototype, {
                 height: 100%;
                 object-fit: cover;
                 display: block;
+            }
+            .wgs-camera-preview {
+                max-width: none;
+                aspect-ratio: auto;
+                border: none;
+                border-radius: 0;
+                background: transparent;
             }
             .wgs-new-partner-empty-photo {
                 width: 100%;
