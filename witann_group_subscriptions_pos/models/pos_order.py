@@ -1141,6 +1141,9 @@ class PosOrder(models.Model):
         next_field = self._wgs_find_subscription_next_invoice_date_field(source_order)
         if next_field:
             values[next_field] = next_billing_date
+        end_field = self._wgs_find_subscription_end_date_field(source_order)
+        if end_field:
+            values[end_field] = self._wgs_to_date(next_billing_date) - timedelta(days=1)
         if values:
             source_order.write(values)
 
@@ -1408,6 +1411,7 @@ class PosOrder(models.Model):
         next_billing_date = False
         if plan_record:
             next_billing_date = self._wgs_get_plan_min_end_threshold(plan_record, sale_start_date)
+            subscription_end_date = self._wgs_get_plan_period_end_date(plan_record, sale_start_date)
 
         sale_order_line_fields = self.env['sale.order.line']._fields
         line_values = {'product_id': product.id}
@@ -2702,6 +2706,16 @@ class PosOrder(models.Model):
             return start_date + relativedelta(years=interval_value)
         # month by default
         return start_date + relativedelta(months=interval_value)
+
+    def _wgs_get_plan_period_end_date(self, plan, start_date, periods_count=1):
+        next_threshold = self._wgs_get_plan_min_end_threshold(plan, start_date, periods_count=periods_count)
+        if not next_threshold:
+            return False
+        start_date = fields.Date.to_date(start_date) or fields.Date.context_today(self)
+        period_end = fields.Date.to_date(next_threshold) - timedelta(days=1)
+        if period_end < start_date:
+            return start_date
+        return period_end
 
     def _wgs_extract_interval_from_plan(self, plan):
         interval_value = 1

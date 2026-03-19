@@ -500,6 +500,24 @@ function addPeriodToDate(dateValue, intervalValue, intervalUnit) {
     return date.toISOString().slice(0, 10);
 }
 
+function addDaysToDate(dateValue, days) {
+    const parsed = parseISODate(String(dateValue || "").trim());
+    if (!parsed) {
+        return "";
+    }
+    const date = new Date(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate());
+    date.setDate(date.getDate() + Number(days || 0));
+    return date.toISOString().slice(0, 10);
+}
+
+function getPlanPeriodEndDate(dateValue, intervalValue, intervalUnit) {
+    const periodNextDate = addPeriodToDate(dateValue, intervalValue, intervalUnit);
+    if (!periodNextDate) {
+        return "";
+    }
+    return addDaysToDate(periodNextDate, -1);
+}
+
 patch(ControlButtons.prototype, {
     setup() {
         super.setup(...arguments);
@@ -1505,8 +1523,8 @@ patch(ControlButtons.prototype, {
                 return "";
             }
             const plan = getSelectedPlan();
-            const minEndDate = plan
-                ? addPeriodToDate(newSubscriptionForm.startDate, plan.interval_value, plan.interval_unit)
+            const automaticEndDate = plan
+                ? getPlanPeriodEndDate(newSubscriptionForm.startDate, plan.interval_value, plan.interval_unit)
                 : "";
             const filteredParticipants = filterParticipantRows(newSubscriptionForm.participantSearch);
             const participantOptions = Number(newSubscriptionForm.maxParticipantsTotal || 1) > 1
@@ -1563,16 +1581,16 @@ patch(ControlButtons.prototype, {
                             <span>${this._escapeHtml(_t("Fecha de inicio"))}</span>
                             <input type="date" data-field="start_date" value="${this._escapeHtml(newSubscriptionForm.startDate || formatTodayISO())}" />
                         </label>
-                        <label>
-                            <span>${this._escapeHtml(_t("Fecha de fin (opcional)"))}</span>
-                            <input type="date" data-field="end_date" value="${this._escapeHtml(newSubscriptionForm.endDate || "")}" />
-                        </label>
+                        <div>
+                            <span>${this._escapeHtml(_t("Fecha de fin"))}</span>
+                            <strong class="wgs-inline-static-value">${this._escapeHtml(this._formatDateDisplay(automaticEndDate) || "-")}</strong>
+                        </div>
                     </div>
                     <div class="wgs-inline-form-meta">
                         <div><span>${this._escapeHtml(_t("Precio"))}</span><strong>${this._escapeHtml(this._formatMoney(newSubscriptionForm.displayPrice || newSubscriptionForm.price || 0))}</strong></div>
                         <div><span>${this._escapeHtml(_t("Cupo total"))}</span><strong>${this._escapeHtml(String(newSubscriptionForm.maxParticipantsTotal || 1))}</strong></div>
                         ${Number(newSubscriptionForm.maxParticipantsTotal || 1) > 1 ? `<div><span>${this._escapeHtml(_t("Participantes seleccionados"))}</span><strong>${this._escapeHtml(String((newSubscriptionForm.participantIds || []).length || 0))}</strong></div>` : ""}
-                        <div><span>${this._escapeHtml(_t("Fin minimo sugerido"))}</span><strong>${this._escapeHtml(this._formatDateDisplay(minEndDate) || "-")}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Cobertura del plan"))}</span><strong>${this._escapeHtml(this._formatDateDisplay(automaticEndDate) || "-")}</strong></div>
                     </div>
                     ${Number(newSubscriptionForm.maxParticipantsTotal || 1) > 1 ? `
                         <div class="wgs-inline-participants">
@@ -2733,9 +2751,13 @@ patch(ControlButtons.prototype, {
                     renderDetail(currentDetail);
                     return;
                 }
-                const minEndDate = addPeriodToDate(newSubscriptionForm.startDate, selectedPlan.interval_value, selectedPlan.interval_unit);
-                if (newSubscriptionForm.endDate && minEndDate && newSubscriptionForm.endDate < minEndDate) {
-                    formError = _t("La fecha fin debe ser posterior al primer periodo del plan seleccionado.");
+                const automaticEndDate = getPlanPeriodEndDate(
+                    newSubscriptionForm.startDate,
+                    selectedPlan.interval_value,
+                    selectedPlan.interval_unit
+                );
+                if (!automaticEndDate) {
+                    formError = _t("No se pudo calcular la fecha de fin automática para el plan seleccionado.");
                     renderDetail(currentDetail);
                     return;
                 }
@@ -2818,7 +2840,7 @@ patch(ControlButtons.prototype, {
                     plan_id: Number(selectedPlan.plan_id || 0) || false,
                     pricing_id: Number(selectedPlan.pricing_id || 0) || false,
                     start_date: newSubscriptionForm.startDate || formatTodayISO(),
-                    end_date: newSubscriptionForm.endDate || false,
+                    end_date: automaticEndDate || false,
                     product_id: Number(newSubscriptionForm.productId || 0) || false,
                     product_name: newSubscriptionForm.productName || false,
                 };
@@ -3389,8 +3411,6 @@ patch(ControlButtons.prototype, {
                 await updateSelectedPlan(event.target.value);
             } else if (formMode === "new" && field === "start_date") {
                 newSubscriptionForm.startDate = event.target.value || formatTodayISO();
-            } else if (formMode === "new" && field === "end_date") {
-                newSubscriptionForm.endDate = event.target.value || "";
             } else if (formMode === "new" && field === "participant_toggle") {
                 toggleParticipant(event.target.value, event.target.checked);
             } else if (formMode === "new_partner" && field === "partner_gender") {
@@ -3517,7 +3537,6 @@ patch(ControlButtons.prototype, {
             price: 0,
             displayPrice: 0,
             startDate: formatTodayISO(),
-            endDate: "",
             maxParticipantsTotal: 1,
             participantIds,
             participantSearch: "",
