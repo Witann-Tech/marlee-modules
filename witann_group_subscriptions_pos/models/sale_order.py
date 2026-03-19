@@ -140,7 +140,7 @@ class SaleOrder(models.Model):
                     error,
                 )
                 item = False
-            if item:
+            if item and self._should_display_subscription_item_in_pos_detail(item, today=today):
                 item['is_owner'] = bool(subscription.partner_id and subscription.partner_id.id == partner.id)
                 item['partner_role_label'] = _('Titular') if item['is_owner'] else _('Participante')
                 item['participant_ids'] = subscription.participant_ids.ids
@@ -759,6 +759,8 @@ class SaleOrder(models.Model):
         if hard_end_date and hard_end_date < today:
             access_state = False
             is_valid = False
+            native_state_key = 'closed'
+            native_state_label = _('Cerrada')
             reason = _('La suscripción ya terminó y no debe contarse como vigente.')
         elif start_date and start_date > today:
             access_state = False
@@ -818,6 +820,29 @@ class SaleOrder(models.Model):
             'pending_amount_total': first_pending[0]['amount_residual'] if first_pending else 0.0,
             'pending_document_name': first_pending[0]['name'] if first_pending else False,
         }
+
+    @api.model
+    def _should_display_subscription_item_in_pos_detail(self, item, today=False):
+        if not item:
+            return False
+
+        today = today or fields.Date.context_today(self)
+        access_state = item.get('access_state') or False
+        if access_state in ('enabled', 'suspended'):
+            return True
+
+        start_date = self._to_date(item.get('start_date'))
+        if start_date and start_date >= today:
+            return True
+
+        valid_until = self._to_date(item.get('valid_until'))
+        if valid_until and valid_until >= today:
+            return True
+
+        if item.get('has_pending_document'):
+            return True
+
+        return False
 
     def _wgs_get_pending_invoice_records_for_pos(self):
         self.ensure_one()

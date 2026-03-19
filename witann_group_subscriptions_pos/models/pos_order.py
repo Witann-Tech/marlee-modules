@@ -45,6 +45,7 @@ class PosOrderLine(models.Model):
             ('renewal', 'Renovación recurrente'),
             ('upsale', 'Upsale inmediato'),
             ('pending_charge', 'Cobro pendiente'),
+            ('cancellation_refund', 'Cancelación con devolución'),
         ],
         string='Flujo suscripción (POS)',
         default='new',
@@ -58,6 +59,11 @@ class PosOrderLine(models.Model):
     wgs_subscription_pending_move_id = fields.Many2one(
         'account.move',
         string='Documento pendiente (POS)',
+        copy=False,
+    )
+    wgs_subscription_refund_origin_line_id = fields.Many2one(
+        'pos.order.line',
+        string='Línea POS origen para devolución (POS)',
         copy=False,
     )
 
@@ -106,6 +112,7 @@ class PosOrderLine(models.Model):
             or self.wgs_subscription_end_date
             or self.wgs_subscription_source_id
             or self.wgs_subscription_pending_move_id
+            or self.wgs_subscription_refund_origin_line_id
         )
 
 
@@ -457,6 +464,44 @@ class PosOrder(models.Model):
         }
 
     @api.model
+    def wgs_get_subscription_cancellation_refund_for_pos(self, subscription_id):
+        if not self.env.user.has_group('point_of_sale.group_pos_user'):
+            raise UserError(_('No tienes permisos para consultar cancelación de suscripción desde Punto de Venta.'))
+
+        try:
+            subscription_id = int(subscription_id or 0)
+        except (TypeError, ValueError):
+            subscription_id = 0
+        source_order = self.env['sale.order'].sudo().browse(subscription_id).exists()
+        if not source_order:
+            raise UserError(_('La suscripción origen no existe.'))
+        if not self._wgs_order_has_subscription_signal(source_order):
+            raise UserError(_('La orden origen no corresponde a una suscripción válida.'))
+
+        origin_line = self._wgs_get_refundable_pos_line_for_subscription(source_order)
+        if not origin_line:
+            raise UserError(_('No se encontró un cobro POS devoluble ligado exactamente a esta suscripción.'))
+
+        refund_total = self._wgs_get_pos_line_total_amount(origin_line, include_taxes=True)
+        if refund_total <= 0.0:
+            refund_total = abs(float(origin_line.price_unit or 0.0) * float(origin_line.qty or 0.0))
+
+        return {
+            'subscription_id': source_order.id,
+            'subscription_name': source_order.name,
+            'origin_pos_line_id': origin_line.id,
+            'origin_pos_order_id': origin_line.order_id.id,
+            'origin_pos_order_name': origin_line.order_id.pos_reference or origin_line.order_id.name or False,
+            'origin_date': fields.Datetime.to_string(origin_line.order_id.date_order) if getattr(origin_line.order_id, 'date_order', False) else False,
+            'product_id': origin_line.product_id.id,
+            'product_name': origin_line.product_id.display_name,
+            'qty': abs(float(origin_line.qty or 0.0)),
+            'price_unit': abs(float(origin_line.price_unit or 0.0)),
+            'discount': float(origin_line.discount or 0.0) if 'discount' in origin_line._fields else 0.0,
+            'amount_total': round(max(refund_total, 0.0), 2),
+        }
+
+    @api.model
     def wgs_get_subscription_product_context_for_pos(self, product_id, fallback=0.0):
         if not self.env.user.has_group('point_of_sale.group_pos_user'):
             raise UserError(_('No tienes permisos para consultar contexto de suscripción desde Punto de Venta.'))
@@ -592,7 +637,7 @@ class PosOrder(models.Model):
                 values['wgs_subscription_start_date'] = start_date
 
         flow_value = str(config_payload.get('flow') or 'new').strip().lower()
-        values['wgs_subscription_flow'] = flow_value if flow_value in ('renewal', 'upsale', 'pending_charge') else 'new'
+        values['wgs_subscription_flow'] = flow_value if flow_value in ('renewal', 'upsale', 'pending_charge', 'cancellation_refund') else 'new'
 
         source_subscription_id = self._wgs_to_int(config_payload.get('source_subscription_id'))
         if source_subscription_id > 0:
@@ -600,6 +645,9 @@ class PosOrder(models.Model):
         pending_move_id = self._wgs_to_int(config_payload.get('pending_move_id'))
         if pending_move_id > 0:
             values['wgs_subscription_pending_move_id'] = pending_move_id
+        refund_origin_line_id = self._wgs_to_int(config_payload.get('refund_origin_line_id'))
+        if refund_origin_line_id > 0:
+            values['wgs_subscription_refund_origin_line_id'] = refund_origin_line_id
 
         return values
 
@@ -632,6 +680,7 @@ class PosOrder(models.Model):
             'flow': 'new',
             'source_subscription_id': False,
             'pending_move_id': False,
+            'refund_origin_line_id': False,
         }
         if not isinstance(ui_line, dict):
             return data
@@ -707,6 +756,13 @@ class PosOrder(models.Model):
             or ui_line.get('wgsSubscriptionPendingMoveId')
             or raw_config.get('pending_move_id')
             or raw_config.get('pendingMoveId')
+            or False
+        )
+        data['refund_origin_line_id'] = (
+            ui_line.get('wgs_subscription_refund_origin_line_id')
+            or ui_line.get('wgsSubscriptionRefundOriginLineId')
+            or raw_config.get('refund_origin_line_id')
+            or raw_config.get('refundOriginLineId')
             or False
         )
 
@@ -845,7 +901,7 @@ class PosOrder(models.Model):
                     write_values['wgs_subscription_start_date'] = start_date
 
             flow_value = str(config.get('flow') or 'new').strip().lower()
-            write_values['wgs_subscription_flow'] = flow_value if flow_value in ('renewal', 'upsale', 'pending_charge') else 'new'
+            write_values['wgs_subscription_flow'] = flow_value if flow_value in ('renewal', 'upsale', 'pending_charge', 'cancellation_refund') else 'new'
 
             source_subscription_id = self._wgs_to_int(config.get('source_subscription_id'))
             if source_subscription_id > 0:
@@ -853,6 +909,9 @@ class PosOrder(models.Model):
             pending_move_id = self._wgs_to_int(config.get('pending_move_id'))
             if pending_move_id > 0:
                 write_values['wgs_subscription_pending_move_id'] = pending_move_id
+            refund_origin_line_id = self._wgs_to_int(config.get('refund_origin_line_id'))
+            if refund_origin_line_id > 0:
+                write_values['wgs_subscription_refund_origin_line_id'] = refund_origin_line_id
 
             if write_values:
                 target_line.write(write_values)
@@ -3020,10 +3079,15 @@ class PosOrder(models.Model):
         original_line = None
         if 'refunded_orderline_id' in line._fields:
             original_line = line.refunded_orderline_id
+        if not original_line and line.wgs_subscription_refund_origin_line_id:
+            original_line = line.wgs_subscription_refund_origin_line_id
 
         if not original_line or not original_line.wgs_sale_order_id:
             return
-        if original_line.wgs_subscription_flow in ('renewal', 'pending_charge'):
+        if (
+            original_line.wgs_subscription_flow in ('renewal', 'pending_charge')
+            and line.wgs_subscription_flow != 'cancellation_refund'
+        ):
             # Renewal/pending-charge refunds should not cancel the underlying subscription contract.
             line.wgs_sale_order_id = original_line.wgs_sale_order_id.id
             return
@@ -3042,6 +3106,43 @@ class PosOrder(models.Model):
             self.pos_reference,
             line.id,
         )
+
+    def _wgs_get_refundable_pos_line_for_subscription(self, source_order):
+        self.ensure_one()
+        source_order.ensure_one()
+
+        pos_line_model = self.env['pos.order.line'].sudo()
+        candidates = pos_line_model.search(
+            [
+                ('wgs_sale_order_id', '=', source_order.id),
+                ('qty', '>', 0),
+            ],
+            order='id desc',
+        )
+        if not candidates:
+            return pos_line_model
+
+        for candidate in candidates:
+            refunded_lines = pos_line_model.browse()
+            if 'refunded_orderline_id' in pos_line_model._fields:
+                refunded_lines |= pos_line_model.search([('refunded_orderline_id', '=', candidate.id)])
+            refunded_lines |= pos_line_model.search([('wgs_subscription_refund_origin_line_id', '=', candidate.id)])
+            refunded_qty = sum(abs(float(refund_line.qty or 0.0)) for refund_line in refunded_lines if float(refund_line.qty or 0.0) < 0.0)
+            original_qty = abs(float(candidate.qty or 0.0))
+            if refunded_qty + 0.00001 < original_qty:
+                return candidate
+        return pos_line_model
+
+    def _wgs_get_pos_line_total_amount(self, line, include_taxes=False):
+        line.ensure_one()
+        if include_taxes:
+            for field_name in ('price_subtotal_incl', 'price_total', 'price_total_incl'):
+                if field_name in line._fields:
+                    return abs(float(line[field_name] or 0.0))
+        for field_name in ('price_subtotal', 'price_total'):
+            if field_name in line._fields:
+                return abs(float(line[field_name] or 0.0))
+        return abs(float(line.price_unit or 0.0) * float(line.qty or 0.0))
 
     def action_pos_order_cancel(self):
         super_method = getattr(super(), 'action_pos_order_cancel', None)

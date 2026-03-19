@@ -208,6 +208,21 @@ function setLineUnitPrice(line, price) {
     line.price_unit = price;
 }
 
+function setLineDiscount(line, discount) {
+    if (!line) {
+        return;
+    }
+    if (typeof line.set_discount === "function") {
+        line.set_discount(discount);
+        return;
+    }
+    if (typeof line.setDiscount === "function") {
+        line.setDiscount(discount);
+        return;
+    }
+    line.discount = discount;
+}
+
 function getSelectedOrderLine(source, maybeOrder = null) {
     const order = maybeOrder || getCurrentOrder(source);
     if (!order) {
@@ -608,6 +623,14 @@ patch(ControlButtons.prototype, {
         );
     },
 
+    async _fetchSubscriptionCancellationRefund(subscriptionId) {
+        return this.orm.call(
+            "pos.order",
+            "wgs_get_subscription_cancellation_refund_for_pos",
+            [subscriptionId]
+        );
+    },
+
     async _saveSubscriptionParticipants(subscriptionId, participantIds) {
         return this.orm.call(
             "pos.order",
@@ -795,6 +818,7 @@ patch(ControlButtons.prototype, {
         let renewalForm = null;
         let upsaleForm = null;
         let pendingChargeForm = null;
+        let cancellationRefundForm = null;
         let participantEditForm = null;
         let newPartnerForm = null;
         let partnerPhotoForm = null;
@@ -885,6 +909,7 @@ patch(ControlButtons.prototype, {
             renewalForm = null;
             upsaleForm = null;
             pendingChargeForm = null;
+            cancellationRefundForm = null;
             participantEditForm = null;
             newPartnerForm = null;
             partnerPhotoForm = null;
@@ -920,6 +945,7 @@ patch(ControlButtons.prototype, {
             renewalForm = null;
             upsaleForm = null;
             pendingChargeForm = null;
+            cancellationRefundForm = null;
             participantEditForm = null;
             newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
             newPartnerForm = this._getDefaultNewPartnerForm();
@@ -959,6 +985,7 @@ patch(ControlButtons.prototype, {
             stopPartnerCamera();
             newPartnerForm = null;
             pendingChargeForm = null;
+            cancellationRefundForm = null;
             participantEditForm = null;
             renewalForm = {
                 subscriptionId: Number(item.subscription_id || 0) || false,
@@ -1071,6 +1098,63 @@ patch(ControlButtons.prototype, {
                 formError = _t("No se pudo consultar el documento pendiente para esta suscripción.");
                 pendingChargeForm = {
                     ...pendingChargeForm,
+                    loading: false,
+                };
+            }
+            renderDetail(currentDetail);
+        };
+
+        const openCancellationRefundForm = async (item) => {
+            if (!item || !item.subscription_id) {
+                return;
+            }
+            formMode = "cancellation_refund";
+            formError = "";
+            formNotice = "";
+            stopPartnerCamera();
+            newPartnerForm = null;
+            renewalForm = null;
+            upsaleForm = null;
+            pendingChargeForm = null;
+            cancellationRefundForm = null;
+            participantEditForm = null;
+            cancellationRefundForm = {
+                subscriptionId: Number(item.subscription_id || 0) || false,
+                subscriptionName: item.subscription_name || "",
+                holderPartnerId: Number(item.holder_partner_id || 0) || false,
+                holderPartnerName: item.holder_partner_name || "",
+                originPosLineId: false,
+                originPosOrderName: "",
+                originDate: false,
+                productId: false,
+                productName: "",
+                qty: 1,
+                priceUnit: 0,
+                discount: 0,
+                amountTotal: 0,
+                loading: true,
+            };
+            renderDetail(currentDetail);
+            try {
+                const refund = await this._fetchSubscriptionCancellationRefund(cancellationRefundForm.subscriptionId);
+                cancellationRefundForm = {
+                    ...cancellationRefundForm,
+                    loading: false,
+                    originPosLineId: Number(refund && refund.origin_pos_line_id ? refund.origin_pos_line_id : 0) || false,
+                    originPosOrderName: refund && refund.origin_pos_order_name ? refund.origin_pos_order_name : "",
+                    originDate: refund && refund.origin_date ? refund.origin_date : false,
+                    productId: Number(refund && refund.product_id ? refund.product_id : 0) || false,
+                    productName: refund && refund.product_name ? refund.product_name : "",
+                    qty: Number(refund && refund.qty ? refund.qty : 1) || 1,
+                    priceUnit: Number(refund && refund.price_unit ? refund.price_unit : 0) || 0,
+                    discount: Number(refund && refund.discount ? refund.discount : 0) || 0,
+                    amountTotal: Number(refund && refund.amount_total ? refund.amount_total : 0) || 0,
+                };
+            } catch (error) {
+                console.error("Error al consultar devolución por cancelación POS", error);
+                formError = _t("No se pudo consultar la devolución exacta de esta suscripción.");
+                cancellationRefundForm = {
+                    ...cancellationRefundForm,
                     loading: false,
                 };
             }
@@ -1280,6 +1364,7 @@ patch(ControlButtons.prototype, {
             renewalForm = null;
             upsaleForm = this._getDefaultUpsaleForm(item);
             pendingChargeForm = null;
+            cancellationRefundForm = null;
             participantEditForm = null;
             renderDetail(currentDetail);
             if (!productCatalog.length && !catalogLoading) {
@@ -1642,6 +1727,40 @@ patch(ControlButtons.prototype, {
             `;
         };
 
+        const renderCancellationRefundForm = (item) => {
+            if (
+                formMode !== "cancellation_refund"
+                || !cancellationRefundForm
+                || Number(cancellationRefundForm.subscriptionId || 0) !== Number(item.subscription_id || 0)
+            ) {
+                return "";
+            }
+            return `
+                <div class="wgs-inline-form-card">
+                    <div class="wgs-inline-form-header">
+                        <strong>${this._escapeHtml(_t("Cancelar suscripción"))}</strong>
+                        <button type="button" class="wgs-inline-close-btn" data-action="cancel-cancellation-refund">${this._escapeHtml(_t("Cancelar"))}</button>
+                    </div>
+                    ${formError ? `<div class="wgs-inline-error">${this._escapeHtml(formError)}</div>` : ""}
+                    ${formNotice ? `<div class="wgs-inline-notice">${this._escapeHtml(formNotice)}</div>` : ""}
+                    ${cancellationRefundForm.loading ? `<div class="wgs-inline-loading">${this._escapeHtml(_t("Consultando cobro POS exacto de esta suscripción..."))}</div>` : ""}
+                    <div class="wgs-inline-form-meta">
+                        <div><span>${this._escapeHtml(_t("Suscripción"))}</span><strong>${this._escapeHtml(cancellationRefundForm.subscriptionName || "-")}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Titular"))}</span><strong>${this._escapeHtml(cancellationRefundForm.holderPartnerName || "-")}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Ticket origen"))}</span><strong>${this._escapeHtml(cancellationRefundForm.originPosOrderName || "-")}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Fecha cobro"))}</span><strong>${this._escapeHtml(this._formatDateTimeDisplay(cancellationRefundForm.originDate) || "-")}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Producto"))}</span><strong>${this._escapeHtml(cancellationRefundForm.productName || "-")}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Monto a devolver"))}</span><strong>${this._escapeHtml(this._formatMoney(cancellationRefundForm.amountTotal || 0))}</strong></div>
+                    </div>
+                    <div class="wgs-inline-notice">${this._escapeHtml(_t("La devolución solo se generará si corresponde exactamente a esta suscripción."))}</div>
+                    <div class="wgs-inline-actions">
+                        <button type="button" class="wgs-primary-action-btn" data-action="save-cancellation-refund" ${cancellationRefundForm.loading ? "disabled" : ""}>${this._escapeHtml(_t("Agregar devolución al ticket"))}</button>
+                        <button type="button" class="wgs-secondary-action-btn" data-action="cancel-cancellation-refund">${this._escapeHtml(_t("Cancelar"))}</button>
+                    </div>
+                </div>
+            `;
+        };
+
         const renderParticipantEditForm = (item) => {
             if (
                 formMode !== "participants"
@@ -1901,6 +2020,12 @@ patch(ControlButtons.prototype, {
                                     data-action="resync-access"
                                     data-subscription-id="${this._escapeHtml(String(item.subscription_id || 0))}"
                                 >${this._escapeHtml(_t("Resincronizar acceso"))}</button>
+                                <button
+                                    type="button"
+                                    class="wgs-action-btn"
+                                    data-action="open-cancellation-refund"
+                                    data-subscription-id="${this._escapeHtml(String(item.subscription_id || 0))}"
+                                >${this._escapeHtml(_t("Cancelar suscripción"))}</button>
                             </div>
                             ${item.has_pending_document ? `
                                 <div class="wgs-subscription-participants">
@@ -1910,6 +2035,7 @@ patch(ControlButtons.prototype, {
                             ` : ""}
                             ${renderParticipantEditForm(item)}
                             ${renderPendingChargeForm(item)}
+                            ${renderCancellationRefundForm(item)}
                             ${renderRenewalForm(item)}
                             ${renderUpsaleForm(item)}
                         </div>
@@ -2187,6 +2313,7 @@ patch(ControlButtons.prototype, {
             renewalForm = null;
             upsaleForm = null;
             pendingChargeForm = null;
+            cancellationRefundForm = null;
             participantEditForm = null;
             newPartnerForm = null;
             partnerPhotoForm = null;
@@ -2504,6 +2631,14 @@ patch(ControlButtons.prototype, {
                 await openPendingChargeForm(item);
                 return;
             }
+            if (action === "open-cancellation-refund") {
+                const subscriptionId = Number(actionButton.dataset.subscriptionId || 0);
+                const item = (currentDetail && Array.isArray(currentDetail.items) ? currentDetail.items : []).find(
+                    (row) => Number(row.subscription_id || 0) === subscriptionId
+                );
+                await openCancellationRefundForm(item);
+                return;
+            }
             if (action === "cancel-renewal") {
                 formMode = null;
                 formError = "";
@@ -2511,6 +2646,7 @@ patch(ControlButtons.prototype, {
                 renewalForm = null;
                 upsaleForm = null;
                 pendingChargeForm = null;
+                cancellationRefundForm = null;
                 participantEditForm = null;
                 renderDetail(currentDetail);
                 return;
@@ -2522,6 +2658,7 @@ patch(ControlButtons.prototype, {
                 renewalForm = null;
                 upsaleForm = null;
                 pendingChargeForm = null;
+                cancellationRefundForm = null;
                 participantEditForm = null;
                 renderDetail(currentDetail);
                 return;
@@ -2533,6 +2670,19 @@ patch(ControlButtons.prototype, {
                 renewalForm = null;
                 upsaleForm = null;
                 pendingChargeForm = null;
+                cancellationRefundForm = null;
+                participantEditForm = null;
+                renderDetail(currentDetail);
+                return;
+            }
+            if (action === "cancel-cancellation-refund") {
+                formMode = null;
+                formError = "";
+                formNotice = "";
+                renewalForm = null;
+                upsaleForm = null;
+                pendingChargeForm = null;
+                cancellationRefundForm = null;
                 participantEditForm = null;
                 renderDetail(currentDetail);
                 return;
@@ -2544,6 +2694,7 @@ patch(ControlButtons.prototype, {
                 renewalForm = null;
                 upsaleForm = null;
                 pendingChargeForm = null;
+                cancellationRefundForm = null;
                 participantEditForm = null;
                 renderDetail(currentDetail);
                 return;
@@ -2779,6 +2930,113 @@ patch(ControlButtons.prototype, {
                 renewalForm = null;
                 upsaleForm = null;
                 pendingChargeForm = null;
+                participantEditForm = null;
+                renderDetail(currentDetail);
+                return;
+            }
+            if (action === "save-cancellation-refund") {
+                formError = "";
+                formNotice = "";
+                if (!cancellationRefundForm || !cancellationRefundForm.subscriptionId || !cancellationRefundForm.originPosLineId || !cancellationRefundForm.productId) {
+                    formError = _t("No se encontró un cobro POS exacto para devolver esta suscripción.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+
+                const order = getCurrentOrder(this);
+                if (!order) {
+                    formError = _t("No hay una orden POS activa para agregar la devolución.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+
+                const holderPartnerId = Number(cancellationRefundForm.holderPartnerId || 0) || false;
+                const partnerOnOrderId = getPartnerIdFromOrder(order);
+                if (partnerOnOrderId !== holderPartnerId) {
+                    const partnerRecord = findPartnerInPos(this, holderPartnerId);
+                    if (partnerRecord && setPartnerOnCurrentOrder(this, partnerRecord)) {
+                        // Partner aligned locally in POS.
+                    } else if (partnerOnOrderId) {
+                        formError = _t("La orden actual ya tiene otro cliente y no se pudo reemplazar desde esta sesión. Usa un solo cliente por ticket.");
+                        renderDetail(currentDetail);
+                        return;
+                    } else {
+                        formNotice = _t("El titular no está cargado en la sesión local del POS. La devolución se vinculará al confirmar el pago.");
+                    }
+                }
+
+                const productRecord = findProductInPos(this, cancellationRefundForm.productId);
+                if (!productRecord) {
+                    formError = _t("El producto original de esta suscripción no está cargado en la sesión actual del POS.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+
+                const beforeLines = getOrderLines(order);
+                const beforeCount = beforeLines.length;
+                const beforeSet = new Set(beforeLines);
+                const beforeSelectedLine = getSelectedOrderLine(this, order);
+                let targetLine = null;
+                try {
+                    const addResult = await addProductToOrder(this, order, productRecord, {
+                        quantity: -Math.max(1, Number(cancellationRefundForm.qty || 1)),
+                        merge: false,
+                        price: Number(cancellationRefundForm.priceUnit || 0),
+                    });
+                    await waitForNextTick();
+                    await waitForNextTick();
+                    const afterLines = getOrderLines(order);
+                    targetLine = afterLines.find((line) => !beforeSet.has(line)) || null;
+                    if (!targetLine && addResult && typeof addResult === "object") {
+                        targetLine = addResult;
+                    }
+                    if (!targetLine) {
+                        const selectedAfter = getSelectedOrderLine(this, order);
+                        if (selectedAfter && selectedAfter !== beforeSelectedLine) {
+                            targetLine = selectedAfter;
+                        }
+                    }
+                    if (!targetLine && afterLines.length <= beforeCount) {
+                        formError = _t("No se pudo agregar la devolución al ticket actual.");
+                        renderDetail(currentDetail);
+                        return;
+                    }
+                } catch (error) {
+                    console.error("Error al agregar devolución por cancelación al ticket POS", error);
+                    formError = _t("No se pudo agregar la devolución al ticket actual.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+
+                if (!targetLine) {
+                    formError = _t("No se pudo identificar la línea de devolución agregada al ticket.");
+                    renderDetail(currentDetail);
+                    return;
+                }
+
+                setLineUnitPrice(targetLine, Number(cancellationRefundForm.priceUnit || 0));
+                setLineDiscount(targetLine, Number(cancellationRefundForm.discount || 0));
+                targetLine.wgsSubscriptionConfig = {
+                    flow: "cancellation_refund",
+                    partner_id: holderPartnerId || false,
+                    participant_ids: [],
+                    plan_id: false,
+                    pricing_id: false,
+                    start_date: false,
+                    end_date: false,
+                    product_id: Number(cancellationRefundForm.productId || 0) || false,
+                    product_name: cancellationRefundForm.productName || false,
+                    source_subscription_id: Number(cancellationRefundForm.subscriptionId || 0) || false,
+                    refund_origin_line_id: Number(cancellationRefundForm.originPosLineId || 0) || false,
+                };
+
+                formMode = null;
+                formError = "";
+                formNotice = _t("Devolución agregada al ticket. Al cobrarla, la suscripción se cancelará.");
+                renewalForm = null;
+                upsaleForm = null;
+                pendingChargeForm = null;
+                cancellationRefundForm = null;
                 participantEditForm = null;
                 renderDetail(currentDetail);
                 return;
