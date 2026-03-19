@@ -1559,48 +1559,6 @@ patch(ControlButtons.prototype, {
             `;
         };
 
-        const renderPartnerPhotoForm = () => {
-            if (formMode !== "partner_photo" || !partnerPhotoForm) {
-                return "";
-            }
-            return `
-                <div class="wgs-inline-form-card">
-                    <div class="wgs-inline-form-header">
-                        <strong>${this._escapeHtml(_t("Actualizar foto del cliente"))}</strong>
-                        <button type="button" class="wgs-inline-close-btn" data-action="cancel-partner-photo">${this._escapeHtml(_t("Cancelar"))}</button>
-                    </div>
-                    ${formError ? `<div class="wgs-inline-error">${this._escapeHtml(formError)}</div>` : ""}
-                    ${formNotice ? `<div class="wgs-inline-notice">${this._escapeHtml(formNotice)}</div>` : ""}
-                    <div class="wgs-new-partner-layout">
-                        <div class="wgs-new-partner-photo">
-                            <div class="wgs-new-partner-preview">
-                                ${partnerPhotoForm.cameraActive
-                                    ? `<video class="wgs-camera-preview" data-role="partner-camera-preview" autoplay playsinline muted></video>`
-                                    : partnerPhotoForm.imageDataUrl
-                                    ? `<img src="${this._escapeHtml(partnerPhotoForm.imageDataUrl)}" alt="${this._escapeHtml(_t("Foto del cliente"))}" />`
-                                    : `<div class="wgs-new-partner-empty-photo">${this._escapeHtml(_t("Sin foto"))}</div>`
-                                }
-                            </div>
-                        </div>
-                        <div class="wgs-inline-actions wgs-photo-actions-grid">
-                            <label class="wgs-secondary-action-btn wgs-file-action-btn">
-                                <span>${this._escapeHtml(_t("Subir foto"))}</span>
-                                <input type="file" accept="image/*" data-field="existing_partner_image_file" hidden />
-                            </label>
-                            ${!partnerPhotoForm.cameraActive
-                                ? `<button type="button" class="wgs-secondary-action-btn" data-action="start-existing-partner-camera">${this._escapeHtml(_t("Usar cámara"))}</button>`
-                                : `
-                                    <button type="button" class="wgs-primary-action-btn" data-action="capture-existing-partner-camera">${this._escapeHtml(_t("Capturar"))}</button>
-                                    <button type="button" class="wgs-secondary-action-btn" data-action="stop-existing-partner-camera">${this._escapeHtml(_t("Apagar cámara"))}</button>
-                                `
-                            }
-                            <button type="button" class="wgs-primary-action-btn" data-action="save-partner-photo">${this._escapeHtml(_t("Guardar foto"))}</button>
-                        </div>
-                    </div>
-                </div>
-            `;
-        };
-
         const renderRenewalForm = (item) => {
             if (
                 formMode !== "renewal"
@@ -1819,6 +1777,43 @@ patch(ControlButtons.prototype, {
 
             const subscriptions = Array.isArray(detail.items) ? detail.items : [];
             const summaryStateClass = this._getStateClass(detail.state);
+            const isEditingPartnerPhoto = formMode === "partner_photo" && partnerPhotoForm && Number(partnerPhotoForm.partnerId || 0) === Number(detail.partner_id || 0);
+            const detailAvatarHtml = isEditingPartnerPhoto
+                ? `
+                    <div class="wgs-detail-avatar-stack wgs-detail-avatar-stack-editing">
+                        <div class="wgs-detail-avatar-editor">
+                            ${partnerPhotoForm.cameraActive
+                                ? `<video class="wgs-camera-preview" data-role="partner-camera-preview" autoplay playsinline muted></video>`
+                                : partnerPhotoForm.imageDataUrl
+                                ? `<img class="wgs-detail-avatar" src="${this._escapeHtml(partnerPhotoForm.imageDataUrl)}" alt="${this._escapeHtml(_t("Foto del cliente"))}" loading="lazy" />`
+                                : `<div class="wgs-new-partner-empty-photo">${this._escapeHtml(_t("Sin foto"))}</div>`
+                            }
+                        </div>
+                        ${formError ? `<div class="wgs-inline-error wgs-inline-error-compact">${this._escapeHtml(formError)}</div>` : ""}
+                        ${formNotice ? `<div class="wgs-inline-notice wgs-inline-notice-compact">${this._escapeHtml(formNotice)}</div>` : ""}
+                        <div class="wgs-inline-actions wgs-photo-actions-grid wgs-detail-photo-actions">
+                            <label class="wgs-secondary-action-btn wgs-file-action-btn">
+                                <span>${this._escapeHtml(_t("Subir foto"))}</span>
+                                <input type="file" accept="image/*" data-field="existing_partner_image_file" hidden />
+                            </label>
+                            ${!partnerPhotoForm.cameraActive
+                                ? `<button type="button" class="wgs-secondary-action-btn" data-action="start-existing-partner-camera">${this._escapeHtml(_t("Usar cámara"))}</button>`
+                                : `
+                                    <button type="button" class="wgs-primary-action-btn" data-action="capture-existing-partner-camera">${this._escapeHtml(_t("Capturar"))}</button>
+                                    <button type="button" class="wgs-secondary-action-btn" data-action="stop-existing-partner-camera">${this._escapeHtml(_t("Apagar cámara"))}</button>
+                                `
+                            }
+                            <button type="button" class="wgs-primary-action-btn" data-action="save-partner-photo">${this._escapeHtml(_t("Guardar foto"))}</button>
+                            <button type="button" class="wgs-secondary-action-btn" data-action="cancel-partner-photo">${this._escapeHtml(_t("Cancelar"))}</button>
+                        </div>
+                    </div>
+                `
+                : `
+                    <div class="wgs-detail-avatar-stack">
+                        <img class="wgs-detail-avatar" src="${this._escapeHtml(detail.image_url || "")}" alt="${this._escapeHtml(detail.partner_name || "")}" loading="lazy" />
+                        <button type="button" class="wgs-secondary-action-btn wgs-avatar-edit-btn" data-action="open-partner-photo">${this._escapeHtml(_t("Editar foto"))}</button>
+                    </div>
+                `;
             const subscriptionsHtml = subscriptions.length
                 ? subscriptions.map((item) => {
                     const stateClass = this._getStateClass(item.native_state_key);
@@ -1911,11 +1906,8 @@ patch(ControlButtons.prototype, {
                 `;
 
             detailPane.innerHTML = `
-                <div class="wgs-detail-header-card">
-                    <div class="wgs-detail-avatar-stack">
-                        <img class="wgs-detail-avatar" src="${this._escapeHtml(detail.image_url || "")}" alt="${this._escapeHtml(detail.partner_name || "")}" loading="lazy" />
-                        <button type="button" class="wgs-secondary-action-btn wgs-avatar-edit-btn" data-action="open-partner-photo">${this._escapeHtml(_t("Editar foto"))}</button>
-                    </div>
+                <div class="wgs-detail-header-card ${isEditingPartnerPhoto ? "wgs-detail-header-card-editing" : ""}">
+                    ${detailAvatarHtml}
                     <div class="wgs-detail-header-text">
                         <div class="wgs-detail-title-row">
                             <h4>${this._escapeHtml(detail.partner_name || "-")}</h4>
@@ -1934,7 +1926,6 @@ patch(ControlButtons.prototype, {
                 <div class="wgs-detail-actions-bar">
                     <button type="button" class="wgs-primary-action-btn" data-action="open-new">${this._escapeHtml(_t("Nueva suscripcion"))}</button>
                 </div>
-                ${renderPartnerPhotoForm()}
                 ${renderNewSubscriptionForm()}
                 <div class="wgs-detail-note">${this._escapeHtml(_t("Renovación, upsale, cobro pendiente y participantes se operan desde cada tarjeta de suscripción."))}</div>
                 <div class="wgs-detail-section">
@@ -2864,6 +2855,9 @@ patch(ControlButtons.prototype, {
                 try {
                     const result = await this._updatePartnerPhotoForPos(partnerPhotoForm.partnerId, partnerPhotoForm.imageBase64);
                     stopPartnerCamera();
+                    if (currentDetail && Number(currentDetail.partner_id || 0) === Number(partnerPhotoForm.partnerId || 0)) {
+                        currentDetail.image_url = result && result.image_url ? result.image_url : partnerPhotoForm.imageDataUrl;
+                    }
                     formMode = null;
                     partnerPhotoForm = null;
                     formNotice = _t("Foto actualizada correctamente.");
@@ -3735,6 +3729,10 @@ patch(ControlButtons.prototype, {
                 padding: 1rem;
                 margin-bottom: 0.85rem;
             }
+            .wgs-detail-header-card-editing {
+                grid-template-columns: minmax(168px, 196px) 1fr;
+                align-items: start;
+            }
             .wgs-detail-avatar {
                 width: 72px;
                 height: 72px;
@@ -3749,9 +3747,31 @@ patch(ControlButtons.prototype, {
                 gap: 0.5rem;
                 align-items: flex-start;
             }
+            .wgs-detail-avatar-stack-editing {
+                width: 100%;
+            }
+            .wgs-detail-avatar-editor {
+                width: 100%;
+                max-width: 168px;
+                aspect-ratio: 1 / 1;
+                border-radius: 0.7rem;
+                border: 1px solid #d7deea;
+                background: #eff6ff;
+                overflow: hidden;
+            }
+            .wgs-detail-avatar-editor .wgs-detail-avatar {
+                width: 100%;
+                height: 100%;
+                max-width: none;
+                border: none;
+                border-radius: 0;
+            }
             .wgs-avatar-edit-btn {
                 width: 100%;
                 white-space: nowrap;
+            }
+            .wgs-detail-photo-actions {
+                width: 100%;
             }
             .wgs-detail-title-row {
                 display: flex;
@@ -3899,6 +3919,12 @@ patch(ControlButtons.prototype, {
                 padding: 0.65rem 0.75rem;
                 font-size: 0.84rem;
                 font-weight: 600;
+            }
+            .wgs-inline-error-compact,
+            .wgs-inline-notice-compact {
+                width: 100%;
+                padding: 0.45rem 0.55rem;
+                font-size: 0.76rem;
             }
             .wgs-inline-loading {
                 color: #475569;
@@ -4124,11 +4150,17 @@ patch(ControlButtons.prototype, {
                 .wgs-detail-header-card {
                     grid-template-columns: 1fr;
                 }
+                .wgs-detail-header-card-editing {
+                    grid-template-columns: 1fr;
+                }
                 .wgs-new-partner-layout {
                     grid-template-columns: 1fr;
                 }
                 .wgs-new-partner-preview,
                 .wgs-camera-preview {
+                    max-width: 100%;
+                }
+                .wgs-detail-avatar-editor {
                     max-width: 100%;
                 }
                 .wgs-photo-actions-grid {
