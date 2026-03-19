@@ -121,6 +121,30 @@ class PosOrder(models.Model):
     )
 
     @api.model
+    def wgs_get_partner_directory_rows_for_pos(self, offset=0, limit=500):
+        return self.env['sale.order'].get_partner_directory_rows_for_pos(offset=offset, limit=limit)
+
+    @api.model
+    def wgs_get_partner_subscription_detail_for_pos(self, partner_id):
+        return self.env['sale.order'].get_partner_subscription_detail_for_pos(partner_id)
+
+    @api.model
+    def wgs_update_subscription_participants_for_pos(self, subscription_id, participant_ids):
+        return self.env['sale.order'].wgs_update_subscription_participants_for_pos(subscription_id, participant_ids)
+
+    @api.model
+    def wgs_create_partner_for_pos(self, vals):
+        return self.env['sale.order'].wgs_create_partner_for_pos(vals)
+
+    @api.model
+    def wgs_update_partner_photo_for_pos(self, partner_id, image_1920):
+        return self.env['sale.order'].wgs_update_partner_photo_for_pos(partner_id, image_1920)
+
+    @api.model
+    def wgs_resync_subscription_access_for_pos(self, subscription_id):
+        return self.env['sale.order'].wgs_resync_subscription_access_for_pos(subscription_id)
+
+    @api.model
     def _wgs_is_subscription_buffer_ready(self):
         model_name = 'wgs.pos.subscription.buffer'
         if model_name not in self.env.registry:

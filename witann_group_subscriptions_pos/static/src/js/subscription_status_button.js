@@ -397,6 +397,45 @@ function waitForNextTick() {
     return new Promise((resolve) => window.setTimeout(resolve, 0));
 }
 
+function captureFocusState(root) {
+    const active = document.activeElement;
+    if (!root || !active || !root.contains(active)) {
+        return null;
+    }
+    const field = active.dataset && active.dataset.field ? active.dataset.field : "";
+    const selector = field
+        ? `[data-field="${field}"]`
+        : active.classList && active.classList.contains("wgs-filter-search")
+            ? ".wgs-filter-search"
+            : "";
+    if (!selector) {
+        return null;
+    }
+    return {
+        selector,
+        start: typeof active.selectionStart === "number" ? active.selectionStart : null,
+        end: typeof active.selectionEnd === "number" ? active.selectionEnd : null,
+    };
+}
+
+function restoreFocusState(root, state) {
+    if (!root || !state || !state.selector) {
+        return;
+    }
+    const target = root.querySelector(state.selector);
+    if (!target || typeof target.focus !== "function") {
+        return;
+    }
+    target.focus({ preventScroll: true });
+    if (
+        typeof state.start === "number"
+        && typeof state.end === "number"
+        && typeof target.setSelectionRange === "function"
+    ) {
+        target.setSelectionRange(state.start, state.end);
+    }
+}
+
 async function stageSubscriptionConfigsForOrder(orm, order) {
     const configs = collectSubscriptionConfigsFromOrder(order);
     if (!configs.length) {
@@ -482,8 +521,8 @@ patch(ControlButtons.prototype, {
 
         while (true) {
             const batch = await this.orm.call(
-                "sale.order",
-                "get_partner_directory_rows_for_pos",
+                "pos.order",
+                "wgs_get_partner_directory_rows_for_pos",
                 [offset, batchSize]
             );
             if (!Array.isArray(batch) || !batch.length) {
@@ -500,15 +539,15 @@ patch(ControlButtons.prototype, {
     },
 
     async _fetchPartnerSubscriptionDetail(partnerId) {
-        return this.orm.call("sale.order", "get_partner_subscription_detail_for_pos", [partnerId]);
+        return this.orm.call("pos.order", "wgs_get_partner_subscription_detail_for_pos", [partnerId]);
     },
 
     async _createPartnerForPos(values) {
-        return this.orm.call("sale.order", "wgs_create_partner_for_pos", [values || {}]);
+        return this.orm.call("pos.order", "wgs_create_partner_for_pos", [values || {}]);
     },
 
     async _updatePartnerPhotoForPos(partnerId, imageBase64) {
-        return this.orm.call("sale.order", "wgs_update_partner_photo_for_pos", [partnerId, imageBase64 || false]);
+        return this.orm.call("pos.order", "wgs_update_partner_photo_for_pos", [partnerId, imageBase64 || false]);
     },
 
     async _fetchSubscriptionProductCatalog(searchTerm = "") {
@@ -562,7 +601,7 @@ patch(ControlButtons.prototype, {
 
     async _saveSubscriptionParticipants(subscriptionId, participantIds) {
         return this.orm.call(
-            "sale.order",
+            "pos.order",
             "wgs_update_subscription_participants_for_pos",
             [subscriptionId, participantIds || []]
         );
@@ -570,7 +609,7 @@ patch(ControlButtons.prototype, {
 
     async _resyncSubscriptionAccess(subscriptionId) {
         return this.orm.call(
-            "sale.order",
+            "pos.order",
             "wgs_resync_subscription_access_for_pos",
             [subscriptionId]
         );
@@ -1471,7 +1510,7 @@ patch(ControlButtons.prototype, {
                             ${newPartnerForm.cameraActive ? `
                                 <video class="wgs-camera-preview" data-role="partner-camera-preview" autoplay playsinline muted></video>
                             ` : ""}
-                            <div class="wgs-inline-actions wgs-inline-actions-stacked">
+                            <div class="wgs-inline-actions wgs-photo-actions-grid">
                                 <label class="wgs-secondary-action-btn wgs-file-action-btn">
                                     <span>${this._escapeHtml(_t("Subir foto"))}</span>
                                     <input type="file" accept="image/*" data-field="partner_image_file" hidden />
@@ -1545,7 +1584,7 @@ patch(ControlButtons.prototype, {
                                 <video class="wgs-camera-preview" data-role="partner-camera-preview" autoplay playsinline muted></video>
                             ` : ""}
                         </div>
-                        <div class="wgs-inline-actions wgs-inline-actions-stacked">
+                        <div class="wgs-inline-actions wgs-photo-actions-grid">
                             <label class="wgs-secondary-action-btn wgs-file-action-btn">
                                 <span>${this._escapeHtml(_t("Subir foto"))}</span>
                                 <input type="file" accept="image/*" data-field="existing_partner_image_file" hidden />
@@ -1908,6 +1947,12 @@ patch(ControlButtons.prototype, {
             syncPartnerCameraPreview();
         };
 
+        const renderDetailPreservingFocus = (detail) => {
+            const focusState = captureFocusState(overlay);
+            renderDetail(detail);
+            restoreFocusState(overlay, focusState);
+        };
+
         const loadDetail = async (partnerId, options = {}) => {
             const force = Boolean(options && options.force);
             if (!partnerId) {
@@ -2111,6 +2156,12 @@ patch(ControlButtons.prototype, {
             }).join("");
 
             loadDetail(selectedPartnerId);
+        };
+
+        const renderPreservingFocus = () => {
+            const focusState = captureFocusState(overlay);
+            render();
+            restoreFocusState(overlay, focusState);
         };
 
         tbody.addEventListener("click", (event) => {
@@ -3126,8 +3177,8 @@ patch(ControlButtons.prototype, {
                         formError = _t("No se pudo procesar la foto seleccionada.");
                     }
                 }
+                render();
             }
-            render();
         });
 
         listPane.addEventListener("input", (event) => {
@@ -3171,11 +3222,11 @@ patch(ControlButtons.prototype, {
                 return;
             }
             if (shouldRender) {
-                renderDetail(currentDetail);
+                renderDetailPreservingFocus(currentDetail);
             }
         });
 
-        searchInput.addEventListener("input", render);
+        searchInput.addEventListener("input", renderPreservingFocus);
         stateSelect.addEventListener("change", render);
         birthdaySelect.addEventListener("change", render);
         sortSelect.addEventListener("change", render);
@@ -3887,20 +3938,21 @@ patch(ControlButtons.prototype, {
             }
             .wgs-new-partner-layout {
                 display: grid;
-                grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
-                gap: 1rem;
+                grid-template-columns: minmax(136px, 168px) minmax(0, 1fr);
+                gap: 0.8rem;
                 align-items: start;
             }
             .wgs-new-partner-photo {
                 display: flex;
                 flex-direction: column;
-                gap: 0.75rem;
+                gap: 0.45rem;
             }
             .wgs-new-partner-preview,
             .wgs-camera-preview {
                 width: 100%;
-                aspect-ratio: 3 / 4;
-                border-radius: 0.85rem;
+                max-width: 168px;
+                aspect-ratio: 1 / 1;
+                border-radius: 0.7rem;
                 border: 1px solid #d7deea;
                 background: #eff6ff;
                 overflow: hidden;
@@ -3923,6 +3975,19 @@ patch(ControlButtons.prototype, {
             }
             .wgs-inline-actions-stacked {
                 grid-template-columns: 1fr;
+            }
+            .wgs-photo-actions-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 0.4rem;
+            }
+            .wgs-new-partner-photo .wgs-primary-action-btn,
+            .wgs-new-partner-photo .wgs-secondary-action-btn,
+            .wgs-photo-actions-grid .wgs-primary-action-btn,
+            .wgs-photo-actions-grid .wgs-secondary-action-btn,
+            .wgs-photo-actions-grid .wgs-file-action-btn {
+                min-height: 36px;
+                padding: 0.45rem 0.55rem;
+                font-size: 0.8rem;
             }
             .wgs-file-action-btn {
                 display: inline-flex;
@@ -4056,6 +4121,13 @@ patch(ControlButtons.prototype, {
                     grid-template-columns: 1fr;
                 }
                 .wgs-new-partner-layout {
+                    grid-template-columns: 1fr;
+                }
+                .wgs-new-partner-preview,
+                .wgs-camera-preview {
+                    max-width: 100%;
+                }
+                .wgs-photo-actions-grid {
                     grid-template-columns: 1fr;
                 }
                 .wgs-detail-avatar {
