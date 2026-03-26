@@ -895,6 +895,64 @@ patch(ControlButtons.prototype, {
                 activeCameraStream = null;
             }
         };
+        const canUsePartnerCamera = () => Boolean(
+            navigator.mediaDevices && navigator.mediaDevices.getUserMedia
+        );
+        const applyImageDataUrlToForm = (targetForm, dataUrl) => {
+            if (!targetForm || !dataUrl) {
+                return;
+            }
+            targetForm.imageDataUrl = dataUrl;
+            targetForm.imageBase64 = this._stripDataUrlPrefix(dataUrl);
+        };
+        const startPartnerCameraForForm = async (targetForm, renderFn, logLabel) => {
+            if (!targetForm || !canUsePartnerCamera()) {
+                formError = _t("La cámara no está disponible en este equipo o navegador.");
+                renderFn();
+                return false;
+            }
+            try {
+                stopPartnerCamera();
+                activeCameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
+                targetForm.cameraActive = true;
+                formError = "";
+                renderFn();
+                return true;
+            } catch (error) {
+                console.error(logLabel, error);
+                formError = _t("No se pudo acceder a la cámara del equipo.");
+                renderFn();
+                return false;
+            }
+        };
+        const stopPartnerCameraForForm = (targetForm, renderFn) => {
+            stopPartnerCamera();
+            if (targetForm) {
+                targetForm.cameraActive = false;
+            }
+            renderFn();
+        };
+        const capturePartnerCameraForForm = (targetForm, previewRoot, renderFn) => {
+            if (!targetForm || !activeCameraStream) {
+                return false;
+            }
+            const video = previewRoot.querySelector('[data-role="partner-camera-preview"]');
+            if (!video) {
+                formError = _t("No se pudo leer la vista previa de la cámara.");
+                renderFn();
+                return false;
+            }
+            const canvas = document.createElement("canvas");
+            canvas.width = video.videoWidth || 480;
+            canvas.height = video.videoHeight || 640;
+            const context = canvas.getContext("2d");
+            context.drawImage(video, 0, 0, canvas.width, canvas.height);
+            applyImageDataUrlToForm(targetForm, canvas.toDataURL("image/jpeg", 0.9));
+            targetForm.cameraActive = false;
+            stopPartnerCamera();
+            renderFn();
+            return true;
+        };
 
         const footer = document.createElement("div");
         footer.className = "wgs-status-modal-footer";
@@ -2478,53 +2536,15 @@ patch(ControlButtons.prototype, {
                 return;
             }
             if (action === "start-partner-camera") {
-                if (!newPartnerForm || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                    formError = _t("La cámara no está disponible en este equipo o navegador.");
-                    render();
-                    return;
-                }
-                try {
-                    stopPartnerCamera();
-                    activeCameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
-                    newPartnerForm.cameraActive = true;
-                    formError = "";
-                    render();
-                } catch (error) {
-                    console.error("Error al abrir cámara para partner POS", error);
-                    formError = _t("No se pudo acceder a la cámara del equipo.");
-                    render();
-                }
+                await startPartnerCameraForForm(newPartnerForm, render, "Error al abrir cámara para partner POS");
                 return;
             }
             if (action === "stop-partner-camera") {
-                stopPartnerCamera();
-                if (newPartnerForm) {
-                    newPartnerForm.cameraActive = false;
-                }
-                render();
+                stopPartnerCameraForForm(newPartnerForm, render);
                 return;
             }
             if (action === "capture-partner-camera") {
-                if (!newPartnerForm || !activeCameraStream) {
-                    return;
-                }
-                const video = overlay.querySelector('[data-role="partner-camera-preview"]');
-                if (!video) {
-                    formError = _t("No se pudo leer la vista previa de la cámara.");
-                    render();
-                    return;
-                }
-                const canvas = document.createElement("canvas");
-                canvas.width = video.videoWidth || 480;
-                canvas.height = video.videoHeight || 640;
-                const context = canvas.getContext("2d");
-                context.drawImage(video, 0, 0, canvas.width, canvas.height);
-                const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
-                newPartnerForm.imageDataUrl = dataUrl;
-                newPartnerForm.imageBase64 = this._stripDataUrlPrefix(dataUrl);
-                newPartnerForm.cameraActive = false;
-                stopPartnerCamera();
-                render();
+                capturePartnerCameraForForm(newPartnerForm, overlay, render);
                 return;
             }
             if (action === "save-new-partner") {
@@ -2601,30 +2621,11 @@ patch(ControlButtons.prototype, {
                 return;
             }
             if (action === "start-partner-camera") {
-                if (!newPartnerForm || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                    formError = _t("La cámara no está disponible en este equipo o navegador.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-                try {
-                    stopPartnerCamera();
-                    activeCameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
-                    newPartnerForm.cameraActive = true;
-                    formError = "";
-                    renderDetail(currentDetail);
-                } catch (error) {
-                    console.error("Error al abrir cámara para partner POS", error);
-                    formError = _t("No se pudo acceder a la cámara del equipo.");
-                    renderDetail(currentDetail);
-                }
+                await startPartnerCameraForForm(newPartnerForm, () => renderDetail(currentDetail), "Error al abrir cámara para partner POS");
                 return;
             }
             if (action === "stop-partner-camera") {
-                stopPartnerCamera();
-                if (newPartnerForm) {
-                    newPartnerForm.cameraActive = false;
-                }
-                renderDetail(currentDetail);
+                stopPartnerCameraForForm(newPartnerForm, () => renderDetail(currentDetail));
                 return;
             }
             if (action === "open-partner-photo") {
@@ -2641,76 +2642,19 @@ patch(ControlButtons.prototype, {
                 return;
             }
             if (action === "start-existing-partner-camera") {
-                if (!partnerPhotoForm || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                    formError = _t("La cámara no está disponible en este equipo o navegador.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-                try {
-                    stopPartnerCamera();
-                    activeCameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
-                    partnerPhotoForm.cameraActive = true;
-                    formError = "";
-                    renderDetail(currentDetail);
-                } catch (error) {
-                    console.error("Error al abrir cámara para editar foto POS", error);
-                    formError = _t("No se pudo acceder a la cámara del equipo.");
-                    renderDetail(currentDetail);
-                }
+                await startPartnerCameraForForm(partnerPhotoForm, () => renderDetail(currentDetail), "Error al abrir cámara para editar foto POS");
                 return;
             }
             if (action === "stop-existing-partner-camera") {
-                stopPartnerCamera();
-                if (partnerPhotoForm) {
-                    partnerPhotoForm.cameraActive = false;
-                }
-                renderDetail(currentDetail);
+                stopPartnerCameraForForm(partnerPhotoForm, () => renderDetail(currentDetail));
                 return;
             }
             if (action === "capture-existing-partner-camera") {
-                if (!partnerPhotoForm || !activeCameraStream) {
-                    return;
-                }
-                const video = overlay.querySelector('[data-role="partner-camera-preview"]');
-                if (!video) {
-                    formError = _t("No se pudo leer la vista previa de la cámara.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-                const canvas = document.createElement("canvas");
-                canvas.width = video.videoWidth || 480;
-                canvas.height = video.videoHeight || 640;
-                const context = canvas.getContext("2d");
-                context.drawImage(video, 0, 0, canvas.width, canvas.height);
-                const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
-                partnerPhotoForm.imageDataUrl = dataUrl;
-                partnerPhotoForm.imageBase64 = this._stripDataUrlPrefix(dataUrl);
-                partnerPhotoForm.cameraActive = false;
-                stopPartnerCamera();
-                renderDetail(currentDetail);
+                capturePartnerCameraForForm(partnerPhotoForm, overlay, () => renderDetail(currentDetail));
                 return;
             }
             if (action === "capture-partner-camera") {
-                if (!newPartnerForm || !activeCameraStream) {
-                    return;
-                }
-                const video = detailPane.querySelector('[data-role="partner-camera-preview"]');
-                if (!video) {
-                    formError = _t("No se pudo leer la vista previa de la cámara.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-                const canvas = document.createElement("canvas");
-                canvas.width = video.videoWidth || 480;
-                canvas.height = video.videoHeight || 640;
-                const context = canvas.getContext("2d");
-                context.drawImage(video, 0, 0, canvas.width, canvas.height);
-                const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
-                newPartnerForm.imageDataUrl = dataUrl;
-                newPartnerForm.imageBase64 = this._stripDataUrlPrefix(dataUrl);
-                newPartnerForm.cameraActive = false;
-                stopPartnerCamera();
-                renderDetail(currentDetail);
+                capturePartnerCameraForForm(newPartnerForm, detailPane, () => renderDetail(currentDetail));
                 return;
             }
             if (action === "open-renewal") {
@@ -3459,8 +3403,7 @@ patch(ControlButtons.prototype, {
                 if (file) {
                     try {
                         const dataUrl = await this._readFileAsDataUrl(file);
-                        partnerPhotoForm.imageDataUrl = dataUrl;
-                        partnerPhotoForm.imageBase64 = this._stripDataUrlPrefix(dataUrl);
+                        applyImageDataUrlToForm(partnerPhotoForm, dataUrl);
                     } catch (error) {
                         console.error("Error al leer foto existente de partner POS", error);
                         formError = _t("No se pudo procesar la foto seleccionada.");
@@ -3486,8 +3429,7 @@ patch(ControlButtons.prototype, {
                 if (file) {
                     try {
                         const dataUrl = await this._readFileAsDataUrl(file);
-                        newPartnerForm.imageDataUrl = dataUrl;
-                        newPartnerForm.imageBase64 = this._stripDataUrlPrefix(dataUrl);
+                        applyImageDataUrlToForm(newPartnerForm, dataUrl);
                     } catch (error) {
                         console.error("Error al leer foto de partner POS", error);
                         formError = _t("No se pudo procesar la foto seleccionada.");
