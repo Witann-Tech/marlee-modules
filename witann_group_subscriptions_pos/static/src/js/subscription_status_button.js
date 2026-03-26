@@ -3330,7 +3330,11 @@ patch(ControlButtons.prototype, {
                     const lineResult = await addConfiguredProductLineToOrder(this, order, productRecord, {
                         quantity: 1,
                         merge: false,
-                        price: Number(renewalForm.amount || 0),
+                        price: Number(
+                            renewalForm.displayAmount !== undefined
+                                ? renewalForm.displayAmount
+                                : (renewalForm.amount || 0)
+                        ),
                         metadata: {
                             flow: "renewal",
                             partner_id: holderPartnerId || false,
