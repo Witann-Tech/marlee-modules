@@ -2746,6 +2746,11 @@ patch(ControlButtons.prototype, {
                 if (!participantIds.includes(selectedPartnerId)) {
                     participantIds.unshift(selectedPartnerId);
                 }
+                const posChargeAmount = Number(
+                    newSubscriptionForm.displayPrice !== undefined
+                        ? newSubscriptionForm.displayPrice
+                        : (newSubscriptionForm.price || 0)
+                );
                 if (participantIds.length > Number(newSubscriptionForm.maxParticipantsTotal || 1)) {
                     formError = _t("Estas excediendo el cupo maximo de participantes para este paquete.");
                     renderDetail(currentDetail);
@@ -2800,7 +2805,7 @@ patch(ControlButtons.prototype, {
                     addResult = await addProductToOrder(this, order, productRecord, {
                         quantity: 1,
                         merge: false,
-                        price: Number(newSubscriptionForm.price || 0),
+                        price: posChargeAmount,
                     });
                     added = Boolean(addResult);
                 } catch (error) {
@@ -2832,7 +2837,7 @@ patch(ControlButtons.prototype, {
                     return;
                 }
 
-                setLineUnitPrice(targetLine, Number(newSubscriptionForm.price || 0));
+                setLineUnitPrice(targetLine, posChargeAmount);
                 targetLine.wgsSubscriptionConfig = {
                     flow: "new",
                     partner_id: selectedPartnerId,
