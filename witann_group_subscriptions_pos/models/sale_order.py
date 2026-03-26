@@ -5,7 +5,6 @@ from dateutil.relativedelta import relativedelta
 
 from odoo import _, api, fields, models
 from odoo.exceptions import AccessError
-from odoo.osv import expression
 from odoo.tools.safe_eval import safe_eval
 
 _logger = logging.getLogger(__name__)
@@ -76,6 +75,16 @@ class SaleOrder(models.Model):
         'x_studio_last_access',
         'x_studio_ultimo_acceso',
     )
+
+    @api.model
+    def _wgs_and_domains_for_pos(self, left_domain, right_domain):
+        left_domain = list(left_domain or [])
+        right_domain = list(right_domain or [])
+        if not left_domain:
+            return right_domain
+        if not right_domain:
+            return left_domain
+        return ['&', *left_domain, *right_domain]
 
     @api.model
     def get_partner_subscription_status_for_pos(self, partner_id):
@@ -592,10 +601,10 @@ class SaleOrder(models.Model):
             ('participant_ids', 'in', partner.id),
             ('partner_id', '=', partner.id),
         ]
-        domain = expression.AND([
+        domain = self._wgs_and_domains_for_pos(
             self._get_subscription_action_domain_for_pos(),
             partner_domain,
-        ])
+        )
 
         subscriptions = self.sudo().search(domain, order='id desc')
         return subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
@@ -611,10 +620,10 @@ class SaleOrder(models.Model):
             ('participant_ids', 'in', partner_ids),
             ('partner_id', 'in', partner_ids),
         ]
-        domain = expression.AND([
+        domain = self._wgs_and_domains_for_pos(
             self._get_subscription_action_domain_for_pos(),
             partner_domain,
-        ])
+        )
 
         subscriptions = self.sudo().search(domain, order='id desc')
         subscriptions = subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
@@ -643,7 +652,7 @@ class SaleOrder(models.Model):
             action_domain = self._parse_action_domain_for_pos(action.domain)
 
         if action_domain:
-            return expression.AND([base_domain, action_domain])
+            return self._wgs_and_domains_for_pos(base_domain, action_domain)
         return base_domain
 
     @api.model
