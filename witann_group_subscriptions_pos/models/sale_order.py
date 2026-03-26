@@ -766,23 +766,26 @@ class SaleOrder(models.Model):
         if hard_end_date and (not valid_until or hard_end_date < valid_until):
             valid_until = hard_end_date
 
-        if has_replacement_subscription:
+        force_closed = bool(
+            has_replacement_subscription
+            or (hard_end_date and hard_end_date <= today)
+            or (start_date and hard_end_date and hard_end_date < start_date)
+        )
+
+        if force_closed:
             access_state = False
             is_valid = False
             native_state_key = 'closed'
             native_state_label = _('Cerrada')
-            reason = _('La suscripción fue reemplazada por un upsale posterior.')
-        elif hard_end_date and hard_end_date < today:
-            access_state = False
-            is_valid = False
-            native_state_key = 'closed'
-            native_state_label = _('Cerrada')
-            reason = _('La suscripción ya terminó y no debe contarse como vigente.')
+            if has_replacement_subscription:
+                reason = _('La suscripción fue reemplazada por un upsale posterior.')
+            else:
+                reason = _('La suscripción ya terminó y no debe contarse como vigente.')
         elif start_date and start_date > today:
             access_state = False
             is_valid = False
             reason = _('La suscripción todavía no inicia.')
-        if access_state == 'enabled':
+        elif access_state == 'enabled':
             is_valid = True
             reason = _('Suscripción en progreso o en renovación.')
         elif access_state == 'suspended':
