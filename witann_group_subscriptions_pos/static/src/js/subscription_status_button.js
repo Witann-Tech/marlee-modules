@@ -1193,12 +1193,13 @@ patch(ControlButtons.prototype, {
                     preferredPlan ? Number(preferredPlan.plan_id || 0) || false : false,
                     preferredPlan ? Number(preferredPlan.pricing_id || 0) || false : false
                 );
-                newSubscriptionForm.price = Number(charge && charge.recurring_price ? charge.recurring_price : 0);
-                newSubscriptionForm.displayPrice = Number(
+                const displayRecurringPrice = Number(
                     charge && charge.display_recurring_price !== undefined
                         ? charge.display_recurring_price
                         : (charge && charge.recurring_price ? charge.recurring_price : 0)
                 );
+                newSubscriptionForm.displayPrice = displayRecurringPrice;
+                newSubscriptionForm.price = displayRecurringPrice;
                 if (charge && (charge.plan_id || charge.pricing_id)) {
                     newSubscriptionForm.planChoice = `${Number(charge.plan_id || 0)}:${Number(charge.pricing_id || 0)}`;
                 }
@@ -1478,10 +1479,11 @@ patch(ControlButtons.prototype, {
             const plan = getSelectedPlan();
             const product = productCatalog.find((item) => Number(item.id) === Number(newSubscriptionForm.productId || 0)) || null;
             if (plan) {
-                newSubscriptionForm.price = Number(plan.price || 0);
-                newSubscriptionForm.displayPrice = Number(
+                const displayPlanPrice = Number(
                     plan.display_price !== undefined ? plan.display_price : (plan.price || 0)
                 );
+                newSubscriptionForm.displayPrice = displayPlanPrice;
+                newSubscriptionForm.price = displayPlanPrice;
             }
             if (product && plan) {
                 await recalculateNewSubscriptionCharge(product, plan);
