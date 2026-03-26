@@ -1262,8 +1262,7 @@ patch(ControlButtons.prototype, {
                         ? charge.display_recurring_price
                         : (charge && charge.recurring_price ? charge.recurring_price : 0)
                 );
-                newSubscriptionForm.displayPrice = displayRecurringPrice;
-                newSubscriptionForm.price = displayRecurringPrice;
+                newSubscriptionForm.chargeAmount = displayRecurringPrice;
                 if (charge && (charge.plan_id || charge.pricing_id)) {
                     newSubscriptionForm.planChoice = `${Number(charge.plan_id || 0)}:${Number(charge.pricing_id || 0)}`;
                 }
@@ -1521,8 +1520,7 @@ patch(ControlButtons.prototype, {
                 newSubscriptionForm.planChoice = `${Number(defaultChoice.plan_id || 0)}:${Number(defaultChoice.pricing_id || 0)}`;
             } else {
                 newSubscriptionForm.planChoice = "";
-                newSubscriptionForm.price = Number(product ? product.default_price || 0 : 0);
-                newSubscriptionForm.displayPrice = Number(
+                newSubscriptionForm.chargeAmount = Number(
                     product ? (product.default_display_price !== undefined ? product.default_display_price : (product.default_price || 0)) : 0
                 );
             }
@@ -1543,11 +1541,9 @@ patch(ControlButtons.prototype, {
             const plan = getSelectedPlan();
             const product = productCatalog.find((item) => Number(item.id) === Number(newSubscriptionForm.productId || 0)) || null;
             if (plan) {
-                const displayPlanPrice = Number(
+                newSubscriptionForm.chargeAmount = Number(
                     plan.display_price !== undefined ? plan.display_price : (plan.price || 0)
                 );
-                newSubscriptionForm.displayPrice = displayPlanPrice;
-                newSubscriptionForm.price = displayPlanPrice;
             }
             if (product && plan) {
                 await recalculateNewSubscriptionCharge(product, plan);
@@ -1653,7 +1649,7 @@ patch(ControlButtons.prototype, {
                         </div>
                     </div>
                     <div class="wgs-inline-form-meta">
-                        <div><span>${this._escapeHtml(_t("Precio"))}</span><strong>${this._escapeHtml(this._formatMoney(newSubscriptionForm.displayPrice || newSubscriptionForm.price || 0))}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Precio"))}</span><strong>${this._escapeHtml(this._formatMoney(newSubscriptionForm.chargeAmount || 0))}</strong></div>
                         <div><span>${this._escapeHtml(_t("Cupo total"))}</span><strong>${this._escapeHtml(String(newSubscriptionForm.maxParticipantsTotal || 1))}</strong></div>
                         ${Number(newSubscriptionForm.maxParticipantsTotal || 1) > 1 ? `<div><span>${this._escapeHtml(_t("Participantes seleccionados"))}</span><strong>${this._escapeHtml(String((newSubscriptionForm.participantIds || []).length || 0))}</strong></div>` : ""}
                         <div><span>${this._escapeHtml(_t("Cobertura del plan"))}</span><strong>${this._escapeHtml(this._formatDateDisplay(automaticEndDate) || "-")}</strong></div>
@@ -2813,9 +2809,7 @@ patch(ControlButtons.prototype, {
                     participantIds.unshift(selectedPartnerId);
                 }
                 const posChargeAmount = Number(
-                    newSubscriptionForm.displayPrice !== undefined
-                        ? newSubscriptionForm.displayPrice
-                        : (newSubscriptionForm.price || 0)
+                    newSubscriptionForm.chargeAmount || 0
                 );
                 if (participantIds.length > Number(newSubscriptionForm.maxParticipantsTotal || 1)) {
                     formError = _t("Estas excediendo el cupo maximo de participantes para este paquete.");
@@ -3513,8 +3507,7 @@ patch(ControlButtons.prototype, {
             productName: "",
             planChoice: "",
             plans: [],
-            price: 0,
-            displayPrice: 0,
+            chargeAmount: 0,
             startDate: formatTodayISO(),
             maxParticipantsTotal: 1,
             participantIds,
