@@ -1,0 +1,635 @@
+import logging
+from datetime import timedelta, date, datetime
+
+from dateutil.relativedelta import relativedelta
+
+from odoo import fields, models
+
+_logger = logging.getLogger(__name__)
+
+
+class PosOrderPricingMixin(models.Model):
+    _inherit = 'pos.order'
+
+    def _wgs_compute_upgrade_credit_amount(self, source_order, today=False, tax_included=False):
+        source_order.ensure_one()
+
+        recurring_total = self._wgs_get_order_recurring_total_amount(source_order, include_taxes=tax_included)
+        if recurring_total <= 0:
+            return 0.0
+
+        today = fields.Date.to_date(today) or fields.Date.context_today(self)
+        period_start, period_end = self._wgs_get_current_subscription_period_bounds(source_order, today=today)
+        if not period_start or not period_end:
+            return 0.0
+        if period_end <= period_start:
+            return 0.0
+        if today >= period_end:
+            return 0.0
+
+        effective_start = today if today > period_start else period_start
+        total_days = max((period_end - period_start).days, 1)
+        remaining_days = max((period_end - effective_start).days, 0)
+        credit_amount = recurring_total * (remaining_days / total_days)
+        return round(max(credit_amount, 0.0), 2)
+
+    def _wgs_get_order_recurring_total_amount(self, sale_order, include_taxes=False):
+        sale_order.ensure_one()
+        recurring_lines = sale_order.order_line.filtered(
+            lambda so_line: self._wgs_is_recurring_so_line(so_line) and abs(self._wgs_get_so_line_qty(so_line)) > 0
+        )
+        total = 0.0
+        for so_line in recurring_lines:
+            qty = abs(self._wgs_get_so_line_qty(so_line))
+            if include_taxes:
+                total += self._wgs_get_sale_order_line_total_with_tax(so_line, qty_override=qty)
+            else:
+                discount = float(so_line.discount or 0.0) if 'discount' in so_line._fields else 0.0
+                total += qty * float(so_line.price_unit or 0.0) * (1 - (discount / 100.0))
+        return max(total, 0.0)
+
+    def _wgs_get_sale_order_line_total_with_tax(self, so_line, qty_override=False):
+        so_line.ensure_one()
+        qty = abs(float(qty_override if qty_override is not False else self._wgs_get_so_line_qty(so_line)))
+        discount = float(so_line.discount or 0.0) if 'discount' in so_line._fields else 0.0
+        unit_price = float(so_line.price_unit or 0.0) * (1 - (discount / 100.0))
+        taxes = self.env['account.tax']
+        for field_name in ('tax_id', 'tax_ids'):
+            if field_name in so_line._fields and so_line[field_name]:
+                taxes = so_line[field_name]
+                break
+        if not taxes and so_line.product_id:
+            taxes = so_line.product_id.taxes_id
+        if not taxes and so_line.product_id and 'taxes_id' in so_line.product_id.product_tmpl_id._fields:
+            taxes = so_line.product_id.product_tmpl_id.taxes_id
+        if not taxes:
+            return round(max(unit_price * qty, 0.0), 2)
+        currency = so_line.order_id.currency_id if 'currency_id' in so_line.order_id._fields else False
+        partner = so_line.order_id.partner_id if 'partner_id' in so_line.order_id._fields else False
+        fiscal_position = so_line.order_id.fiscal_position_id if 'fiscal_position_id' in so_line.order_id._fields else False
+        if fiscal_position and hasattr(fiscal_position, 'map_tax'):
+            taxes = fiscal_position.map_tax(taxes, product=so_line.product_id, partner=partner or False)
+        result = taxes.compute_all(unit_price, currency=currency, quantity=qty, product=so_line.product_id, partner=partner)
+        return round(max(float(result.get('total_included') or 0.0), 0.0), 2)
+
+    def _wgs_get_price_with_taxes_for_pos(self, product, base_price, partner=False, company=False, fiscal_position=False):
+        product.ensure_one()
+        base_price = float(base_price or 0.0)
+        taxes = product.taxes_id
+        if not taxes and 'taxes_id' in product.product_tmpl_id._fields:
+            taxes = product.product_tmpl_id.taxes_id
+        if not taxes:
+            return round(max(base_price, 0.0), 2)
+
+        requested_company = (
+            company
+            or getattr(product, 'company_id', False)
+            or getattr(product.product_tmpl_id, 'company_id', False)
+            or self.company_id
+            or self.env.company
+        )
+        if requested_company:
+            filtered_taxes = taxes.filtered(lambda tax: not tax.company_id or tax.company_id == requested_company)
+            if filtered_taxes:
+                taxes = filtered_taxes
+
+        if fiscal_position and hasattr(fiscal_position, 'map_tax'):
+            taxes = fiscal_position.map_tax(taxes, product=product, partner=partner or False)
+
+        currency_company = requested_company
+        tax_companies = taxes.mapped('company_id').filtered(bool)
+        if len(tax_companies) == 1:
+            currency_company = tax_companies[0]
+        currency = currency_company.currency_id if currency_company and getattr(currency_company, 'currency_id', False) else False
+        result = taxes.compute_all(base_price, currency=currency, quantity=1.0, product=product, partner=partner or False)
+        return round(max(float(result.get('total_included') or 0.0), 0.0), 2)
+
+    def _wgs_is_recurring_so_line(self, so_line):
+        so_line.ensure_one()
+        if 'display_type' in so_line._fields and so_line.display_type:
+            return False
+        if so_line.product_id and so_line.product_id.product_tmpl_id.recurring_invoice:
+            return True
+
+        for field_name in ('subscription_plan_id', 'plan_id', 'recurring_plan_id'):
+            if field_name in so_line._fields and so_line[field_name]:
+                return True
+        for field_name in ('subscription_pricing_id', 'pricing_id', 'recurring_pricing_id'):
+            if field_name in so_line._fields and so_line[field_name]:
+                return True
+        return False
+
+    def _wgs_get_so_line_qty(self, so_line):
+        for field_name in ('product_uom_qty', 'quantity', 'qty'):
+            if field_name in so_line._fields:
+                return float(so_line[field_name] or 0.0)
+        return 0.0
+
+    def _wgs_get_current_subscription_period_bounds(self, source_order, today=False):
+        source_order.ensure_one()
+        today = fields.Date.to_date(today) or fields.Date.context_today(self)
+
+        period_end = self._wgs_get_first_date_from_order(source_order, ('recurring_next_date', 'next_invoice_date'))
+        delta = self._wgs_get_order_recurrence_delta(source_order)
+        if not period_end:
+            start_date = self._wgs_get_first_date_from_order(
+                source_order,
+                ('wgs_effective_start_date', 'start_date', 'date_start', 'subscription_start_date', 'date_order'),
+            ) or today
+            period_start = start_date
+            period_end = period_start + delta
+            safety_counter = 0
+            while period_end <= today and safety_counter < 120:
+                period_start = period_end
+                period_end = period_start + delta
+                safety_counter += 1
+        else:
+            period_start = period_end - delta
+
+        if isinstance(period_start, datetime):
+            period_start = period_start.date()
+        if isinstance(period_end, datetime):
+            period_end = period_end.date()
+
+        if isinstance(period_start, date) and isinstance(period_end, date):
+            return period_start, period_end
+        return False, False
+
+    def _wgs_get_order_recurrence_delta(self, sale_order):
+        sale_order.ensure_one()
+
+        interval = 1
+        unit = 'month'
+        if {'recurring_interval', 'recurring_rule_type'}.issubset(sale_order._fields):
+            interval = int(sale_order.recurring_interval or 1)
+            unit = sale_order.recurring_rule_type or 'month'
+        else:
+            plan = self._wgs_extract_plan_record_from_sale_order(sale_order)
+            if plan:
+                interval, unit = self._wgs_extract_interval_from_plan(plan)
+
+        interval = max(1, int(interval or 1))
+        unit_value = (unit or 'month').lower()
+        if 'day' in unit_value:
+            return relativedelta(days=interval)
+        if 'week' in unit_value:
+            return relativedelta(weeks=interval)
+        if 'year' in unit_value:
+            return relativedelta(years=interval)
+        return relativedelta(months=interval)
+
+    def _wgs_extract_plan_record_from_sale_order(self, sale_order):
+        sale_order.ensure_one()
+        if 'plan_id' in sale_order._fields and sale_order.plan_id:
+            return sale_order.plan_id
+
+        recurring_lines = sale_order.order_line.filtered(
+            lambda so_line: self._wgs_is_recurring_so_line(so_line)
+        )
+        line_plan_fields = ('subscription_plan_id', 'plan_id', 'recurring_plan_id')
+        for so_line in recurring_lines:
+            for field_name in line_plan_fields:
+                if field_name in so_line._fields and so_line[field_name]:
+                    return so_line[field_name]
+        return False
+
+    def _wgs_get_first_date_from_order(self, sale_order, field_names):
+        sale_order.ensure_one()
+        for field_name in field_names:
+            if field_name not in sale_order._fields:
+                continue
+            value = sale_order[field_name]
+            converted = self._wgs_to_date(value)
+            if converted:
+                return converted
+        return False
+
+    def _wgs_to_date(self, value):
+        if not value:
+            return False
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
+        return fields.Date.to_date(value)
+
+    def _wgs_resolve_plan_record(self, product, plan_id=False, pricing_id=False):
+        product.ensure_one()
+        resolved_plan = False
+        if pricing_id and 'sale.subscription.pricing' in self.env.registry:
+            pricing = self.env['sale.subscription.pricing'].browse(int(pricing_id)).exists()
+            if pricing:
+                resolved_plan = self._wgs_extract_plan_record_from_pricing(pricing)
+        if not resolved_plan and plan_id:
+            resolved_plan = self._wgs_find_plan_record_by_id(int(plan_id))
+        if not resolved_plan:
+            resolved_plan = self._wgs_extract_plan_record_from_product(product)
+        return resolved_plan
+
+    def _wgs_find_plan_record_by_id(self, plan_id):
+        if not plan_id:
+            return False
+        candidate_model_names = set()
+
+        for model_name in ('sale.order', 'sale.order.line', 'product.product', 'product.template'):
+            if model_name not in self.env.registry:
+                continue
+            for field in self.env[model_name]._fields.values():
+                if field.type != 'many2one':
+                    continue
+                comodel_name = getattr(field, 'comodel_name', '')
+                if self._wgs_is_plan_model_name(comodel_name):
+                    candidate_model_names.add(comodel_name)
+
+        for model_name in sorted(candidate_model_names):
+            if model_name not in self.env.registry:
+                continue
+            record = self.env[model_name].browse(plan_id).exists()
+            if record:
+                return record
+        return False
+
+    def _wgs_get_plan_min_end_threshold(self, plan, start_date, periods_count=1):
+        start_date = fields.Date.to_date(start_date) or fields.Date.context_today(self)
+        interval_value, interval_unit = self._wgs_extract_interval_from_plan(plan)
+        multiplier = max(1, int(periods_count or 1))
+        interval_value = interval_value * multiplier
+        if interval_unit == 'day':
+            return start_date + timedelta(days=interval_value)
+        if interval_unit == 'week':
+            return start_date + relativedelta(weeks=interval_value)
+        if interval_unit == 'year':
+            return start_date + relativedelta(years=interval_value)
+        return start_date + relativedelta(months=interval_value)
+
+    def _wgs_get_plan_period_end_date(self, plan, start_date, periods_count=1):
+        next_threshold = self._wgs_get_plan_min_end_threshold(plan, start_date, periods_count=periods_count)
+        if not next_threshold:
+            return False
+        start_date = fields.Date.to_date(start_date) or fields.Date.context_today(self)
+        period_end = fields.Date.to_date(next_threshold) - timedelta(days=1)
+        if period_end < start_date:
+            return start_date
+        return period_end
+
+    def _wgs_extract_interval_from_plan(self, plan):
+        interval_value = 1
+        interval_unit = 'month'
+        if not plan:
+            return interval_value, interval_unit
+
+        if {'recurring_interval', 'recurring_rule_type'}.issubset(plan._fields):
+            interval_value = int(plan.recurring_interval or 1)
+            interval_unit = plan.recurring_rule_type or 'month'
+        elif {'billing_period_value', 'billing_period_unit'}.issubset(plan._fields):
+            interval_value = int(plan.billing_period_value or 1)
+            interval_unit = plan.billing_period_unit or 'month'
+        elif {'interval_number', 'interval_type'}.issubset(plan._fields):
+            interval_value = int(plan.interval_number or 1)
+            interval_unit = plan.interval_type or 'month'
+        elif {'duration', 'duration_unit'}.issubset(plan._fields):
+            interval_value = int(plan.duration or 1)
+            interval_unit = plan.duration_unit or 'month'
+
+        interval_value = max(1, int(interval_value or 1))
+        interval_unit = (interval_unit or 'month').lower()
+        if 'day' in interval_unit:
+            return interval_value, 'day'
+        if 'quinc' in interval_unit:
+            return interval_value * 2, 'week'
+        if 'week' in interval_unit:
+            return interval_value, 'week'
+        if 'year' in interval_unit or 'annual' in interval_unit:
+            return interval_value, 'year'
+        return interval_value, 'month'
+
+    def _wgs_is_plan_model_name(self, model_name):
+        model_name = (model_name or '').lower()
+        if not model_name:
+            return False
+        if 'subscription.plan' in model_name or 'recurring.plan' in model_name:
+            return True
+        if 'recurr' in model_name:
+            return True
+        if 'subscription' in model_name and ('period' in model_name or 'template' in model_name):
+            return True
+        return model_name.endswith('.plan')
+
+    def _wgs_is_pricing_model_name(self, model_name):
+        model_name = (model_name or '').lower()
+        if not model_name:
+            return False
+        if 'subscription.pricing' in model_name or 'recurring.pricing' in model_name:
+            return True
+        return 'subscription' in model_name and 'price' in model_name
+
+    def _wgs_extract_plan_id_from_product(self, product):
+        plan = self._wgs_extract_plan_record_from_product(product)
+        return plan.id if plan else False
+
+    def _wgs_extract_plan_record_from_product(self, product):
+        product.ensure_one()
+
+        if self._wgs_is_plan_model_name(product._name):
+            return product
+        if self._wgs_is_plan_model_name(product.product_tmpl_id._name):
+            return product.product_tmpl_id
+
+        for source in (product, product.product_tmpl_id):
+            for field_name in ('plan_id', 'subscription_plan_id', 'recurring_plan_id'):
+                if field_name in source._fields and source[field_name]:
+                    return source[field_name]
+
+        for source in (product, product.product_tmpl_id):
+            for field_name, field in source._fields.items():
+                if field.type not in ('many2one', 'one2many', 'many2many'):
+                    continue
+                comodel_name = getattr(field, 'comodel_name', '')
+                normalized_name = (field_name or '').lower()
+                is_candidate_name = (
+                    ('plan' in normalized_name)
+                    or ('recurr' in normalized_name)
+                    or ('period' in normalized_name)
+                )
+                if not (self._wgs_is_plan_model_name(comodel_name) or is_candidate_name):
+                    continue
+                value = source[field_name]
+                if not value:
+                    continue
+                if field.type == 'many2one':
+                    return value
+                return value[:1]
+        return False
+
+    def _wgs_get_recurring_pricing_choice(self, product, fallback=0.0, preferred_plan_id=False, preferred_pricing_id=False):
+        product.ensure_one()
+        fallback_price = float(fallback or 0.0)
+
+        candidates = self._wgs_get_recurring_pricing_candidates(product)
+
+        if not candidates:
+            return {
+                'price': fallback_price,
+                'plan_id': False,
+                'pricing_id': False,
+            }
+
+        preferred_plan_id = int(preferred_plan_id or 0)
+        preferred_pricing_id = int(preferred_pricing_id or 0)
+        if preferred_pricing_id:
+            matching = [row for row in candidates if int(row.get('pricing_id') or 0) == preferred_pricing_id]
+            if matching:
+                return matching[0]
+        if preferred_plan_id:
+            matching = [row for row in candidates if int(row.get('plan_id') or 0) == preferred_plan_id]
+            if matching:
+                matching.sort(key=lambda row: (row['sequence'], row.get('pricing_id') or 0))
+                return matching[0]
+
+        candidates.sort(key=lambda row: (row['sequence'], row.get('pricing_id') or 0))
+        return candidates[0]
+
+    def _wgs_get_recurring_pricing_candidates(self, product):
+        product.ensure_one()
+        candidates = []
+        seen_pricing_ids = set()
+
+        for source in (product, product.product_tmpl_id):
+            for field_name in ('subscription_pricing_ids', 'recurring_pricing_ids'):
+                if field_name not in source._fields:
+                    continue
+                for pricing in source[field_name]:
+                    if pricing.id in seen_pricing_ids:
+                        continue
+                    candidate = self._wgs_build_pricing_candidate(pricing)
+                    if candidate:
+                        seen_pricing_ids.add(pricing.id)
+                        candidates.append(candidate)
+
+            for field_name, field in source._fields.items():
+                if field_name in ('subscription_pricing_ids', 'recurring_pricing_ids'):
+                    continue
+                if getattr(field, 'comodel_name', False) != 'sale.subscription.pricing':
+                    continue
+                if field.type not in ('many2one', 'one2many', 'many2many'):
+                    continue
+                records = source[field_name]
+                for pricing in records:
+                    if pricing.id in seen_pricing_ids:
+                        continue
+                    candidate = self._wgs_build_pricing_candidate(pricing)
+                    if candidate:
+                        seen_pricing_ids.add(pricing.id)
+                        candidates.append(candidate)
+
+        candidates.extend(self._wgs_search_product_pricelist_item_records(product))
+
+        if not candidates:
+            candidates.extend(self._wgs_search_subscription_pricing_records(product))
+
+        if not candidates:
+            _logger.warning(
+                'WGS POS: No recurring pricing candidates for product %s (id=%s). recurring_invoice=%s',
+                product.display_name,
+                product.id,
+                bool(getattr(product.product_tmpl_id, 'recurring_invoice', False)),
+            )
+
+        return candidates
+
+    def _wgs_search_product_pricelist_item_records(self, product):
+        model_name = 'product.pricelist.item'
+        if model_name not in self.env.registry:
+            return []
+
+        pricelist_item_model = self.env[model_name]
+        fields_map = pricelist_item_model._fields
+        records = pricelist_item_model.browse()
+
+        for field_name, field in fields_map.items():
+            if field.type != 'many2one':
+                continue
+            comodel_name = getattr(field, 'comodel_name', False)
+            if comodel_name == 'product.product':
+                records |= pricelist_item_model.search([(field_name, '=', product.id)])
+            elif comodel_name == 'product.template':
+                records |= pricelist_item_model.search([(field_name, '=', product.product_tmpl_id.id)])
+
+        output = []
+        seen = set()
+        for record in records:
+            if record.id in seen:
+                continue
+            seen.add(record.id)
+
+            plan = self._wgs_extract_plan_record_from_pricing(record)
+            if not plan:
+                continue
+
+            price = self._wgs_extract_price_from_pricing(record)
+            if price is None:
+                continue
+            interval_value, interval_unit = self._wgs_extract_interval_from_plan(plan)
+
+            output.append({
+                'sequence': self._wgs_extract_pricing_sequence(record),
+                'pricing_id': False,
+                'plan_id': plan.id,
+                'plan_name': plan.display_name,
+                'interval_label': self._wgs_extract_plan_interval_label_from_pricing(record),
+                'interval_value': interval_value,
+                'interval_unit': interval_unit,
+                'price': float(price),
+            })
+        return output
+
+    def _wgs_build_pricing_candidate(self, pricing):
+        plan = self._wgs_extract_plan_record_from_pricing(pricing)
+        price = self._wgs_extract_price_from_pricing(pricing)
+        if price is None:
+            return False
+        interval_value, interval_unit = self._wgs_extract_interval_from_plan(plan)
+        return {
+            'sequence': self._wgs_extract_pricing_sequence(pricing),
+            'pricing_id': pricing.id,
+            'plan_id': plan.id if plan else False,
+            'plan_name': plan.display_name if plan else False,
+            'interval_label': self._wgs_extract_plan_interval_label_from_pricing(pricing),
+            'interval_value': interval_value,
+            'interval_unit': interval_unit,
+            'price': float(price),
+        }
+
+    def _wgs_search_subscription_pricing_records(self, product):
+        pricing_model_name = 'sale.subscription.pricing'
+        if pricing_model_name not in self.env.registry:
+            return []
+
+        pricing_model = self.env[pricing_model_name]
+        fields_map = pricing_model._fields
+        records = pricing_model.browse()
+
+        for field_name in ('product_id', 'product_variant_id'):
+            if field_name in fields_map:
+                records |= pricing_model.search([(field_name, '=', product.id)])
+
+        for field_name in ('product_template_id', 'product_tmpl_id'):
+            if field_name in fields_map:
+                records |= pricing_model.search([(field_name, '=', product.product_tmpl_id.id)])
+
+        for field_name, field in fields_map.items():
+            if field.type != 'many2one':
+                continue
+            comodel_name = getattr(field, 'comodel_name', False)
+            if comodel_name == 'product.product':
+                records |= pricing_model.search([(field_name, '=', product.id)])
+            elif comodel_name == 'product.template':
+                records |= pricing_model.search([(field_name, '=', product.product_tmpl_id.id)])
+
+        seen = set()
+        output = []
+        for pricing in records:
+            if pricing.id in seen:
+                continue
+            seen.add(pricing.id)
+            plan = self._wgs_extract_plan_record_from_pricing(pricing)
+            price = self._wgs_extract_price_from_pricing(pricing)
+            if price is None:
+                continue
+            interval_value, interval_unit = self._wgs_extract_interval_from_plan(plan)
+            output.append({
+                'sequence': self._wgs_extract_pricing_sequence(pricing),
+                'pricing_id': pricing.id,
+                'plan_id': plan.id if plan else False,
+                'plan_name': plan.display_name if plan else False,
+                'interval_label': self._wgs_extract_plan_interval_label_from_pricing(pricing),
+                'interval_value': interval_value,
+                'interval_unit': interval_unit,
+                'price': float(price),
+            })
+        return output
+
+    def _wgs_extract_plan_id_from_pricing(self, pricing):
+        plan = self._wgs_extract_plan_record_from_pricing(pricing)
+        if plan:
+            return plan.id
+        return False
+
+    def _wgs_extract_plan_name_from_pricing(self, pricing):
+        plan = self._wgs_extract_plan_record_from_pricing(pricing)
+        if plan:
+            return plan.display_name
+        return False
+
+    def _wgs_extract_plan_interval_label_from_pricing(self, pricing):
+        plan = self._wgs_extract_plan_record_from_pricing(pricing)
+        if not plan:
+            return ''
+        interval_value, interval_unit = self._wgs_extract_interval_from_plan(plan)
+        return f'{interval_value} {interval_unit}'
+
+    def _wgs_extract_plan_record_from_pricing(self, pricing):
+        if self._wgs_is_plan_model_name(pricing._name):
+            return pricing
+
+        for field_name in ('plan_id', 'subscription_plan_id', 'recurring_plan_id'):
+            if field_name in pricing._fields and pricing[field_name]:
+                return pricing[field_name]
+
+        for field_name, field in pricing._fields.items():
+            if field.type not in ('many2one', 'one2many', 'many2many'):
+                continue
+            comodel_name = getattr(field, 'comodel_name', '')
+            normalized_name = (field_name or '').lower()
+            is_candidate_name = (
+                ('plan' in normalized_name)
+                or ('recurr' in normalized_name)
+                or ('period' in normalized_name)
+            )
+            if not (self._wgs_is_plan_model_name(comodel_name) or is_candidate_name):
+                continue
+            value = pricing[field_name]
+            if not value:
+                continue
+            if field.type == 'many2one':
+                return value
+            return value[:1]
+        return False
+
+    def _wgs_extract_price_from_pricing(self, pricing):
+        known_price_fields = (
+            'fixed_price',
+            'price',
+            'recurring_price',
+            'price_unit',
+            'unit_price',
+            'list_price',
+            'amount',
+        )
+        for field_name in known_price_fields:
+            if field_name not in pricing._fields:
+                continue
+            value = pricing[field_name]
+            if value is not None:
+                return float(value)
+
+        for field_name, field in pricing._fields.items():
+            if field_name in known_price_fields:
+                continue
+            if field.type not in ('float', 'monetary'):
+                continue
+            normalized_name = field_name.lower()
+            if 'price' not in normalized_name and 'amount' not in normalized_name:
+                continue
+            value = pricing[field_name]
+            if value is not None:
+                return float(value)
+        return None
+
+    def _wgs_extract_pricing_sequence(self, pricing):
+        if 'sequence' in pricing._fields and pricing.sequence is not None:
+            return int(pricing.sequence)
+        plan = self._wgs_extract_plan_record_from_pricing(pricing)
+        if plan and 'sequence' in plan._fields:
+            return int(plan.sequence or 1000)
+        return 1000
