@@ -2189,10 +2189,17 @@ class PosOrder(models.Model):
             if field_name in so_line._fields and so_line[field_name]:
                 taxes = so_line[field_name]
                 break
+        if not taxes and so_line.product_id:
+            taxes = so_line.product_id.taxes_id
+        if not taxes and so_line.product_id and 'taxes_id' in so_line.product_id.product_tmpl_id._fields:
+            taxes = so_line.product_id.product_tmpl_id.taxes_id
         if not taxes:
             return round(max(unit_price * qty, 0.0), 2)
         currency = so_line.order_id.currency_id if 'currency_id' in so_line.order_id._fields else False
         partner = so_line.order_id.partner_id if 'partner_id' in so_line.order_id._fields else False
+        fiscal_position = so_line.order_id.fiscal_position_id if 'fiscal_position_id' in so_line.order_id._fields else False
+        if fiscal_position and hasattr(fiscal_position, 'map_tax'):
+            taxes = fiscal_position.map_tax(taxes, product=so_line.product_id, partner=partner or False)
         result = taxes.compute_all(unit_price, currency=currency, quantity=qty, product=so_line.product_id, partner=partner)
         return round(max(float(result.get('total_included') or 0.0), 0.0), 2)
 
