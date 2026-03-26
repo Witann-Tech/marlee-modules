@@ -524,6 +524,75 @@ function isInteractiveModalField(target) {
     );
 }
 
+function createSubscriptionPosApi(orm) {
+    return {
+        async fetchPartnerDirectoryBatch(offset = 0, limit = 500) {
+            return orm.call("pos.order", "wgs_get_partner_directory_rows_for_pos", [offset, limit]);
+        },
+        async fetchPartnerSubscriptionDetail(partnerId) {
+            return orm.call("pos.order", "wgs_get_partner_subscription_detail_for_pos", [partnerId]);
+        },
+        async createPartner(values) {
+            return orm.call("pos.order", "wgs_create_partner_for_pos", [values || {}]);
+        },
+        async updatePartnerPhoto(partnerId, imageBase64) {
+            return orm.call("pos.order", "wgs_update_partner_photo_for_pos", [partnerId, imageBase64 || false]);
+        },
+        async fetchSubscriptionProductCatalog(searchTerm = "", limit = 200) {
+            return orm.call("pos.order", "wgs_get_subscription_product_catalog_for_pos", [searchTerm, limit]);
+        },
+        async fetchSubscriptionCharge(partnerId, productId, fallback = 0, planId = false, pricingId = false) {
+            return orm.call(
+                "pos.order",
+                "wgs_get_subscription_charge_for_pos",
+                [partnerId || false, productId, fallback || 0, planId || false, pricingId || false]
+            );
+        },
+        async fetchSubscriptionRenewalCharge(subscriptionId, productId = false, planId = false, pricingId = false) {
+            return orm.call(
+                "pos.order",
+                "wgs_get_subscription_renewal_charge_for_pos",
+                [subscriptionId, productId || false, planId || false, pricingId || false]
+            );
+        },
+        async fetchSubscriptionUpsaleCharge(subscriptionId, productId, fallback = 0, planId = false, pricingId = false) {
+            return orm.call(
+                "pos.order",
+                "wgs_get_subscription_upsale_charge_for_pos",
+                [subscriptionId, productId, fallback || 0, planId || false, pricingId || false]
+            );
+        },
+        async fetchSubscriptionPendingCharge(subscriptionId, pendingMoveId = false) {
+            return orm.call(
+                "pos.order",
+                "wgs_get_subscription_pending_charge_for_pos",
+                [subscriptionId, pendingMoveId || false]
+            );
+        },
+        async fetchSubscriptionCancellationRefund(subscriptionId) {
+            return orm.call(
+                "pos.order",
+                "wgs_get_subscription_cancellation_refund_for_pos",
+                [subscriptionId]
+            );
+        },
+        async saveSubscriptionParticipants(subscriptionId, participantIds) {
+            return orm.call(
+                "pos.order",
+                "wgs_update_subscription_participants_for_pos",
+                [subscriptionId, participantIds || []]
+            );
+        },
+        async resyncSubscriptionAccess(subscriptionId) {
+            return orm.call(
+                "pos.order",
+                "wgs_resync_subscription_access_for_pos",
+                [subscriptionId]
+            );
+        },
+    };
+}
+
 async function stageSubscriptionConfigsForOrder(orm, order) {
     const configs = collectSubscriptionConfigsFromOrder(order);
     if (!configs.length) {
@@ -586,6 +655,7 @@ patch(ControlButtons.prototype, {
     setup() {
         super.setup(...arguments);
         this.orm = useService("orm");
+        this.subscriptionPosApi = createSubscriptionPosApi(this.orm);
         this._ensureStatusStyles();
 
         onWillUnmount(() => {
@@ -626,11 +696,7 @@ patch(ControlButtons.prototype, {
         let offset = 0;
 
         while (true) {
-            const batch = await this.orm.call(
-                "pos.order",
-                "wgs_get_partner_directory_rows_for_pos",
-                [offset, batchSize]
-            );
+            const batch = await this.subscriptionPosApi.fetchPartnerDirectoryBatch(offset, batchSize);
             if (!Array.isArray(batch) || !batch.length) {
                 break;
             }
@@ -645,23 +711,19 @@ patch(ControlButtons.prototype, {
     },
 
     async _fetchPartnerSubscriptionDetail(partnerId) {
-        return this.orm.call("pos.order", "wgs_get_partner_subscription_detail_for_pos", [partnerId]);
+        return this.subscriptionPosApi.fetchPartnerSubscriptionDetail(partnerId);
     },
 
     async _createPartnerForPos(values) {
-        return this.orm.call("pos.order", "wgs_create_partner_for_pos", [values || {}]);
+        return this.subscriptionPosApi.createPartner(values || {});
     },
 
     async _updatePartnerPhotoForPos(partnerId, imageBase64) {
-        return this.orm.call("pos.order", "wgs_update_partner_photo_for_pos", [partnerId, imageBase64 || false]);
+        return this.subscriptionPosApi.updatePartnerPhoto(partnerId, imageBase64 || false);
     },
 
     async _fetchSubscriptionProductCatalog(searchTerm = "") {
-        const backendCatalog = await this.orm.call(
-            "pos.order",
-            "wgs_get_subscription_product_catalog_for_pos",
-            [searchTerm, 200]
-        );
+        const backendCatalog = await this.subscriptionPosApi.fetchSubscriptionProductCatalog(searchTerm, 200);
         const localProducts = getAllLocalPosProducts(this);
         const localIds = new Set(
             (localProducts || [])
@@ -674,59 +736,48 @@ patch(ControlButtons.prototype, {
     },
 
     async _fetchSubscriptionCharge(partnerId, productId, fallback = 0, planId = false, pricingId = false) {
-        return this.orm.call(
-            "pos.order",
-            "wgs_get_subscription_charge_for_pos",
-            [partnerId || false, productId, fallback || 0, planId || false, pricingId || false]
+        return this.subscriptionPosApi.fetchSubscriptionCharge(
+            partnerId || false,
+            productId,
+            fallback || 0,
+            planId || false,
+            pricingId || false
         );
     },
 
     async _fetchSubscriptionRenewalCharge(subscriptionId, productId = false, planId = false, pricingId = false) {
-        return this.orm.call(
-            "pos.order",
-            "wgs_get_subscription_renewal_charge_for_pos",
-            [subscriptionId, productId || false, planId || false, pricingId || false]
+        return this.subscriptionPosApi.fetchSubscriptionRenewalCharge(
+            subscriptionId,
+            productId || false,
+            planId || false,
+            pricingId || false
         );
     },
 
     async _fetchSubscriptionUpsaleCharge(subscriptionId, productId, fallback = 0, planId = false, pricingId = false) {
-        return this.orm.call(
-            "pos.order",
-            "wgs_get_subscription_upsale_charge_for_pos",
-            [subscriptionId, productId, fallback || 0, planId || false, pricingId || false]
+        return this.subscriptionPosApi.fetchSubscriptionUpsaleCharge(
+            subscriptionId,
+            productId,
+            fallback || 0,
+            planId || false,
+            pricingId || false
         );
     },
 
     async _fetchSubscriptionPendingCharge(subscriptionId, pendingMoveId = false) {
-        return this.orm.call(
-            "pos.order",
-            "wgs_get_subscription_pending_charge_for_pos",
-            [subscriptionId, pendingMoveId || false]
-        );
+        return this.subscriptionPosApi.fetchSubscriptionPendingCharge(subscriptionId, pendingMoveId || false);
     },
 
     async _fetchSubscriptionCancellationRefund(subscriptionId) {
-        return this.orm.call(
-            "pos.order",
-            "wgs_get_subscription_cancellation_refund_for_pos",
-            [subscriptionId]
-        );
+        return this.subscriptionPosApi.fetchSubscriptionCancellationRefund(subscriptionId);
     },
 
     async _saveSubscriptionParticipants(subscriptionId, participantIds) {
-        return this.orm.call(
-            "pos.order",
-            "wgs_update_subscription_participants_for_pos",
-            [subscriptionId, participantIds || []]
-        );
+        return this.subscriptionPosApi.saveSubscriptionParticipants(subscriptionId, participantIds || []);
     },
 
     async _resyncSubscriptionAccess(subscriptionId) {
-        return this.orm.call(
-            "pos.order",
-            "wgs_resync_subscription_access_for_pos",
-            [subscriptionId]
-        );
+        return this.subscriptionPosApi.resyncSubscriptionAccess(subscriptionId);
     },
 
     _showSubscriptionsModal(rows) {
