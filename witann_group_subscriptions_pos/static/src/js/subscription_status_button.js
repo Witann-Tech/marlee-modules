@@ -2084,6 +2084,11 @@ patch(ControlButtons.prototype, {
             const subscriptionsHtml = subscriptions.length
                 ? subscriptions.map((item) => {
                     const stateClass = this._getStateClass(item.native_state_key);
+                    const nativeStateKey = String(item.native_state_key || "").toLowerCase();
+                    const canOperateSubscription = Boolean(
+                        item.subscription_id
+                        && (item.access_state === "enabled" || ["progress", "renew"].includes(nativeStateKey))
+                    );
                     const participantNames = (item.participant_names || []).length
                         ? item.participant_names.map((name) => this._escapeHtml(name)).join(", ")
                         : this._escapeHtml(_t("Sin participantes"));
@@ -2091,8 +2096,8 @@ patch(ControlButtons.prototype, {
                     const accessSiteLabel = (accessSummary.site_names || []).length
                         ? this._escapeHtml((accessSummary.site_names || []).join(", "))
                         : this._escapeHtml(_t("Sin sitios"));
-                    return `
-                        <div class="wgs-subscription-card">
+                return `
+                    <div class="wgs-subscription-card">
                             <div class="wgs-subscription-card-header">
                                 <div>
                                     <strong>${this._escapeHtml(item.subscription_name || "-")}</strong>
@@ -2123,14 +2128,14 @@ patch(ControlButtons.prototype, {
                                     class="wgs-action-btn"
                                     data-action="open-renewal"
                                     data-subscription-id="${this._escapeHtml(String(item.subscription_id || 0))}"
-                                    ${item.access_state === "enabled" ? "" : "disabled"}
+                                    ${canOperateSubscription ? "" : "disabled"}
                                 >${this._escapeHtml(_t("Renovar"))}</button>
                                 <button
                                     type="button"
                                     class="wgs-action-btn"
                                     data-action="open-upsale"
                                     data-subscription-id="${this._escapeHtml(String(item.subscription_id || 0))}"
-                                    ${item.access_state === "enabled" ? "" : "disabled"}
+                                    ${canOperateSubscription ? "" : "disabled"}
                                 >${this._escapeHtml(_t("Upsale"))}</button>
                                 <button
                                     type="button"
