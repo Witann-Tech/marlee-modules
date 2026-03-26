@@ -216,7 +216,7 @@ class PosOrder(models.Model):
         if not self.env.user.has_group('point_of_sale.group_pos_user'):
             raise UserError(_('No tienes permisos para consultar precios de suscripción desde Punto de Venta.'))
 
-        product = self.env['product.product'].browse(int(product_id)).exists()
+        product = self.env['product.product'].sudo().browse(int(product_id)).exists()
         if not product:
             raise UserError(_('El producto seleccionado no existe o no está disponible.'))
 
@@ -246,7 +246,7 @@ class PosOrder(models.Model):
         if not self.env.user.has_group('point_of_sale.group_pos_user'):
             raise UserError(_('No tienes permisos para consultar cobro de suscripción desde Punto de Venta.'))
 
-        product = self.env['product.product'].browse(int(product_id)).exists()
+        product = self.env['product.product'].sudo().browse(int(product_id)).exists()
         if not product:
             raise UserError(_('El producto seleccionado no existe o no está disponible.'))
 
@@ -260,7 +260,7 @@ class PosOrder(models.Model):
         plan_id = choice.get('plan_id') or False
         pricing_id = choice.get('pricing_id') or False
 
-        partner = self.env['res.partner'].browse(int(partner_id or 0)).exists()
+        partner = self.env['res.partner'].sudo().browse(int(partner_id or 0)).exists()
         source_order = False
         credit_amount = 0.0
         if partner:
@@ -391,7 +391,7 @@ class PosOrder(models.Model):
         if not self._wgs_is_subscription_order_active_for_upsell(source_order):
             raise UserError(_('La suscripción origen no está activa para upsale.'))
 
-        product = self.env['product.product'].browse(int(product_id or 0)).exists()
+        product = self.env['product.product'].sudo().browse(int(product_id or 0)).exists()
         if not product:
             raise UserError(_('El producto seleccionado no existe o no está disponible.'))
 
@@ -506,7 +506,7 @@ class PosOrder(models.Model):
         if not self.env.user.has_group('point_of_sale.group_pos_user'):
             raise UserError(_('No tienes permisos para consultar contexto de suscripción desde Punto de Venta.'))
 
-        product = self.env['product.product'].browse(int(product_id)).exists()
+        product = self.env['product.product'].sudo().browse(int(product_id)).exists()
         if not product:
             raise UserError(_('El producto seleccionado no existe o no está disponible.'))
 
@@ -556,7 +556,7 @@ class PosOrder(models.Model):
         if not self.env.user.has_group('point_of_sale.group_pos_user'):
             raise UserError(_('No tienes permisos para consultar productos de suscripción desde Punto de Venta.'))
 
-        product_model = self.env['product.product']
+        product_model = self.env['product.product'].sudo()
         domain = [('sale_ok', '=', True)]
         if 'active' in product_model._fields:
             domain.append(('active', '=', True))
