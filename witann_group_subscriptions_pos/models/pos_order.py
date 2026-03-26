@@ -126,6 +126,53 @@ class PosOrder(models.Model):
     )
 
     @api.model
+    def _wgs_ensure_pos_user_for_pos(self, error_message):
+        if not self.env.user.has_group('point_of_sale.group_pos_user'):
+            raise UserError(error_message)
+
+    @api.model
+    def _wgs_product_model_for_pos(self):
+        return self.env['product.product'].sudo()
+
+    @api.model
+    def _wgs_partner_model_for_pos(self):
+        return self.env['res.partner'].sudo().with_context(active_test=False)
+
+    @api.model
+    def _wgs_sale_order_model_for_pos(self):
+        return self.env['sale.order'].sudo()
+
+    @api.model
+    def _wgs_browse_product_for_pos(self, product_id):
+        try:
+            product_id = int(product_id or 0)
+        except (TypeError, ValueError):
+            product_id = 0
+        if product_id <= 0:
+            return self.env['product.product']
+        return self._wgs_product_model_for_pos().browse(product_id).exists()
+
+    @api.model
+    def _wgs_browse_partner_for_pos(self, partner_id):
+        try:
+            partner_id = int(partner_id or 0)
+        except (TypeError, ValueError):
+            partner_id = 0
+        if partner_id <= 0:
+            return self.env['res.partner']
+        return self._wgs_partner_model_for_pos().browse(partner_id).exists()
+
+    @api.model
+    def _wgs_browse_source_subscription_for_pos(self, subscription_id):
+        try:
+            subscription_id = int(subscription_id or 0)
+        except (TypeError, ValueError):
+            subscription_id = 0
+        if subscription_id <= 0:
+            return self.env['sale.order']
+        return self._wgs_sale_order_model_for_pos().browse(subscription_id).exists()
+
+    @api.model
     def wgs_get_partner_directory_rows_for_pos(self, offset=0, limit=500):
         return self.env['sale.order'].get_partner_directory_rows_for_pos(offset=offset, limit=limit)
 
@@ -171,8 +218,7 @@ class PosOrder(models.Model):
 
     @api.model
     def wgs_stage_subscription_config_for_uuid(self, order_uuid, configs):
-        if not self.env.user.has_group('point_of_sale.group_pos_user'):
-            raise UserError(_('No tienes permisos para guardar configuración de suscripción desde Punto de Venta.'))
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para guardar configuración de suscripción desde Punto de Venta.'))
 
         order_uuid = (order_uuid or '').strip()
         if not order_uuid:
@@ -211,10 +257,9 @@ class PosOrder(models.Model):
 
     @api.model
     def wgs_get_recurring_price_for_pos(self, product_id, fallback=0.0, preferred_plan_id=False, preferred_pricing_id=False):
-        if not self.env.user.has_group('point_of_sale.group_pos_user'):
-            raise UserError(_('No tienes permisos para consultar precios de suscripción desde Punto de Venta.'))
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar precios de suscripción desde Punto de Venta.'))
 
-        product = self.env['product.product'].sudo().browse(int(product_id)).exists()
+        product = self._wgs_browse_product_for_pos(product_id)
         if not product:
             raise UserError(_('El producto seleccionado no existe o no está disponible.'))
 
@@ -241,10 +286,9 @@ class PosOrder(models.Model):
         preferred_plan_id=False,
         preferred_pricing_id=False,
     ):
-        if not self.env.user.has_group('point_of_sale.group_pos_user'):
-            raise UserError(_('No tienes permisos para consultar cobro de suscripción desde Punto de Venta.'))
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar cobro de suscripción desde Punto de Venta.'))
 
-        product = self.env['product.product'].sudo().browse(int(product_id)).exists()
+        product = self._wgs_browse_product_for_pos(product_id)
         if not product:
             raise UserError(_('El producto seleccionado no existe o no está disponible.'))
 
@@ -258,7 +302,7 @@ class PosOrder(models.Model):
         plan_id = choice.get('plan_id') or False
         pricing_id = choice.get('pricing_id') or False
 
-        partner = self.env['res.partner'].sudo().browse(int(partner_id or 0)).exists()
+        partner = self._wgs_browse_partner_for_pos(partner_id)
         source_order = False
         credit_amount = 0.0
         if partner:
@@ -292,14 +336,13 @@ class PosOrder(models.Model):
         preferred_plan_id=False,
         preferred_pricing_id=False,
     ):
-        if not self.env.user.has_group('point_of_sale.group_pos_user'):
-            raise UserError(_('No tienes permisos para consultar cobro recurrente desde Punto de Venta.'))
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar cobro recurrente desde Punto de Venta.'))
 
         try:
             subscription_id = int(subscription_id or 0)
         except (TypeError, ValueError):
             subscription_id = 0
-        source_order = self.env['sale.order'].sudo().browse(subscription_id).exists()
+        source_order = self._wgs_browse_source_subscription_for_pos(subscription_id)
         if not source_order:
             raise UserError(_('La suscripción origen no existe.'))
         if not self._wgs_order_has_subscription_signal(source_order):
@@ -378,10 +421,9 @@ class PosOrder(models.Model):
         preferred_plan_id=False,
         preferred_pricing_id=False,
     ):
-        if not self.env.user.has_group('point_of_sale.group_pos_user'):
-            raise UserError(_('No tienes permisos para consultar cobro de upsale desde Punto de Venta.'))
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar cobro de upsale desde Punto de Venta.'))
 
-        source_order = self.env['sale.order'].sudo().browse(int(subscription_id or 0)).exists()
+        source_order = self._wgs_browse_source_subscription_for_pos(subscription_id)
         if not source_order:
             raise UserError(_('La suscripción origen no existe.'))
         if not self._wgs_order_has_subscription_signal(source_order):
@@ -389,7 +431,7 @@ class PosOrder(models.Model):
         if not self._wgs_is_subscription_order_active_for_upsell(source_order):
             raise UserError(_('La suscripción origen no está activa para upsale.'))
 
-        product = self.env['product.product'].sudo().browse(int(product_id or 0)).exists()
+        product = self._wgs_browse_product_for_pos(product_id)
         if not product:
             raise UserError(_('El producto seleccionado no existe o no está disponible.'))
 
@@ -429,14 +471,13 @@ class PosOrder(models.Model):
 
     @api.model
     def wgs_get_subscription_pending_charge_for_pos(self, subscription_id, pending_move_id=False):
-        if not self.env.user.has_group('point_of_sale.group_pos_user'):
-            raise UserError(_('No tienes permisos para consultar cobro pendiente desde Punto de Venta.'))
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar cobro pendiente desde Punto de Venta.'))
 
         try:
             subscription_id = int(subscription_id or 0)
         except (TypeError, ValueError):
             subscription_id = 0
-        source_order = self.env['sale.order'].sudo().browse(subscription_id).exists()
+        source_order = self._wgs_browse_source_subscription_for_pos(subscription_id)
         if not source_order:
             raise UserError(_('La suscripción origen no existe.'))
         if not self._wgs_order_has_subscription_signal(source_order):
@@ -463,14 +504,13 @@ class PosOrder(models.Model):
 
     @api.model
     def wgs_get_subscription_cancellation_refund_for_pos(self, subscription_id):
-        if not self.env.user.has_group('point_of_sale.group_pos_user'):
-            raise UserError(_('No tienes permisos para consultar cancelación de suscripción desde Punto de Venta.'))
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar cancelación de suscripción desde Punto de Venta.'))
 
         try:
             subscription_id = int(subscription_id or 0)
         except (TypeError, ValueError):
             subscription_id = 0
-        source_order = self.env['sale.order'].sudo().browse(subscription_id).exists()
+        source_order = self._wgs_browse_source_subscription_for_pos(subscription_id)
         if not source_order:
             raise UserError(_('La suscripción origen no existe.'))
         if not self._wgs_order_has_subscription_signal(source_order):
@@ -501,10 +541,9 @@ class PosOrder(models.Model):
 
     @api.model
     def wgs_get_subscription_product_context_for_pos(self, product_id, fallback=0.0):
-        if not self.env.user.has_group('point_of_sale.group_pos_user'):
-            raise UserError(_('No tienes permisos para consultar contexto de suscripción desde Punto de Venta.'))
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar contexto de suscripción desde Punto de Venta.'))
 
-        product = self.env['product.product'].sudo().browse(int(product_id)).exists()
+        product = self._wgs_browse_product_for_pos(product_id)
         if not product:
             raise UserError(_('El producto seleccionado no existe o no está disponible.'))
 
@@ -551,10 +590,9 @@ class PosOrder(models.Model):
 
     @api.model
     def wgs_get_subscription_product_catalog_for_pos(self, search_term=False, limit=80):
-        if not self.env.user.has_group('point_of_sale.group_pos_user'):
-            raise UserError(_('No tienes permisos para consultar productos de suscripción desde Punto de Venta.'))
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar productos de suscripción desde Punto de Venta.'))
 
-        product_model = self.env['product.product'].sudo()
+        product_model = self._wgs_product_model_for_pos()
         domain = [('sale_ok', '=', True)]
         if 'active' in product_model._fields:
             domain.append(('active', '=', True))

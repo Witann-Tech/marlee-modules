@@ -76,6 +76,43 @@ class SaleOrder(models.Model):
     )
 
     @api.model
+    def _wgs_ensure_pos_user_for_pos(self, error_message):
+        if not self.env.user.has_group('point_of_sale.group_pos_user'):
+            raise AccessError(error_message)
+
+    @api.model
+    def _wgs_partner_model_for_pos(self):
+        return self.env['res.partner'].sudo().with_context(active_test=False)
+
+    @api.model
+    def _wgs_person_model_for_pos(self):
+        return self.env['access_control.person'].sudo()
+
+    @api.model
+    def _wgs_account_move_model_for_pos(self):
+        return self.env['account.move'].sudo()
+
+    @api.model
+    def _wgs_browse_partner_for_pos(self, partner_id):
+        try:
+            partner_id = int(partner_id or 0)
+        except (TypeError, ValueError):
+            partner_id = 0
+        if partner_id <= 0:
+            return self.env['res.partner']
+        return self._wgs_partner_model_for_pos().browse(partner_id).exists()
+
+    @api.model
+    def _wgs_browse_subscription_for_pos(self, subscription_id):
+        try:
+            subscription_id = int(subscription_id or 0)
+        except (TypeError, ValueError):
+            subscription_id = 0
+        if subscription_id <= 0:
+            return self.browse()
+        return self.sudo().browse(subscription_id).exists()
+
+    @api.model
     def _wgs_and_domains_for_pos(self, left_domain, right_domain):
         left_domain = list(left_domain or [])
         right_domain = list(right_domain or [])
@@ -87,10 +124,9 @@ class SaleOrder(models.Model):
 
     @api.model
     def get_partner_subscription_status_for_pos(self, partner_id):
-        if not self.env.user.has_group('point_of_sale.group_pos_user'):
-            raise AccessError(_('No tienes permisos para consultar vigencia desde Punto de Venta.'))
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar vigencia desde Punto de Venta.'))
 
-        partner = self.env['res.partner'].browse(partner_id).exists()
+        partner = self._wgs_browse_partner_for_pos(partner_id)
         if not partner:
             return {
                 'partner_id': False,
@@ -127,10 +163,9 @@ class SaleOrder(models.Model):
 
     @api.model
     def get_partner_subscription_detail_for_pos(self, partner_id):
-        if not self.env.user.has_group('point_of_sale.group_pos_user'):
-            raise AccessError(_('No tienes permisos para consultar suscripciones desde Punto de Venta.'))
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar suscripciones desde Punto de Venta.'))
 
-        partner = self.env['res.partner'].sudo().with_context(active_test=False).browse(int(partner_id or 0)).exists()
+        partner = self._wgs_browse_partner_for_pos(partner_id)
         if not partner:
             return {'partner_id': False, 'items': []}
 
@@ -196,10 +231,9 @@ class SaleOrder(models.Model):
 
     @api.model
     def wgs_update_subscription_participants_for_pos(self, subscription_id, participant_ids):
-        if not self.env.user.has_group('point_of_sale.group_pos_user'):
-            raise AccessError(_('No tienes permisos para actualizar participantes desde Punto de Venta.'))
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para actualizar participantes desde Punto de Venta.'))
 
-        subscription = self.sudo().browse(int(subscription_id or 0)).exists()
+        subscription = self._wgs_browse_subscription_for_pos(subscription_id)
         if not subscription:
             raise AccessError(_('La suscripción seleccionada no existe.'))
         if not subscription._is_subscription_record_for_pos():
@@ -221,7 +255,7 @@ class SaleOrder(models.Model):
         if owner_id and owner_id not in cleaned_ids:
             cleaned_ids.insert(0, owner_id)
 
-        participants = self.env['res.partner'].sudo().with_context(active_test=False).browse(cleaned_ids).exists()
+        participants = self._wgs_partner_model_for_pos().browse(cleaned_ids).exists()
         subscription.write({'participant_ids': [fields.Command.set(participants.ids)]})
         subscription._ensure_subscription_owner_is_participant()
 
@@ -236,15 +270,14 @@ class SaleOrder(models.Model):
 
     @api.model
     def wgs_create_partner_for_pos(self, vals):
-        if not self.env.user.has_group('point_of_sale.group_pos_user'):
-            raise AccessError(_('No tienes permisos para crear clientes desde Punto de Venta.'))
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para crear clientes desde Punto de Venta.'))
 
         values = dict(vals or {})
         name = (values.get('name') or '').strip()
         if not name:
             raise AccessError(_('Debes capturar el nombre del cliente.'))
 
-        Partner = self.env['res.partner'].sudo().with_context(active_test=False)
+        Partner = self._wgs_partner_model_for_pos()
         create_vals = {
             'name': name,
             'company_type': 'person',
@@ -284,10 +317,9 @@ class SaleOrder(models.Model):
 
     @api.model
     def wgs_update_partner_photo_for_pos(self, partner_id, image_1920):
-        if not self.env.user.has_group('point_of_sale.group_pos_user'):
-            raise AccessError(_('No tienes permisos para actualizar la foto desde Punto de Venta.'))
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para actualizar la foto desde Punto de Venta.'))
 
-        partner = self.env['res.partner'].sudo().with_context(active_test=False).browse(int(partner_id or 0)).exists()
+        partner = self._wgs_browse_partner_for_pos(partner_id)
         if not partner:
             raise AccessError(_('El cliente seleccionado no existe.'))
         if 'image_1920' not in partner._fields:
@@ -302,10 +334,9 @@ class SaleOrder(models.Model):
 
     @api.model
     def wgs_resync_subscription_access_for_pos(self, subscription_id):
-        if not self.env.user.has_group('point_of_sale.group_pos_user'):
-            raise AccessError(_('No tienes permisos para resincronizar acceso desde Punto de Venta.'))
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para resincronizar acceso desde Punto de Venta.'))
 
-        subscription = self.sudo().browse(int(subscription_id or 0)).exists()
+        subscription = self._wgs_browse_subscription_for_pos(subscription_id)
         if not subscription:
             raise AccessError(_('La suscripción seleccionada no existe.'))
         if not subscription._is_subscription_record_for_pos():
@@ -316,7 +347,7 @@ class SaleOrder(models.Model):
         if hasattr(subscription, '_wgs_sync_access_control_people'):
             subscription._wgs_sync_access_control_people()
 
-        partners = self.env['res.partner'].sudo().browse(sorted(subscription._wgs_get_access_related_partner_ids())).exists()
+        partners = self._wgs_partner_model_for_pos().browse(sorted(subscription._wgs_get_access_related_partner_ids())).exists()
         if partners and hasattr(partners, '_sync_access_person_face'):
             partners._sync_access_person_face()
 
@@ -339,8 +370,8 @@ class SaleOrder(models.Model):
                 'people': [],
             }
 
-        partners = self.env['res.partner'].sudo().with_context(active_test=False).browse(partner_ids).exists()
-        Person = self.env['access_control.person'].sudo()
+        partners = self._wgs_partner_model_for_pos().browse(partner_ids).exists()
+        Person = self._wgs_person_model_for_pos()
         people = Person.search([('partner_id', 'in', partners.ids)], order='partner_id asc, id asc')
         people_by_partner = {person.partner_id.id: person for person in people}
 
@@ -394,14 +425,13 @@ class SaleOrder(models.Model):
 
     @api.model
     def get_partner_subscription_status_map_for_pos(self, partner_ids):
-        if not self.env.user.has_group('point_of_sale.group_pos_user'):
-            raise AccessError(_('No tienes permisos para consultar vigencia desde Punto de Venta.'))
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar vigencia desde Punto de Venta.'))
 
         partner_ids = [int(pid) for pid in (partner_ids or []) if pid]
         if not partner_ids:
             return {}
 
-        partners = self.env['res.partner'].sudo().with_context(active_test=False).browse(partner_ids).exists()
+        partners = self._wgs_partner_model_for_pos().browse(partner_ids).exists()
         if not partners:
             return {}
 
@@ -492,8 +522,7 @@ class SaleOrder(models.Model):
 
     @api.model
     def get_partner_directory_rows_for_pos(self, offset=0, limit=500):
-        if not self.env.user.has_group('point_of_sale.group_pos_user'):
-            raise AccessError(_('No tienes permisos para consultar vigencia desde Punto de Venta.'))
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar vigencia desde Punto de Venta.'))
 
         try:
             offset = int(offset or 0)
@@ -506,7 +535,7 @@ class SaleOrder(models.Model):
         if limit < 1:
             limit = 500
 
-        partners = self.env['res.partner'].sudo().with_context(active_test=False).search(
+        partners = self._wgs_partner_model_for_pos().search(
             [],
             order='name asc, id asc',
             offset=max(offset, 0),
@@ -860,7 +889,7 @@ class SaleOrder(models.Model):
 
     def _wgs_get_pending_invoice_records_for_pos(self):
         self.ensure_one()
-        account_move_model = self.env['account.move'].sudo()
+        account_move_model = self._wgs_account_move_model_for_pos()
         moves = account_move_model.browse()
 
         if 'invoice_ids' in self._fields:
