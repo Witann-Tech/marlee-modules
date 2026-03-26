@@ -3240,7 +3240,11 @@ patch(ControlButtons.prototype, {
                     const lineResult = await addConfiguredProductLineToOrder(this, order, productRecord, {
                         quantity: 1,
                         merge: false,
-                        price: Number(upsaleForm.chargeNow || 0),
+                        price: Number(
+                            upsaleForm.displayChargeNow !== undefined
+                                ? upsaleForm.displayChargeNow
+                                : (upsaleForm.chargeNow || 0)
+                        ),
                         metadata: {
                             flow: "upsale",
                             partner_id: holderPartnerId || false,
