@@ -198,14 +198,25 @@ function setLineUnitPrice(line, price) {
     }
     if (typeof line.set_unit_price === "function") {
         line.set_unit_price(price);
-        return;
-    }
-    if (typeof line.setUnitPrice === "function") {
+    } else if (typeof line.setUnitPrice === "function") {
         line.setUnitPrice(price);
-        return;
+    } else {
+        line.price = price;
+        line.price_unit = price;
     }
-    line.price = price;
-    line.price_unit = price;
+
+    if (typeof line.set_price_manually === "function") {
+        line.set_price_manually(true);
+    } else if (typeof line.setPriceManually === "function") {
+        line.setPriceManually(true);
+    }
+
+    if ("price_manually_set" in line) {
+        line.price_manually_set = true;
+    }
+    if ("priceManuallySet" in line) {
+        line.priceManuallySet = true;
+    }
 }
 
 function setLineDiscount(line, discount) {
