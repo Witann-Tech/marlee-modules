@@ -283,6 +283,59 @@ async function addProductToOrder(source, order, product, options = {}) {
     return null;
 }
 
+async function addConfiguredProductLineToOrder(source, order, product, options = {}) {
+    const {
+        quantity = 1,
+        price = 0,
+        discount = 0,
+        merge = false,
+        metadata = null,
+    } = options;
+    if (!order || !product) {
+        return null;
+    }
+
+    const beforeLines = getOrderLines(order);
+    const beforeCount = beforeLines.length;
+    const beforeSet = new Set(beforeLines);
+    const beforeSelectedLine = getSelectedOrderLine(source, order);
+
+    const addResult = await addProductToOrder(source, order, product, {
+        quantity,
+        merge,
+        price,
+    });
+    await waitForNextTick();
+    await waitForNextTick();
+
+    const afterLines = getOrderLines(order);
+    let targetLine = afterLines.find((line) => !beforeSet.has(line)) || null;
+    if (!targetLine && addResult && typeof addResult === "object") {
+        targetLine = addResult;
+    }
+    if (!targetLine) {
+        const selectedAfter = getSelectedOrderLine(source, order);
+        if (selectedAfter && selectedAfter !== beforeSelectedLine) {
+            targetLine = selectedAfter;
+        }
+    }
+    if (!targetLine && afterLines.length <= beforeCount) {
+        return { line: null, reason: "not_added" };
+    }
+    if (!targetLine) {
+        return { line: null, reason: "not_identified" };
+    }
+
+    setLineUnitPrice(targetLine, Number(price || 0));
+    if (Number(discount || 0)) {
+        setLineDiscount(targetLine, Number(discount || 0));
+    }
+    if (metadata) {
+        targetLine.wgsSubscriptionConfig = metadata;
+    }
+    return { line: targetLine, reason: null };
+}
+
 function findProductInPos(source, productId) {
     const pos = getPos(source);
     if (!pos || !productId) {
@@ -2807,39 +2860,32 @@ patch(ControlButtons.prototype, {
                     return;
                 }
 
-                const beforeLines = getOrderLines(order);
-                const beforeCount = beforeLines.length;
-                const beforeSet = new Set(beforeLines);
-                const beforeSelectedLine = getSelectedOrderLine(this, order);
-                let added = false;
-                let addResult = null;
-                let addErrorMessage = "";
+                let targetLine = null;
                 try {
-                    addResult = await addProductToOrder(this, order, productRecord, {
+                    const lineResult = await addConfiguredProductLineToOrder(this, order, productRecord, {
                         quantity: 1,
                         merge: false,
                         price: posChargeAmount,
+                        metadata: {
+                            flow: "new",
+                            partner_id: selectedPartnerId,
+                            participant_ids: participantIds,
+                            plan_id: Number(selectedPlan.plan_id || 0) || false,
+                            pricing_id: Number(selectedPlan.pricing_id || 0) || false,
+                            start_date: newSubscriptionForm.startDate || formatTodayISO(),
+                            end_date: automaticEndDate || false,
+                            product_id: Number(newSubscriptionForm.productId || 0) || false,
+                            product_name: newSubscriptionForm.productName || false,
+                        },
                     });
-                    added = Boolean(addResult);
+                    targetLine = lineResult && lineResult.line ? lineResult.line : null;
+                    if (!targetLine && lineResult && lineResult.reason === "not_added") {
+                        formError = _t("No se pudo agregar el producto al ticket actual.");
+                        renderDetail(currentDetail);
+                        return;
+                    }
                 } catch (error) {
                     console.error("Error al agregar producto de suscripcion al ticket POS", error);
-                    added = false;
-                    addErrorMessage = error && error.message ? error.message : String(error || "");
-                }
-                await waitForNextTick();
-                await waitForNextTick();
-                const afterLines = getOrderLines(order);
-                const selectedAfter = getSelectedOrderLine(this, order);
-                let targetLine = afterLines.find((line) => !beforeSet.has(line)) || null;
-                if (!targetLine && addResult && typeof addResult === "object") {
-                    targetLine = addResult;
-                }
-                if (!targetLine) {
-                    if (selectedAfter && selectedAfter !== beforeSelectedLine) {
-                        targetLine = selectedAfter;
-                    }
-                }
-                if (!added && !targetLine && afterLines.length <= beforeCount) {
                     formError = _t("No se pudo agregar el producto al ticket actual.");
                     renderDetail(currentDetail);
                     return;
@@ -2849,19 +2895,6 @@ patch(ControlButtons.prototype, {
                     renderDetail(currentDetail);
                     return;
                 }
-
-                setLineUnitPrice(targetLine, posChargeAmount);
-                targetLine.wgsSubscriptionConfig = {
-                    flow: "new",
-                    partner_id: selectedPartnerId,
-                    participant_ids: participantIds,
-                    plan_id: Number(selectedPlan.plan_id || 0) || false,
-                    pricing_id: Number(selectedPlan.pricing_id || 0) || false,
-                    start_date: newSubscriptionForm.startDate || formatTodayISO(),
-                    end_date: automaticEndDate || false,
-                    product_id: Number(newSubscriptionForm.productId || 0) || false,
-                    product_name: newSubscriptionForm.productName || false,
-                };
 
                 formMode = null;
                 formError = "";
@@ -2907,31 +2940,28 @@ patch(ControlButtons.prototype, {
                     return;
                 }
 
-                const beforeLines = getOrderLines(order);
-                const beforeCount = beforeLines.length;
-                const beforeSet = new Set(beforeLines);
-                const beforeSelectedLine = getSelectedOrderLine(this, order);
                 let targetLine = null;
                 try {
-                    const addResult = await addProductToOrder(this, order, productRecord, {
+                    const lineResult = await addConfiguredProductLineToOrder(this, order, productRecord, {
                         quantity: 1,
                         merge: false,
                         price: Number(pendingChargeForm.amount || 0),
+                        metadata: {
+                            flow: "pending_charge",
+                            partner_id: holderPartnerId || false,
+                            participant_ids: [],
+                            plan_id: false,
+                            pricing_id: false,
+                            start_date: false,
+                            end_date: false,
+                            product_id: Number(pendingChargeForm.productId || 0) || false,
+                            product_name: pendingChargeForm.productName || false,
+                            source_subscription_id: Number(pendingChargeForm.subscriptionId || 0) || false,
+                            pending_move_id: Number(pendingChargeForm.pendingMoveId || 0) || false,
+                        },
                     });
-                    await waitForNextTick();
-                    await waitForNextTick();
-                    const afterLines = getOrderLines(order);
-                    targetLine = afterLines.find((line) => !beforeSet.has(line)) || null;
-                    if (!targetLine && addResult && typeof addResult === "object") {
-                        targetLine = addResult;
-                    }
-                    if (!targetLine) {
-                        const selectedAfter = getSelectedOrderLine(this, order);
-                        if (selectedAfter && selectedAfter !== beforeSelectedLine) {
-                            targetLine = selectedAfter;
-                        }
-                    }
-                    if (!targetLine && afterLines.length <= beforeCount) {
+                    targetLine = lineResult && lineResult.line ? lineResult.line : null;
+                    if (!targetLine && lineResult && lineResult.reason === "not_added") {
                         formError = _t("No se pudo agregar el cobro pendiente al ticket actual.");
                         renderDetail(currentDetail);
                         return;
@@ -2948,21 +2978,6 @@ patch(ControlButtons.prototype, {
                     renderDetail(currentDetail);
                     return;
                 }
-
-                setLineUnitPrice(targetLine, Number(pendingChargeForm.amount || 0));
-                targetLine.wgsSubscriptionConfig = {
-                    flow: "pending_charge",
-                    partner_id: holderPartnerId || false,
-                    participant_ids: [],
-                    plan_id: false,
-                    pricing_id: false,
-                    start_date: false,
-                    end_date: false,
-                    product_id: Number(pendingChargeForm.productId || 0) || false,
-                    product_name: pendingChargeForm.productName || false,
-                    source_subscription_id: Number(pendingChargeForm.subscriptionId || 0) || false,
-                    pending_move_id: Number(pendingChargeForm.pendingMoveId || 0) || false,
-                };
 
                 formMode = null;
                 formError = "";
@@ -3012,31 +3027,29 @@ patch(ControlButtons.prototype, {
                     return;
                 }
 
-                const beforeLines = getOrderLines(order);
-                const beforeCount = beforeLines.length;
-                const beforeSet = new Set(beforeLines);
-                const beforeSelectedLine = getSelectedOrderLine(this, order);
                 let targetLine = null;
                 try {
-                    const addResult = await addProductToOrder(this, order, productRecord, {
+                    const lineResult = await addConfiguredProductLineToOrder(this, order, productRecord, {
                         quantity: -Math.max(1, Number(cancellationRefundForm.qty || 1)),
                         merge: false,
                         price: Number(cancellationRefundForm.priceUnit || 0),
+                        discount: Number(cancellationRefundForm.discount || 0),
+                        metadata: {
+                            flow: "cancellation_refund",
+                            partner_id: holderPartnerId || false,
+                            participant_ids: [],
+                            plan_id: false,
+                            pricing_id: false,
+                            start_date: false,
+                            end_date: false,
+                            product_id: Number(cancellationRefundForm.productId || 0) || false,
+                            product_name: cancellationRefundForm.productName || false,
+                            source_subscription_id: Number(cancellationRefundForm.subscriptionId || 0) || false,
+                            refund_origin_line_id: Number(cancellationRefundForm.originPosLineId || 0) || false,
+                        },
                     });
-                    await waitForNextTick();
-                    await waitForNextTick();
-                    const afterLines = getOrderLines(order);
-                    targetLine = afterLines.find((line) => !beforeSet.has(line)) || null;
-                    if (!targetLine && addResult && typeof addResult === "object") {
-                        targetLine = addResult;
-                    }
-                    if (!targetLine) {
-                        const selectedAfter = getSelectedOrderLine(this, order);
-                        if (selectedAfter && selectedAfter !== beforeSelectedLine) {
-                            targetLine = selectedAfter;
-                        }
-                    }
-                    if (!targetLine && afterLines.length <= beforeCount) {
+                    targetLine = lineResult && lineResult.line ? lineResult.line : null;
+                    if (!targetLine && lineResult && lineResult.reason === "not_added") {
                         formError = _t("No se pudo agregar la devolución al ticket actual.");
                         renderDetail(currentDetail);
                         return;
@@ -3053,22 +3066,6 @@ patch(ControlButtons.prototype, {
                     renderDetail(currentDetail);
                     return;
                 }
-
-                setLineUnitPrice(targetLine, Number(cancellationRefundForm.priceUnit || 0));
-                setLineDiscount(targetLine, Number(cancellationRefundForm.discount || 0));
-                targetLine.wgsSubscriptionConfig = {
-                    flow: "cancellation_refund",
-                    partner_id: holderPartnerId || false,
-                    participant_ids: [],
-                    plan_id: false,
-                    pricing_id: false,
-                    start_date: false,
-                    end_date: false,
-                    product_id: Number(cancellationRefundForm.productId || 0) || false,
-                    product_name: cancellationRefundForm.productName || false,
-                    source_subscription_id: Number(cancellationRefundForm.subscriptionId || 0) || false,
-                    refund_origin_line_id: Number(cancellationRefundForm.originPosLineId || 0) || false,
-                };
 
                 formMode = null;
                 formError = "";
@@ -3244,31 +3241,27 @@ patch(ControlButtons.prototype, {
                     return;
                 }
 
-                const beforeLines = getOrderLines(order);
-                const beforeCount = beforeLines.length;
-                const beforeSet = new Set(beforeLines);
-                const beforeSelectedLine = getSelectedOrderLine(this, order);
                 let targetLine = null;
                 try {
-                    const addResult = await addProductToOrder(this, order, productRecord, {
+                    const lineResult = await addConfiguredProductLineToOrder(this, order, productRecord, {
                         quantity: 1,
                         merge: false,
                         price: Number(upsaleForm.chargeNow || 0),
+                        metadata: {
+                            flow: "upsale",
+                            partner_id: holderPartnerId || false,
+                            participant_ids: participantIds,
+                            plan_id: Number(selectedUpsalePlan.plan_id || 0) || false,
+                            pricing_id: Number(selectedUpsalePlan.pricing_id || 0) || false,
+                            start_date: formatTodayISO(),
+                            end_date: false,
+                            product_id: Number(upsaleForm.productId || 0) || false,
+                            product_name: upsaleForm.productName || false,
+                            source_subscription_id: Number(upsaleForm.subscriptionId || 0) || false,
+                        },
                     });
-                    await waitForNextTick();
-                    await waitForNextTick();
-                    const afterLines = getOrderLines(order);
-                    targetLine = afterLines.find((line) => !beforeSet.has(line)) || null;
-                    if (!targetLine && addResult && typeof addResult === "object") {
-                        targetLine = addResult;
-                    }
-                    if (!targetLine) {
-                        const selectedAfter = getSelectedOrderLine(this, order);
-                        if (selectedAfter && selectedAfter !== beforeSelectedLine) {
-                            targetLine = selectedAfter;
-                        }
-                    }
-                    if (!targetLine && afterLines.length <= beforeCount) {
+                    targetLine = lineResult && lineResult.line ? lineResult.line : null;
+                    if (!targetLine && lineResult && lineResult.reason === "not_added") {
                         formError = _t("No se pudo agregar el upsale al ticket actual.");
                         renderDetail(currentDetail);
                         return;
@@ -3285,20 +3278,6 @@ patch(ControlButtons.prototype, {
                     renderDetail(currentDetail);
                     return;
                 }
-
-                setLineUnitPrice(targetLine, Number(upsaleForm.chargeNow || 0));
-                targetLine.wgsSubscriptionConfig = {
-                    flow: "upsale",
-                    partner_id: holderPartnerId || false,
-                    participant_ids: participantIds,
-                    plan_id: Number(selectedUpsalePlan.plan_id || 0) || false,
-                    pricing_id: Number(selectedUpsalePlan.pricing_id || 0) || false,
-                    start_date: formatTodayISO(),
-                    end_date: false,
-                    product_id: Number(upsaleForm.productId || 0) || false,
-                    product_name: upsaleForm.productName || false,
-                    source_subscription_id: Number(upsaleForm.subscriptionId || 0) || false,
-                };
 
                 formMode = null;
                 formError = "";
@@ -3348,31 +3327,27 @@ patch(ControlButtons.prototype, {
                     return;
                 }
 
-                const beforeLines = getOrderLines(order);
-                const beforeCount = beforeLines.length;
-                const beforeSet = new Set(beforeLines);
-                const beforeSelectedLine = getSelectedOrderLine(this, order);
                 let targetLine = null;
                 try {
-                    const addResult = await addProductToOrder(this, order, productRecord, {
+                    const lineResult = await addConfiguredProductLineToOrder(this, order, productRecord, {
                         quantity: 1,
                         merge: false,
                         price: Number(renewalForm.amount || 0),
+                        metadata: {
+                            flow: "renewal",
+                            partner_id: holderPartnerId || false,
+                            participant_ids: [],
+                            plan_id: Number(renewalForm.planId || 0) || false,
+                            pricing_id: Number(renewalForm.pricingId || 0) || false,
+                            start_date: false,
+                            end_date: false,
+                            product_id: Number(renewalForm.productId || 0) || false,
+                            product_name: renewalForm.productName || false,
+                            source_subscription_id: Number(renewalForm.subscriptionId || 0) || false,
+                        },
                     });
-                    await waitForNextTick();
-                    await waitForNextTick();
-                    const afterLines = getOrderLines(order);
-                    targetLine = afterLines.find((line) => !beforeSet.has(line)) || null;
-                    if (!targetLine && addResult && typeof addResult === "object") {
-                        targetLine = addResult;
-                    }
-                    if (!targetLine) {
-                        const selectedAfter = getSelectedOrderLine(this, order);
-                        if (selectedAfter && selectedAfter !== beforeSelectedLine) {
-                            targetLine = selectedAfter;
-                        }
-                    }
-                    if (!targetLine && afterLines.length <= beforeCount) {
+                    targetLine = lineResult && lineResult.line ? lineResult.line : null;
+                    if (!targetLine && lineResult && lineResult.reason === "not_added") {
                         formError = _t("No se pudo agregar la renovación al ticket actual.");
                         renderDetail(currentDetail);
                         return;
@@ -3389,20 +3364,6 @@ patch(ControlButtons.prototype, {
                     renderDetail(currentDetail);
                     return;
                 }
-
-                setLineUnitPrice(targetLine, Number(renewalForm.amount || 0));
-                targetLine.wgsSubscriptionConfig = {
-                    flow: "renewal",
-                    partner_id: holderPartnerId || false,
-                    participant_ids: [],
-                    plan_id: Number(renewalForm.planId || 0) || false,
-                    pricing_id: Number(renewalForm.pricingId || 0) || false,
-                    start_date: false,
-                    end_date: false,
-                    product_id: Number(renewalForm.productId || 0) || false,
-                    product_name: renewalForm.productName || false,
-                    source_subscription_id: Number(renewalForm.subscriptionId || 0) || false,
-                };
 
                 formMode = null;
                 formError = "";
