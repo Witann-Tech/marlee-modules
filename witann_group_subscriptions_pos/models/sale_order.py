@@ -113,6 +113,14 @@ class SaleOrder(models.Model):
         return self.sudo().browse(subscription_id).exists()
 
     @api.model
+    def _wgs_raise_pos_data_error(self, message, *, error=False, **context):
+        if error:
+            _logger.warning('WGS POS data error: %s | context=%s | error=%s', message, context, error)
+        else:
+            _logger.warning('WGS POS data error: %s | context=%s', message, context)
+        raise AccessError(message)
+
+    @api.model
     def _wgs_and_domains_for_pos(self, left_domain, right_domain):
         left_domain = list(left_domain or [])
         right_domain = list(right_domain or [])
@@ -176,13 +184,12 @@ class SaleOrder(models.Model):
             try:
                 item = subscription._build_pos_subscription_status_item(today)
             except Exception as error:
-                _logger.warning(
-                    'WGS POS: could not build subscription detail item (so=%s, partner=%s, error=%s)',
-                    subscription.id,
-                    partner.id,
-                    error,
+                self._wgs_raise_pos_data_error(
+                    _('No se pudo construir el detalle de suscripciones para este cliente.'),
+                    error=error,
+                    subscription_id=subscription.id,
+                    partner_id=partner.id,
                 )
-                item = False
             if item and self._should_display_subscription_item_in_pos_detail(item, today=today):
                 item['is_owner'] = bool(subscription.partner_id and subscription.partner_id.id == partner.id)
                 item['partner_role_label'] = _('Titular') if item['is_owner'] else _('Participante')
@@ -440,8 +447,11 @@ class SaleOrder(models.Model):
         try:
             access_last_map = self._get_access_person_last_access_map_for_pos(partners)
         except Exception as error:
-            _logger.warning('WGS POS: fallback without access last map (%s)', error)
-            access_last_map = {}
+            self._wgs_raise_pos_data_error(
+                _('No se pudo consultar la información de acceso para construir el directorio de suscripciones.'),
+                error=error,
+                partner_ids=partner_ids,
+            )
 
         result = {}
         for partner in partners:
@@ -451,13 +461,12 @@ class SaleOrder(models.Model):
                 try:
                     item = subscription._build_pos_subscription_status_item(today)
                 except Exception as error:
-                    _logger.warning(
-                        'WGS POS: could not build subscription status item (so=%s, partner=%s, error=%s)',
-                        subscription.id,
-                        partner.id,
-                        error,
+                    self._wgs_raise_pos_data_error(
+                        _('No se pudo construir el estado de suscripciones para uno de los clientes del directorio.'),
+                        error=error,
+                        subscription_id=subscription.id,
+                        partner_id=partner.id,
                     )
-                    item = False
                 if item:
                     items.append(item)
 
@@ -547,8 +556,12 @@ class SaleOrder(models.Model):
         try:
             status_map = self.get_partner_subscription_status_map_for_pos(partners.ids)
         except Exception as error:
-            _logger.warning('WGS POS: could not build partner status map for directory batch offset=%s limit=%s (%s)', offset, limit, error)
-            status_map = {}
+            self._wgs_raise_pos_data_error(
+                _('No se pudo construir el directorio de suscripciones en este momento.'),
+                error=error,
+                offset=offset,
+                limit=limit,
+            )
         rows = []
         for partner in partners:
             status = status_map.get(partner.id, {})
