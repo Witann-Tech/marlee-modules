@@ -748,6 +748,7 @@ class SaleOrder(models.Model):
         )
         next_invoice_date = self._get_first_available_date(('recurring_next_date', 'next_invoice_date'))
         hard_end_date = self._get_first_available_date(('date_end', 'end_date'))
+        has_replacement_subscription = self._wgs_has_replacement_subscription_for_pos()
 
         recurrence_delta = self._get_recurrence_delta()
         # POS flow treats the first period as paid at checkout. When Odoo still has
@@ -765,7 +766,13 @@ class SaleOrder(models.Model):
         if hard_end_date and (not valid_until or hard_end_date < valid_until):
             valid_until = hard_end_date
 
-        if hard_end_date and hard_end_date < today:
+        if has_replacement_subscription:
+            access_state = False
+            is_valid = False
+            native_state_key = 'closed'
+            native_state_label = _('Cerrada')
+            reason = _('La suscripción fue reemplazada por un upsale posterior.')
+        elif hard_end_date and hard_end_date < today:
             access_state = False
             is_valid = False
             native_state_key = 'closed'
@@ -829,6 +836,53 @@ class SaleOrder(models.Model):
             'pending_amount_total': first_pending[0]['amount_residual'] if first_pending else 0.0,
             'pending_document_name': first_pending[0]['name'] if first_pending else False,
         }
+
+    def _wgs_has_replacement_subscription_for_pos(self):
+        self.ensure_one()
+        sale_order_model = self.sudo()
+        fields_map = sale_order_model._fields
+        relation_field_names = []
+
+        for field_name in ('subscription_id', 'origin_order_id', 'note_order'):
+            field = fields_map.get(field_name)
+            if field and field.type == 'many2one' and getattr(field, 'comodel_name', '') == 'sale.order':
+                relation_field_names.append(field_name)
+
+        for field_name, field in fields_map.items():
+            if field_name in relation_field_names:
+                continue
+            if field.type != 'many2one' or getattr(field, 'comodel_name', '') != 'sale.order':
+                continue
+            normalized_name = (field_name or '').lower()
+            if any(token in normalized_name for token in ('subscription', 'origin', 'upsell', 'note')):
+                relation_field_names.append(field_name)
+
+        if not relation_field_names:
+            return False
+
+        candidates = sale_order_model.browse()
+        for field_name in relation_field_names:
+            domain = [
+                (field_name, '=', self.id),
+                ('state', 'in', ['sale', 'done']),
+                ('id', '!=', self.id),
+            ]
+            if self.partner_id and 'partner_id' in fields_map:
+                domain.append(('partner_id', '=', self.partner_id.id))
+            candidates |= sale_order_model.search(domain, order='id desc')
+
+        if not candidates:
+            return False
+
+        replacement_orders = candidates.filtered(
+            lambda order: order._is_subscription_record_for_pos()
+            and (
+                not self.partner_id
+                or not order.partner_id
+                or order.partner_id.id == self.partner_id.id
+            )
+        )
+        return bool(replacement_orders)
 
     @api.model
     def _should_display_subscription_item_in_pos_detail(self, item, today=False):
