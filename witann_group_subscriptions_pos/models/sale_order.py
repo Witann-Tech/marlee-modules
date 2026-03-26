@@ -893,6 +893,10 @@ class SaleOrder(models.Model):
             return False
 
         today = today or fields.Date.context_today(self)
+        native_state_key = item.get('native_state_key') or False
+        if native_state_key in ('closed', 'cancel', 'draft', 'upsell') and not item.get('has_pending_document'):
+            return False
+
         access_state = item.get('access_state') or False
         if access_state in ('enabled', 'suspended'):
             return True
