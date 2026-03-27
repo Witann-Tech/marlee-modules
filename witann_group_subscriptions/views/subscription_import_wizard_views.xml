@@ -18,7 +18,6 @@
                             <field name="update_existing"/>
                             <field name="skip_non_current"/>
                             <field name="active_state_mode"/>
-                            <field name="customer_id_partner_field_names"/>
                         </group>
                     </group>
                     <separator string="Formato esperado"/>

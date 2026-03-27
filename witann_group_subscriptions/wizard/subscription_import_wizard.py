@@ -63,13 +63,6 @@ class WgsSubscriptionImportWizard(models.TransientModel):
     )
     result_summary = fields.Char(string='Resumen', readonly=True)
     result_log = fields.Text(string='Resultado', readonly=True)
-    customer_id_partner_field_names = fields.Char(
-        string='Campos partner para ID Cliente',
-        default='id_cliente,cliente_id,x_id_cliente,x_cliente_id,x_studio_id_cliente,x_studio_cliente_id',
-        required=True,
-        help='Lista separada por comas de campos en res.partner donde puede venir el ID Cliente del archivo.',
-    )
-
     _HEADER_ALIASES = {
         'partner_id': ('partner_id', 'id_partner'),
         'customer_id': ('id_cliente', 'cliente_id', 'customer_id', 'client_id', 'codigo_cliente_propietario'),
@@ -529,24 +522,15 @@ class WgsSubscriptionImportWizard(models.TransientModel):
                 ('barcode', '=', value),
                 ('name', '=ilike', value),
             ],
-            limit=5,
+            limit=20,
         )
-        if len(candidates) == 1:
-            cache[key] = candidates
-            return candidates
-
-        normalized_value = self._normalize_token(value)
-        exact = candidates.filtered(
-            lambda product: self._normalize_token(product.display_name) == normalized_value
-            or self._normalize_token(product.name) == normalized_value
-            or self._normalize_token(product.default_code) == normalized_value
-        )
-        if len(exact) == 1:
-            cache[key] = exact
-            return exact
-        if len(exact) > 1 or len(candidates) > 1:
+        resolved = self._pick_best_product_candidate(candidates, value)
+        if resolved:
+            cache[key] = resolved
+            return resolved
+        if candidates:
             raise UserError(
-                _('Fila %(row)s: el plan "%(plan)s" coincide con varios productos recurrentes.') % {
+                _('Fila %(row)s: el plan "%(plan)s" coincide con varios productos recurrentes activos o válidos para la compañía.') % {
                     'row': row_number,
                     'plan': value,
                 }
@@ -555,6 +539,64 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             'row': row_number,
             'plan': value,
         })
+
+    def _pick_best_product_candidate(self, candidates, raw_value):
+        if not candidates:
+            return False
+        normalized_value = self._normalize_token(raw_value)
+        exact = candidates.filtered(
+            lambda product: self._normalize_token(product.display_name) == normalized_value
+            or self._normalize_token(product.name) == normalized_value
+            or self._normalize_token(product.default_code) == normalized_value
+        )
+        pools = [
+            exact.filtered(lambda product: product.active),
+            self._filter_products_for_company(exact.filtered(lambda product: product.active)),
+            self._filter_products_for_company(exact),
+            exact,
+            self._filter_products_for_company(candidates.filtered(lambda product: product.active)),
+            candidates.filtered(lambda product: product.active),
+            self._filter_products_for_company(candidates),
+            candidates,
+        ]
+        for pool in pools:
+            resolved = self._resolve_unique_product_candidate(pool)
+            if resolved:
+                return resolved
+        return False
+
+    def _resolve_unique_product_candidate(self, products):
+        products = products.exists()
+        if not products:
+            return False
+        unique_ids = list(dict.fromkeys(products.ids))
+        if len(unique_ids) == 1:
+            return products.browse(unique_ids[0])
+
+        template_ids = list(dict.fromkeys(products.mapped('product_tmpl_id').ids))
+        if len(template_ids) == 1:
+            active_same_template = products.filtered(lambda product: product.active)
+            if active_same_template:
+                return active_same_template.sorted(key=lambda product: product.id)[:1]
+            return products.sorted(key=lambda product: product.id)[:1]
+        return False
+
+    def _filter_products_for_company(self, products):
+        if not products:
+            return products
+        company_id = self.company_id.id
+        filtered = products.filtered(
+            lambda product: self._get_product_company_id(product) in (False, company_id)
+        )
+        return filtered or products
+
+    def _get_product_company_id(self, product):
+        if 'company_id' in product._fields and product.company_id:
+            return product.company_id.id
+        product_tmpl = product.product_tmpl_id if product else False
+        if product_tmpl and 'company_id' in product_tmpl._fields and product_tmpl.company_id:
+            return product_tmpl.company_id.id
+        return False
 
     def _resolve_subscription_plan(self, raw_value, cache, row_number):
         if self._is_empty_cell(raw_value) or 'sale.subscription.plan' not in self.env:
@@ -1003,9 +1045,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
         return [part.strip() for part in text.split(',') if part and part.strip()]
 
     def _get_customer_id_partner_field_names(self):
-        raw_value = self.customer_id_partner_field_names or ''
-        field_names = [self._normalize_python_identifier(part) for part in raw_value.split(',') if part.strip()]
-        return [field_name for field_name in field_names if field_name]
+        return ['x_studio_id_de_cliente']
 
     def _cacheable_value(self, value):
         if isinstance(value, str):
@@ -1029,9 +1069,6 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             else:
                 cleaned.append('_')
         return ''.join(cleaned).strip('_')
-
-    def _normalize_python_identifier(self, value):
-        return self._normalize_token(value).replace('-', '_')
 
     def _is_empty_cell(self, value):
         if value is None:
