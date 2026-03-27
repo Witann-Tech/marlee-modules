@@ -283,6 +283,103 @@ async function addProductToOrder(source, order, product, options = {}) {
     return null;
 }
 
+function getProductTaxIds(product) {
+    if (!product) {
+        return [];
+    }
+    const rawTaxes = product.taxes_id || product.tax_ids || product.taxes || [];
+    const values = Array.isArray(rawTaxes) ? rawTaxes : [rawTaxes];
+    return [...new Set(values.map((item) => {
+        if (typeof item === "number") {
+            return item;
+        }
+        if (Array.isArray(item)) {
+            return Number(item[0] || 0);
+        }
+        if (item && typeof item === "object") {
+            return Number(item.id || 0);
+        }
+        return Number(item || 0);
+    }).filter((item) => item > 0))];
+}
+
+function findTaxInPos(source, taxId) {
+    const pos = getPos(source);
+    if (!pos || !taxId) {
+        return null;
+    }
+    const numericId = Number(taxId || 0);
+    const taxCollection = pos.models && pos.models["account.tax"];
+    if (taxCollection && typeof taxCollection.get === "function") {
+        const tax = taxCollection.get(numericId);
+        if (tax) {
+            return tax;
+        }
+    }
+    if (pos.db) {
+        if (pos.db.tax_by_id && pos.db.tax_by_id[numericId]) {
+            return pos.db.tax_by_id[numericId];
+        }
+        if (typeof pos.db.get_tax_by_id === "function") {
+            const tax = pos.db.get_tax_by_id(numericId);
+            if (tax) {
+                return tax;
+            }
+        }
+    }
+    if (taxCollection && typeof taxCollection.getAll === "function") {
+        return (taxCollection.getAll() || []).find((item) => Number(item.id) === numericId) || null;
+    }
+    if (Array.isArray(pos.taxes)) {
+        return pos.taxes.find((item) => Number(item.id) === numericId) || null;
+    }
+    return null;
+}
+
+function convertDisplayPriceToTaxExcluded(source, product, displayPrice) {
+    const grossAmount = Number(displayPrice || 0);
+    if (!grossAmount || !product) {
+        return grossAmount;
+    }
+    const taxIds = getProductTaxIds(product);
+    if (!taxIds.length) {
+        return grossAmount;
+    }
+    const taxes = taxIds.map((taxId) => findTaxInPos(source, taxId)).filter(Boolean);
+    if (!taxes.length) {
+        return grossAmount;
+    }
+
+    let baseAmount = grossAmount;
+    let percentFactor = 0;
+    let fixedAmount = 0;
+    for (const tax of taxes) {
+        const amountType = String(tax.amount_type || tax.amountType || "percent");
+        const isPriceIncluded = Boolean(tax.price_include ?? tax.priceInclude ?? false);
+        if (isPriceIncluded) {
+            continue;
+        }
+        if (!["percent", "fixed"].includes(amountType)) {
+            return grossAmount;
+        }
+        const amount = Number(tax.amount || 0);
+        if (amountType === "fixed") {
+            fixedAmount += amount;
+            continue;
+        }
+        percentFactor += amount / 100;
+    }
+
+    baseAmount -= fixedAmount;
+    if (baseAmount < 0) {
+        baseAmount = 0;
+    }
+    if (percentFactor) {
+        baseAmount = baseAmount / (1 + percentFactor);
+    }
+    return Math.round(baseAmount * 1000000) / 1000000;
+}
+
 async function addConfiguredProductLineToOrder(source, order, product, options = {}) {
     const {
         quantity = 1,
@@ -290,6 +387,7 @@ async function addConfiguredProductLineToOrder(source, order, product, options =
         discount = 0,
         merge = false,
         metadata = null,
+        priceIncludesTaxes = false,
     } = options;
     if (!order || !product) {
         return null;
@@ -300,10 +398,14 @@ async function addConfiguredProductLineToOrder(source, order, product, options =
     const beforeSet = new Set(beforeLines);
     const beforeSelectedLine = getSelectedOrderLine(source, order);
 
+    const lineUnitPrice = priceIncludesTaxes
+        ? convertDisplayPriceToTaxExcluded(source, product, price)
+        : Number(price || 0);
+
     const addResult = await addProductToOrder(source, order, product, {
         quantity,
         merge,
-        price,
+        price: lineUnitPrice,
     });
     await waitForNextTick();
     await waitForNextTick();
@@ -326,7 +428,7 @@ async function addConfiguredProductLineToOrder(source, order, product, options =
         return { line: null, reason: "not_identified" };
     }
 
-    setLineUnitPrice(targetLine, Number(price || 0));
+    setLineUnitPrice(targetLine, Number(lineUnitPrice || 0));
     if (Number(discount || 0)) {
         setLineDiscount(targetLine, Number(discount || 0));
     }
@@ -2860,6 +2962,7 @@ patch(ControlButtons.prototype, {
                         quantity: 1,
                         merge: false,
                         price: posChargeAmount,
+                        priceIncludesTaxes: true,
                         metadata: {
                             flow: "new",
                             partner_id: selectedPartnerId,
@@ -2939,7 +3042,12 @@ patch(ControlButtons.prototype, {
                     const lineResult = await addConfiguredProductLineToOrder(this, order, productRecord, {
                         quantity: 1,
                         merge: false,
-                        price: Number(pendingChargeForm.amount || 0),
+                        price: Number(
+                            pendingChargeForm.displayAmount !== undefined
+                                ? pendingChargeForm.displayAmount
+                                : (pendingChargeForm.amount || 0)
+                        ),
+                        priceIncludesTaxes: true,
                         metadata: {
                             flow: "pending_charge",
                             partner_id: holderPartnerId || false,
@@ -3245,6 +3353,7 @@ patch(ControlButtons.prototype, {
                                 ? upsaleForm.displayChargeNow
                                 : (upsaleForm.chargeNow || 0)
                         ),
+                        priceIncludesTaxes: true,
                         metadata: {
                             flow: "upsale",
                             partner_id: holderPartnerId || false,
@@ -3335,6 +3444,7 @@ patch(ControlButtons.prototype, {
                                 ? renewalForm.displayAmount
                                 : (renewalForm.amount || 0)
                         ),
+                        priceIncludesTaxes: true,
                         metadata: {
                             flow: "renewal",
                             partner_id: holderPartnerId || false,
