@@ -181,13 +181,23 @@ class WgsSubscriptionImportWizard(models.TransientModel):
                     subscription_plan_cache,
                     row_number=row_number,
                 )
+                pricing_context = self._resolve_recurring_context(
+                    product=product,
+                    subscription_plan=subscription_plan,
+                    fallback_price=normalized.get('price'),
+                )
+                subscription_plan = pricing_context.get('plan') or subscription_plan
+                recurring_pricing_id = pricing_context.get('pricing_id') or False
                 participant_ids = self._resolve_participants(
                     raw_value=normalized.get('participants'),
                     owner=partner,
                     row_number=row_number,
                 )
                 quantity = self._parse_quantity_value(normalized.get('quantity'))
-                price_unit = self._parse_price_value(normalized.get('price'), fallback=float(product.list_price or 0.0))
+                price_unit = self._parse_price_value(
+                    normalized.get('price'),
+                    fallback=float(pricing_context.get('price') or product.list_price or 0.0),
+                )
                 source_key = self._build_source_key(partner, product, start_date)
 
                 existing_order = order_model.search([('wgs_import_source_key', '=', source_key)], limit=1)
@@ -220,6 +230,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
                             price_unit=price_unit,
                             quantity=quantity,
                             participant_ids=participant_ids,
+                            recurring_pricing_id=recurring_pricing_id,
                             source_key=source_key,
                         )
                         counters['updated'] += 1
@@ -235,6 +246,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
                             price_unit=price_unit,
                             quantity=quantity,
                             participant_ids=participant_ids,
+                            recurring_pricing_id=recurring_pricing_id,
                             source_key=source_key,
                         )
                         counters['created'] += 1
@@ -684,6 +696,51 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             return matches[:1]
         raise UserError(_('No encontré al participante "%s".') % value)
 
+    def _resolve_recurring_context(self, product, subscription_plan=False, fallback_price=False):
+        choice = {
+            'price': float(product.list_price or 0.0),
+            'plan': subscription_plan or False,
+            'pricing_id': False,
+        }
+        pos_order_model = self.env['pos.order'].sudo() if 'pos.order' in self.env.registry else False
+        if not pos_order_model:
+            return choice
+
+        try:
+            fallback_amount = (
+                self._parse_price_value(fallback_price, fallback=float(product.list_price or 0.0))
+                if not self._is_empty_cell(fallback_price)
+                else float(product.list_price or 0.0)
+            )
+            preferred_plan_id = subscription_plan.id if subscription_plan else False
+            pricing_choice = pos_order_model._wgs_get_recurring_pricing_choice(
+                product,
+                fallback=fallback_amount,
+                preferred_plan_id=preferred_plan_id,
+                preferred_pricing_id=False,
+            )
+            plan_id = pricing_choice.get('plan_id') or False
+            pricing_id = pricing_choice.get('pricing_id') or False
+            resolved_plan = subscription_plan
+            if not resolved_plan and plan_id:
+                resolved_plan = pos_order_model._wgs_resolve_plan_record(
+                    product=product,
+                    plan_id=plan_id,
+                    pricing_id=pricing_id,
+                )
+            return {
+                'price': float(pricing_choice.get('price') or fallback_amount or 0.0),
+                'plan': resolved_plan or False,
+                'pricing_id': pricing_id or False,
+            }
+        except Exception as error:  # pragma: no cover - defensive integration fallback
+            _logger.warning(
+                'WGS import: could not resolve recurring context for product=%s error=%s',
+                product.id,
+                error,
+            )
+            return choice
+
     def _create_subscription_order(
         self,
         partner,
@@ -695,10 +752,17 @@ class WgsSubscriptionImportWizard(models.TransientModel):
         price_unit,
         quantity,
         participant_ids,
+        recurring_pricing_id,
         source_key,
     ):
         order_model = self.env['sale.order'].sudo().with_company(self.company_id)
-        line_values = self._build_sale_order_line_values(product, subscription_plan, price_unit, quantity)
+        line_values = self._build_sale_order_line_values(
+            product,
+            subscription_plan,
+            price_unit,
+            quantity,
+            recurring_pricing_id=recurring_pricing_id,
+        )
         order_values = self._build_sale_order_values(
             partner=partner,
             product=product,
@@ -723,6 +787,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             price_unit=price_unit,
             quantity=quantity,
             participant_ids=participant_ids,
+            recurring_pricing_id=recurring_pricing_id,
             source_key=source_key,
             allow_line_update=False,
         )
@@ -740,6 +805,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
         price_unit,
         quantity,
         participant_ids,
+        recurring_pricing_id,
         source_key,
     ):
         if order.state == 'cancel':
@@ -757,6 +823,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             price_unit=price_unit,
             quantity=quantity,
             participant_ids=participant_ids,
+            recurring_pricing_id=recurring_pricing_id,
             source_key=source_key,
             allow_line_update=True,
         )
@@ -776,6 +843,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
         price_unit,
         quantity,
         participant_ids,
+        recurring_pricing_id,
         source_key,
         allow_line_update,
     ):
@@ -846,6 +914,13 @@ class WgsSubscriptionImportWizard(models.TransientModel):
                 preferred_names=('subscription_plan_id', 'plan_id', 'recurring_plan_id'),
                 comodel_names=('sale.subscription.plan',),
             )
+            self._assign_many2one_value(
+                values=line_values,
+                fields_map=line._fields,
+                value_id=recurring_pricing_id,
+                preferred_names=('subscription_pricing_id', 'pricing_id', 'recurring_pricing_id'),
+                comodel_names=('sale.subscription.pricing',),
+            )
             line.write(line_values)
 
         self._sync_order_participants(order, participant_ids, quantity, product)
@@ -903,7 +978,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
         )
         return values
 
-    def _build_sale_order_line_values(self, product, subscription_plan, price_unit, quantity):
+    def _build_sale_order_line_values(self, product, subscription_plan, price_unit, quantity, recurring_pricing_id=False):
         line_model = self.env['sale.order.line'].sudo()
         values = {'product_id': product.id}
         if 'name' in line_model._fields:
@@ -921,6 +996,13 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             value_id=subscription_plan.id if subscription_plan else False,
             preferred_names=('subscription_plan_id', 'plan_id', 'recurring_plan_id'),
             comodel_names=('sale.subscription.plan',),
+        )
+        self._assign_many2one_value(
+            values=values,
+            fields_map=line_model._fields,
+            value_id=recurring_pricing_id,
+            preferred_names=('subscription_pricing_id', 'pricing_id', 'recurring_pricing_id'),
+            comodel_names=('sale.subscription.pricing',),
         )
         return values
 
