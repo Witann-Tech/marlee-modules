@@ -380,6 +380,42 @@ function convertDisplayPriceToTaxExcluded(source, product, displayPrice) {
     return Math.round(baseAmount * 1000000) / 1000000;
 }
 
+function buildChargeBreakdown(source, product, values = {}) {
+    const hasBaseAmount = values && values.baseAmount !== undefined && values.baseAmount !== null;
+    const hasDisplayAmount = values && values.displayAmount !== undefined && values.displayAmount !== null;
+    const baseAmount = hasBaseAmount ? Number(values.baseAmount || 0) : null;
+    const displayAmount = hasDisplayAmount ? Number(values.displayAmount || 0) : null;
+
+    let resolvedDisplayAmount = displayAmount;
+    if (resolvedDisplayAmount === null) {
+        resolvedDisplayAmount = baseAmount !== null ? baseAmount : 0;
+    }
+
+    let resolvedBaseAmount = baseAmount;
+    if (resolvedBaseAmount === null) {
+        resolvedBaseAmount = convertDisplayPriceToTaxExcluded(source, product, resolvedDisplayAmount);
+    }
+
+    return {
+        baseAmount: Number(resolvedBaseAmount || 0),
+        displayAmount: Number(resolvedDisplayAmount || 0),
+        ticketUnitPrice: Number(resolvedBaseAmount || 0),
+    };
+}
+
+function getChargeDisplayAmount(charge) {
+    if (!charge || typeof charge !== "object") {
+        return 0;
+    }
+    if (charge.displayAmount !== undefined) {
+        return Number(charge.displayAmount || 0);
+    }
+    if (charge.baseAmount !== undefined) {
+        return Number(charge.baseAmount || 0);
+    }
+    return 0;
+}
+
 async function addConfiguredProductLineToOrder(source, order, product, options = {}) {
     const {
         quantity = 1,
@@ -387,6 +423,7 @@ async function addConfiguredProductLineToOrder(source, order, product, options =
         discount = 0,
         merge = false,
         metadata = null,
+        charge = null,
         priceIncludesTaxes = false,
     } = options;
     if (!order || !product) {
@@ -398,9 +435,14 @@ async function addConfiguredProductLineToOrder(source, order, product, options =
     const beforeSet = new Set(beforeLines);
     const beforeSelectedLine = getSelectedOrderLine(source, order);
 
-    const lineUnitPrice = priceIncludesTaxes
-        ? convertDisplayPriceToTaxExcluded(source, product, price)
-        : Number(price || 0);
+    const resolvedCharge = charge && typeof charge === "object"
+        ? buildChargeBreakdown(source, product, charge)
+        : null;
+    const lineUnitPrice = resolvedCharge
+        ? Number(resolvedCharge.ticketUnitPrice || 0)
+        : priceIncludesTaxes
+            ? convertDisplayPriceToTaxExcluded(source, product, price)
+            : Number(price || 0);
 
     const addResult = await addProductToOrder(source, order, product, {
         quantity,
@@ -1289,8 +1331,7 @@ patch(ControlButtons.prototype, {
                 productName: item.renewal_product_name || "",
                 planId: Number(item.renewal_plan_id || 0) || false,
                 pricingId: Number(item.renewal_pricing_id || 0) || false,
-                amount: 0,
-                displayAmount: 0,
+                charge: buildChargeBreakdown(this, null, { baseAmount: 0, displayAmount: 0 }),
                 nextInvoiceDate: item.next_invoice_date || false,
                 loading: true,
             };
@@ -1305,12 +1346,14 @@ patch(ControlButtons.prototype, {
                 renewalForm = {
                     ...renewalForm,
                     loading: false,
-                    amount: Number(charge && charge.charge_now ? charge.charge_now : 0),
-                    displayAmount: Number(
-                        charge && charge.display_charge_now !== undefined
-                            ? charge.display_charge_now
-                            : (charge && charge.charge_now ? charge.charge_now : 0)
-                    ),
+                    charge: buildChargeBreakdown(this, null, {
+                        baseAmount: Number(charge && charge.charge_now ? charge.charge_now : 0),
+                        displayAmount: Number(
+                            charge && charge.display_charge_now !== undefined
+                                ? charge.display_charge_now
+                                : (charge && charge.charge_now ? charge.charge_now : 0)
+                        ),
+                    }),
                     planId: Number(charge && charge.plan_id ? charge.plan_id : renewalForm.planId) || false,
                     pricingId: Number(charge && charge.pricing_id ? charge.pricing_id : renewalForm.pricingId) || false,
                 };
@@ -1354,10 +1397,11 @@ patch(ControlButtons.prototype, {
                 pendingMoveName: firstPending.name || "",
                 invoiceDate: firstPending.invoice_date || false,
                 invoiceDateDue: firstPending.invoice_date_due || false,
-                amount: 0,
-                displayAmount: 0,
-                amountTotal: Number(firstPending.amount_total || 0),
-                displayAmountTotal: Number(firstPending.amount_total || 0),
+                charge: buildChargeBreakdown(this, null, { baseAmount: 0, displayAmount: 0 }),
+                totalCharge: buildChargeBreakdown(this, null, {
+                    baseAmount: Number(firstPending.amount_total || 0),
+                    displayAmount: Number(firstPending.amount_total || 0),
+                }),
                 loading: true,
             };
             renderDetail(currentDetail);
@@ -1373,18 +1417,22 @@ patch(ControlButtons.prototype, {
                     pendingMoveName: charge && charge.pending_move_name ? charge.pending_move_name : pendingChargeForm.pendingMoveName,
                     invoiceDate: charge && charge.invoice_date ? charge.invoice_date : pendingChargeForm.invoiceDate,
                     invoiceDateDue: charge && charge.invoice_date_due ? charge.invoice_date_due : pendingChargeForm.invoiceDateDue,
-                    amount: Number(charge && charge.charge_now ? charge.charge_now : 0),
-                    displayAmount: Number(
-                        charge && charge.display_charge_now !== undefined
-                            ? charge.display_charge_now
-                            : (charge && charge.charge_now ? charge.charge_now : 0)
-                    ),
-                    amountTotal: Number(charge && charge.amount_total ? charge.amount_total : pendingChargeForm.amountTotal || 0),
-                    displayAmountTotal: Number(
-                        charge && charge.display_amount_total !== undefined
-                            ? charge.display_amount_total
-                            : (charge && charge.amount_total ? charge.amount_total : pendingChargeForm.amountTotal || 0)
-                    ),
+                    charge: buildChargeBreakdown(this, null, {
+                        baseAmount: Number(charge && charge.charge_now ? charge.charge_now : 0),
+                        displayAmount: Number(
+                            charge && charge.display_charge_now !== undefined
+                                ? charge.display_charge_now
+                                : (charge && charge.charge_now ? charge.charge_now : 0)
+                        ),
+                    }),
+                    totalCharge: buildChargeBreakdown(this, null, {
+                        baseAmount: Number(charge && charge.amount_total ? charge.amount_total : getChargeDisplayAmount(pendingChargeForm.totalCharge) || 0),
+                        displayAmount: Number(
+                            charge && charge.display_amount_total !== undefined
+                                ? charge.display_amount_total
+                                : (charge && charge.amount_total ? charge.amount_total : getChargeDisplayAmount(pendingChargeForm.totalCharge) || 0)
+                        ),
+                    }),
                 };
             } catch (error) {
                 console.error("Error al consultar cobro pendiente POS", error);
@@ -1473,7 +1521,10 @@ patch(ControlButtons.prototype, {
                         ? charge.display_recurring_price
                         : (charge && charge.recurring_price ? charge.recurring_price : 0)
                 );
-                newSubscriptionForm.chargeAmount = displayRecurringPrice;
+                newSubscriptionForm.charge = buildChargeBreakdown(this, null, {
+                    baseAmount: Number(charge && charge.recurring_price ? charge.recurring_price : 0),
+                    displayAmount: displayRecurringPrice,
+                });
                 if (charge && (charge.plan_id || charge.pricing_id)) {
                     newSubscriptionForm.planChoice = `${Number(charge.plan_id || 0)}:${Number(charge.pricing_id || 0)}`;
                 }
@@ -1497,12 +1548,9 @@ patch(ControlButtons.prototype, {
             upsaleForm.maxParticipantsTotal = product ? Number(product.max_participants_total || 1) : 1;
             upsaleForm.plans = product ? [...(product.plans || [])] : [];
             upsaleForm.planChoice = "";
-            upsaleForm.recurringPrice = 0;
-            upsaleForm.displayRecurringPrice = 0;
-            upsaleForm.creditAmount = 0;
-            upsaleForm.displayCreditAmount = 0;
-            upsaleForm.chargeNow = 0;
-            upsaleForm.displayChargeNow = 0;
+            upsaleForm.recurringCharge = buildChargeBreakdown(this, null, { baseAmount: 0, displayAmount: 0 });
+            upsaleForm.creditCharge = buildChargeBreakdown(this, null, { baseAmount: 0, displayAmount: 0 });
+            upsaleForm.charge = buildChargeBreakdown(this, null, { baseAmount: 0, displayAmount: 0 });
             upsaleForm.participantIds = clampParticipantIds(
                 upsaleForm.participantIds,
                 upsaleForm.holderPartnerId,
@@ -1536,24 +1584,30 @@ patch(ControlButtons.prototype, {
                 upsaleForm = {
                     ...upsaleForm,
                     loading: false,
-                    recurringPrice: Number(charge && charge.recurring_price ? charge.recurring_price : 0),
-                    displayRecurringPrice: Number(
-                        charge && charge.display_recurring_price !== undefined
-                            ? charge.display_recurring_price
-                            : (charge && charge.recurring_price ? charge.recurring_price : 0)
-                    ),
-                    creditAmount: Number(charge && charge.credit_amount ? charge.credit_amount : 0),
-                    displayCreditAmount: Number(
-                        charge && charge.display_credit_amount !== undefined
-                            ? charge.display_credit_amount
-                            : (charge && charge.credit_amount ? charge.credit_amount : 0)
-                    ),
-                    chargeNow: Number(charge && charge.charge_now ? charge.charge_now : 0),
-                    displayChargeNow: Number(
-                        charge && charge.display_charge_now !== undefined
-                            ? charge.display_charge_now
-                            : (charge && charge.charge_now ? charge.charge_now : 0)
-                    ),
+                    recurringCharge: buildChargeBreakdown(this, null, {
+                        baseAmount: Number(charge && charge.recurring_price ? charge.recurring_price : 0),
+                        displayAmount: Number(
+                            charge && charge.display_recurring_price !== undefined
+                                ? charge.display_recurring_price
+                                : (charge && charge.recurring_price ? charge.recurring_price : 0)
+                        ),
+                    }),
+                    creditCharge: buildChargeBreakdown(this, null, {
+                        baseAmount: Number(charge && charge.credit_amount ? charge.credit_amount : 0),
+                        displayAmount: Number(
+                            charge && charge.display_credit_amount !== undefined
+                                ? charge.display_credit_amount
+                                : (charge && charge.credit_amount ? charge.credit_amount : 0)
+                        ),
+                    }),
+                    charge: buildChargeBreakdown(this, null, {
+                        baseAmount: Number(charge && charge.charge_now ? charge.charge_now : 0),
+                        displayAmount: Number(
+                            charge && charge.display_charge_now !== undefined
+                                ? charge.display_charge_now
+                                : (charge && charge.charge_now ? charge.charge_now : 0)
+                        ),
+                    }),
                     planChoice: `${Number(charge && charge.plan_id ? charge.plan_id : (selectedPlan && selectedPlan.plan_id) || 0)}:${Number(charge && charge.pricing_id ? charge.pricing_id : (selectedPlan && selectedPlan.pricing_id) || 0)}`,
                 };
             } catch (error) {
@@ -1562,12 +1616,9 @@ patch(ControlButtons.prototype, {
                 upsaleForm = {
                     ...upsaleForm,
                     loading: false,
-                    recurringPrice: 0,
-                    displayRecurringPrice: 0,
-                    creditAmount: 0,
-                    displayCreditAmount: 0,
-                    chargeNow: 0,
-                    displayChargeNow: 0,
+                    recurringCharge: buildChargeBreakdown(this, null, { baseAmount: 0, displayAmount: 0 }),
+                    creditCharge: buildChargeBreakdown(this, null, { baseAmount: 0, displayAmount: 0 }),
+                    charge: buildChargeBreakdown(this, null, { baseAmount: 0, displayAmount: 0 }),
                 };
             }
             renderDetail(currentDetail);
@@ -1596,24 +1647,30 @@ patch(ControlButtons.prototype, {
                 upsaleForm = {
                     ...upsaleForm,
                     loading: false,
-                    recurringPrice: Number(charge && charge.recurring_price ? charge.recurring_price : 0),
-                    displayRecurringPrice: Number(
-                        charge && charge.display_recurring_price !== undefined
-                            ? charge.display_recurring_price
-                            : (charge && charge.recurring_price ? charge.recurring_price : 0)
-                    ),
-                    creditAmount: Number(charge && charge.credit_amount ? charge.credit_amount : 0),
-                    displayCreditAmount: Number(
-                        charge && charge.display_credit_amount !== undefined
-                            ? charge.display_credit_amount
-                            : (charge && charge.credit_amount ? charge.credit_amount : 0)
-                    ),
-                    chargeNow: Number(charge && charge.charge_now ? charge.charge_now : 0),
-                    displayChargeNow: Number(
-                        charge && charge.display_charge_now !== undefined
-                            ? charge.display_charge_now
-                            : (charge && charge.charge_now ? charge.charge_now : 0)
-                    ),
+                    recurringCharge: buildChargeBreakdown(this, null, {
+                        baseAmount: Number(charge && charge.recurring_price ? charge.recurring_price : 0),
+                        displayAmount: Number(
+                            charge && charge.display_recurring_price !== undefined
+                                ? charge.display_recurring_price
+                                : (charge && charge.recurring_price ? charge.recurring_price : 0)
+                        ),
+                    }),
+                    creditCharge: buildChargeBreakdown(this, null, {
+                        baseAmount: Number(charge && charge.credit_amount ? charge.credit_amount : 0),
+                        displayAmount: Number(
+                            charge && charge.display_credit_amount !== undefined
+                                ? charge.display_credit_amount
+                                : (charge && charge.credit_amount ? charge.credit_amount : 0)
+                        ),
+                    }),
+                    charge: buildChargeBreakdown(this, null, {
+                        baseAmount: Number(charge && charge.charge_now ? charge.charge_now : 0),
+                        displayAmount: Number(
+                            charge && charge.display_charge_now !== undefined
+                                ? charge.display_charge_now
+                                : (charge && charge.charge_now ? charge.charge_now : 0)
+                        ),
+                    }),
                     planChoice: `${Number(charge && charge.plan_id ? charge.plan_id : selectedPlan.plan_id || 0)}:${Number(charge && charge.pricing_id ? charge.pricing_id : selectedPlan.pricing_id || 0)}`,
                 };
             } catch (error) {
@@ -1731,9 +1788,12 @@ patch(ControlButtons.prototype, {
                 newSubscriptionForm.planChoice = `${Number(defaultChoice.plan_id || 0)}:${Number(defaultChoice.pricing_id || 0)}`;
             } else {
                 newSubscriptionForm.planChoice = "";
-                newSubscriptionForm.chargeAmount = Number(
-                    product ? (product.default_display_price !== undefined ? product.default_display_price : (product.default_price || 0)) : 0
-                );
+                newSubscriptionForm.charge = buildChargeBreakdown(this, null, {
+                    baseAmount: Number(product ? (product.default_price || 0) : 0),
+                    displayAmount: Number(
+                        product ? (product.default_display_price !== undefined ? product.default_display_price : (product.default_price || 0)) : 0
+                    ),
+                });
             }
             newSubscriptionForm.participantIds = clampParticipantIds(
                 newSubscriptionForm.participantIds,
@@ -1752,9 +1812,12 @@ patch(ControlButtons.prototype, {
             const plan = getSelectedPlan();
             const product = productCatalog.find((item) => Number(item.id) === Number(newSubscriptionForm.productId || 0)) || null;
             if (plan) {
-                newSubscriptionForm.chargeAmount = Number(
-                    plan.display_price !== undefined ? plan.display_price : (plan.price || 0)
-                );
+                newSubscriptionForm.charge = buildChargeBreakdown(this, null, {
+                    baseAmount: Number(plan.price || 0),
+                    displayAmount: Number(
+                        plan.display_price !== undefined ? plan.display_price : (plan.price || 0)
+                    ),
+                });
             }
             if (product && plan) {
                 await recalculateNewSubscriptionCharge(product, plan);
@@ -1860,7 +1923,7 @@ patch(ControlButtons.prototype, {
                         </div>
                     </div>
                     <div class="wgs-inline-form-meta">
-                        <div><span>${this._escapeHtml(_t("Precio"))}</span><strong>${this._escapeHtml(this._formatMoney(newSubscriptionForm.chargeAmount || 0))}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Precio"))}</span><strong>${this._escapeHtml(this._formatMoney(getChargeDisplayAmount(newSubscriptionForm.charge)))}</strong></div>
                         <div><span>${this._escapeHtml(_t("Cupo total"))}</span><strong>${this._escapeHtml(String(newSubscriptionForm.maxParticipantsTotal || 1))}</strong></div>
                         ${Number(newSubscriptionForm.maxParticipantsTotal || 1) > 1 ? `<div><span>${this._escapeHtml(_t("Participantes seleccionados"))}</span><strong>${this._escapeHtml(String((newSubscriptionForm.participantIds || []).length || 0))}</strong></div>` : ""}
                         <div><span>${this._escapeHtml(_t("Cobertura del plan"))}</span><strong>${this._escapeHtml(this._formatDateDisplay(automaticEndDate) || "-")}</strong></div>
@@ -1974,7 +2037,7 @@ patch(ControlButtons.prototype, {
                         <div><span>${this._escapeHtml(_t("Titular"))}</span><strong>${this._escapeHtml(renewalForm.holderPartnerName || "-")}</strong></div>
                         <div><span>${this._escapeHtml(_t("Producto"))}</span><strong>${this._escapeHtml(renewalForm.productName || "-")}</strong></div>
                         <div><span>${this._escapeHtml(_t("Próxima fecha"))}</span><strong>${this._escapeHtml(this._formatDateDisplay(renewalForm.nextInvoiceDate) || "-")}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Importe a cobrar"))}</span><strong>${this._escapeHtml(this._formatMoney(renewalForm.displayAmount || renewalForm.amount || 0))}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Importe a cobrar"))}</span><strong>${this._escapeHtml(this._formatMoney(getChargeDisplayAmount(renewalForm.charge)))}</strong></div>
                     </div>
                     <div class="wgs-inline-actions">
                         <button type="button" class="wgs-primary-action-btn" data-action="save-renewal" ${renewalForm.loading ? "disabled" : ""}>${this._escapeHtml(_t("Agregar al ticket"))}</button>
@@ -2007,8 +2070,8 @@ patch(ControlButtons.prototype, {
                         <div><span>${this._escapeHtml(_t("Documento"))}</span><strong>${this._escapeHtml(pendingChargeForm.pendingMoveName || "-")}</strong></div>
                         <div><span>${this._escapeHtml(_t("Fecha factura"))}</span><strong>${this._escapeHtml(this._formatDateDisplay(pendingChargeForm.invoiceDate) || "-")}</strong></div>
                         <div><span>${this._escapeHtml(_t("Vencimiento"))}</span><strong>${this._escapeHtml(this._formatDateDisplay(pendingChargeForm.invoiceDateDue) || "-")}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Total documento"))}</span><strong>${this._escapeHtml(this._formatMoney(pendingChargeForm.displayAmountTotal || pendingChargeForm.amountTotal || 0))}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Saldo pendiente"))}</span><strong>${this._escapeHtml(this._formatMoney(pendingChargeForm.displayAmount || pendingChargeForm.amount || 0))}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Total documento"))}</span><strong>${this._escapeHtml(this._formatMoney(getChargeDisplayAmount(pendingChargeForm.totalCharge)))}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Saldo pendiente"))}</span><strong>${this._escapeHtml(this._formatMoney(getChargeDisplayAmount(pendingChargeForm.charge)))}</strong></div>
                     </div>
                     <div class="wgs-inline-actions">
                         <button type="button" class="wgs-primary-action-btn" data-action="save-pending" ${pendingChargeForm.loading ? "disabled" : ""}>${this._escapeHtml(_t("Agregar al ticket"))}</button>
@@ -2172,9 +2235,9 @@ patch(ControlButtons.prototype, {
                         <div><span>${this._escapeHtml(_t("Titular"))}</span><strong>${this._escapeHtml(upsaleForm.holderPartnerName || "-")}</strong></div>
                         <div><span>${this._escapeHtml(_t("Paquete actual"))}</span><strong>${this._escapeHtml((item.package_names || []).join(", ") || "-")}</strong></div>
                         <div><span>${this._escapeHtml(_t("Plan actual"))}</span><strong>${this._escapeHtml(upsaleForm.sourcePlanName || item.plan_name || "-")}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Nuevo recurrente"))}</span><strong>${this._escapeHtml(this._formatMoney(upsaleForm.displayRecurringPrice || upsaleForm.recurringPrice || 0))}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Bonificación"))}</span><strong>${this._escapeHtml(this._formatMoney(upsaleForm.displayCreditAmount || upsaleForm.creditAmount || 0))}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Cobro ahora"))}</span><strong>${this._escapeHtml(this._formatMoney(upsaleForm.displayChargeNow || upsaleForm.chargeNow || 0))}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Nuevo recurrente"))}</span><strong>${this._escapeHtml(this._formatMoney(getChargeDisplayAmount(upsaleForm.recurringCharge)))}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Bonificación"))}</span><strong>${this._escapeHtml(this._formatMoney(getChargeDisplayAmount(upsaleForm.creditCharge)))}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Cobro ahora"))}</span><strong>${this._escapeHtml(this._formatMoney(getChargeDisplayAmount(upsaleForm.charge)))}</strong></div>
                         <div><span>${this._escapeHtml(_t("Cupo destino"))}</span><strong>${this._escapeHtml(String(upsaleForm.maxParticipantsTotal || 1))}</strong></div>
                     </div>
                     ${Number(upsaleForm.maxParticipantsTotal || 1) > 1 ? `
@@ -2910,9 +2973,7 @@ patch(ControlButtons.prototype, {
                 if (!participantIds.includes(selectedPartnerId)) {
                     participantIds.unshift(selectedPartnerId);
                 }
-                const posChargeAmount = Number(
-                    newSubscriptionForm.chargeAmount || 0
-                );
+                const posCharge = buildChargeBreakdown(this, null, newSubscriptionForm.charge || {});
                 if (participantIds.length > Number(newSubscriptionForm.maxParticipantsTotal || 1)) {
                     formError = _t("Estas excediendo el cupo maximo de participantes para este paquete.");
                     renderDetail(currentDetail);
@@ -2961,8 +3022,7 @@ patch(ControlButtons.prototype, {
                     const lineResult = await addConfiguredProductLineToOrder(this, order, productRecord, {
                         quantity: 1,
                         merge: false,
-                        price: posChargeAmount,
-                        priceIncludesTaxes: true,
+                        charge: posCharge,
                         metadata: {
                             flow: "new",
                             partner_id: selectedPartnerId,
@@ -3042,12 +3102,7 @@ patch(ControlButtons.prototype, {
                     const lineResult = await addConfiguredProductLineToOrder(this, order, productRecord, {
                         quantity: 1,
                         merge: false,
-                        price: Number(
-                            pendingChargeForm.displayAmount !== undefined
-                                ? pendingChargeForm.displayAmount
-                                : (pendingChargeForm.amount || 0)
-                        ),
-                        priceIncludesTaxes: true,
+                        charge: pendingChargeForm.charge,
                         metadata: {
                             flow: "pending_charge",
                             partner_id: holderPartnerId || false,
@@ -3348,12 +3403,7 @@ patch(ControlButtons.prototype, {
                     const lineResult = await addConfiguredProductLineToOrder(this, order, productRecord, {
                         quantity: 1,
                         merge: false,
-                        price: Number(
-                            upsaleForm.displayChargeNow !== undefined
-                                ? upsaleForm.displayChargeNow
-                                : (upsaleForm.chargeNow || 0)
-                        ),
-                        priceIncludesTaxes: true,
+                        charge: upsaleForm.charge,
                         metadata: {
                             flow: "upsale",
                             partner_id: holderPartnerId || false,
@@ -3439,12 +3489,7 @@ patch(ControlButtons.prototype, {
                     const lineResult = await addConfiguredProductLineToOrder(this, order, productRecord, {
                         quantity: 1,
                         merge: false,
-                        price: Number(
-                            renewalForm.displayAmount !== undefined
-                                ? renewalForm.displayAmount
-                                : (renewalForm.amount || 0)
-                        ),
-                        priceIncludesTaxes: true,
+                        charge: renewalForm.charge,
                         metadata: {
                             flow: "renewal",
                             partner_id: holderPartnerId || false,
@@ -3623,7 +3668,7 @@ patch(ControlButtons.prototype, {
             productName: "",
             planChoice: "",
             plans: [],
-            chargeAmount: 0,
+            charge: buildChargeBreakdown(this, null, { baseAmount: 0, displayAmount: 0 }),
             startDate: formatTodayISO(),
             maxParticipantsTotal: 1,
             participantIds,
@@ -3666,12 +3711,9 @@ patch(ControlButtons.prototype, {
             productName: "",
             planChoice: "",
             plans: [],
-            recurringPrice: 0,
-            displayRecurringPrice: 0,
-            creditAmount: 0,
-            displayCreditAmount: 0,
-            chargeNow: 0,
-            displayChargeNow: 0,
+            recurringCharge: buildChargeBreakdown(this, null, { baseAmount: 0, displayAmount: 0 }),
+            creditCharge: buildChargeBreakdown(this, null, { baseAmount: 0, displayAmount: 0 }),
+            charge: buildChargeBreakdown(this, null, { baseAmount: 0, displayAmount: 0 }),
             maxParticipantsTotal: 1,
             participantIds,
             participantSearch: "",

@@ -18,16 +18,17 @@
                             <field name="update_existing"/>
                             <field name="skip_non_current"/>
                             <field name="active_state_mode"/>
+                            <field name="customer_id_partner_field_names"/>
                         </group>
                     </group>
                     <separator string="Formato esperado"/>
                     <div class="alert alert-info" role="alert">
                         Columnas mínimas: <b>plan</b>, <b>inicio</b> y <b>fin</b>, más alguna llave para identificar al usuario:
-                        <b>partner_id</b>, <b>xml_id/external_id</b>, <b>ref</b>, <b>email</b>, <b>mobile</b>,
+                        <b>partner_id</b>, <b>ID Cliente</b>, <b>xml_id/external_id</b>, <b>ref</b>, <b>email</b>, <b>mobile</b>,
                         <b>phone</b>, <b>vat</b> o <b>name</b>.
                     </div>
                     <div class="text-muted">
-                        Columnas opcionales: <b>subscription_plan</b>, <b>price</b> y <b>quantity</b>.
+                        Columnas opcionales: <b>subscription_plan</b>, <b>price</b>, <b>quantity</b> y <b>participants/participantes</b>.
                         El campo <b>plan</b> se mapea al producto recurrente.
                     </div>
                     <group invisible="not result_summary">

@@ -63,9 +63,16 @@ class WgsSubscriptionImportWizard(models.TransientModel):
     )
     result_summary = fields.Char(string='Resumen', readonly=True)
     result_log = fields.Text(string='Resultado', readonly=True)
+    customer_id_partner_field_names = fields.Char(
+        string='Campos partner para ID Cliente',
+        default='id_cliente,cliente_id,x_id_cliente,x_cliente_id,x_studio_id_cliente,x_studio_cliente_id',
+        required=True,
+        help='Lista separada por comas de campos en res.partner donde puede venir el ID Cliente del archivo.',
+    )
 
     _HEADER_ALIASES = {
-        'partner_id': ('partner_id', 'id_partner', 'id_cliente', 'cliente_id'),
+        'partner_id': ('partner_id', 'id_partner'),
+        'customer_id': ('id_cliente', 'cliente_id', 'customer_id', 'client_id', 'codigo_cliente_propietario'),
         'ref': ('ref', 'codigo', 'codigo_cliente', 'codigo_usuario', 'partner_ref'),
         'xml_id': ('xml_id', 'external_id', 'id_externo', 'record_id'),
         'email': ('email', 'correo', 'correo_electronico', 'mail'),
@@ -98,6 +105,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
         'state': ('state', 'estado', 'subscription_state'),
         'price': ('price', 'precio', 'importe', 'monto'),
         'quantity': ('quantity', 'qty', 'cantidad'),
+        'participants': ('participants', 'participantes', 'participantes', 'nombres_participantes'),
     }
 
     def action_process_file(self):
@@ -174,6 +182,11 @@ class WgsSubscriptionImportWizard(models.TransientModel):
                     subscription_plan_cache,
                     row_number=row_number,
                 )
+                participant_ids = self._resolve_participants(
+                    raw_value=normalized.get('participants'),
+                    owner=partner,
+                    row_number=row_number,
+                )
                 quantity = self._parse_quantity_value(normalized.get('quantity'))
                 price_unit = self._parse_price_value(normalized.get('price'), fallback=float(product.list_price or 0.0))
                 source_key = self._build_source_key(partner, product, start_date)
@@ -207,6 +220,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
                             state_value=state_value,
                             price_unit=price_unit,
                             quantity=quantity,
+                            participant_ids=participant_ids,
                             source_key=source_key,
                         )
                         counters['updated'] += 1
@@ -221,6 +235,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
                             state_value=state_value,
                             price_unit=price_unit,
                             quantity=quantity,
+                            participant_ids=participant_ids,
                             source_key=source_key,
                         )
                         counters['created'] += 1
@@ -234,7 +249,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
 
                 log_lines.append(
                     _(
-                        'Fila %(row)s: %(partner)s -> %(product)s (%(start)s -> %(end)s) [%(action)s].'
+                    'Fila %(row)s: %(partner)s -> %(product)s (%(start)s -> %(end)s) [%(action)s].'
                     )
                     % {
                         'row': row_number,
@@ -348,6 +363,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
     def _resolve_partner(self, row, cache, row_number):
         raw_candidates = [
             ('partner_id', row.get('partner_id')),
+            ('customer_id', row.get('customer_id')),
             ('xml_id', row.get('xml_id')),
             ('ref', row.get('ref')),
             ('email', row.get('email')),
@@ -371,7 +387,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
         if not partner:
             raise UserError(
                 _(
-                    'Fila %(row)s: no pude identificar al usuario. Usa partner_id, external_id/xml_id, ref, email, teléfono o nombre.'
+                    'Fila %(row)s: no pude identificar al usuario. Usa partner_id, ID Cliente, external_id/xml_id, ref, email, teléfono o nombre.'
                 )
                 % {'row': row_number}
             )
@@ -391,6 +407,9 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             except (TypeError, ValueError):
                 partner = False
             return partner
+
+        if candidate_type == 'customer_id':
+            return self._find_partner_by_customer_id(raw_value)
 
         if candidate_type == 'xml_id':
             partner = self.env.ref(raw_value, raise_if_not_found=False)
@@ -440,6 +459,44 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             or self._normalize_phone(partner.mobile).endswith(digits)
         )
         return self._single_record_or_false(exact[:2], raw_value, 'partner.phone')
+
+    def _find_partner_by_customer_id(self, raw_value):
+        value = str(raw_value or '').strip()
+        if not value:
+            return False
+        Partner = self.env['res.partner'].sudo().with_context(active_test=False)
+        field_names = self._get_customer_id_partner_field_names()
+        matches = Partner.browse()
+        for field_name in field_names:
+            field = Partner._fields.get(field_name)
+            if not field or field.type not in ('char', 'text', 'integer', 'float'):
+                continue
+            domain_value = value
+            if field.type in ('integer', 'float'):
+                try:
+                    domain_value = int(float(value))
+                except (TypeError, ValueError):
+                    continue
+                operator = '='
+            else:
+                operator = '=ilike'
+            current = Partner.search([(field_name, operator, domain_value)], limit=2)
+            if current:
+                if len(current) > 1:
+                    raise UserError(
+                        _('La búsqueda por ID Cliente "%(value)s" devolvió varios partners en el campo %(field)s.') % {
+                            'value': value,
+                            'field': field_name,
+                        }
+                    )
+                if matches and matches[:1].id != current[:1].id:
+                    raise UserError(
+                        _('El ID Cliente "%(value)s" coincide con distintos partners según el campo configurado.') % {
+                            'value': value,
+                        }
+                    )
+                matches = current
+        return matches[:1] if matches else False
 
     def _resolve_subscription_product(self, raw_value, cache, row_number):
         key = self._cacheable_value(raw_value)
@@ -542,6 +599,43 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             }
         )
 
+    def _resolve_participants(self, raw_value, owner, row_number):
+        if self._is_empty_cell(raw_value):
+            return [owner.id] if owner else []
+        raw_names = self._split_participants(raw_value)
+        participant_ids = [owner.id] if owner else []
+        seen_ids = set(participant_ids)
+        for participant_name in raw_names:
+            partner = self._find_partner_by_participant_name(participant_name)
+            if owner and partner.id == owner.id:
+                continue
+            if partner.id in seen_ids:
+                continue
+            participant_ids.append(partner.id)
+            seen_ids.add(partner.id)
+        if not participant_ids:
+            raise UserError(_('Fila %s: no se pudo resolver ningún participante.') % row_number)
+        return participant_ids
+
+    def _find_partner_by_participant_name(self, raw_value):
+        value = str(raw_value or '').strip()
+        if not value:
+            return False
+        Partner = self.env['res.partner'].sudo().with_context(active_test=False)
+        matches = Partner.search([('name', '=ilike', value)], limit=5)
+        normalized_value = self._normalize_token(value)
+        exact = matches.filtered(
+            lambda partner: self._normalize_token(partner.name) == normalized_value
+            or self._normalize_token(partner.display_name) == normalized_value
+        )
+        if len(exact) == 1:
+            return exact[:1]
+        if len(exact) > 1 or len(matches) > 1:
+            raise UserError(_('La búsqueda del participante "%s" devolvió varios partners.') % value)
+        if matches:
+            return matches[:1]
+        raise UserError(_('No encontré al participante "%s".') % value)
+
     def _create_subscription_order(
         self,
         partner,
@@ -552,6 +646,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
         state_value,
         price_unit,
         quantity,
+        participant_ids,
         source_key,
     ):
         order_model = self.env['sale.order'].sudo().with_company(self.company_id)
@@ -579,6 +674,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             state_value=state_value,
             price_unit=price_unit,
             quantity=quantity,
+            participant_ids=participant_ids,
             source_key=source_key,
             allow_line_update=False,
         )
@@ -595,6 +691,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
         state_value,
         price_unit,
         quantity,
+        participant_ids,
         source_key,
     ):
         if order.state == 'cancel':
@@ -611,6 +708,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             state_value=state_value,
             price_unit=price_unit,
             quantity=quantity,
+            participant_ids=participant_ids,
             source_key=source_key,
             allow_line_update=True,
         )
@@ -629,6 +727,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
         state_value,
         price_unit,
         quantity,
+        participant_ids,
         source_key,
         allow_line_update,
     ):
@@ -701,6 +800,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             )
             line.write(line_values)
 
+        self._sync_order_participants(order, participant_ids, quantity, product)
         order._ensure_subscription_owner_is_participant()
 
     def _build_sale_order_values(
@@ -874,8 +974,38 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             fields.Date.to_string(start_date),
         )
 
+    def _sync_order_participants(self, order, participant_ids, quantity, product):
+        if 'participant_ids' not in order._fields or not participant_ids:
+            return
+        max_total = int((float(quantity or 0.0) or 0.0) * int(product.product_tmpl_id.max_participants_total or 0))
+        if max_total and len(participant_ids) > max_total:
+            raise UserError(
+                _(
+                    'No puedes asignar %(current)s participantes para %(product)s. El máximo permitido es %(max)s.'
+                )
+                % {
+                    'current': len(participant_ids),
+                    'product': product.display_name,
+                    'max': max_total,
+                }
+            )
+        order.write({'participant_ids': [Command.set(participant_ids)]})
+
     def _normalize_phone(self, value):
         return ''.join(ch for ch in str(value or '') if ch.isdigit())
+
+    def _split_participants(self, raw_value):
+        if isinstance(raw_value, str):
+            text = raw_value
+        else:
+            text = str(raw_value or '')
+        text = text.replace(';', ',')
+        return [part.strip() for part in text.split(',') if part and part.strip()]
+
+    def _get_customer_id_partner_field_names(self):
+        raw_value = self.customer_id_partner_field_names or ''
+        field_names = [self._normalize_python_identifier(part) for part in raw_value.split(',') if part.strip()]
+        return [field_name for field_name in field_names if field_name]
 
     def _cacheable_value(self, value):
         if isinstance(value, str):
@@ -899,6 +1029,9 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             else:
                 cleaned.append('_')
         return ''.join(cleaned).strip('_')
+
+    def _normalize_python_identifier(self, value):
+        return self._normalize_token(value).replace('-', '_')
 
     def _is_empty_cell(self, value):
         if value is None:
