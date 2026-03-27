@@ -108,9 +108,12 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             raise UserError(_('El archivo no contiene filas de datos.'))
 
         today = fields.Date.context_today(self)
-        state_value = self._resolve_subscription_state_value(self.active_state_mode)
-        if not state_value:
+        active_state_value = self._resolve_subscription_state_value(self.active_state_mode)
+        closed_state_value = self._resolve_subscription_state_value('closed')
+        if not active_state_value:
             raise UserError(_('No se pudo resolver un valor válido para subscription_state en este entorno.'))
+        if not closed_state_value:
+            raise UserError(_('No se pudo resolver el estado CLOSED de subscription_state en este entorno.'))
 
         partner_cache = {}
         product_cache = {}
@@ -168,6 +171,13 @@ class WgsSubscriptionImportWizard(models.TransientModel):
                     )
                     continue
 
+                state_value = self._resolve_import_subscription_state_value(
+                    start_date=start_date,
+                    end_date=end_date,
+                    today=today,
+                    active_state_value=active_state_value,
+                    closed_state_value=closed_state_value,
+                )
                 partner = self._resolve_partner(normalized, partner_cache, row_number=row_number)
                 product = self._resolve_subscription_product(normalized.get('plan'), product_cache, row_number=row_number)
                 subscription_plan = self._resolve_subscription_plan(
@@ -929,7 +939,9 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             except TypeError:
                 selection = selection(self.env)
         selection = selection or []
-        if mode == 'renew':
+        if mode == 'closed':
+            wanted = ('close', 'closed', 'cerrada', 'cerrado')
+        elif mode == 'renew':
             wanted = ('renew', 'to renew', 'por renovar', 'progress', 'en progreso')
         else:
             wanted = ('progress', 'in progress', 'en progreso', 'renew', 'por renovar')
@@ -938,6 +950,18 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             if any(token in haystack for token in wanted):
                 return value
         return False
+
+    def _resolve_import_subscription_state_value(
+        self,
+        start_date,
+        end_date,
+        today,
+        active_state_value,
+        closed_state_value,
+    ):
+        if end_date and end_date < today:
+            return closed_state_value
+        return active_state_value
 
     def _assign_date_field(self, values, fields_map, value_date, preferred_names):
         if not value_date:
