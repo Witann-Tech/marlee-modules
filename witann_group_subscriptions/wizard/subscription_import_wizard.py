@@ -1,6 +1,7 @@
 import base64
 import binascii
 import csv
+import difflib
 import io
 import logging
 import os
@@ -682,8 +683,8 @@ class WgsSubscriptionImportWizard(models.TransientModel):
         if not value:
             return False
         Partner = self.env['res.partner'].sudo().with_context(active_test=False)
-        matches = Partner.search([('name', '=ilike', value)], limit=5)
         normalized_value = self._normalize_token(value)
+        matches = Partner.search([('name', '=ilike', value)], limit=10)
         exact = matches.filtered(
             lambda partner: self._normalize_token(partner.name) == normalized_value
             or self._normalize_token(partner.display_name) == normalized_value
@@ -694,7 +695,92 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             raise UserError(_('La búsqueda del participante "%s" devolvió varios partners.') % value)
         if matches:
             return matches[:1]
+
+        token_candidates = self._search_participant_candidates(value)
+        fuzzy_match = self._pick_best_participant_candidate(token_candidates, value)
+        if fuzzy_match:
+            return fuzzy_match
         raise UserError(_('No encontré al participante "%s".') % value)
+
+    def _search_participant_candidates(self, raw_value):
+        Partner = self.env['res.partner'].sudo().with_context(active_test=False)
+        tokens = self._tokenize_name_for_match(raw_value)
+        if not tokens:
+            return Partner.browse()
+
+        probe_tokens = []
+        if tokens:
+            probe_tokens.append(tokens[0])
+        if len(tokens) > 1:
+            probe_tokens.append(tokens[-1])
+        if len(tokens) > 2:
+            probe_tokens.append(tokens[-2])
+
+        domain = []
+        for token in probe_tokens:
+            domain.extend(['|', ('name', 'ilike', token), ('display_name', 'ilike', token)])
+        if domain and domain[0] == '|':
+            domain = domain[1:]
+        if not domain:
+            return Partner.browse()
+
+        candidates = Partner.search(domain, limit=80)
+        if len(tokens) >= 2:
+            filtered = candidates.filtered(
+                lambda partner: all(
+                    token in self._normalize_token(partner.name) or token in self._normalize_token(partner.display_name)
+                    for token in tokens[:1] + tokens[-1:]
+                )
+            )
+            if filtered:
+                candidates = filtered
+        return candidates
+
+    def _pick_best_participant_candidate(self, candidates, raw_value):
+        candidates = candidates.exists()
+        if not candidates:
+            return False
+
+        scored = []
+        for partner in candidates:
+            score = self._score_participant_candidate(partner, raw_value)
+            if score > 0:
+                scored.append((score, partner))
+        if not scored:
+            return False
+
+        scored.sort(key=lambda row: (-row[0], row[1].id))
+        best_score, best_partner = scored[0]
+        second_score = scored[1][0] if len(scored) > 1 else 0.0
+
+        if best_score >= 0.93:
+            return best_partner
+        if best_score >= 0.86 and (best_score - second_score) >= 0.03:
+            return best_partner
+        if best_score >= 0.80 and second_score <= 0.72:
+            return best_partner
+        return False
+
+    def _score_participant_candidate(self, partner, raw_value):
+        input_normalized = self._normalize_token(raw_value)
+        partner_normalized = self._normalize_token(partner.name or partner.display_name or '')
+        display_normalized = self._normalize_token(partner.display_name or partner.name or '')
+        if not input_normalized or not partner_normalized:
+            return 0.0
+
+        name_ratio = difflib.SequenceMatcher(None, input_normalized, partner_normalized).ratio()
+        display_ratio = difflib.SequenceMatcher(None, input_normalized, display_normalized).ratio()
+
+        input_token_list = self._tokenize_name_for_match(raw_value)
+        partner_token_list = self._tokenize_name_for_match(partner.name or partner.display_name or '')
+        input_tokens = set(input_token_list)
+        partner_tokens = set(partner_token_list)
+        token_overlap = 0.0
+        if input_tokens and partner_tokens:
+            token_overlap = len(input_tokens & partner_tokens) / float(max(len(input_tokens), len(partner_tokens)))
+
+        starts_same = 1.0 if input_token_list and partner_token_list and input_token_list[0] == partner_token_list[0] else 0.0
+        return max(name_ratio, display_ratio) * 0.75 + token_overlap * 0.2 + starts_same * 0.05
 
     def _resolve_recurring_context(self, product, subscription_plan=False, fallback_price=False):
         choice = {
@@ -1142,6 +1228,10 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             text = str(raw_value or '')
         text = text.replace(';', ',')
         return [part.strip() for part in text.split(',') if part and part.strip()]
+
+    def _tokenize_name_for_match(self, value):
+        normalized = self._normalize_token(value)
+        return [token for token in normalized.split('_') if token and len(token) >= 2]
 
     def _get_customer_id_partner_field_names(self):
         return ['x_studio_id_de_cliente']
