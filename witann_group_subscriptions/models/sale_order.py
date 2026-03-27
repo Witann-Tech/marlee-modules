@@ -1,4 +1,5 @@
 import logging
+from datetime import date, datetime
 
 from odoo import _, api, fields, models
 from odoo.exceptions import ValidationError
@@ -208,12 +209,49 @@ class SaleOrder(models.Model):
         state_value = (self.subscription_state or '').strip().lower()
         if not state_value:
             return False
+        if not self._wgs_is_subscription_within_effective_dates():
+            return False
         if any(token in state_value for token in self._WGS_ACCESS_SUSPENDED_STATE_TOKENS):
             return 'suspended'
         if any(token in state_value for token in self._WGS_ACCESS_ENABLED_STATE_TOKENS):
             return 'enabled'
         if any(token in state_value for token in self._WGS_ACCESS_DISABLED_STATE_TOKENS):
             return False
+        return False
+
+    def _wgs_is_subscription_within_effective_dates(self):
+        self.ensure_one()
+        today = fields.Date.context_today(self)
+        start_date = self._wgs_get_first_available_date(
+            ('wgs_effective_start_date', 'start_date', 'date_start', 'subscription_start_date', 'date_order')
+        )
+        end_date = self._wgs_get_first_available_date(('date_end', 'end_date', 'subscription_end_date'))
+        if start_date and start_date > today:
+            return False
+        if end_date and end_date < today:
+            return False
+        return True
+
+    def _wgs_get_first_available_date(self, field_names):
+        self.ensure_one()
+        for field_name in field_names:
+            if field_name not in self._fields:
+                continue
+            value = self[field_name]
+            converted = self._wgs_to_date(value)
+            if converted:
+                return converted
+        return False
+
+    def _wgs_to_date(self, value):
+        if not value:
+            return False
+        if isinstance(value, date) and not isinstance(value, datetime):
+            return value
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, str):
+            return fields.Date.to_date(value)
         return False
 
     @api.model

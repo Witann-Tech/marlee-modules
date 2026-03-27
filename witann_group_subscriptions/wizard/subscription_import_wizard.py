@@ -109,11 +109,8 @@ class WgsSubscriptionImportWizard(models.TransientModel):
 
         today = fields.Date.context_today(self)
         active_state_value = self._resolve_subscription_state_value(self.active_state_mode)
-        closed_state_value = self._resolve_subscription_state_value('closed')
         if not active_state_value:
             raise UserError(_('No se pudo resolver un valor válido para subscription_state en este entorno.'))
-        if not closed_state_value:
-            raise UserError(_('No se pudo resolver el estado CLOSED de subscription_state en este entorno.'))
 
         partner_cache = {}
         product_cache = {}
@@ -176,7 +173,6 @@ class WgsSubscriptionImportWizard(models.TransientModel):
                     end_date=end_date,
                     today=today,
                     active_state_value=active_state_value,
-                    closed_state_value=closed_state_value,
                 )
                 partner = self._resolve_partner(normalized, partner_cache, row_number=row_number)
                 product = self._resolve_subscription_product(normalized.get('plan'), product_cache, row_number=row_number)
@@ -957,10 +953,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
         end_date,
         today,
         active_state_value,
-        closed_state_value,
     ):
-        if end_date and end_date < today:
-            return closed_state_value
         return active_state_value
 
     def _assign_date_field(self, values, fields_map, value_date, preferred_names):
