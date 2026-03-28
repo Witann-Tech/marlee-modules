@@ -529,7 +529,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             allow_line_repair=allow_line_repair,
         )
         self._apply_native_subscription_identity(order=order, subscription_plan=subscription_plan, state_value=state_value)
-        self._sync_subscription_metadata(
+        self._wgs_sync_subscription_metadata(
             sale_order=order,
             participant_ids=participant_ids,
             contract_date=contract_date,
