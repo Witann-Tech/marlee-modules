@@ -197,6 +197,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
                     )
                     recurring_pricing_id = pricing_context.get('pricing_id') or False
                     next_billing_date = pricing_context.get('next_billing_date') or False
+                    contract_date = today
                     participant_ids = self._resolve_participants(
                         raw_value=normalized.get('participants'),
                         owner=partner,
@@ -248,6 +249,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
                                 participant_ids=participant_ids,
                                 recurring_pricing_id=recurring_pricing_id,
                                 next_billing_date=next_billing_date,
+                                contract_date=contract_date,
                                 source_key=source_key,
                             )
                             counters['updated'] += 1
@@ -265,6 +267,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
                                 participant_ids=participant_ids,
                                 recurring_pricing_id=recurring_pricing_id,
                                 next_billing_date=next_billing_date,
+                                contract_date=contract_date,
                                 source_key=source_key,
                             )
                             counters['created'] += 1
@@ -909,6 +912,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
         participant_ids,
         recurring_pricing_id,
         next_billing_date,
+        contract_date,
         source_key,
     ):
         order_model = self.env['sale.order'].sudo().with_company(self.company_id)
@@ -923,13 +927,15 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             partner=partner,
             product=product,
             subscription_plan=subscription_plan,
+            contract_date=contract_date,
             start_date=start_date,
             end_date=end_date,
-            state_value=state_value,
             source_key=source_key,
             line_values=line_values,
         )
         order = order_model.create(order_values)
+        if 'participant_ids' in order._fields and participant_ids:
+            order.write({'participant_ids': [Command.set(participant_ids)]})
         if order.state in ('draft', 'sent'):
             order.action_confirm()
         self._write_subscription_metadata(
@@ -945,9 +951,12 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             participant_ids=participant_ids,
             recurring_pricing_id=recurring_pricing_id,
             next_billing_date=next_billing_date,
+            contract_date=contract_date,
             source_key=source_key,
             allow_line_update=False,
         )
+        self._ensure_subscription_identity(order, subscription_plan=subscription_plan, state_value=state_value)
+        self._validate_subscription_order_recognition(order, row_label=partner.display_name)
         return order
 
     def _update_existing_subscription_order(
@@ -964,6 +973,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
         participant_ids,
         recurring_pricing_id,
         next_billing_date,
+        contract_date,
         source_key,
     ):
         if order.state == 'cancel':
@@ -983,11 +993,14 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             participant_ids=participant_ids,
             recurring_pricing_id=recurring_pricing_id,
             next_billing_date=next_billing_date,
+            contract_date=contract_date,
             source_key=source_key,
             allow_line_update=True,
         )
         if order.state in ('draft', 'sent'):
             order.action_confirm()
+        self._ensure_subscription_identity(order, subscription_plan=subscription_plan, state_value=state_value)
+        self._validate_subscription_order_recognition(order, row_label=partner.display_name)
         return order
 
     def _write_subscription_metadata(
@@ -1004,6 +1017,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
         participant_ids,
         recurring_pricing_id,
         next_billing_date,
+        contract_date,
         source_key,
         allow_line_update,
     ):
@@ -1049,11 +1063,11 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             preferred_names=('date_end', 'end_date', 'subscription_end_date', 'recurring_end_date'),
         )
         if 'date_order' in order._fields:
-            write_values['date_order'] = self._convert_for_field(start_date, order._fields['date_order'])
+            write_values['date_order'] = self._convert_for_field(contract_date, order._fields['date_order'])
         self._assign_date_field(
             values=write_values,
             fields_map=order._fields,
-            value_date=start_date,
+            value_date=contract_date,
             preferred_names=('first_contract_date', 'contract_date', 'date_contract'),
         )
         if subscription_plan:
@@ -1104,7 +1118,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
         self._sync_subscription_runtime_metadata(
             order=order,
             participant_ids=participant_ids,
-            contract_date=start_date,
+            contract_date=contract_date,
             subscription_start_date=start_date,
             subscription_end_date=end_date,
             next_billing_date=next_billing_date,
@@ -1117,9 +1131,9 @@ class WgsSubscriptionImportWizard(models.TransientModel):
         partner,
         product,
         subscription_plan,
+        contract_date,
         start_date,
         end_date,
-        state_value,
         source_key,
         line_values,
     ):
@@ -1138,15 +1152,13 @@ class WgsSubscriptionImportWizard(models.TransientModel):
         if 'pricelist_id' in order_model._fields and partner.property_product_pricelist:
             values['pricelist_id'] = partner.property_product_pricelist.id
         if 'date_order' in order_model._fields:
-            values['date_order'] = self._convert_for_field(start_date, order_model._fields['date_order'])
+            values['date_order'] = self._convert_for_field(contract_date, order_model._fields['date_order'])
         self._assign_date_field(
             values=values,
             fields_map=order_model._fields,
-            value_date=start_date,
+            value_date=contract_date,
             preferred_names=('first_contract_date', 'contract_date', 'date_contract'),
         )
-        if 'subscription_state' in order_model._fields:
-            values['subscription_state'] = state_value
         if 'wgs_effective_start_date' in order_model._fields:
             values['wgs_effective_start_date'] = start_date
         self._assign_date_field(
@@ -1203,8 +1215,10 @@ class WgsSubscriptionImportWizard(models.TransientModel):
         values = {'product_id': product.id}
         if 'name' in line_model._fields:
             values['name'] = product.display_name
-        if 'product_uom' in line_model._fields and product.uom_id:
-            values['product_uom'] = product.uom_id.id
+        for field_name in ('product_uom_id', 'product_uom', 'uom_id'):
+            if field_name in line_model._fields and product.uom_id:
+                values[field_name] = product.uom_id.id
+                break
         qty_field = self._get_line_qty_field_name(line_model._fields)
         if qty_field:
             values[qty_field] = quantity
@@ -1233,6 +1247,79 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             comodel_checker=self._is_pricing_model_name,
         )
         return values
+
+    def _ensure_subscription_identity(self, order, subscription_plan=False, state_value=False):
+        order = order.sudo().with_company(self.company_id)
+        write_values = {}
+        if subscription_plan:
+            for field_name in ('subscription_plan_id', 'plan_id', 'recurring_plan_id'):
+                field = order._fields.get(field_name)
+                if not field or field.type != 'many2one':
+                    continue
+                if order[field_name]:
+                    continue
+                write_values[field_name] = subscription_plan.id
+                break
+        if state_value and 'subscription_state' in order._fields and not order.subscription_state:
+            write_values['subscription_state'] = state_value
+        if write_values:
+            order.write(write_values)
+        if 'is_subscription' in order._fields and not order.is_subscription:
+            try:
+                order.write({'is_subscription': True})
+            except Exception as error:  # pragma: no cover - runtime-specific field behavior
+                _logger.warning(
+                    'WGS import: could not force is_subscription on order %s (%s)',
+                    order.id,
+                    error,
+                )
+
+    def _validate_subscription_order_recognition(self, order, row_label=False):
+        order = order.sudo().with_company(self.company_id)
+        recurring_lines = order.order_line.filtered(
+            lambda line: line.product_id and line.product_id.product_tmpl_id.recurring_invoice
+        )
+        if not recurring_lines:
+            raise UserError(
+                _('La orden %(order)s para %(label)s no conservó una línea recurrente después de crearla.') % {
+                    'order': order.display_name,
+                    'label': row_label or order.partner_id.display_name or _('este cliente'),
+                }
+            )
+
+        check_method = getattr(order, '_is_subscription_record_for_pos', None)
+        if callable(check_method):
+            try:
+                if check_method():
+                    return
+            except Exception as error:  # pragma: no cover - runtime-specific helper
+                _logger.warning(
+                    'WGS import: _is_subscription_record_for_pos failed on order %s (%s)',
+                    order.id,
+                    error,
+                )
+
+        if 'is_subscription' in order._fields and order.is_subscription:
+            return
+        if 'subscription_state' in order._fields and (order.subscription_state or '').strip():
+            return
+        if 'plan_id' in order._fields and order.plan_id:
+            return
+        if any(
+            field_name in order._fields and order[field_name]
+            for field_name in ('recurring_next_date', 'next_invoice_date', 'recurring_next_invoice_date')
+        ):
+            return
+
+        raise UserError(
+            _(
+                'La orden %(order)s para %(label)s se creó como venta normal y no quedó reconocida como suscripción. '
+                'La fila fue revertida para evitar dejar SO incorrectas.'
+            ) % {
+                'order': order.display_name,
+                'label': row_label or order.partner_id.display_name or _('este cliente'),
+            }
+        )
 
     def _resolve_subscription_state_value(self, mode):
         field = self.env['sale.order']._fields.get('subscription_state')
