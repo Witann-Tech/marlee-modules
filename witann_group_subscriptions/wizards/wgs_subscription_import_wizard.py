@@ -327,7 +327,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             'order_line': [Command.create({
                 'product_id': product_variant.id,
                 'product_uom_qty': 1,
-                'price_unit': 0,  # importación histórica — sin facturación retroactiva
+                'price_unit': product_variant.lst_price,
             })],
         }
         if line.start_date and 'date_order' in SaleOrder._fields:
