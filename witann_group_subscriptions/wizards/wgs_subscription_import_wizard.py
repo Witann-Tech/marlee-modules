@@ -338,32 +338,39 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             skip_owner_participant_sync=True,
         ).create(order_vals)
 
-        # ── Agregar participantes adicionales ──────────────────────────────────
-        if line.participant_ids:
-            order.with_context(skip_owner_participant_sync=True).write({
-                'participant_ids': [Command.link(pid) for pid in line.participant_ids.ids],
-            })
-
         # ── Confirmar ──────────────────────────────────────────────────────────
         # action_confirm() recalcula start_date y next_invoice_date desde hoy,
         # sobreescribiendo los valores históricos. Los restauramos después.
         order.action_confirm()
 
-        # ── Restaurar fechas históricas del Excel ──────────────────────────────
+        # ── Restaurar fechas históricas + participantes ─────────────────────────
+        # Escribimos todo en un solo write() DESPUÉS de action_confirm() para que
+        # ningún proceso interno de Odoo sobreescriba o interfiera con los valores.
+        #
         # La constraint sale_order_check_start_date_lower_next_invoice_date exige
         # start_date ≤ next_invoice_date.  Como Inicio ≤ Fin siempre en los datos,
         # asignar ambos desde el Excel satisface la constraint incluso para
-        # suscripciones vencidas (Fin en el pasado), que quedarán marcadas como
-        # por renovar automáticamente.
-        date_write = {}
+        # suscripciones vencidas (Fin en el pasado).
+        post_confirm_write = {}
         if line.end_date:
-            date_write['next_invoice_date'] = line.end_date
+            post_confirm_write['next_invoice_date'] = line.end_date
         if line.start_date and 'start_date' in order._fields:
-            date_write['start_date'] = line.start_date
+            post_confirm_write['start_date'] = line.start_date
         if line.start_date and 'first_contract_date' in order._fields:
-            date_write['first_contract_date'] = line.start_date
-        if date_write:
-            order.write(date_write)
+            post_confirm_write['first_contract_date'] = line.start_date
+
+        # Participantes: incluir al titular + los participantes adicionales del Excel.
+        # Se escriben aquí (post-confirm) para evitar que lógica interna de
+        # action_confirm() interfiera. skip_owner_participant_sync=True evita que
+        # _ensure_subscription_owner_is_participant() sobreescriba la lista.
+        participant_ids_to_set = list(line.participant_ids.ids)
+        if order.partner_id and order.partner_id.id not in participant_ids_to_set:
+            participant_ids_to_set.insert(0, order.partner_id.id)
+        if participant_ids_to_set:
+            post_confirm_write['participant_ids'] = [Command.set(participant_ids_to_set)]
+
+        if post_confirm_write:
+            order.with_context(skip_owner_participant_sync=True).write(post_confirm_write)
 
         # Forzar subscription_state al valor correcto de "en progreso".
         # No hardcodeamos 'progress' porque el valor real del campo varía
