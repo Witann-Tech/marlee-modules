@@ -178,18 +178,20 @@ class WgsSubscriptionImportWizard(models.TransientModel):
                     )
                     partner = self._resolve_partner(normalized, partner_cache, row_number=row_number)
                     product = self._resolve_subscription_product(normalized.get('plan'), product_cache, row_number=row_number)
-                    subscription_plan = self._resolve_subscription_plan(
-                        normalized.get('subscription_plan'),
-                        subscription_plan_cache,
+                    preferred_choice = self._resolve_preferred_recurring_choice(
+                        product=product,
+                        raw_value=normalized.get('subscription_plan'),
+                        cache=subscription_plan_cache,
                         row_number=row_number,
                     )
                     pricing_context = self._resolve_recurring_context(
                         product=product,
-                        subscription_plan=subscription_plan,
+                        preferred_plan_id=preferred_choice.get('plan_id') or False,
+                        preferred_pricing_id=preferred_choice.get('pricing_id') or False,
                         start_date=start_date,
                         fallback_price=normalized.get('price'),
                     )
-                    subscription_plan = pricing_context.get('plan') or subscription_plan
+                    subscription_plan = pricing_context.get('plan') or False
                     self._ensure_subscription_plan_ready(
                         product=product,
                         subscription_plan=subscription_plan,
@@ -637,95 +639,78 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             return product_tmpl.company_id.id
         return False
 
-    def _resolve_subscription_plan(self, raw_value, cache, row_number):
+    def _resolve_preferred_recurring_choice(self, product, raw_value, cache, row_number):
         if self._is_empty_cell(raw_value):
-            return False
+            return {}
         key = self._cacheable_value(raw_value)
         if key in cache:
             return cache[key]
 
         value = str(raw_value).strip()
-        candidate_model_names = self._get_subscription_plan_model_names()
-        if not candidate_model_names:
+        pos_order_model = self.env['pos.order'].sudo() if 'pos.order' in self.env.registry else False
+        if not pos_order_model:
             raise UserError(
-                _('Fila %(row)s: no encontré ningún modelo de plan recurrente disponible en este entorno.') % {
+                _('Fila %(row)s: no pude consultar planes recurrentes para "%(product)s" porque POS no está disponible.') % {
                     'row': row_number,
+                    'product': product.display_name,
+                }
+            )
+
+        candidates = pos_order_model._wgs_get_recurring_pricing_candidates(product)
+        if not candidates:
+            raise UserError(
+                _('Fila %(row)s: el producto "%(product)s" no expone planes recurrentes candidatos en POS.') % {
+                    'row': row_number,
+                    'product': product.display_name,
                 }
             )
 
         try:
-            plan_id = int(float(value))
+            numeric_value = int(float(value))
         except (TypeError, ValueError):
-            plan_id = 0
-        if plan_id > 0:
-            for model_name in candidate_model_names:
-                if model_name not in self.env.registry:
-                    continue
-                plan = self.env[model_name].sudo().browse(plan_id).exists()
-                if plan:
-                    cache[key] = plan
-                    return plan
+            numeric_value = 0
 
-        normalized_value = self._normalize_token(value)
-        record_matches = []
+        matching = []
+        if numeric_value > 0:
+            matching = [
+                row for row in candidates
+                if int(row.get('plan_id') or 0) == numeric_value or int(row.get('pricing_id') or 0) == numeric_value
+            ]
+        else:
+            normalized_value = self._normalize_token(value)
+            matching = [
+                row for row in candidates
+                if self._normalize_token(row.get('plan_name') or '') == normalized_value
+                or self._normalize_token('%s %s' % (row.get('plan_name') or '', row.get('interval_label') or '')) == normalized_value
+            ]
+
+        deduped = []
         seen_keys = set()
-        for model_name in candidate_model_names:
-            if model_name not in self.env.registry:
+        for row in matching:
+            row_key = (int(row.get('plan_id') or 0), int(row.get('pricing_id') or 0))
+            if row_key in seen_keys:
                 continue
-            Model = self.env[model_name].sudo().with_context(active_test=False)
-            if 'name' in Model._fields:
-                current = Model.search([('name', '=ilike', value)], limit=5)
-            else:
-                current = Model.browse()
-            if not current and 'code' in Model._fields:
-                current = Model.search([('code', '=ilike', value)], limit=5)
-            current = current.filtered(
-                lambda record: self._normalize_token(getattr(record, 'display_name', False) or getattr(record, 'name', False) or '') == normalized_value
-                or self._normalize_token(getattr(record, 'name', False) or '') == normalized_value
-            ) or current
-            for record in current:
-                record_key = (record._name, record.id)
-                if record_key in seen_keys:
-                    continue
-                seen_keys.add(record_key)
-                record_matches.append(record)
+            seen_keys.add(row_key)
+            deduped.append(row)
 
-        if len(record_matches) == 1:
-            cache[key] = record_matches[0]
-            return record_matches[0]
-        if len(record_matches) > 1:
+        if len(deduped) == 1:
+            cache[key] = deduped[0]
+            return deduped[0]
+        if len(deduped) > 1:
             raise UserError(
-                _('Fila %(row)s: el plan recurrente "%(plan)s" es ambiguo. Usa el ID exacto en subscription_plan.') % {
+                _('Fila %(row)s: el plan recurrente "%(plan)s" es ambiguo para "%(product)s". Usa el ID exacto del plan o pricing en subscription_plan.') % {
                     'row': row_number,
                     'plan': value,
+                    'product': product.display_name,
                 }
             )
         raise UserError(
-            _('Fila %(row)s: no encontré el plan recurrente "%(plan)s".') % {
+            _('Fila %(row)s: no encontré el plan recurrente "%(plan)s" entre los candidatos del producto "%(product)s".') % {
                 'row': row_number,
                 'plan': value,
+                'product': product.display_name,
             }
         )
-
-    def _get_subscription_plan_model_names(self):
-        model_names = set()
-        checker = self._is_plan_model_name
-        pos_order_model = self.env['pos.order'].sudo() if 'pos.order' in self.env.registry else False
-        if pos_order_model:
-            pos_checker = getattr(pos_order_model, '_wgs_is_plan_model_name', None)
-            if callable(pos_checker):
-                checker = pos_checker
-
-        for model_name in ('sale.order', 'sale.order.line', 'product.product', 'product.template'):
-            if model_name not in self.env.registry:
-                continue
-            for field in self.env[model_name]._fields.values():
-                if field.type != 'many2one':
-                    continue
-                comodel_name = getattr(field, 'comodel_name', '')
-                if checker(comodel_name):
-                    model_names.add(comodel_name)
-        return sorted(model_names)
 
     def _resolve_participants(self, raw_value, owner, row_number):
         if self._is_empty_cell(raw_value):
@@ -849,7 +834,15 @@ class WgsSubscriptionImportWizard(models.TransientModel):
         starts_same = 1.0 if input_token_list and partner_token_list and input_token_list[0] == partner_token_list[0] else 0.0
         return max(name_ratio, display_ratio) * 0.75 + token_overlap * 0.2 + starts_same * 0.05
 
-    def _resolve_recurring_context(self, product, subscription_plan=False, start_date=False, fallback_price=False):
+    def _resolve_recurring_context(
+        self,
+        product,
+        subscription_plan=False,
+        preferred_plan_id=False,
+        preferred_pricing_id=False,
+        start_date=False,
+        fallback_price=False,
+    ):
         choice = {
             'price': float(product.list_price or 0.0),
             'plan': subscription_plan or False,
@@ -866,12 +859,11 @@ class WgsSubscriptionImportWizard(models.TransientModel):
                 if not self._is_empty_cell(fallback_price)
                 else float(product.list_price or 0.0)
             )
-            preferred_plan_id = subscription_plan.id if subscription_plan else False
             pricing_choice = pos_order_model._wgs_get_recurring_pricing_choice(
                 product,
                 fallback=fallback_amount,
-                preferred_plan_id=preferred_plan_id,
-                preferred_pricing_id=False,
+                preferred_plan_id=preferred_plan_id or (subscription_plan.id if subscription_plan else False),
+                preferred_pricing_id=preferred_pricing_id or False,
             )
             plan_id = pricing_choice.get('plan_id') or False
             pricing_id = pricing_choice.get('pricing_id') or False
