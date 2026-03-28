@@ -128,150 +128,155 @@ class WgsSubscriptionImportWizard(models.TransientModel):
 
         for row_number, row_data in rows:
             try:
-                normalized = self._normalize_row(row_data)
-                if not normalized:
-                    counters['skipped'] += 1
-                    log_lines.append(_('Fila %(row)s: omitida porque está vacía.') % {'row': row_number})
-                    continue
+                with self.env.cr.savepoint():
+                    normalized = self._normalize_row(row_data)
+                    if not normalized:
+                        counters['skipped'] += 1
+                        log_lines.append(_('Fila %(row)s: omitida porque está vacía.') % {'row': row_number})
+                        continue
 
-                start_date = self._parse_date_value(normalized.get('start_date'), field_label='inicio', row_number=row_number)
-                end_date = self._parse_date_value(normalized.get('end_date'), field_label='fin', row_number=row_number)
-                if not start_date or not end_date:
-                    raise UserError(
-                        _(
-                            'Fila %(row)s: las columnas de inicio y fin son obligatorias.'
+                    start_date = self._parse_date_value(normalized.get('start_date'), field_label='inicio', row_number=row_number)
+                    end_date = self._parse_date_value(normalized.get('end_date'), field_label='fin', row_number=row_number)
+                    if not start_date or not end_date:
+                        raise UserError(
+                            _(
+                                'Fila %(row)s: las columnas de inicio y fin son obligatorias.'
+                            )
+                            % {'row': row_number}
                         )
-                        % {'row': row_number}
-                    )
-                if end_date < start_date:
-                    raise UserError(
-                        _(
-                            'Fila %(row)s: la fecha de fin %(end)s no puede ser menor que la de inicio %(start)s.'
+                    if end_date < start_date:
+                        raise UserError(
+                            _(
+                                'Fila %(row)s: la fecha de fin %(end)s no puede ser menor que la de inicio %(start)s.'
+                            )
+                            % {
+                                'row': row_number,
+                                'start': fields.Date.to_string(start_date),
+                                'end': fields.Date.to_string(end_date),
+                            }
                         )
-                        % {
-                            'row': row_number,
-                            'start': fields.Date.to_string(start_date),
-                            'end': fields.Date.to_string(end_date),
-                        }
-                    )
 
-                if self.skip_non_current and (start_date > today or end_date < today):
-                    counters['skipped'] += 1
+                    if self.skip_non_current and (start_date > today or end_date < today):
+                        counters['skipped'] += 1
+                        log_lines.append(
+                            _(
+                                'Fila %(row)s: omitida por no estar vigente hoy (%(start)s -> %(end)s).'
+                            )
+                            % {
+                                'row': row_number,
+                                'start': fields.Date.to_string(start_date),
+                                'end': fields.Date.to_string(end_date),
+                            }
+                        )
+                        continue
+
+                    state_value = self._resolve_import_subscription_state_value(
+                        start_date=start_date,
+                        end_date=end_date,
+                        today=today,
+                        active_state_value=active_state_value,
+                    )
+                    partner = self._resolve_partner(normalized, partner_cache, row_number=row_number)
+                    product = self._resolve_subscription_product(normalized.get('plan'), product_cache, row_number=row_number)
+                    subscription_plan = self._resolve_subscription_plan(
+                        normalized.get('subscription_plan'),
+                        subscription_plan_cache,
+                        row_number=row_number,
+                    )
+                    pricing_context = self._resolve_recurring_context(
+                        product=product,
+                        subscription_plan=subscription_plan,
+                        start_date=start_date,
+                        fallback_price=normalized.get('price'),
+                    )
+                    subscription_plan = pricing_context.get('plan') or subscription_plan
+                    recurring_pricing_id = pricing_context.get('pricing_id') or False
+                    next_billing_date = pricing_context.get('next_billing_date') or False
+                    participant_ids = self._resolve_participants(
+                        raw_value=normalized.get('participants'),
+                        owner=partner,
+                        row_number=row_number,
+                    )
+                    quantity = self._parse_quantity_value(normalized.get('quantity'))
+                    price_unit = self._parse_price_value(
+                        normalized.get('price'),
+                        fallback=float(pricing_context.get('price') or product.list_price or 0.0),
+                    )
+                    source_key = self._build_source_key(partner, product, start_date)
+
+                    existing_order = order_model.search([('wgs_import_source_key', '=', source_key)], limit=1)
+                    action_label = 'preview'
+
+                    if existing_order and not self.update_existing:
+                        counters['skipped'] += 1
+                        log_lines.append(
+                            _(
+                                'Fila %(row)s: ya existe %(order)s para %(partner)s y update_existing está desactivado.'
+                            )
+                            % {
+                                'row': row_number,
+                                'order': existing_order.display_name,
+                                'partner': partner.display_name,
+                            }
+                        )
+                        continue
+
+                    if not self.dry_run:
+                        if existing_order:
+                            self._update_existing_subscription_order(
+                                order=existing_order,
+                                partner=partner,
+                                product=product,
+                                subscription_plan=subscription_plan,
+                                start_date=start_date,
+                                end_date=end_date,
+                                state_value=state_value,
+                                price_unit=price_unit,
+                                quantity=quantity,
+                                participant_ids=participant_ids,
+                                recurring_pricing_id=recurring_pricing_id,
+                                next_billing_date=next_billing_date,
+                                source_key=source_key,
+                            )
+                            counters['updated'] += 1
+                            action_label = 'updated'
+                        else:
+                            order = self._create_subscription_order(
+                                partner=partner,
+                                product=product,
+                                subscription_plan=subscription_plan,
+                                start_date=start_date,
+                                end_date=end_date,
+                                state_value=state_value,
+                                price_unit=price_unit,
+                                quantity=quantity,
+                                participant_ids=participant_ids,
+                                recurring_pricing_id=recurring_pricing_id,
+                                next_billing_date=next_billing_date,
+                                source_key=source_key,
+                            )
+                            counters['created'] += 1
+                            action_label = order.display_name
+                    else:
+                        action_label = existing_order.display_name if existing_order else _('se crearía')
+                        if existing_order:
+                            counters['updated'] += 1
+                        else:
+                            counters['created'] += 1
+
                     log_lines.append(
                         _(
-                            'Fila %(row)s: omitida por no estar vigente hoy (%(start)s -> %(end)s).'
+                        'Fila %(row)s: %(partner)s -> %(product)s (%(start)s -> %(end)s) [%(action)s].'
                         )
                         % {
                             'row': row_number,
-                            'start': fields.Date.to_string(start_date),
-                            'end': fields.Date.to_string(end_date),
-                        }
-                    )
-                    continue
-
-                state_value = self._resolve_import_subscription_state_value(
-                    start_date=start_date,
-                    end_date=end_date,
-                    today=today,
-                    active_state_value=active_state_value,
-                )
-                partner = self._resolve_partner(normalized, partner_cache, row_number=row_number)
-                product = self._resolve_subscription_product(normalized.get('plan'), product_cache, row_number=row_number)
-                subscription_plan = self._resolve_subscription_plan(
-                    normalized.get('subscription_plan'),
-                    subscription_plan_cache,
-                    row_number=row_number,
-                )
-                pricing_context = self._resolve_recurring_context(
-                    product=product,
-                    subscription_plan=subscription_plan,
-                    fallback_price=normalized.get('price'),
-                )
-                subscription_plan = pricing_context.get('plan') or subscription_plan
-                recurring_pricing_id = pricing_context.get('pricing_id') or False
-                participant_ids = self._resolve_participants(
-                    raw_value=normalized.get('participants'),
-                    owner=partner,
-                    row_number=row_number,
-                )
-                quantity = self._parse_quantity_value(normalized.get('quantity'))
-                price_unit = self._parse_price_value(
-                    normalized.get('price'),
-                    fallback=float(pricing_context.get('price') or product.list_price or 0.0),
-                )
-                source_key = self._build_source_key(partner, product, start_date)
-
-                existing_order = order_model.search([('wgs_import_source_key', '=', source_key)], limit=1)
-                action_label = 'preview'
-
-                if existing_order and not self.update_existing:
-                    counters['skipped'] += 1
-                    log_lines.append(
-                        _(
-                            'Fila %(row)s: ya existe %(order)s para %(partner)s y update_existing está desactivado.'
-                        )
-                        % {
-                            'row': row_number,
-                            'order': existing_order.display_name,
                             'partner': partner.display_name,
+                            'product': product.display_name,
+                            'start': fields.Date.to_string(start_date),
+                            'end': fields.Date.to_string(end_date),
+                            'action': action_label,
                         }
                     )
-                    continue
-
-                if not self.dry_run:
-                    if existing_order:
-                        self._update_existing_subscription_order(
-                            order=existing_order,
-                            partner=partner,
-                            product=product,
-                            subscription_plan=subscription_plan,
-                            start_date=start_date,
-                            end_date=end_date,
-                            state_value=state_value,
-                            price_unit=price_unit,
-                            quantity=quantity,
-                            participant_ids=participant_ids,
-                            recurring_pricing_id=recurring_pricing_id,
-                            source_key=source_key,
-                        )
-                        counters['updated'] += 1
-                        action_label = 'updated'
-                    else:
-                        order = self._create_subscription_order(
-                            partner=partner,
-                            product=product,
-                            subscription_plan=subscription_plan,
-                            start_date=start_date,
-                            end_date=end_date,
-                            state_value=state_value,
-                            price_unit=price_unit,
-                            quantity=quantity,
-                            participant_ids=participant_ids,
-                            recurring_pricing_id=recurring_pricing_id,
-                            source_key=source_key,
-                        )
-                        counters['created'] += 1
-                        action_label = order.display_name
-                else:
-                    action_label = existing_order.display_name if existing_order else _('se crearía')
-                    if existing_order:
-                        counters['updated'] += 1
-                    else:
-                        counters['created'] += 1
-
-                log_lines.append(
-                    _(
-                    'Fila %(row)s: %(partner)s -> %(product)s (%(start)s -> %(end)s) [%(action)s].'
-                    )
-                    % {
-                        'row': row_number,
-                        'partner': partner.display_name,
-                        'product': product.display_name,
-                        'start': fields.Date.to_string(start_date),
-                        'end': fields.Date.to_string(end_date),
-                        'action': action_label,
-                    }
-                )
             except Exception as error:  # pragma: no cover - integration behavior
                 counters['errors'] += 1
                 log_lines.append(_('Fila %(row)s: ERROR: %(error)s') % {'row': row_number, 'error': str(error)})
@@ -782,11 +787,12 @@ class WgsSubscriptionImportWizard(models.TransientModel):
         starts_same = 1.0 if input_token_list and partner_token_list and input_token_list[0] == partner_token_list[0] else 0.0
         return max(name_ratio, display_ratio) * 0.75 + token_overlap * 0.2 + starts_same * 0.05
 
-    def _resolve_recurring_context(self, product, subscription_plan=False, fallback_price=False):
+    def _resolve_recurring_context(self, product, subscription_plan=False, start_date=False, fallback_price=False):
         choice = {
             'price': float(product.list_price or 0.0),
             'plan': subscription_plan or False,
             'pricing_id': False,
+            'next_billing_date': False,
         }
         pos_order_model = self.env['pos.order'].sudo() if 'pos.order' in self.env.registry else False
         if not pos_order_model:
@@ -814,10 +820,14 @@ class WgsSubscriptionImportWizard(models.TransientModel):
                     plan_id=plan_id,
                     pricing_id=pricing_id,
                 )
+            next_billing_date = False
+            if resolved_plan and start_date:
+                next_billing_date = pos_order_model._wgs_get_plan_min_end_threshold(resolved_plan, start_date)
             return {
                 'price': float(pricing_choice.get('price') or fallback_amount or 0.0),
                 'plan': resolved_plan or False,
                 'pricing_id': pricing_id or False,
+                'next_billing_date': next_billing_date or False,
             }
         except Exception as error:  # pragma: no cover - defensive integration fallback
             _logger.warning(
@@ -839,6 +849,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
         quantity,
         participant_ids,
         recurring_pricing_id,
+        next_billing_date,
         source_key,
     ):
         order_model = self.env['sale.order'].sudo().with_company(self.company_id)
@@ -874,6 +885,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             quantity=quantity,
             participant_ids=participant_ids,
             recurring_pricing_id=recurring_pricing_id,
+            next_billing_date=next_billing_date,
             source_key=source_key,
             allow_line_update=False,
         )
@@ -892,6 +904,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
         quantity,
         participant_ids,
         recurring_pricing_id,
+        next_billing_date,
         source_key,
     ):
         if order.state == 'cancel':
@@ -910,6 +923,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             quantity=quantity,
             participant_ids=participant_ids,
             recurring_pricing_id=recurring_pricing_id,
+            next_billing_date=next_billing_date,
             source_key=source_key,
             allow_line_update=True,
         )
@@ -930,6 +944,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
         quantity,
         participant_ids,
         recurring_pricing_id,
+        next_billing_date,
         source_key,
         allow_line_update,
     ):
@@ -976,12 +991,22 @@ class WgsSubscriptionImportWizard(models.TransientModel):
         )
         if 'date_order' in order._fields:
             write_values['date_order'] = self._convert_for_field(start_date, order._fields['date_order'])
+        self._assign_date_field(
+            values=write_values,
+            fields_map=order._fields,
+            value_date=start_date,
+            preferred_names=('first_contract_date', 'contract_date', 'date_contract'),
+        )
+        if subscription_plan:
+            for field_name in ('subscription_plan_id', 'plan_id', 'recurring_plan_id'):
+                if field_name in order._fields and field_name not in write_values:
+                    write_values[field_name] = subscription_plan.id
         self._assign_many2one_value(
             values=write_values,
             fields_map=order._fields,
             value_id=subscription_plan.id if subscription_plan else False,
             preferred_names=('plan_id', 'subscription_plan_id', 'recurring_plan_id'),
-            comodel_names=('sale.subscription.plan',),
+            comodel_checker=self._is_plan_model_name,
         )
         order.write(write_values)
 
@@ -993,22 +1018,38 @@ class WgsSubscriptionImportWizard(models.TransientModel):
                 line_values[qty_field] = quantity
             if 'price_unit' in line._fields:
                 line_values['price_unit'] = price_unit
+            if subscription_plan:
+                for field_name in ('subscription_plan_id', 'plan_id', 'recurring_plan_id'):
+                    if field_name in line._fields and field_name not in line_values:
+                        line_values[field_name] = subscription_plan.id
             self._assign_many2one_value(
                 values=line_values,
                 fields_map=line._fields,
                 value_id=subscription_plan.id if subscription_plan else False,
                 preferred_names=('subscription_plan_id', 'plan_id', 'recurring_plan_id'),
-                comodel_names=('sale.subscription.plan',),
+                comodel_checker=self._is_plan_model_name,
             )
+            if recurring_pricing_id:
+                for field_name in ('subscription_pricing_id', 'pricing_id', 'recurring_pricing_id'):
+                    if field_name in line._fields and field_name not in line_values:
+                        line_values[field_name] = recurring_pricing_id
             self._assign_many2one_value(
                 values=line_values,
                 fields_map=line._fields,
                 value_id=recurring_pricing_id,
                 preferred_names=('subscription_pricing_id', 'pricing_id', 'recurring_pricing_id'),
-                comodel_names=('sale.subscription.pricing',),
+                comodel_checker=self._is_pricing_model_name,
             )
             line.write(line_values)
 
+        self._sync_subscription_runtime_metadata(
+            order=order,
+            participant_ids=participant_ids,
+            contract_date=start_date,
+            subscription_start_date=start_date,
+            subscription_end_date=end_date,
+            next_billing_date=next_billing_date,
+        )
         self._sync_order_participants(order, participant_ids, quantity, product)
         order._ensure_subscription_owner_is_participant()
 
@@ -1039,6 +1080,12 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             values['pricelist_id'] = partner.property_product_pricelist.id
         if 'date_order' in order_model._fields:
             values['date_order'] = self._convert_for_field(start_date, order_model._fields['date_order'])
+        self._assign_date_field(
+            values=values,
+            fields_map=order_model._fields,
+            value_date=start_date,
+            preferred_names=('first_contract_date', 'contract_date', 'date_contract'),
+        )
         if 'subscription_state' in order_model._fields:
             values['subscription_state'] = state_value
         if 'wgs_effective_start_date' in order_model._fields:
@@ -1055,14 +1102,42 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             value_date=end_date,
             preferred_names=('date_end', 'end_date', 'subscription_end_date', 'recurring_end_date'),
         )
+        if subscription_plan:
+            for field_name in ('subscription_plan_id', 'plan_id', 'recurring_plan_id'):
+                if field_name in order_model._fields and field_name not in values:
+                    values[field_name] = subscription_plan.id
         self._assign_many2one_value(
             values=values,
             fields_map=order_model._fields,
             value_id=subscription_plan.id if subscription_plan else False,
             preferred_names=('plan_id', 'subscription_plan_id', 'recurring_plan_id'),
-            comodel_names=('sale.subscription.plan',),
+            comodel_checker=self._is_plan_model_name,
         )
         return values
+
+    def _sync_subscription_runtime_metadata(
+        self,
+        order,
+        participant_ids,
+        contract_date=False,
+        subscription_start_date=False,
+        subscription_end_date=False,
+        next_billing_date=False,
+    ):
+        pos_order_model = self.env['pos.order'].sudo() if 'pos.order' in self.env.registry else False
+        if not pos_order_model:
+            return
+        sync_method = getattr(pos_order_model, '_wgs_sync_subscription_metadata', None)
+        if not callable(sync_method):
+            return
+        sync_method(
+            sale_order=order,
+            participant_ids=participant_ids or [],
+            contract_date=contract_date,
+            subscription_start_date=subscription_start_date,
+            subscription_end_date=subscription_end_date,
+            next_billing_date=next_billing_date,
+        )
 
     def _build_sale_order_line_values(self, product, subscription_plan, price_unit, quantity, recurring_pricing_id=False):
         line_model = self.env['sale.order.line'].sudo()
@@ -1076,19 +1151,27 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             values[qty_field] = quantity
         if 'price_unit' in line_model._fields:
             values['price_unit'] = price_unit
+        if subscription_plan:
+            for field_name in ('subscription_plan_id', 'plan_id', 'recurring_plan_id'):
+                if field_name in line_model._fields and field_name not in values:
+                    values[field_name] = subscription_plan.id
         self._assign_many2one_value(
             values=values,
             fields_map=line_model._fields,
             value_id=subscription_plan.id if subscription_plan else False,
             preferred_names=('subscription_plan_id', 'plan_id', 'recurring_plan_id'),
-            comodel_names=('sale.subscription.plan',),
+            comodel_checker=self._is_plan_model_name,
         )
+        if recurring_pricing_id:
+            for field_name in ('subscription_pricing_id', 'pricing_id', 'recurring_pricing_id'):
+                if field_name in line_model._fields and field_name not in values:
+                    values[field_name] = recurring_pricing_id
         self._assign_many2one_value(
             values=values,
             fields_map=line_model._fields,
             value_id=recurring_pricing_id,
             preferred_names=('subscription_pricing_id', 'pricing_id', 'recurring_pricing_id'),
-            comodel_names=('sale.subscription.pricing',),
+            comodel_checker=self._is_pricing_model_name,
         )
         return values
 
@@ -1132,17 +1215,52 @@ class WgsSubscriptionImportWizard(models.TransientModel):
                 values[field_name] = self._convert_for_field(value_date, fields_map[field_name])
                 return
 
-    def _assign_many2one_value(self, values, fields_map, value_id, preferred_names, comodel_names):
-        if not value_id:
+    def _assign_many2one_value(self, values, fields_map, value_id, preferred_names, comodel_checker=None):
+        value_id = int(value_id or 0)
+        if value_id <= 0:
             return
         for field_name in preferred_names:
             field = fields_map.get(field_name)
             if not field or field.type != 'many2one':
                 continue
-            if field.comodel_name not in comodel_names:
-                continue
             values[field_name] = value_id
             return
+        if not comodel_checker:
+            return
+        for field_name, field in fields_map.items():
+            if field_name in values or field.type != 'many2one':
+                continue
+            normalized_name = (field_name or '').lower()
+            heuristic_name_match = (
+                ('plan' in normalized_name)
+                or ('recurr' in normalized_name)
+                or ('period' in normalized_name)
+                or ('pricing' in normalized_name)
+                or ('price' in normalized_name)
+            )
+            if comodel_checker(getattr(field, 'comodel_name', '')) or heuristic_name_match:
+                values[field_name] = value_id
+                return
+
+    def _is_plan_model_name(self, model_name):
+        model_name = (model_name or '').lower()
+        if not model_name:
+            return False
+        if 'subscription.plan' in model_name or 'recurring.plan' in model_name:
+            return True
+        if 'recurr' in model_name:
+            return True
+        if 'subscription' in model_name and ('period' in model_name or 'template' in model_name):
+            return True
+        return model_name.endswith('.plan')
+
+    def _is_pricing_model_name(self, model_name):
+        model_name = (model_name or '').lower()
+        if not model_name:
+            return False
+        if 'subscription.pricing' in model_name or 'recurring.pricing' in model_name:
+            return True
+        return 'subscription' in model_name and 'price' in model_name
 
     def _convert_for_field(self, value_date, field):
         if not value_date:

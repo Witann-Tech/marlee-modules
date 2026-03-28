@@ -411,9 +411,62 @@ class SaleOrder(models.Model):
         return res
 
     def action_cancel(self):
-        res = super().action_cancel()
+        try:
+            res = super().action_cancel()
+        except ValueError as error:
+            broken_orders = self._wgs_get_cancelable_broken_subscription_orders()
+            if not broken_orders or 'Expected singleton: sale.order()' not in str(error):
+                raise
+            _logger.warning(
+                'WGS cancel fallback for malformed subscription orders %s due to error: %s',
+                broken_orders.ids,
+                error,
+            )
+            normal_orders = self - broken_orders
+            res = True
+            if normal_orders:
+                res = super(SaleOrder, normal_orders).action_cancel()
+            broken_orders._wgs_force_cancel_malformed_subscription_orders()
         self._wgs_sync_access_control_people()
         return res
+
+    def _wgs_get_cancelable_broken_subscription_orders(self):
+        if 'subscription_id' not in self._fields:
+            return self.browse()
+        return self.filtered(
+            lambda order: order._get_subscription_recurring_lines()
+            and not order.subscription_id
+            and order.state != 'cancel'
+        )
+
+    def _wgs_resolve_cancel_subscription_state_value(self):
+        field = self._fields.get('subscription_state')
+        if not field:
+            return False
+        selection = field.selection
+        if callable(selection):
+            try:
+                selection = selection(self)
+            except TypeError:
+                selection = selection(self.env)
+        selection = selection or []
+        wanted_tokens = ('cancel', 'cancelled', 'canceled', 'close', 'closed', 'churn')
+        for value, label in selection:
+            haystack = ' '.join(filter(None, [str(value).lower(), str(label).lower()]))
+            if any(token in haystack for token in wanted_tokens):
+                return value
+        return False
+
+    def _wgs_force_cancel_malformed_subscription_orders(self):
+        cancel_subscription_state = self._wgs_resolve_cancel_subscription_state_value()
+        for order in self:
+            values = {}
+            if 'state' in order._fields and order.state != 'cancel':
+                values['state'] = 'cancel'
+            if 'subscription_state' in order._fields and cancel_subscription_state:
+                values['subscription_state'] = cancel_subscription_state
+            if values:
+                order.write(values)
 
     def action_close(self):
         super_method = getattr(super(), 'action_close', None)
