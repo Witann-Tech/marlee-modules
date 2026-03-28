@@ -190,6 +190,11 @@ class WgsSubscriptionImportWizard(models.TransientModel):
                         fallback_price=normalized.get('price'),
                     )
                     subscription_plan = pricing_context.get('plan') or subscription_plan
+                    self._ensure_subscription_plan_ready(
+                        product=product,
+                        subscription_plan=subscription_plan,
+                        row_number=row_number,
+                    )
                     recurring_pricing_id = pricing_context.get('pricing_id') or False
                     next_billing_date = pricing_context.get('next_billing_date') or False
                     participant_ids = self._resolve_participants(
@@ -1213,6 +1218,20 @@ class WgsSubscriptionImportWizard(models.TransientModel):
         active_state_value,
     ):
         return active_state_value
+
+    def _ensure_subscription_plan_ready(self, product, subscription_plan, row_number):
+        if subscription_plan:
+            return
+        raise UserError(
+            _(
+                'Fila %(row)s: no pude resolver el plan recurrente para "%(product)s". '
+                'Agrega la columna subscription_plan en el Excel con el nombre o ID del plan recurrente.'
+            )
+            % {
+                'row': row_number,
+                'product': product.display_name,
+            }
+        )
 
     def _assign_date_field(self, values, fields_map, value_date, preferred_names):
         if not value_date:
