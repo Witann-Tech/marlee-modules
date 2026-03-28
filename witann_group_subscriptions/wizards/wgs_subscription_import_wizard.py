@@ -318,13 +318,6 @@ class WgsSubscriptionImportWizard(models.TransientModel):
                 _('El producto "%s" no tiene variante disponible.') % product_tmpl.display_name
             )
 
-        # Odoo pone start_date = hoy al confirmar. La constraint
-        # sale_order_check_start_date_lower_next_invoice_date exige
-        # start_date ≤ next_invoice_date, así que si Fin ya venció
-        # usamos hoy para evitar la violación.
-        today = dt.date.today()
-        next_invoice_date = line.end_date if (line.end_date and line.end_date >= today) else today
-
         # ── Crear la orden de venta / suscripción ──────────────────────────────
         order = SaleOrder.with_context(
             skip_owner_participant_sync=True,  # evitar doble sync durante creación
@@ -332,7 +325,6 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             'partner_id': line.partner_id.id,
             'plan_id': line.plan_id.id,
             'wgs_effective_start_date': line.start_date,
-            'next_invoice_date': next_invoice_date,
             'order_line': [Command.create({
                 'product_id': product_variant.id,
                 'product_uom_qty': 1,
@@ -347,8 +339,18 @@ class WgsSubscriptionImportWizard(models.TransientModel):
                 'participant_ids': [Command.link(pid) for pid in line.participant_ids.ids],
             })
 
-        # ── Confirmar y marcar como suscripción activa ─────────────────────────
+        # ── Confirmar ──────────────────────────────────────────────────────────
+        # IMPORTANTE: action_confirm() recalcula next_invoice_date automáticamente
+        # (hoy + período del plan), sobreescribiendo cualquier valor previo.
+        # Por eso asignamos next_invoice_date DESPUÉS de confirmar.
         order.action_confirm()
+
+        # La constraint sale_order_check_start_date_lower_next_invoice_date exige
+        # start_date ≤ next_invoice_date. Odoo pone start_date = hoy al confirmar,
+        # así que usamos max(Fin, hoy) para suscripciones ya vencidas.
+        today = dt.date.today()
+        next_invoice_date = line.end_date if (line.end_date and line.end_date >= today) else today
+        order.write({'next_invoice_date': next_invoice_date})
 
         # Forzar subscription_state al valor correcto de "en progreso".
         # No hardcodeamos 'progress' porque el valor real del campo varía
