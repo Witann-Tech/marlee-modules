@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         Vista del wizard de importación
+    ═══════════════════════════════════════════════════════════════════════ -->
+    <record id="wgs_subscription_import_wizard_form" model="ir.ui.view">
+        <field name="name">wgs.subscription.import.wizard.form</field>
+        <field name="model">wgs.subscription.import.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Importar Suscripciones Existentes">
+
+                <!-- ── PASO 1: Cargar archivo ─────────────────────────────── -->
+                <group invisible="state != 'draft'">
+                    <group string="Seleccionar archivo">
+                        <field name="file_data" filename="file_name" widget="binary"
+                               string="Archivo Excel (.xlsx)"/>
+                        <field name="file_name" invisible="1"/>
+                    </group>
+                    <group string="Instrucciones">
+                        <div class="alert alert-info" role="alert">
+                            <p><strong>Columnas requeridas en el archivo:</strong></p>
+                            <ul>
+                                <li><code>ID Cliente</code> — debe existir en Odoo como <code>x_studio_id_de_cliente</code></li>
+                                <li><code>PLAN</code> — nombre del producto recurrente en Odoo</li>
+                                <li><code>PLAN RECURRENTE</code> — nombre del plan de suscripción en Odoo</li>
+                                <li><code>Inicio</code> — fecha de inicio de vigencia</li>
+                                <li><code>Fin</code> — fecha de próxima renovación</li>
+                                <li><code>PARTICIPANTES</code> — nombres separados por coma (opcional)</li>
+                            </ul>
+                            <p class="mb-0">Todas las suscripciones se importarán con estado <strong>En Progreso</strong> y precio cero.</p>
+                        </div>
+                    </group>
+                </group>
+
+                <!-- ── PASO 2: Vista previa ───────────────────────────────── -->
+                <group invisible="state != 'preview'">
+                    <div class="row mb-2">
+                        <div class="col-3 text-center">
+                            <span class="badge bg-success fs-6">
+                                <field name="count_ok" readonly="1"/> correctas
+                            </span>
+                        </div>
+                        <div class="col-3 text-center">
+                            <span class="badge bg-warning fs-6">
+                                <field name="count_warning" readonly="1"/> advertencias
+                            </span>
+                        </div>
+                        <div class="col-3 text-center">
+                            <span class="badge bg-danger fs-6">
+                                <field name="count_error" readonly="1"/> errores
+                            </span>
+                        </div>
+                        <div class="col-3 text-center">
+                            <span class="badge bg-secondary fs-6">
+                                <field name="count_total" readonly="1"/> total
+                            </span>
+                        </div>
+                    </div>
+                    <div class="alert alert-warning mb-2" invisible="count_error == 0" role="alert">
+                        Las filas con <strong>Error</strong> no serán importadas. Las filas con
+                        <strong>Advertencia</strong> se importarán sin los participantes no encontrados.
+                    </div>
+                </group>
+
+                <field name="line_ids" invisible="state != 'preview'" readonly="1">
+                    <list string="Líneas a importar" decoration-success="status == 'ok'"
+                          decoration-warning="status == 'warning'"
+                          decoration-danger="status == 'error'"
+                          decoration-muted="status == 'done'">
+                        <field name="row_number" string="Fila" width="50"/>
+                        <field name="client_id_raw" string="ID Cliente" width="80"/>
+                        <field name="partner_id" string="Titular"/>
+                        <field name="plan_name_raw" string="PLAN"/>
+                        <field name="rec_plan_name_raw" string="Plan Recurrente"/>
+                        <field name="start_date" string="Inicio"/>
+                        <field name="end_date" string="Fin"/>
+                        <field name="participants_raw" string="Participantes (texto)" optional="show"/>
+                        <field name="participant_ids" string="Participantes resueltos" widget="many2many_tags" optional="show"/>
+                        <field name="status" string="Estado" widget="badge"
+                               decoration-success="status == 'ok' or status == 'done'"
+                               decoration-warning="status == 'warning'"
+                               decoration-danger="status == 'error'"/>
+                        <field name="message" string="Notas" optional="show"/>
+                    </list>
+                </field>
+
+                <!-- ── PASO 3: Resultado ──────────────────────────────────── -->
+                <group invisible="state != 'done'">
+                    <field name="summary" widget="text" readonly="1" string="Resultado"/>
+                </group>
+
+                <field name="state" invisible="1"/>
+                <field name="count_error" invisible="1"/>
+                <field name="count_ok" invisible="1"/>
+                <field name="count_warning" invisible="1"/>
+                <field name="count_total" invisible="1"/>
+
+                <footer>
+                    <!-- Paso 1 -->
+                    <button string="Cargar y previsualizar"
+                            name="action_load_preview"
+                            type="object"
+                            class="btn-primary"
+                            invisible="state != 'draft'"/>
+
+                    <!-- Paso 2 -->
+                    <button string="Importar suscripciones"
+                            name="action_import"
+                            type="object"
+                            class="btn-primary"
+                            invisible="state != 'preview'"
+                            confirm="Se crearán las suscripciones válidas y con advertencia. ¿Desea continuar?"/>
+                    <button string="← Volver a cargar otro archivo"
+                            name="action_reset"
+                            type="object"
+                            class="btn-secondary"
+                            invisible="state != 'preview'"/>
+
+                    <!-- Paso 3 -->
+                    <button string="Nueva importación"
+                            name="action_reset"
+                            type="object"
+                            class="btn-secondary"
+                            invisible="state != 'done'"/>
+
+                    <button string="Cerrar" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         Acción de ventana para abrir el wizard
+    ═══════════════════════════════════════════════════════════════════════ -->
+    <record id="action_wgs_subscription_import_wizard" model="ir.actions.act_window">
+        <field name="name">Importar Suscripciones Existentes</field>
+        <field name="res_model">wgs.subscription.import.wizard</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+        <field name="binding_model_id" ref="sale_subscription.model_sale_order"/>
+        <field name="binding_view_types">list,form</field>
+    </record>
+
+</odoo>
