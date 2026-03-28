@@ -102,12 +102,26 @@ class WgsSubscriptionImportWizard(models.TransientModel):
         return found_ids, unresolved
 
     def _parse_date(self, value):
-        """Normaliza un valor de celda a date."""
+        """Normaliza un valor de celda Excel a date, soportando datetime, date y strings."""
+        import datetime as dt
         if not value:
             return False
-        if hasattr(value, 'date'):
+        # openpyxl devuelve datetime para celdas con formato de fecha
+        if isinstance(value, dt.datetime):
             return value.date()
-        return value
+        if isinstance(value, dt.date):
+            return value
+        # Intentar parsear string con múltiples formatos comunes
+        raw = str(value).strip()
+        if not raw:
+            return False
+        for fmt in ('%Y-%m-%d', '%d/%m/%Y', '%m/%d/%Y', '%d-%m-%Y'):
+            try:
+                return dt.datetime.strptime(raw, fmt).date()
+            except ValueError:
+                continue
+        _logger.warning('WGS Import: no se pudo parsear fecha "%s"', raw)
+        return False
 
     # ── Acción: Cargar vista previa ────────────────────────────────────────────
 
