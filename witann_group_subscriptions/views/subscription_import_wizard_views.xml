@@ -4,7 +4,7 @@
         <field name="name">wgs.subscription.import.wizard.form</field>
         <field name="model">wgs.subscription.import.wizard</field>
         <field name="arch" type="xml">
-            <form string="Importar suscripciones vigentes" create="false" edit="true">
+            <form string="Importar suscripciones" create="false" edit="true">
                 <sheet>
                     <group>
                         <group>
@@ -28,7 +28,7 @@
                     </div>
                     <div class="text-muted">
                         Columnas opcionales: <b>price</b>, <b>quantity</b> y <b>participants/participantes</b>.
-                        El campo <b>plan</b> se mapea al producto recurrente y <b>subscription_plan</b> es requerido para crear la suscripción con el plan recurrente correcto.
+                        El campo <b>plan</b> se mapea al producto recurrente. Usa <b>subscription_plan</b> cuando un producto tenga varios planes/tarifas recurrentes posibles.
                     </div>
                     <group invisible="not result_summary">
                         <field name="result_summary" readonly="1"/>
@@ -46,11 +46,18 @@
     </record>
 
     <record id="action_wgs_subscription_import_wizard" model="ir.actions.act_window">
-        <field name="name">Importar suscripciones vigentes</field>
+        <field name="name">Importar suscripciones</field>
         <field name="res_model">wgs.subscription.import.wizard</field>
         <field name="view_mode">form</field>
         <field name="target">new</field>
-        <field name="binding_model_id" ref="sale.model_sale_order"/>
-        <field name="binding_view_types">list,form</field>
     </record>
+
+    <menuitem id="menu_wgs_subscription_tools_root" name="Suscripciones WGS" sequence="80"/>
+    <menuitem
+        id="menu_wgs_subscription_import_wizard"
+        name="Importar suscripciones"
+        parent="menu_wgs_subscription_tools_root"
+        action="action_wgs_subscription_import_wizard"
+        sequence="10"
+    />
 </odoo>
