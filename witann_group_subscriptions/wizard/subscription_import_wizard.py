@@ -635,47 +635,94 @@ class WgsSubscriptionImportWizard(models.TransientModel):
         return False
 
     def _resolve_subscription_plan(self, raw_value, cache, row_number):
-        if self._is_empty_cell(raw_value) or 'sale.subscription.plan' not in self.env:
+        if self._is_empty_cell(raw_value):
             return False
         key = self._cacheable_value(raw_value)
         if key in cache:
             return cache[key]
 
-        Plan = self.env['sale.subscription.plan'].sudo().with_context(active_test=False)
         value = str(raw_value).strip()
-        plan = False
+        candidate_model_names = self._get_subscription_plan_model_names()
+        if not candidate_model_names:
+            raise UserError(
+                _('Fila %(row)s: no encontré ningún modelo de plan recurrente disponible en este entorno.') % {
+                    'row': row_number,
+                }
+            )
+
         try:
             plan_id = int(float(value))
         except (TypeError, ValueError):
             plan_id = 0
         if plan_id > 0:
-            plan = Plan.browse(plan_id).exists()
-            if plan:
-                cache[key] = plan
-                return plan
+            for model_name in candidate_model_names:
+                if model_name not in self.env.registry:
+                    continue
+                plan = self.env[model_name].sudo().browse(plan_id).exists()
+                if plan:
+                    cache[key] = plan
+                    return plan
 
-        candidates = Plan.search([('name', '=ilike', value)], limit=5)
         normalized_value = self._normalize_token(value)
-        exact = candidates.filtered(lambda record: self._normalize_token(record.display_name) == normalized_value)
-        if len(exact) == 1:
-            cache[key] = exact
-            return exact
-        if len(candidates) == 1:
-            cache[key] = candidates
-            return candidates
-        if candidates:
+        record_matches = []
+        seen_keys = set()
+        for model_name in candidate_model_names:
+            if model_name not in self.env.registry:
+                continue
+            Model = self.env[model_name].sudo().with_context(active_test=False)
+            if 'name' in Model._fields:
+                current = Model.search([('name', '=ilike', value)], limit=5)
+            else:
+                current = Model.browse()
+            if not current and 'code' in Model._fields:
+                current = Model.search([('code', '=ilike', value)], limit=5)
+            current = current.filtered(
+                lambda record: self._normalize_token(getattr(record, 'display_name', False) or getattr(record, 'name', False) or '') == normalized_value
+                or self._normalize_token(getattr(record, 'name', False) or '') == normalized_value
+            ) or current
+            for record in current:
+                record_key = (record._name, record.id)
+                if record_key in seen_keys:
+                    continue
+                seen_keys.add(record_key)
+                record_matches.append(record)
+
+        if len(record_matches) == 1:
+            cache[key] = record_matches[0]
+            return record_matches[0]
+        if len(record_matches) > 1:
             raise UserError(
-                _('Fila %(row)s: el plan de facturación "%(plan)s" es ambiguo.') % {
+                _('Fila %(row)s: el plan recurrente "%(plan)s" es ambiguo. Usa el ID exacto en subscription_plan.') % {
                     'row': row_number,
                     'plan': value,
                 }
             )
         raise UserError(
-            _('Fila %(row)s: no encontré el plan de facturación "%(plan)s".') % {
+            _('Fila %(row)s: no encontré el plan recurrente "%(plan)s".') % {
                 'row': row_number,
                 'plan': value,
             }
         )
+
+    def _get_subscription_plan_model_names(self):
+        model_names = set()
+        checker = self._is_plan_model_name
+        pos_order_model = self.env['pos.order'].sudo() if 'pos.order' in self.env.registry else False
+        if pos_order_model:
+            pos_checker = getattr(pos_order_model, '_wgs_is_plan_model_name', None)
+            if callable(pos_checker):
+                checker = pos_checker
+
+        for model_name in ('sale.order', 'sale.order.line', 'product.product', 'product.template'):
+            if model_name not in self.env.registry:
+                continue
+            for field in self.env[model_name]._fields.values():
+                if field.type != 'many2one':
+                    continue
+                comodel_name = getattr(field, 'comodel_name', '')
+                if checker(comodel_name):
+                    model_names.add(comodel_name)
+        return sorted(model_names)
 
     def _resolve_participants(self, raw_value, owner, row_number):
         if self._is_empty_cell(raw_value):

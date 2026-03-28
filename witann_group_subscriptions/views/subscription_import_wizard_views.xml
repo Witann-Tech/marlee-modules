@@ -28,7 +28,7 @@
                     </div>
                     <div class="text-muted">
                         Columnas opcionales: <b>price</b>, <b>quantity</b> y <b>participants/participantes</b>.
-                        El campo <b>plan</b> se mapea al producto recurrente y <b>subscription_plan</b> debe traer el nombre o ID del plan recurrente.
+                        El campo <b>plan</b> se mapea al producto recurrente y <b>subscription_plan</b> es requerido para crear la suscripción con el plan recurrente correcto.
                     </div>
                     <group invisible="not result_summary">
                         <field name="result_summary" readonly="1"/>
