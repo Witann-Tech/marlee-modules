@@ -318,39 +318,61 @@ class WgsSubscriptionImportWizard(models.TransientModel):
                 _('El producto "%s" no tiene variante disponible.') % product_tmpl.display_name
             )
 
-        # date_order = Inicio para que "Fecha del primer contrato" sea correcta.
-        # Lo incluimos en create() porque confirm() no lo sobreescribe.
+        # ── Crear la orden sin líneas para obtener la lista de precios ──────────
+        # Necesitamos el pricelist del pedido (determinado por el partner) ANTES
+        # de crear la línea, para calcular el precio correcto del producto.
         order_vals = {
             'partner_id': line.partner_id.id,
             'plan_id': line.plan_id.id,
             'wgs_effective_start_date': line.start_date,
-            'order_line': [Command.create({
-                'product_id': product_variant.id,
-                'product_uom_qty': 1,
-                'price_unit': product_variant.lst_price,
-            })],
         }
         if line.start_date and 'date_order' in SaleOrder._fields:
             order_vals['date_order'] = dt.datetime.combine(line.start_date, dt.time.min)
 
-        # ── Crear la orden de venta / suscripción ──────────────────────────────
         order = SaleOrder.with_context(
             skip_owner_participant_sync=True,
         ).create(order_vals)
+
+        # ── Calcular precio vía lista de precios del pedido ─────────────────────
+        # lst_price es el precio de catálogo base (puede ser $1.00 de placeholder).
+        # Usamos el pricelist del pedido para obtener el precio real de venta.
+        price_unit = product_variant.lst_price
+        try:
+            pricelist = order.pricelist_id
+            if pricelist and hasattr(pricelist, '_get_product_price'):
+                price_unit = pricelist._get_product_price(
+                    product_variant,
+                    quantity=1.0,
+                    currency=order.currency_id if 'currency_id' in order._fields else None,
+                    date=line.start_date or fields.Date.today(),
+                )
+        except Exception as e:
+            _logger.warning(
+                'WGS Import: no se pudo obtener precio de pricelist para %s, usando lst_price. Error: %s',
+                product_variant.display_name, e,
+            )
+
+        # ── Agregar línea de producto con precio correcto ───────────────────────
+        order.with_context(skip_owner_participant_sync=True).write({
+            'order_line': [Command.create({
+                'product_id': product_variant.id,
+                'product_uom_qty': 1,
+                'price_unit': price_unit,
+            })]
+        })
 
         # ── Confirmar ──────────────────────────────────────────────────────────
         # action_confirm() recalcula start_date y next_invoice_date desde hoy,
         # sobreescribiendo los valores históricos. Los restauramos después.
         order.action_confirm()
 
-        # ── Restaurar fechas históricas + participantes ─────────────────────────
-        # Escribimos todo en un solo write() DESPUÉS de action_confirm() para que
-        # ningún proceso interno de Odoo sobreescriba o interfiera con los valores.
+        # ── Restaurar fechas + participantes tras confirm ───────────────────────
+        # Todo en un solo write() post-confirm para que ningún proceso interno
+        # de Odoo sobreescriba o interfiera con los valores.
         #
-        # La constraint sale_order_check_start_date_lower_next_invoice_date exige
-        # start_date ≤ next_invoice_date.  Como Inicio ≤ Fin siempre en los datos,
-        # asignar ambos desde el Excel satisface la constraint incluso para
-        # suscripciones vencidas (Fin en el pasado).
+        # Constraint sale_order_check_start_date_lower_next_invoice_date exige
+        # start_date ≤ next_invoice_date. Como Inicio ≤ Fin en los datos de Excel,
+        # esto se cumple incluso para suscripciones vencidas.
         post_confirm_write = {}
         if line.end_date:
             post_confirm_write['next_invoice_date'] = line.end_date
@@ -359,15 +381,22 @@ class WgsSubscriptionImportWizard(models.TransientModel):
         if line.start_date and 'first_contract_date' in order._fields:
             post_confirm_write['first_contract_date'] = line.start_date
 
-        # Participantes: incluir al titular + los participantes adicionales del Excel.
-        # Se escriben aquí (post-confirm) para evitar que lógica interna de
-        # action_confirm() interfiera. skip_owner_participant_sync=True evita que
-        # _ensure_subscription_owner_is_participant() sobreescriba la lista.
-        participant_ids_to_set = list(line.participant_ids.ids)
-        if order.partner_id and order.partner_id.id not in participant_ids_to_set:
-            participant_ids_to_set.insert(0, order.partner_id.id)
+        # Participantes: re-resolvemos desde el texto crudo (más robusto que leer
+        # la M2M del TransientModel, que puede tener issues de caché o vacuum).
+        # Incluimos al titular siempre como primer participante.
+        extra_ids, _ = self._resolve_participants(line.participants_raw or '')
+        participant_ids_to_set = []
+        if order.partner_id:
+            participant_ids_to_set.append(order.partner_id.id)
+        for pid in extra_ids:
+            if pid not in participant_ids_to_set:
+                participant_ids_to_set.append(pid)
         if participant_ids_to_set:
             post_confirm_write['participant_ids'] = [Command.set(participant_ids_to_set)]
+        _logger.info(
+            'WGS Import fila %s: participants_raw=%r extra_ids=%s total_set=%s',
+            line.row_number, line.participants_raw, extra_ids, participant_ids_to_set,
+        )
 
         if post_confirm_write:
             order.with_context(skip_owner_participant_sync=True).write(post_confirm_write)
