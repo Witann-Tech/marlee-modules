@@ -2587,7 +2587,7 @@ patch(ControlButtons.prototype, {
             summary.innerHTML = `
                 <span class="wgs-summary-pill">${_t("Total")}: ${counts.total || 0}</span>
                 <span class="wgs-summary-pill wgs-summary-positive">${_t("En progreso")}: ${counts.progress || 0}</span>
-                <span class="wgs-summary-pill wgs-summary-positive">${_t("Por renovar")}: ${counts.renew || 0}</span>
+                <span class="wgs-summary-pill wgs-summary-warning">${_t("Por renovar")}: ${counts.renew || 0}</span>
                 <span class="wgs-summary-pill wgs-summary-warning">${_t("Pausadas")}: ${counts.paused || 0}</span>
                 <span class="wgs-summary-pill wgs-summary-negative">${_t("Canceladas")}: ${counts.cancel || 0}</span>
                 <span class="wgs-summary-pill wgs-summary-none">${_t("Sin suscripcion")}: ${counts.none || 0}</span>
@@ -3747,10 +3747,10 @@ patch(ControlButtons.prototype, {
 
     _getStateClass(state) {
         const value = state || "none";
-        if (value === "progress" || value === "renew") {
+        if (value === "progress") {
             return "wgs-state-positive";
         }
-        if (value === "paused" || value === "draft" || value === "upsell") {
+        if (value === "renew" || value === "paused" || value === "draft" || value === "upsell") {
             return "wgs-state-warning";
         }
         if (value === "cancel" || value === "closed") {
