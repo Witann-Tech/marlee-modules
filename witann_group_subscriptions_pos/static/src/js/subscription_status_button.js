@@ -419,12 +419,11 @@ function getChargeDisplayAmount(charge) {
 async function addConfiguredProductLineToOrder(source, order, product, options = {}) {
     const {
         quantity = 1,
-        price = 0,
+        lineUnitPrice = null,
         discount = 0,
         merge = false,
         metadata = null,
         charge = null,
-        priceIncludesTaxes = false,
     } = options;
     if (!order || !product) {
         return null;
@@ -435,19 +434,15 @@ async function addConfiguredProductLineToOrder(source, order, product, options =
     const beforeSet = new Set(beforeLines);
     const beforeSelectedLine = getSelectedOrderLine(source, order);
 
-    const resolvedCharge = charge && typeof charge === "object"
-        ? buildChargeBreakdown(source, product, charge)
-        : null;
-    const lineUnitPrice = resolvedCharge
+    const resolvedCharge = charge && typeof charge === "object" ? buildChargeBreakdown(source, product, charge) : null;
+    const resolvedLineUnitPrice = resolvedCharge
         ? Number(resolvedCharge.ticketUnitPrice || 0)
-        : priceIncludesTaxes
-            ? convertDisplayPriceToTaxExcluded(source, product, price)
-            : Number(price || 0);
+        : Number(lineUnitPrice || 0);
 
     const addResult = await addProductToOrder(source, order, product, {
         quantity,
         merge,
-        price: lineUnitPrice,
+        price: resolvedLineUnitPrice,
     });
     await waitForNextTick();
     await waitForNextTick();
@@ -470,7 +465,7 @@ async function addConfiguredProductLineToOrder(source, order, product, options =
         return { line: null, reason: "not_identified" };
     }
 
-    setLineUnitPrice(targetLine, Number(lineUnitPrice || 0));
+    setLineUnitPrice(targetLine, Number(resolvedLineUnitPrice || 0));
     if (Number(discount || 0)) {
         setLineDiscount(targetLine, Number(discount || 0));
     }
@@ -3189,7 +3184,7 @@ patch(ControlButtons.prototype, {
                     const lineResult = await addConfiguredProductLineToOrder(this, order, productRecord, {
                         quantity: -Math.max(1, Number(cancellationRefundForm.qty || 1)),
                         merge: false,
-                        price: Number(cancellationRefundForm.priceUnit || 0),
+                        lineUnitPrice: Number(cancellationRefundForm.priceUnit || 0),
                         discount: Number(cancellationRefundForm.discount || 0),
                         metadata: {
                             flow: "cancellation_refund",
