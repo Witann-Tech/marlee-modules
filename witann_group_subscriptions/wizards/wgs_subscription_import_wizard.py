@@ -65,10 +65,19 @@ class WgsSubscriptionImportWizard(models.TransientModel):
         return partner
 
     def _resolve_product(self, plan_name):
-        """Busca product.template recurrente por nombre exacto (case-insensitive)."""
+        """
+        Busca product.template recurrente por nombre exacto (case-insensitive),
+        restringido a la empresa activa del wizard para evitar mezclar
+        productos de otras empresas en entornos multi-empresa.
+        """
         Product = self.env['product.template'].sudo()
+        company_id = self.env.company.id
         product = Product.search(
-            [('name', '=ilike', plan_name.strip()), ('recurring_invoice', '=', True)],
+            [
+                ('name', '=ilike', plan_name.strip()),
+                ('recurring_invoice', '=', True),
+                ('company_id', 'in', [company_id, False]),
+            ],
             limit=1,
         )
         return product
@@ -332,14 +341,75 @@ class WgsSubscriptionImportWizard(models.TransientModel):
         # ── Confirmar y marcar como suscripción activa ─────────────────────────
         order.action_confirm()
 
-        # Forzar subscription_state = 'progress' (activa) independientemente del flujo
-        if 'subscription_state' in order._fields:
-            order.write({'subscription_state': 'progress'})
+        # Forzar subscription_state al valor correcto de "en progreso".
+        # No hardcodeamos 'progress' porque el valor real del campo varía
+        # entre versiones/builds de Odoo. Lo detectamos inspeccionando la
+        # selección del campo y buscando el valor que contenga un token conocido.
+        progress_state = self._find_progress_state_value(order)
+        if progress_state and 'subscription_state' in order._fields:
+            try:
+                order.write({'subscription_state': progress_state})
+            except Exception as exc:
+                _logger.warning(
+                    'WGS Import: no se pudo escribir subscription_state=%s en order=%s: %s',
+                    progress_state, order.id, exc,
+                )
 
         # ── Sync de control de acceso (dispara al escribir subscription_state) ─
         order._wgs_sync_access_control_people()
 
     # ── Utilidades ─────────────────────────────────────────────────────────────
+
+    def _find_progress_state_value(self, order):
+        """
+        Detecta el valor real del campo subscription_state que representa
+        "en progreso / activo", sin asumir que es literalmente 'progress'.
+
+        Estrategia:
+        1. Inspecciona la lista de selección del campo.
+        2. Busca el valor cuyo key o label contenga algún token conocido
+           de los que WGS clasifica como "enabled".
+        3. Si no encuentra ninguno por token, devuelve None (no escribe nada).
+        """
+        if 'subscription_state' not in order._fields:
+            return None
+
+        field = order._fields['subscription_state']
+        selection = field.selection
+        if callable(selection):
+            try:
+                selection = selection(order)
+            except Exception:
+                selection = []
+
+        if not selection:
+            return None
+
+        # Tokens que WGS considera "activo/en progreso"
+        enabled_tokens = (
+            'progress', 'in_progress', 'in progress',
+            'progreso', 'activo', 'active',
+        )
+
+        for value, label in selection:
+            value_lower = (value or '').lower()
+            label_lower = (label or '').lower()
+            if any(t in value_lower or t in label_lower for t in enabled_tokens):
+                _logger.debug('WGS Import: subscription_state "progress" = %r', value)
+                return value
+
+        # Último recurso: si el campo ya tiene un valor establecido por action_confirm()
+        # y ese valor es clasificado como "enabled" por la lógica WGS, usarlo.
+        current = order.subscription_state
+        if current and order._wgs_classify_subscription_access_state() == 'enabled':
+            return None  # Ya está en estado correcto, no escribir nada
+
+        _logger.warning(
+            'WGS Import: no se encontró valor "en progreso" en subscription_state. '
+            'Valores disponibles: %s',
+            [v for v, _ in selection],
+        )
+        return None
 
     def _reopen_wizard(self):
         return {
