@@ -91,6 +91,8 @@ class WgsSubscriptionImportWizard(models.TransientModel):
     def _resolve_participants(self, participants_raw):
         """
         Separa la cadena de participantes por coma y busca cada uno por nombre.
+        Primero intenta coincidencia exacta (=ilike); si no encuentra, usa búsqueda
+        parcial (ilike) para tolerar nombres mal escritos o abreviados.
         Devuelve (found_ids, unresolved_names).
         """
         if not participants_raw:
@@ -102,7 +104,12 @@ class WgsSubscriptionImportWizard(models.TransientModel):
 
         names = [n.strip() for n in str(participants_raw).split(',') if n.strip()]
         for name in names:
+            # 1. Coincidencia exacta (case-insensitive)
             partner = Partner.search([('name', '=ilike', name)], limit=1)
+            if not partner:
+                # 2. Coincidencia parcial — tolera errores de escritura o nombres
+                #    incompletos (e.g. "MARIA GONZALEZ" encuentra "MARIA GONZALEZ PEREZ")
+                partner = Partner.search([('name', 'ilike', name)], limit=1)
             if partner:
                 found_ids.append(partner.id)
             else:
@@ -318,9 +325,11 @@ class WgsSubscriptionImportWizard(models.TransientModel):
                 _('El producto "%s" no tiene variante disponible.') % product_tmpl.display_name
             )
 
-        # ── Crear la orden sin líneas para obtener la lista de precios ──────────
-        # Necesitamos el pricelist del pedido (determinado por el partner) ANTES
-        # de crear la línea, para calcular el precio correcto del producto.
+        # ── Crear la orden sin líneas ───────────────────────────────────────────
+        # Se crea primero la orden (con plan_id) para que Odoo determine el
+        # pricelist correcto según el partner. Luego se agrega la línea y se
+        # llama a _recompute_prices() para que el plan recurrente establezca
+        # el precio real (igual que cuando el usuario selecciona el plan en la UI).
         order_vals = {
             'partner_id': line.partner_id.id,
             'plan_id': line.plan_id.id,
@@ -333,33 +342,20 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             skip_owner_participant_sync=True,
         ).create(order_vals)
 
-        # ── Calcular precio vía lista de precios del pedido ─────────────────────
-        # lst_price es el precio de catálogo base (puede ser $1.00 de placeholder).
-        # Usamos el pricelist del pedido para obtener el precio real de venta.
-        price_unit = product_variant.lst_price
-        try:
-            pricelist = order.pricelist_id
-            if pricelist and hasattr(pricelist, '_get_product_price'):
-                price_unit = pricelist._get_product_price(
-                    product_variant,
-                    quantity=1.0,
-                    currency=order.currency_id if 'currency_id' in order._fields else None,
-                    date=line.start_date or fields.Date.today(),
-                )
-        except Exception as e:
-            _logger.warning(
-                'WGS Import: no se pudo obtener precio de pricelist para %s, usando lst_price. Error: %s',
-                product_variant.display_name, e,
-            )
-
-        # ── Agregar línea de producto con precio correcto ───────────────────────
+        # ── Agregar línea de producto (sin forzar precio) ───────────────────────
         order.with_context(skip_owner_participant_sync=True).write({
             'order_line': [Command.create({
                 'product_id': product_variant.id,
                 'product_uom_qty': 1,
-                'price_unit': price_unit,
             })]
         })
+
+        # ── Calcular precio desde el plan recurrente ────────────────────────────
+        # _recompute_prices() es el método que dispara Odoo internamente cuando
+        # se asigna un plan recurrente a una suscripción. Aplica las reglas de
+        # precios del plan (sale.subscription.pricing) sobre las líneas del pedido.
+        if hasattr(order, '_recompute_prices'):
+            order._recompute_prices()
 
         # ── Confirmar ──────────────────────────────────────────────────────────
         # action_confirm() recalcula start_date y next_invoice_date desde hoy,
