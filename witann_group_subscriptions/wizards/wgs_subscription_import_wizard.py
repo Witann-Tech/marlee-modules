@@ -318,10 +318,9 @@ class WgsSubscriptionImportWizard(models.TransientModel):
                 _('El producto "%s" no tiene variante disponible.') % product_tmpl.display_name
             )
 
-        # ── Crear la orden de venta / suscripción ──────────────────────────────
-        order = SaleOrder.with_context(
-            skip_owner_participant_sync=True,  # evitar doble sync durante creación
-        ).create({
+        # date_order = Inicio para que "Fecha del primer contrato" sea correcta.
+        # Lo incluimos en create() porque confirm() no lo sobreescribe.
+        order_vals = {
             'partner_id': line.partner_id.id,
             'plan_id': line.plan_id.id,
             'wgs_effective_start_date': line.start_date,
@@ -330,27 +329,41 @@ class WgsSubscriptionImportWizard(models.TransientModel):
                 'product_uom_qty': 1,
                 'price_unit': 0,  # importación histórica — sin facturación retroactiva
             })],
-        })
+        }
+        if line.start_date and 'date_order' in SaleOrder._fields:
+            order_vals['date_order'] = dt.datetime.combine(line.start_date, dt.time.min)
+
+        # ── Crear la orden de venta / suscripción ──────────────────────────────
+        order = SaleOrder.with_context(
+            skip_owner_participant_sync=True,
+        ).create(order_vals)
 
         # ── Agregar participantes adicionales ──────────────────────────────────
-        # El titular se agrega automáticamente mediante _ensure_subscription_owner_is_participant
         if line.participant_ids:
             order.with_context(skip_owner_participant_sync=True).write({
                 'participant_ids': [Command.link(pid) for pid in line.participant_ids.ids],
             })
 
         # ── Confirmar ──────────────────────────────────────────────────────────
-        # IMPORTANTE: action_confirm() recalcula next_invoice_date automáticamente
-        # (hoy + período del plan), sobreescribiendo cualquier valor previo.
-        # Por eso asignamos next_invoice_date DESPUÉS de confirmar.
+        # action_confirm() recalcula start_date y next_invoice_date desde hoy,
+        # sobreescribiendo los valores históricos. Los restauramos después.
         order.action_confirm()
 
+        # ── Restaurar fechas históricas del Excel ──────────────────────────────
         # La constraint sale_order_check_start_date_lower_next_invoice_date exige
-        # start_date ≤ next_invoice_date. Odoo pone start_date = hoy al confirmar,
-        # así que usamos max(Fin, hoy) para suscripciones ya vencidas.
-        today = dt.date.today()
-        next_invoice_date = line.end_date if (line.end_date and line.end_date >= today) else today
-        order.write({'next_invoice_date': next_invoice_date})
+        # start_date ≤ next_invoice_date.  Como Inicio ≤ Fin siempre en los datos,
+        # asignar ambos desde el Excel satisface la constraint incluso para
+        # suscripciones vencidas (Fin en el pasado), que quedarán marcadas como
+        # por renovar automáticamente.
+        date_write = {}
+        if line.end_date:
+            date_write['next_invoice_date'] = line.end_date
+        if line.start_date and 'start_date' in order._fields:
+            date_write['start_date'] = line.start_date
+        if line.start_date and 'first_contract_date' in order._fields:
+            date_write['first_contract_date'] = line.start_date
+        if date_write:
+            order.write(date_write)
 
         # Forzar subscription_state al valor correcto de "en progreso".
         # No hardcodeamos 'progress' porque el valor real del campo varía
