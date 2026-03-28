@@ -297,8 +297,9 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             row_number=row_number,
             fallback_price=fallback_price,
         )
-        subscription_plan = self._wgs_resolve_plan_record(
+        subscription_plan = self._wgs_resolve_native_plan_record(
             product=product,
+            raw_value=raw_plan_value,
             plan_id=chosen_candidate.get('plan_id') or False,
             pricing_id=chosen_candidate.get('pricing_id') or False,
         )
@@ -311,9 +312,10 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             )
 
         next_billing_date = self._wgs_get_plan_min_end_threshold(subscription_plan, start_date) if start_date else False
+        native_pricing_id = self._wgs_resolve_native_pricing_id(chosen_candidate.get('pricing_id') or False)
         context = {
             'plan': subscription_plan,
-            'pricing_id': chosen_candidate.get('pricing_id') or False,
+            'pricing_id': native_pricing_id or False,
             'price': float(chosen_candidate.get('price') or fallback_price or 0.0),
             'next_billing_date': next_billing_date or False,
         }

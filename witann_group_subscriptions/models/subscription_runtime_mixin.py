@@ -37,7 +37,11 @@ class WgsSubscriptionRuntimeMixin(models.AbstractModel):
 
         for field_name in preferred_field_names:
             field = fields_map.get(field_name)
-            if field and field.type == 'many2one':
+            if not field or field.type != 'many2one':
+                continue
+            if comodel_checker and not comodel_checker(getattr(field, 'comodel_name', '')):
+                continue
+            if field:
                 values[field_name] = value_id
                 return
 
@@ -406,6 +410,123 @@ class WgsSubscriptionRuntimeMixin(models.AbstractModel):
             if matching:
                 return matching[0]
         return candidates[0]
+
+    def _wgs_get_plan_target_model_names(self):
+        model_names = []
+        for model_name in ('sale.order', 'sale.order.line'):
+            if model_name not in self.env.registry:
+                continue
+            model = self.env[model_name]
+            for field_name in ('plan_id', 'subscription_plan_id', 'recurring_plan_id'):
+                field = model._fields.get(field_name)
+                if field and field.type == 'many2one' and getattr(field, 'comodel_name', False):
+                    model_names.append(field.comodel_name)
+            for field in model._fields.values():
+                if field.type != 'many2one':
+                    continue
+                comodel_name = getattr(field, 'comodel_name', '')
+                if self._wgs_is_plan_model_name(comodel_name):
+                    model_names.append(comodel_name)
+        if 'sale.subscription.plan' in self.env.registry:
+            model_names.insert(0, 'sale.subscription.plan')
+        deduped = []
+        for model_name in model_names:
+            if model_name and model_name not in deduped:
+                deduped.append(model_name)
+        return deduped
+
+    def _wgs_get_pricing_target_model_names(self):
+        model_names = []
+        for model_name in ('sale.order.line',):
+            if model_name not in self.env.registry:
+                continue
+            model = self.env[model_name]
+            for field_name in ('subscription_pricing_id', 'pricing_id', 'recurring_pricing_id'):
+                field = model._fields.get(field_name)
+                if field and field.type == 'many2one' and getattr(field, 'comodel_name', False):
+                    model_names.append(field.comodel_name)
+            for field in model._fields.values():
+                if field.type != 'many2one':
+                    continue
+                comodel_name = getattr(field, 'comodel_name', '')
+                if self._wgs_is_pricing_model_name(comodel_name):
+                    model_names.append(comodel_name)
+        if 'sale.subscription.pricing' in self.env.registry:
+            model_names.insert(0, 'sale.subscription.pricing')
+        deduped = []
+        for model_name in model_names:
+            if model_name and model_name not in deduped:
+                deduped.append(model_name)
+        return deduped
+
+    def _wgs_resolve_native_plan_record(self, product, raw_value=False, plan_id=False, pricing_id=False):
+        product.ensure_one()
+        target_model_names = self._wgs_get_plan_target_model_names()
+
+        if pricing_id:
+            for pricing_model_name in self._wgs_get_pricing_target_model_names():
+                if pricing_model_name not in self.env.registry:
+                    continue
+                pricing = self.env[pricing_model_name].browse(int(pricing_id)).exists()
+                if not pricing:
+                    continue
+                plan = self._wgs_extract_plan_record_from_pricing(pricing)
+                if plan and plan._name in target_model_names:
+                    return plan
+
+        if plan_id:
+            for model_name in target_model_names:
+                if model_name not in self.env.registry:
+                    continue
+                record = self.env[model_name].browse(int(plan_id)).exists()
+                if record:
+                    return record
+
+        direct_plan = self._wgs_extract_plan_record_from_product(product)
+        if direct_plan and direct_plan._name in target_model_names:
+            return direct_plan
+
+        if raw_value not in (False, None, ''):
+            value = str(raw_value).strip()
+            normalized_value = value.lower()
+            try:
+                numeric_value = int(float(value))
+            except (TypeError, ValueError):
+                numeric_value = 0
+            for model_name in target_model_names:
+                if model_name not in self.env.registry:
+                    continue
+                model = self.env[model_name]
+                if numeric_value > 0:
+                    record = model.browse(numeric_value).exists()
+                    if record:
+                        return record
+                domain = []
+                if 'name' in model._fields:
+                    domain = [('name', '=ilike', value)]
+                elif 'display_name' in model._fields:
+                    domain = [('display_name', '=ilike', value)]
+                if domain:
+                    records = model.search(domain, limit=2)
+                    if len(records) == 1:
+                        return records[:1]
+                    exact = records.filtered(lambda rec: (rec.display_name or '').strip().lower() == normalized_value)
+                    if len(exact) == 1:
+                        return exact[:1]
+
+        return False
+
+    def _wgs_resolve_native_pricing_id(self, pricing_id=False):
+        pricing_id = int(pricing_id or 0)
+        if pricing_id <= 0:
+            return False
+        for model_name in self._wgs_get_pricing_target_model_names():
+            if model_name not in self.env.registry:
+                continue
+            record = self.env[model_name].browse(pricing_id).exists()
+            if record:
+                return record.id
+        return False
 
     def _wgs_find_plan_record_by_id(self, plan_id):
         if not plan_id:
