@@ -204,7 +204,14 @@ class WgsSubscriptionImportWizard(models.TransientModel):
                     )
                     source_key = self._build_source_key(partner, product, start_date)
 
-                    existing_order = order_model.search([('wgs_import_source_key', '=', source_key)], limit=1)
+                    existing_order = order_model.search(
+                        [
+                            ('wgs_import_source_key', '=', source_key),
+                            ('state', '!=', 'cancel'),
+                        ],
+                        limit=1,
+                        order='id desc',
+                    )
                     action_label = 'preview'
 
                     if existing_order and not self.update_existing:
