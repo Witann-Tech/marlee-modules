@@ -752,6 +752,8 @@ class SaleOrder(models.Model):
         if hard_end_date and (not valid_until or hard_end_date < valid_until):
             valid_until = hard_end_date
 
+        should_mark_for_renewal = bool(next_invoice_date and next_invoice_date <= today)
+
         force_closed = bool(
             has_replacement_subscription
             or (hard_end_date and hard_end_date <= today)
@@ -771,6 +773,11 @@ class SaleOrder(models.Model):
             access_state = False
             is_valid = False
             reason = _('La suscripción todavía no inicia.')
+        elif should_mark_for_renewal:
+            native_state_key = 'renew'
+            native_state_label = _('Por renovar')
+            is_valid = True
+            reason = _('La suscripción sigue activa, pero ya venció su siguiente fecha de cobro y debe renovarse.')
         elif access_state == 'enabled':
             is_valid = True
             reason = _('Suscripción en progreso o en renovación.')
