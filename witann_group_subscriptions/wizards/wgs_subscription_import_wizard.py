@@ -309,12 +309,21 @@ class WgsSubscriptionImportWizard(models.TransientModel):
 
     def _import_line(self, line, SaleOrder):
         """Crea una sale.order de suscripción a partir de una línea validada."""
+        import datetime as dt
+
         product_tmpl = line.product_tmpl_id
         product_variant = product_tmpl.product_variant_id
         if not product_variant:
             raise UserError(
                 _('El producto "%s" no tiene variante disponible.') % product_tmpl.display_name
             )
+
+        # Odoo pone start_date = hoy al confirmar. La constraint
+        # sale_order_check_start_date_lower_next_invoice_date exige
+        # start_date ≤ next_invoice_date, así que si Fin ya venció
+        # usamos hoy para evitar la violación.
+        today = dt.date.today()
+        next_invoice_date = line.end_date if (line.end_date and line.end_date >= today) else today
 
         # ── Crear la orden de venta / suscripción ──────────────────────────────
         order = SaleOrder.with_context(
@@ -323,7 +332,7 @@ class WgsSubscriptionImportWizard(models.TransientModel):
             'partner_id': line.partner_id.id,
             'plan_id': line.plan_id.id,
             'wgs_effective_start_date': line.start_date,
-            'next_invoice_date': line.end_date,
+            'next_invoice_date': next_invoice_date,
             'order_line': [Command.create({
                 'product_id': product_variant.id,
                 'product_uom_qty': 1,
