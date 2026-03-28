@@ -1,5 +1,4 @@
 import logging
-from datetime import date, datetime
 
 from odoo import _, api, fields, models
 from odoo.exceptions import ValidationError
@@ -209,49 +208,12 @@ class SaleOrder(models.Model):
         state_value = (self.subscription_state or '').strip().lower()
         if not state_value:
             return False
-        if not self._wgs_is_subscription_within_effective_dates():
-            return False
         if any(token in state_value for token in self._WGS_ACCESS_SUSPENDED_STATE_TOKENS):
             return 'suspended'
         if any(token in state_value for token in self._WGS_ACCESS_ENABLED_STATE_TOKENS):
             return 'enabled'
         if any(token in state_value for token in self._WGS_ACCESS_DISABLED_STATE_TOKENS):
             return False
-        return False
-
-    def _wgs_is_subscription_within_effective_dates(self):
-        self.ensure_one()
-        today = fields.Date.context_today(self)
-        start_date = self._wgs_get_first_available_date(
-            ('wgs_effective_start_date', 'start_date', 'date_start', 'subscription_start_date', 'date_order')
-        )
-        end_date = self._wgs_get_first_available_date(('date_end', 'end_date', 'subscription_end_date'))
-        if start_date and start_date > today:
-            return False
-        if end_date and end_date < today:
-            return False
-        return True
-
-    def _wgs_get_first_available_date(self, field_names):
-        self.ensure_one()
-        for field_name in field_names:
-            if field_name not in self._fields:
-                continue
-            value = self[field_name]
-            converted = self._wgs_to_date(value)
-            if converted:
-                return converted
-        return False
-
-    def _wgs_to_date(self, value):
-        if not value:
-            return False
-        if isinstance(value, date) and not isinstance(value, datetime):
-            return value
-        if isinstance(value, datetime):
-            return value.date()
-        if isinstance(value, str):
-            return fields.Date.to_date(value)
         return False
 
     @api.model
@@ -411,62 +373,9 @@ class SaleOrder(models.Model):
         return res
 
     def action_cancel(self):
-        try:
-            res = super().action_cancel()
-        except ValueError as error:
-            broken_orders = self._wgs_get_cancelable_broken_subscription_orders()
-            if not broken_orders or 'Expected singleton: sale.order()' not in str(error):
-                raise
-            _logger.warning(
-                'WGS cancel fallback for malformed subscription orders %s due to error: %s',
-                broken_orders.ids,
-                error,
-            )
-            normal_orders = self - broken_orders
-            res = True
-            if normal_orders:
-                res = super(SaleOrder, normal_orders).action_cancel()
-            broken_orders._wgs_force_cancel_malformed_subscription_orders()
+        res = super().action_cancel()
         self._wgs_sync_access_control_people()
         return res
-
-    def _wgs_get_cancelable_broken_subscription_orders(self):
-        if 'subscription_id' not in self._fields:
-            return self.browse()
-        return self.filtered(
-            lambda order: order._get_subscription_recurring_lines()
-            and not order.subscription_id
-            and order.state != 'cancel'
-        )
-
-    def _wgs_resolve_cancel_subscription_state_value(self):
-        field = self._fields.get('subscription_state')
-        if not field:
-            return False
-        selection = field.selection
-        if callable(selection):
-            try:
-                selection = selection(self)
-            except TypeError:
-                selection = selection(self.env)
-        selection = selection or []
-        wanted_tokens = ('cancel', 'cancelled', 'canceled', 'close', 'closed', 'churn')
-        for value, label in selection:
-            haystack = ' '.join(filter(None, [str(value).lower(), str(label).lower()]))
-            if any(token in haystack for token in wanted_tokens):
-                return value
-        return False
-
-    def _wgs_force_cancel_malformed_subscription_orders(self):
-        cancel_subscription_state = self._wgs_resolve_cancel_subscription_state_value()
-        for order in self:
-            values = {}
-            if 'state' in order._fields and order.state != 'cancel':
-                values['state'] = 'cancel'
-            if 'subscription_state' in order._fields and cancel_subscription_state:
-                values['subscription_state'] = cancel_subscription_state
-            if values:
-                order.write(values)
 
     def action_close(self):
         super_method = getattr(super(), 'action_close', None)
