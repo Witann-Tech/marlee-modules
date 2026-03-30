@@ -1437,13 +1437,6 @@ class PosOrder(models.Model):
         subscription_start_date = line.wgs_get_subscription_start_date() or today
         subscription_end_date = line.wgs_get_subscription_end_date()
         sale_start_date = subscription_start_date
-        if subscription_start_date < today:
-            raise UserError(
-                _(
-                    'La fecha de inicio no puede ser anterior a %(date)s.'
-                )
-                % {'date': fields.Date.to_string(today)}
-            )
         next_billing_date = False
         if plan_record:
             next_billing_date = self._wgs_get_plan_min_end_threshold(plan_record, sale_start_date)
