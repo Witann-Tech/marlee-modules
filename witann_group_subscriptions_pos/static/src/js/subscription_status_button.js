@@ -228,6 +228,44 @@ function getPlanPeriodEndDate(dateValue, intervalValue, intervalUnit) {
     return addDaysToDate(periodNextDate, -1);
 }
 
+function buildChargeBreakdown(source, product, values = {}) {
+    const baseAmount = Number(
+        values.baseAmount !== undefined
+            ? values.baseAmount
+            : (values.amount !== undefined ? values.amount : 0)
+    ) || 0;
+    const displayAmount = Number(
+        values.displayAmount !== undefined
+            ? values.displayAmount
+            : (values.display !== undefined
+                ? values.display
+                : (values.amount !== undefined ? values.amount : baseAmount))
+    ) || 0;
+    const ticketUnitPrice = Number(
+        values.ticketUnitPrice !== undefined
+            ? values.ticketUnitPrice
+            : (values.unitPrice !== undefined
+                ? values.unitPrice
+                : (baseAmount || displayAmount))
+    ) || 0;
+    return {
+        baseAmount,
+        displayAmount,
+        ticketUnitPrice,
+    };
+}
+
+function getChargeDisplayAmount(charge) {
+    if (!charge || typeof charge !== "object") {
+        return 0;
+    }
+    return Number(
+        charge.displayAmount !== undefined
+            ? charge.displayAmount
+            : (charge.baseAmount !== undefined ? charge.baseAmount : 0)
+    ) || 0;
+}
+
 patch(ControlButtons.prototype, {
     setup() {
         super.setup(...arguments);
