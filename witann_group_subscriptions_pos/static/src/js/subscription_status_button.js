@@ -53,6 +53,10 @@ function parseISODate(value) {
     return Number.isNaN(date.getTime()) ? null : date;
 }
 
+function formatTodayISO() {
+    return new Date().toISOString().slice(0, 10);
+}
+
 function captureFocusState(root) {
     const active = document.activeElement;
     if (!root || !active || !root.contains(active)) {
