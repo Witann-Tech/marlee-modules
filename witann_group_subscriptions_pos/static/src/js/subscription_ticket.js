@@ -353,11 +353,11 @@ export async function addConfiguredProductLineToOrder(source, order, product, op
 
     const resolvedLineUnitPrice = charge && typeof charge === "object"
         ? Number(
-            charge.displayAmount !== undefined
-                ? convertDisplayPriceToTaxExcluded(source, product, charge.displayAmount)
-                : (charge.ticketUnitPrice !== undefined
-                    ? charge.ticketUnitPrice
-                    : (charge.baseAmount || 0))
+            charge.ticketUnitPrice !== undefined
+                ? charge.ticketUnitPrice
+                : (charge.baseAmount !== undefined
+                    ? charge.baseAmount
+                    : (charge.displayAmount || 0))
         )
         : Number(lineUnitPrice || 0);
 
