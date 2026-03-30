@@ -18,6 +18,12 @@ import {
     waitForNextTick,
 } from "./subscription_ticket";
 import { createSubscriptionPosApi } from "./subscription_pos_api";
+import {
+    getDefaultNewPartnerForm,
+    getDefaultNewSubscriptionForm,
+    getDefaultParticipantEditForm,
+    getDefaultUpsaleForm,
+} from "./subscription_form_defaults";
 import { ControlButtons } from "@point_of_sale/app/screens/product_screen/control_buttons/control_buttons";
 import { PaymentScreen } from "@point_of_sale/app/screens/payment_screen/payment_screen";
 import { _t } from "@web/core/l10n/translation";
@@ -3146,86 +3152,22 @@ patch(ControlButtons.prototype, {
     },
 
     _getDefaultNewSubscriptionForm(partnerId) {
-        const participantIds = [];
-        if (partnerId) {
-            participantIds.push(Number(partnerId));
-        }
-        return {
-            productId: 0,
-            productName: "",
-            planChoice: "",
-            plans: [],
-            charge: buildChargeBreakdown(this, null, { baseAmount: 0, displayAmount: 0 }),
-            startDate: formatTodayISO(),
-            maxParticipantsTotal: 1,
-            participantIds,
-            participantSearch: "",
-            loading: false,
-        };
+        return getDefaultNewSubscriptionForm(partnerId, {
+            buildChargeBreakdown,
+            formatTodayISO,
+        });
     },
 
     _getDefaultNewPartnerForm() {
-        return {
-            name: "",
-            phone: "",
-            email: "",
-            gender: "",
-            birthday: "",
-            imageDataUrl: "",
-            imageBase64: "",
-            cameraActive: false,
-        };
+        return getDefaultNewPartnerForm();
     },
 
     _getDefaultUpsaleForm(item = null) {
-        const subscriptionId = Number(item && item.subscription_id ? item.subscription_id : 0) || false;
-        const holderPartnerId = Number(item && item.holder_partner_id ? item.holder_partner_id : 0) || false;
-        const participantIds = Array.isArray(item && item.participant_ids)
-            ? [...new Set(item.participant_ids.map((value) => Number(value || 0)).filter((value) => value > 0))]
-            : [];
-        if (holderPartnerId && !participantIds.includes(holderPartnerId)) {
-            participantIds.unshift(holderPartnerId);
-        }
-        return {
-            subscriptionId,
-            subscriptionName: item && item.subscription_name ? item.subscription_name : "",
-            holderPartnerId,
-            holderPartnerName: item && item.holder_partner_name ? item.holder_partner_name : "",
-            sourceProductId: Number(item && item.renewal_product_id ? item.renewal_product_id : 0) || false,
-            sourceProductName: item && item.renewal_product_name ? item.renewal_product_name : "",
-            sourcePlanName: item && item.plan_name ? item.plan_name : "",
-            productId: 0,
-            productName: "",
-            planChoice: "",
-            plans: [],
-            recurringCharge: buildChargeBreakdown(this, null, { baseAmount: 0, displayAmount: 0 }),
-            creditCharge: buildChargeBreakdown(this, null, { baseAmount: 0, displayAmount: 0 }),
-            charge: buildChargeBreakdown(this, null, { baseAmount: 0, displayAmount: 0 }),
-            maxParticipantsTotal: 1,
-            participantIds,
-            participantSearch: "",
-            loading: false,
-        };
+        return getDefaultUpsaleForm(item, { buildChargeBreakdown });
     },
 
     _getDefaultParticipantEditForm(item = null) {
-        const subscriptionId = Number(item && item.subscription_id ? item.subscription_id : 0) || false;
-        const holderPartnerId = Number(item && item.holder_partner_id ? item.holder_partner_id : 0) || false;
-        const participantIds = Array.isArray(item && item.participant_ids)
-            ? [...new Set(item.participant_ids.map((value) => Number(value || 0)).filter((value) => value > 0))]
-            : [];
-        if (holderPartnerId && !participantIds.includes(holderPartnerId)) {
-            participantIds.unshift(holderPartnerId);
-        }
-        return {
-            subscriptionId,
-            subscriptionName: item && item.subscription_name ? item.subscription_name : "",
-            holderPartnerId,
-            holderPartnerName: item && item.holder_partner_name ? item.holder_partner_name : "",
-            participantIds,
-            maxParticipantsTotal: Number(item && item.max_participants_total ? item.max_participants_total : 1),
-            participantSearch: "",
-        };
+        return getDefaultParticipantEditForm(item);
     },
 
     _getStateRank(state) {
