@@ -218,27 +218,7 @@ patch(ControlButtons.prototype, {
     },
 
     async onClickSubscriptionStatus() {
-        let rows = [];
-        try {
-            rows = await this._fetchPartnerDirectoryRows();
-        } catch (error) {
-            this._showSimpleInfoModal(
-                _t("Error al consultar suscripciones"),
-                _t("No se pudo consultar la informacion en este momento.")
-            );
-            console.error("Error al consultar suscripciones en POS", error);
-            return;
-        }
-
-        if (!rows.length) {
-            this._showSimpleInfoModal(
-                _t("Sin clientes"),
-                _t("No se encontraron clientes disponibles para mostrar.")
-            );
-            return;
-        }
-
-        this._showSubscriptionsModal(rows);
+        this._showSubscriptionsModal([]);
     },
 
     async _fetchPartnerDirectoryRows() {
@@ -552,6 +532,9 @@ patch(ControlButtons.prototype, {
         let selectedPartnerId = rows[0] ? rows[0].id : false;
         let detailRequestToken = 0;
         let currentDetail = null;
+        let directoryLoading = false;
+        let directoryFullyLoaded = false;
+        let directoryLoadError = "";
         let formMode = null;
         let formError = "";
         let formNotice = "";
@@ -580,14 +563,53 @@ patch(ControlButtons.prototype, {
             }
         };
 
-        const reloadDirectoryRows = async (preferredPartnerId = false) => {
-            rows = await this._fetchPartnerDirectoryRows();
-            filteredSnapshot = [...rows];
-            detailCache.clear();
-            if (preferredPartnerId) {
-                selectedPartnerId = Number(preferredPartnerId || 0) || false;
+        const loadDirectoryRowsInBackground = async ({ reset = false, preferredPartnerId = false } = {}) => {
+            if (directoryLoading) {
+                return;
             }
+            if (reset) {
+                rows = [];
+                filteredSnapshot = [];
+                detailCache.clear();
+                currentDetail = null;
+                selectedPartnerId = Number(preferredPartnerId || 0) || false;
+                directoryFullyLoaded = false;
+                directoryLoadError = "";
+            }
+            directoryLoading = true;
             render();
+            const batchSize = 250;
+            let offset = rows.length;
+            try {
+                while (overlay.isConnected) {
+                    const batch = await this.subscriptionPosApi.fetchPartnerDirectoryBatch(offset, batchSize);
+                    if (!Array.isArray(batch) || !batch.length) {
+                        directoryFullyLoaded = true;
+                        break;
+                    }
+                    rows.push(...batch);
+                    filteredSnapshot = [...rows];
+                    if (!selectedPartnerId && rows[0]) {
+                        selectedPartnerId = Number(preferredPartnerId || rows[0].id || 0) || false;
+                    }
+                    offset += batch.length;
+                    render();
+                    if (batch.length < batchSize) {
+                        directoryFullyLoaded = true;
+                        break;
+                    }
+                }
+            } catch (error) {
+                console.error("Error al consultar suscripciones en POS", error);
+                directoryLoadError = _t("No se pudo cargar el directorio completo en este momento.");
+            } finally {
+                directoryLoading = false;
+                render();
+            }
+        };
+
+        const reloadDirectoryRows = async (preferredPartnerId = false) => {
+            await loadDirectoryRowsInBackground({ reset: true, preferredPartnerId });
         };
 
         const renderDetailEmpty = (title, message) => {
@@ -2050,10 +2072,15 @@ patch(ControlButtons.prototype, {
                 <span class="wgs-summary-pill wgs-summary-none">${_t("Sin suscripcion")}: ${counts.none || 0}</span>
                 <span class="wgs-summary-pill">${_t("Con cumpleanos")}: ${counts.birthday || 0}</span>
                 <span class="wgs-summary-pill">${_t("Mostrando")}: ${filtered.length}</span>
+                ${directoryLoading ? `<span class="wgs-summary-pill">${_t("Cargando directorio...")}</span>` : ""}
+                ${directoryLoadError ? `<span class="wgs-summary-pill wgs-summary-negative">${this._escapeHtml(directoryLoadError)}</span>` : ""}
             `;
 
             if (!filtered.length) {
-                tbody.innerHTML = `<tr><td colspan="7">${_t("No hay resultados para el filtro actual.")}</td></tr>`;
+                const emptyMessage = directoryLoading && !rows.length
+                    ? _t("Cargando clientes...")
+                    : _t("No hay resultados para el filtro actual.");
+                tbody.innerHTML = `<tr><td colspan="7">${emptyMessage}</td></tr>`;
                 selectedPartnerId = false;
                 currentDetail = null;
                 formMode = null;
@@ -2065,8 +2092,10 @@ patch(ControlButtons.prototype, {
                 newPartnerForm = null;
                 partnerPhotoForm = null;
                 renderDetailEmpty(
-                    _t("Sin resultados"),
-                    _t("Ajusta los filtros para volver a cargar clientes en el directorio.")
+                    directoryLoading && !rows.length ? _t("Cargando directorio") : _t("Sin resultados"),
+                    directoryLoading && !rows.length
+                        ? _t("Estamos cargando el directorio de clientes en segundo plano.")
+                        : _t("Ajusta los filtros para volver a cargar clientes en el directorio.")
                 );
                 return;
             }
@@ -3113,6 +3142,7 @@ patch(ControlButtons.prototype, {
         });
 
         render();
+        loadDirectoryRowsInBackground({ reset: !rows.length, preferredPartnerId: selectedPartnerId });
     },
 
     _getDefaultNewSubscriptionForm(partnerId) {
