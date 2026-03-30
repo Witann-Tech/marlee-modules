@@ -27,6 +27,35 @@ export function getCurrentOrder(source) {
     return pos.selectedOrder || pos.order || null;
 }
 
+function getCurrentCompanyId(source) {
+    const pos = getPos(source);
+    if (!pos) {
+        return 0;
+    }
+    const candidates = [
+        pos.company,
+        pos.company_id,
+        pos.companyId,
+        pos.config && pos.config.company_id,
+        pos.config && pos.config.companyId,
+    ];
+    for (const value of candidates) {
+        if (!value) {
+            continue;
+        }
+        if (typeof value === "number") {
+            return Number(value || 0);
+        }
+        if (Array.isArray(value)) {
+            return Number(value[0] || 0);
+        }
+        if (typeof value === "object" && value.id) {
+            return Number(value.id || 0);
+        }
+    }
+    return 0;
+}
+
 export function getOrderUid(order) {
     if (!order) {
         return null;
@@ -289,6 +318,57 @@ function findTaxInPos(source, taxId) {
     return null;
 }
 
+function getTaxCompanyId(tax) {
+    if (!tax) {
+        return 0;
+    }
+    const rawCompany = tax.company_id || tax.companyId || false;
+    if (!rawCompany) {
+        return 0;
+    }
+    if (typeof rawCompany === "number") {
+        return Number(rawCompany || 0);
+    }
+    if (Array.isArray(rawCompany)) {
+        return Number(rawCompany[0] || 0);
+    }
+    if (typeof rawCompany === "object" && rawCompany.id) {
+        return Number(rawCompany.id || 0);
+    }
+    return 0;
+}
+
+function normalizeProductTaxesForCurrentCompany(source, product) {
+    if (!product) {
+        return product;
+    }
+    const companyId = getCurrentCompanyId(source);
+    if (!companyId) {
+        return product;
+    }
+    const originalTaxIds = getProductTaxIds(product);
+    if (!originalTaxIds.length) {
+        return product;
+    }
+    const filteredTaxIds = originalTaxIds.filter((taxId) => {
+        const tax = findTaxInPos(source, taxId);
+        const taxCompanyId = getTaxCompanyId(tax);
+        return !taxCompanyId || taxCompanyId === companyId;
+    });
+    if (!filteredTaxIds.length || filteredTaxIds.length === originalTaxIds.length) {
+        return product;
+    }
+    product.taxes_id = [...filteredTaxIds];
+    product.tax_ids = [...filteredTaxIds];
+    if (Array.isArray(product.taxes)) {
+        product.taxes = product.taxes.filter((tax) => {
+            const taxId = Number(tax && tax.id ? tax.id : 0);
+            return filteredTaxIds.includes(taxId);
+        });
+    }
+    return product;
+}
+
 function convertDisplayPriceToTaxExcluded(source, product, displayPrice) {
     const grossAmount = Number(displayPrice || 0);
     if (!grossAmount || !product) {
@@ -361,7 +441,9 @@ export async function addConfiguredProductLineToOrder(source, order, product, op
         )
         : Number(lineUnitPrice || 0);
 
-    const addResult = await addProductToOrder(source, order, product, {
+    const normalizedProduct = normalizeProductTaxesForCurrentCompany(source, product);
+
+    const addResult = await addProductToOrder(source, order, normalizedProduct, {
         quantity,
         merge,
         price: resolvedLineUnitPrice,

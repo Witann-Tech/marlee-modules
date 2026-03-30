@@ -823,6 +823,11 @@ patch(ControlButtons.prototype, {
                     loading: false,
                     charge: buildChargeBreakdown(this, null, {
                         baseAmount: Number(charge && charge.charge_now ? charge.charge_now : 0),
+                        ticketUnitPrice: Number(
+                            charge && charge.ticket_charge_now !== undefined
+                                ? charge.ticket_charge_now
+                                : (charge && charge.charge_now ? charge.charge_now : 0)
+                        ),
                         displayAmount: Number(
                             charge && charge.display_charge_now !== undefined
                                 ? charge.display_charge_now
@@ -894,6 +899,11 @@ patch(ControlButtons.prototype, {
                     invoiceDateDue: charge && charge.invoice_date_due ? charge.invoice_date_due : pendingChargeForm.invoiceDateDue,
                     charge: buildChargeBreakdown(this, null, {
                         baseAmount: Number(charge && charge.charge_now ? charge.charge_now : 0),
+                        ticketUnitPrice: Number(
+                            charge && charge.ticket_charge_now !== undefined
+                                ? charge.ticket_charge_now
+                                : (charge && charge.charge_now ? charge.charge_now : 0)
+                        ),
                         displayAmount: Number(
                             charge && charge.display_charge_now !== undefined
                                 ? charge.display_charge_now
@@ -902,6 +912,11 @@ patch(ControlButtons.prototype, {
                     }),
                     totalCharge: buildChargeBreakdown(this, null, {
                         baseAmount: Number(charge && charge.amount_total ? charge.amount_total : getChargeDisplayAmount(pendingChargeForm.totalCharge) || 0),
+                        ticketUnitPrice: Number(
+                            charge && charge.ticket_amount_total !== undefined
+                                ? charge.ticket_amount_total
+                                : (charge && charge.amount_total ? charge.amount_total : getChargeDisplayAmount(pendingChargeForm.totalCharge) || 0)
+                        ),
                         displayAmount: Number(
                             charge && charge.display_amount_total !== undefined
                                 ? charge.display_amount_total
@@ -998,6 +1013,11 @@ patch(ControlButtons.prototype, {
                 );
                 newSubscriptionForm.charge = buildChargeBreakdown(this, null, {
                     baseAmount: Number(charge && charge.recurring_price ? charge.recurring_price : 0),
+                    ticketUnitPrice: Number(
+                        charge && charge.ticket_recurring_price !== undefined
+                            ? charge.ticket_recurring_price
+                            : (charge && charge.recurring_price ? charge.recurring_price : 0)
+                    ),
                     displayAmount: displayRecurringPrice,
                 });
                 if (charge && (charge.plan_id || charge.pricing_id)) {
@@ -1061,6 +1081,11 @@ patch(ControlButtons.prototype, {
                     loading: false,
                     recurringCharge: buildChargeBreakdown(this, null, {
                         baseAmount: Number(charge && charge.recurring_price ? charge.recurring_price : 0),
+                        ticketUnitPrice: Number(
+                            charge && charge.ticket_recurring_price !== undefined
+                                ? charge.ticket_recurring_price
+                                : (charge && charge.recurring_price ? charge.recurring_price : 0)
+                        ),
                         displayAmount: Number(
                             charge && charge.display_recurring_price !== undefined
                                 ? charge.display_recurring_price
@@ -1069,6 +1094,11 @@ patch(ControlButtons.prototype, {
                     }),
                     creditCharge: buildChargeBreakdown(this, null, {
                         baseAmount: Number(charge && charge.credit_amount ? charge.credit_amount : 0),
+                        ticketUnitPrice: Number(
+                            charge && charge.ticket_credit_amount !== undefined
+                                ? charge.ticket_credit_amount
+                                : (charge && charge.credit_amount ? charge.credit_amount : 0)
+                        ),
                         displayAmount: Number(
                             charge && charge.display_credit_amount !== undefined
                                 ? charge.display_credit_amount
@@ -1077,6 +1107,11 @@ patch(ControlButtons.prototype, {
                     }),
                     charge: buildChargeBreakdown(this, null, {
                         baseAmount: Number(charge && charge.charge_now ? charge.charge_now : 0),
+                        ticketUnitPrice: Number(
+                            charge && charge.ticket_charge_now !== undefined
+                                ? charge.ticket_charge_now
+                                : (charge && charge.charge_now ? charge.charge_now : 0)
+                        ),
                         displayAmount: Number(
                             charge && charge.display_charge_now !== undefined
                                 ? charge.display_charge_now
@@ -1124,6 +1159,11 @@ patch(ControlButtons.prototype, {
                     loading: false,
                     recurringCharge: buildChargeBreakdown(this, null, {
                         baseAmount: Number(charge && charge.recurring_price ? charge.recurring_price : 0),
+                        ticketUnitPrice: Number(
+                            charge && charge.ticket_recurring_price !== undefined
+                                ? charge.ticket_recurring_price
+                                : (charge && charge.recurring_price ? charge.recurring_price : 0)
+                        ),
                         displayAmount: Number(
                             charge && charge.display_recurring_price !== undefined
                                 ? charge.display_recurring_price
@@ -1132,6 +1172,11 @@ patch(ControlButtons.prototype, {
                     }),
                     creditCharge: buildChargeBreakdown(this, null, {
                         baseAmount: Number(charge && charge.credit_amount ? charge.credit_amount : 0),
+                        ticketUnitPrice: Number(
+                            charge && charge.ticket_credit_amount !== undefined
+                                ? charge.ticket_credit_amount
+                                : (charge && charge.credit_amount ? charge.credit_amount : 0)
+                        ),
                         displayAmount: Number(
                             charge && charge.display_credit_amount !== undefined
                                 ? charge.display_credit_amount
@@ -1140,6 +1185,11 @@ patch(ControlButtons.prototype, {
                     }),
                     charge: buildChargeBreakdown(this, null, {
                         baseAmount: Number(charge && charge.charge_now ? charge.charge_now : 0),
+                        ticketUnitPrice: Number(
+                            charge && charge.ticket_charge_now !== undefined
+                                ? charge.ticket_charge_now
+                                : (charge && charge.charge_now ? charge.charge_now : 0)
+                        ),
                         displayAmount: Number(
                             charge && charge.display_charge_now !== undefined
                                 ? charge.display_charge_now
