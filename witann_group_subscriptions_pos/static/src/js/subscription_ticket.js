@@ -236,6 +236,103 @@ async function addProductToOrder(source, order, product, options = {}) {
     return null;
 }
 
+function getProductTaxIds(product) {
+    if (!product) {
+        return [];
+    }
+    const rawTaxes = product.taxes_id || product.tax_ids || product.taxes || [];
+    const values = Array.isArray(rawTaxes) ? rawTaxes : [rawTaxes];
+    return [...new Set(values.map((item) => {
+        if (typeof item === "number") {
+            return item;
+        }
+        if (Array.isArray(item)) {
+            return Number(item[0] || 0);
+        }
+        if (item && typeof item === "object") {
+            return Number(item.id || 0);
+        }
+        return Number(item || 0);
+    }).filter((item) => item > 0))];
+}
+
+function findTaxInPos(source, taxId) {
+    const pos = getPos(source);
+    if (!pos || !taxId) {
+        return null;
+    }
+    const numericId = Number(taxId || 0);
+    const taxCollection = pos.models && pos.models["account.tax"];
+    if (taxCollection && typeof taxCollection.get === "function") {
+        const tax = taxCollection.get(numericId);
+        if (tax) {
+            return tax;
+        }
+    }
+    if (pos.db) {
+        if (pos.db.tax_by_id && pos.db.tax_by_id[numericId]) {
+            return pos.db.tax_by_id[numericId];
+        }
+        if (typeof pos.db.get_tax_by_id === "function") {
+            const tax = pos.db.get_tax_by_id(numericId);
+            if (tax) {
+                return tax;
+            }
+        }
+    }
+    if (taxCollection && typeof taxCollection.getAll === "function") {
+        return (taxCollection.getAll() || []).find((item) => Number(item.id) === numericId) || null;
+    }
+    if (Array.isArray(pos.taxes)) {
+        return pos.taxes.find((item) => Number(item.id) === numericId) || null;
+    }
+    return null;
+}
+
+function convertDisplayPriceToTaxExcluded(source, product, displayPrice) {
+    const grossAmount = Number(displayPrice || 0);
+    if (!grossAmount || !product) {
+        return grossAmount;
+    }
+    const taxIds = getProductTaxIds(product);
+    if (!taxIds.length) {
+        return grossAmount;
+    }
+    const taxes = taxIds.map((taxId) => findTaxInPos(source, taxId)).filter(Boolean);
+    if (!taxes.length) {
+        return grossAmount;
+    }
+
+    let baseAmount = grossAmount;
+    let percentFactor = 0;
+    let fixedAmount = 0;
+    for (const tax of taxes) {
+        const amountType = String(tax.amount_type || tax.amountType || "percent");
+        const isPriceIncluded = Boolean(tax.price_include ?? tax.priceInclude ?? false);
+        if (isPriceIncluded) {
+            continue;
+        }
+        if (!["percent", "fixed"].includes(amountType)) {
+            return grossAmount;
+        }
+        const amount = Number(tax.amount || 0);
+        if (amountType === "fixed") {
+            fixedAmount += amount;
+            continue;
+        }
+        percentFactor += amount / 100;
+    }
+
+    baseAmount -= fixedAmount;
+    if (baseAmount < 0) {
+        baseAmount = 0;
+    }
+    if (percentFactor) {
+        baseAmount = baseAmount / (1 + percentFactor);
+    }
+    return Math.round(baseAmount * 1000000) / 1000000;
+}
+
 export async function addConfiguredProductLineToOrder(source, order, product, options = {}) {
     const {
         quantity = 1,
@@ -255,7 +352,13 @@ export async function addConfiguredProductLineToOrder(source, order, product, op
     const beforeSelectedLine = getSelectedOrderLine(source, order);
 
     const resolvedLineUnitPrice = charge && typeof charge === "object"
-        ? Number(charge.ticketUnitPrice || 0)
+        ? Number(
+            charge.displayAmount !== undefined
+                ? convertDisplayPriceToTaxExcluded(source, product, charge.displayAmount)
+                : (charge.ticketUnitPrice !== undefined
+                    ? charge.ticketUnitPrice
+                    : (charge.baseAmount || 0))
+        )
         : Number(lineUnitPrice || 0);
 
     const addResult = await addProductToOrder(source, order, product, {
