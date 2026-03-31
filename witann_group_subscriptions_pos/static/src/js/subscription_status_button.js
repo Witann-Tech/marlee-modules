@@ -65,6 +65,8 @@ import {
 } from "./subscription_card_render";
 import { renderPartnerDetailAvatar } from "./subscription_partner_render";
 import { renderPendingChargeForm as buildPendingChargeFormHtml } from "./subscription_pending_render";
+import { renderParticipantEditForm as buildParticipantEditFormHtml } from "./subscription_participants_render";
+import { renderRenewalForm as buildRenewalFormHtml } from "./subscription_renewal_render";
 import { ControlButtons } from "@point_of_sale/app/screens/product_screen/control_buttons/control_buttons";
 import { PaymentScreen } from "@point_of_sale/app/screens/payment_screen/payment_screen";
 import { _t } from "@web/core/l10n/translation";
@@ -1510,35 +1512,18 @@ patch(ControlButtons.prototype, {
         };
 
         const renderRenewalForm = (item) => {
-            if (
-                formMode !== "renewal"
-                || !renewalForm
-                || Number(renewalForm.subscriptionId || 0) !== Number(item.subscription_id || 0)
-            ) {
-                return "";
-            }
-            return `
-                <div class="wgs-inline-form-card">
-                    <div class="wgs-inline-form-header">
-                        <strong>${this._escapeHtml(_t("Renovar suscripción"))}</strong>
-                        <button type="button" class="wgs-inline-close-btn" data-action="cancel-renewal">${this._escapeHtml(_t("Cancelar"))}</button>
-                    </div>
-                    ${formError ? `<div class="wgs-inline-error">${this._escapeHtml(formError)}</div>` : ""}
-                    ${formNotice ? `<div class="wgs-inline-notice">${this._escapeHtml(formNotice)}</div>` : ""}
-                    ${renewalForm.loading ? `<div class="wgs-inline-loading">${this._escapeHtml(_t("Calculando importe de renovación..."))}</div>` : ""}
-                    <div class="wgs-inline-form-meta">
-                        <div><span>${this._escapeHtml(_t("Suscripción"))}</span><strong>${this._escapeHtml(renewalForm.subscriptionName || "-")}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Titular"))}</span><strong>${this._escapeHtml(renewalForm.holderPartnerName || "-")}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Producto"))}</span><strong>${this._escapeHtml(renewalForm.productName || "-")}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Próxima fecha"))}</span><strong>${this._escapeHtml(this._formatDateDisplay(renewalForm.nextInvoiceDate) || "-")}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Importe a cobrar"))}</span><strong>${this._escapeHtml(this._formatMoney(getChargeDisplayAmount(renewalForm.charge)))}</strong></div>
-                    </div>
-                    <div class="wgs-inline-actions">
-                        <button type="button" class="wgs-primary-action-btn" data-action="save-renewal" ${renewalForm.loading ? "disabled" : ""}>${this._escapeHtml(_t("Agregar al ticket"))}</button>
-                        <button type="button" class="wgs-secondary-action-btn" data-action="cancel-renewal">${this._escapeHtml(_t("Cancelar"))}</button>
-                    </div>
-                </div>
-            `;
+            return buildRenewalFormHtml({
+                item,
+                formMode,
+                renewalForm,
+                formError,
+                formNotice,
+                escapeHtml: (value) => this._escapeHtml(value),
+                formatDateDisplay: (value) => this._formatDateDisplay(value),
+                formatMoney: (value) => this._formatMoney(value),
+                getChargeDisplayAmount,
+                _t,
+            });
         };
 
         const renderPendingChargeForm = (item) => {
@@ -1598,51 +1583,17 @@ patch(ControlButtons.prototype, {
             ) {
                 return "";
             }
-            const holderPartnerId = Number(participantEditForm.holderPartnerId || 0);
             const filteredParticipants = filterParticipantRows(participantEditForm.participantSearch);
-            const participantOptions = Number(participantEditForm.maxParticipantsTotal || 1) > 1
-                ? filteredParticipants
-                    .map((row) => {
-                        const rowId = Number(row.id || 0);
-                        const selected = (participantEditForm.participantIds || []).includes(rowId);
-                        const isOwner = rowId === holderPartnerId;
-                        return `
-                            <label class="wgs-checkbox-option ${isOwner ? "wgs-checkbox-owner" : ""}">
-                                <input type="checkbox" data-field="edit_participant_toggle" value="${this._escapeHtml(String(rowId))}" ${selected ? "checked" : ""} ${isOwner ? "disabled" : ""} />
-                                <span>${this._escapeHtml(row.name || "-")}${isOwner ? ` ${this._escapeHtml(_t("(Titular)"))}` : ""}</span>
-                            </label>
-                        `;
-                    }).join("")
-                : "";
-            return `
-                <div class="wgs-inline-form-card">
-                    <div class="wgs-inline-form-header">
-                        <strong>${this._escapeHtml(_t("Editar participantes"))}</strong>
-                        <button type="button" class="wgs-inline-close-btn" data-action="cancel-participants">${this._escapeHtml(_t("Cancelar"))}</button>
-                    </div>
-                    ${formError ? `<div class="wgs-inline-error">${this._escapeHtml(formError)}</div>` : ""}
-                    ${formNotice ? `<div class="wgs-inline-notice">${this._escapeHtml(formNotice)}</div>` : ""}
-                    <div class="wgs-inline-form-meta">
-                        <div><span>${this._escapeHtml(_t("Suscripción"))}</span><strong>${this._escapeHtml(participantEditForm.subscriptionName || "-")}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Titular"))}</span><strong>${this._escapeHtml(participantEditForm.holderPartnerName || "-")}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Cupo total"))}</span><strong>${this._escapeHtml(String(participantEditForm.maxParticipantsTotal || 1))}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Seleccionados"))}</span><strong>${this._escapeHtml(String((participantEditForm.participantIds || []).length || 0))}</strong></div>
-                    </div>
-                    ${Number(participantEditForm.maxParticipantsTotal || 1) > 1 ? `
-                        <div class="wgs-inline-participants">
-                            <span class="wgs-inline-section-title">${this._escapeHtml(_t("Participantes permitidos"))}</span>
-                            <input type="text" class="wgs-inline-search" data-field="edit_participant_search" placeholder="${this._escapeHtml(_t("Buscar participante"))}" value="${this._escapeHtml(participantEditForm.participantSearch || "")}" />
-                            <div class="wgs-inline-participant-list">${participantOptions}</div>
-                        </div>
-                    ` : `
-                        <div class="wgs-inline-notice">${this._escapeHtml(_t("Este paquete solo permite al titular. No hay participantes adicionales configurables."))}</div>
-                    `}
-                    <div class="wgs-inline-actions">
-                        <button type="button" class="wgs-primary-action-btn" data-action="save-participants">${this._escapeHtml(_t("Guardar participantes"))}</button>
-                        <button type="button" class="wgs-secondary-action-btn" data-action="cancel-participants">${this._escapeHtml(_t("Cancelar"))}</button>
-                    </div>
-                </div>
-            `;
+            return buildParticipantEditFormHtml({
+                item,
+                formMode,
+                participantEditForm,
+                filteredParticipants,
+                formError,
+                formNotice,
+                escapeHtml: (value) => this._escapeHtml(value),
+                _t,
+            });
         };
 
         const renderUpsaleForm = (item) => {
