@@ -44,6 +44,11 @@ import {
     showSimpleInfoModal,
     stripDataUrlPrefix,
 } from "./subscription_modal_helpers";
+import {
+    downloadDirectoryAsXls,
+    renderDirectoryRows,
+    renderDirectorySummary,
+} from "./subscription_directory_render";
 import { ControlButtons } from "@point_of_sale/app/screens/product_screen/control_buttons/control_buttons";
 import { PaymentScreen } from "@point_of_sale/app/screens/payment_screen/payment_screen";
 import { _t } from "@web/core/l10n/translation";
@@ -2059,18 +2064,14 @@ patch(ControlButtons.prototype, {
                 { total: 0, birthday: 0 }
             );
 
-            summary.innerHTML = `
-                <span class="wgs-summary-pill">${_t("Total")}: ${counts.total || 0}</span>
-                <span class="wgs-summary-pill wgs-summary-positive">${_t("En progreso")}: ${counts.progress || 0}</span>
-                <span class="wgs-summary-pill wgs-summary-warning">${_t("Por renovar")}: ${counts.renew || 0}</span>
-                <span class="wgs-summary-pill wgs-summary-warning">${_t("Pausadas")}: ${counts.paused || 0}</span>
-                <span class="wgs-summary-pill wgs-summary-negative">${_t("Canceladas")}: ${counts.cancel || 0}</span>
-                <span class="wgs-summary-pill wgs-summary-none">${_t("Sin suscripcion")}: ${counts.none || 0}</span>
-                <span class="wgs-summary-pill">${_t("Con cumpleanos")}: ${counts.birthday || 0}</span>
-                <span class="wgs-summary-pill">${_t("Mostrando")}: ${filtered.length}</span>
-                ${directoryLoading ? `<span class="wgs-summary-pill">${_t("Cargando directorio...")}</span>` : ""}
-                ${directoryLoadError ? `<span class="wgs-summary-pill wgs-summary-negative">${this._escapeHtml(directoryLoadError)}</span>` : ""}
-            `;
+            summary.innerHTML = renderDirectorySummary({
+                counts,
+                filteredCount: filtered.length,
+                directoryLoading,
+                directoryLoadError,
+                _t,
+                escapeHtml: (value) => this._escapeHtml(value),
+            });
 
             if (!filtered.length) {
                 const emptyMessage = directoryLoading && !rows.length
@@ -2112,21 +2113,15 @@ patch(ControlButtons.prototype, {
                 newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
             }
 
-            tbody.innerHTML = filtered.map((row) => {
-                const rowClass = row.id === selectedPartnerId ? "wgs-selected-row" : "";
-                const stateClass = this._getStateClass(row.state);
-                return `
-                    <tr class="${rowClass}" data-partner-id="${this._escapeHtml(String(row.id))}">
-                        <td><img class="wgs-partner-avatar" src="${this._escapeHtml(row.image_url || "")}" alt="${this._escapeHtml(row.name || "")}" loading="lazy" /></td>
-                        <td class="wgs-cell-name">${this._escapeHtml(row.name || "-")}</td>
-                        <td><span class="wgs-state-badge ${stateClass}">${this._escapeHtml(row.state_label || _t("Sin suscripcion"))}</span></td>
-                        <td>${this._escapeHtml(row.package_label || "-")}</td>
-                        <td>${this._escapeHtml(row.plan_name || "-")}</td>
-                        <td>${this._escapeHtml(this._formatDateDisplay(row.valid_until) || "-")}</td>
-                        <td>${this._escapeHtml(this._formatDateTimeDisplay(row.last_access) || "-")}</td>
-                    </tr>
-                `;
-            }).join("");
+            tbody.innerHTML = renderDirectoryRows({
+                rows: filtered,
+                selectedPartnerId,
+                getStateClass: (state) => this._getStateClass(state),
+                escapeHtml: (value) => this._escapeHtml(value),
+                formatDateDisplay: (value) => this._formatDateDisplay(value),
+                formatDateTimeDisplay: (value) => this._formatDateTimeDisplay(value),
+                _t,
+            });
 
             loadDetail(selectedPartnerId);
         };
@@ -3193,68 +3188,13 @@ patch(ControlButtons.prototype, {
     },
 
     _downloadDirectoryAsXls(rows) {
-        const dataRows = Array.isArray(rows) ? rows : [];
-        const filenameDate = new Date().toISOString().slice(0, 10);
-        const filename = `suscripciones_pos_${filenameDate}.xls`;
-
-        const tableRows = dataRows.map((row) => `
-            <tr>
-                <td>${this._escapeHtml(row.name || "-")}</td>
-                <td>${this._escapeHtml(row.state_label || _t("Sin suscripcion"))}</td>
-                <td>${this._escapeHtml(row.package_label || "-")}</td>
-                <td>${this._escapeHtml(row.plan_name || "-")}</td>
-                <td>${this._escapeHtml(this._formatDateDisplay(row.start_date) || "-")}</td>
-                <td>${this._escapeHtml(this._formatDateDisplay(row.valid_until) || "-")}</td>
-                <td>${this._escapeHtml(row.gender || "-")}</td>
-                <td>${this._escapeHtml(this._formatDateDisplay(row.birthday) || "-")}</td>
-                <td>${this._escapeHtml(this._formatDateTimeDisplay(row.last_access) || "-")}</td>
-                <td>${this._escapeHtml(row.phone || "-")}</td>
-                <td>${this._escapeHtml(row.email || "-")}</td>
-            </tr>
-        `).join("");
-
-        const html = `
-            <html>
-                <head>
-                    <meta charset="UTF-8" />
-                    <style>
-                        table { border-collapse: collapse; font-family: Arial, sans-serif; font-size: 12px; }
-                        th, td { border: 1px solid #999; padding: 6px; text-align: left; }
-                        th { background: #e9eef5; }
-                    </style>
-                </head>
-                <body>
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>${this._escapeHtml(_t("Cliente"))}</th>
-                                <th>${this._escapeHtml(_t("Estado"))}</th>
-                                <th>${this._escapeHtml(_t("Paquete"))}</th>
-                                <th>${this._escapeHtml(_t("Plan"))}</th>
-                                <th>${this._escapeHtml(_t("Inicio"))}</th>
-                                <th>${this._escapeHtml(_t("Vencimiento"))}</th>
-                                <th>${this._escapeHtml(_t("Genero"))}</th>
-                                <th>${this._escapeHtml(_t("Cumpleanos"))}</th>
-                                <th>${this._escapeHtml(_t("Ultimo acceso"))}</th>
-                                <th>${this._escapeHtml(_t("Telefono"))}</th>
-                                <th>${this._escapeHtml(_t("Email"))}</th>
-                            </tr>
-                        </thead>
-                        <tbody>${tableRows}</tbody>
-                    </table>
-                </body>
-            </html>
-        `;
-
-        const blob = new Blob([`\uFEFF${html}`], { type: "application/vnd.ms-excel;charset=utf-8;" });
-        const url = URL.createObjectURL(blob);
-        const anchor = document.createElement("a");
-        anchor.href = url;
-        anchor.download = filename;
-        document.body.appendChild(anchor);
-        anchor.click();
-        anchor.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 500);
+        downloadDirectoryAsXls({
+            rows,
+            escapeHtml: (value) => this._escapeHtml(value),
+            formatDateDisplay: (value) => this._formatDateDisplay(value),
+            formatDateTimeDisplay: (value) => this._formatDateTimeDisplay(value),
+            _t,
+        });
     },
 
     _readFileAsDataUrl(file) {
