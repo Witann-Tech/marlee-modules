@@ -39,6 +39,11 @@ import {
     formatDateTimeDisplay,
     formatMoney,
 } from "./subscription_format_utils";
+import {
+    readFileAsDataUrl,
+    showSimpleInfoModal,
+    stripDataUrlPrefix,
+} from "./subscription_modal_helpers";
 import { ControlButtons } from "@point_of_sale/app/screens/product_screen/control_buttons/control_buttons";
 import { PaymentScreen } from "@point_of_sale/app/screens/payment_screen/payment_screen";
 import { _t } from "@web/core/l10n/translation";
@@ -3253,49 +3258,21 @@ patch(ControlButtons.prototype, {
     },
 
     _readFileAsDataUrl(file) {
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(String(reader.result || ""));
-            reader.onerror = () => reject(reader.error || new Error("file_read_error"));
-            reader.readAsDataURL(file);
-        });
+        return readFileAsDataUrl(file);
     },
 
     _stripDataUrlPrefix(value) {
-        return String(value || "").replace(/^data:image\/[^;]+;base64,/i, "");
+        return stripDataUrlPrefix(value);
     },
 
     _showSimpleInfoModal(title, message) {
-        const previous = document.getElementById(MODAL_ID);
-        if (previous) {
-            previous.remove();
-        }
-
-        const overlay = document.createElement("div");
-        overlay.id = MODAL_ID;
-        overlay.className = "wgs-status-modal-overlay";
-
-        const modal = document.createElement("div");
-        modal.className = "wgs-status-modal";
-
-        modal.innerHTML = `
-            <div class="wgs-status-modal-header"><h3>${this._escapeHtml(title)}</h3></div>
-            <div class="wgs-status-modal-body"><p class="wgs-simple-message">${this._escapeHtml(message)}</p></div>
-            <div class="wgs-status-modal-footer">
-                <button type="button" class="wgs-status-close-btn">${this._escapeHtml(_t("Cerrar"))}</button>
-            </div>
-        `;
-
-        const closeModal = () => overlay.remove();
-        modal.querySelector(".wgs-status-close-btn").addEventListener("click", closeModal);
-        overlay.addEventListener("click", (event) => {
-            if (event.target === overlay) {
-                closeModal();
-            }
+        showSimpleInfoModal({
+            modalId: MODAL_ID,
+            title,
+            message,
+            closeLabel: _t("Cerrar"),
+            escapeHtml: (value) => this._escapeHtml(value),
         });
-
-        overlay.appendChild(modal);
-        document.body.appendChild(overlay);
     },
 
     _escapeHtml(value) {
