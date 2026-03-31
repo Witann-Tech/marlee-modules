@@ -58,6 +58,7 @@ class SaleOrder(models.Model):
         'x_studio_genero',
     )
     _PARTNER_BIRTHDAY_FIELD_CANDIDATES = (
+        'x_studio_fecha_de_nacimiento',
         'birthday',
         'birthdate_date',
         'date_of_birth',
