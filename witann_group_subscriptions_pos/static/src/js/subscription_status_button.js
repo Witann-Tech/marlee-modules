@@ -49,6 +49,11 @@ import {
     renderDirectoryRows,
     renderDirectorySummary,
 } from "./subscription_directory_render";
+import {
+    countDirectoryRows,
+    filterDirectoryRows,
+    sortDirectoryRows,
+} from "./subscription_directory_state";
 import { ControlButtons } from "@point_of_sale/app/screens/product_screen/control_buttons/control_buttons";
 import { PaymentScreen } from "@point_of_sale/app/screens/payment_screen/payment_screen";
 import { _t } from "@web/core/l10n/translation";
@@ -1966,103 +1971,28 @@ patch(ControlButtons.prototype, {
         const render = () => {
             listFormContainer.innerHTML = renderNewPartnerForm();
             syncPartnerCameraPreview();
-            const query = (searchInput.value || "").trim().toLowerCase();
+            const query = searchInput.value || "";
             const stateFilter = stateSelect.value;
             const birthdayFilter = birthdaySelect.value;
             const sortMode = sortSelect.value;
 
-            let filtered = rows.filter((row) => {
-                if (stateFilter !== "all" && (row.state || "none") !== stateFilter) {
-                    return false;
-                }
-                if (!this._matchesBirthdayFilter(row.birthday, birthdayFilter)) {
-                    return false;
-                }
-                if (!query) {
-                    return true;
-                }
-                const haystack = `${row.name || ""} ${row.phone || ""} ${row.email || ""} ${row.package_label || ""} ${row.plan_name || ""} ${row.state_label || ""}`.toLowerCase();
-                return haystack.includes(query);
+            let filtered = filterDirectoryRows(rows, {
+                query,
+                stateFilter,
+                birthdayFilter,
+                matchesBirthdayFilter: (birthdayValue, filterMode) =>
+                    this._matchesBirthdayFilter(birthdayValue, filterMode),
             });
-
-            filtered = filtered.sort((a, b) => {
-                if (sortMode === "name_desc") {
-                    return (b.name || "").localeCompare(a.name || "", "es");
-                }
-                if (sortMode === "state") {
-                    const diff = this._getStateRank(a.state) - this._getStateRank(b.state);
-                    if (diff !== 0) {
-                        return diff;
-                    }
-                    return (a.name || "").localeCompare(b.name || "", "es");
-                }
-                if (sortMode === "valid_until_asc") {
-                    const av = this._toTimestamp(a.valid_until);
-                    const bv = this._toTimestamp(b.valid_until);
-                    if (av === null && bv === null) {
-                        return (a.name || "").localeCompare(b.name || "", "es");
-                    }
-                    if (av === null) {
-                        return 1;
-                    }
-                    if (bv === null) {
-                        return -1;
-                    }
-                    return av - bv;
-                }
-                if (sortMode === "valid_until_desc") {
-                    const av = this._toTimestamp(a.valid_until);
-                    const bv = this._toTimestamp(b.valid_until);
-                    if (av === null && bv === null) {
-                        return (a.name || "").localeCompare(b.name || "", "es");
-                    }
-                    if (av === null) {
-                        return 1;
-                    }
-                    if (bv === null) {
-                        return -1;
-                    }
-                    return bv - av;
-                }
-                if (sortMode === "birthday_asc") {
-                    const av = this._birthdaySortRank(a.birthday);
-                    const bv = this._birthdaySortRank(b.birthday);
-                    if (av !== bv) {
-                        return av - bv;
-                    }
-                    return (a.name || "").localeCompare(b.name || "", "es");
-                }
-                if (sortMode === "last_access_desc") {
-                    const av = this._toTimestamp(a.last_access);
-                    const bv = this._toTimestamp(b.last_access);
-                    if (av === null && bv === null) {
-                        return (a.name || "").localeCompare(b.name || "", "es");
-                    }
-                    if (av === null) {
-                        return 1;
-                    }
-                    if (bv === null) {
-                        return -1;
-                    }
-                    return bv - av;
-                }
-                return (a.name || "").localeCompare(b.name || "", "es");
+            filtered = sortDirectoryRows(filtered, {
+                sortMode,
+                getStateRank: (state) => this._getStateRank(state),
+                toTimestamp: (value) => this._toTimestamp(value),
+                getBirthdaySortRank: (value) => this._birthdaySortRank(value),
             });
 
             filteredSnapshot = filtered;
 
-            const counts = rows.reduce(
-                (acc, row) => {
-                    const state = row.state || "none";
-                    acc.total += 1;
-                    acc[state] = (acc[state] || 0) + 1;
-                    if (row.birthday) {
-                        acc.birthday += 1;
-                    }
-                    return acc;
-                },
-                { total: 0, birthday: 0 }
-            );
+            const counts = countDirectoryRows(rows);
 
             summary.innerHTML = renderDirectorySummary({
                 counts,
