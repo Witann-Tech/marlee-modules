@@ -95,6 +95,11 @@ import {
     openNewPartnerForm as openNewPartnerFormState,
     openPartnerPhotoForm as openPartnerPhotoFormState,
 } from "./subscription_partner_handlers";
+import {
+    buildSubscriptionInlineActionHandlers,
+    handleSubscriptionInlineFieldChange,
+    handleSubscriptionInlineFieldInput,
+} from "./subscription_inline_form_handlers";
 import { ControlButtons } from "@point_of_sale/app/screens/product_screen/control_buttons/control_buttons";
 import { PaymentScreen } from "@point_of_sale/app/screens/payment_screen/payment_screen";
 import { _t } from "@web/core/l10n/translation";
@@ -1971,582 +1976,35 @@ patch(ControlButtons.prototype, {
                 detailCache,
                 _t,
             }),
-            "open-renewal": async ({ actionButton }) => {
-                await openRenewalForm(getCurrentSubscriptionItem(actionButton));
-            },
-            "open-upsale": async ({ actionButton }) => {
-                await openUpsaleForm(getCurrentSubscriptionItem(actionButton));
-            },
-            "open-participants": async ({ actionButton }) => {
-                await openParticipantEditForm(getCurrentSubscriptionItem(actionButton));
-            },
-            "resync-access": async ({ actionButton }) => {
-                const subscriptionId = Number(actionButton.dataset.subscriptionId || 0);
-                if (!subscriptionId) {
-                    return;
-                }
-                clearFeedback();
-                try {
-                    const result = await this._resyncSubscriptionAccess(subscriptionId);
-                    const summary = result && result.access_summary ? result.access_summary : {};
-                    formNotice = _t("Acceso resincronizado. Personas activas: %s. Personas sin registro: %s.").replace("%s", String(summary.active_count || 0)).replace("%s", String(summary.missing_count || 0));
-                    if (currentDetail && currentDetail.partner_id) {
-                        detailCache.delete(Number(currentDetail.partner_id || 0));
-                    }
-                    await loadDetail(selectedPartnerId, { force: true });
-                } catch (error) {
-                    console.error("Error al resincronizar acceso desde POS", error);
-                    formError = (error && error.message) ? error.message : _t("No se pudo resincronizar el acceso de esta suscripción.");
-                    renderDetail(currentDetail);
-                }
-            },
-            "open-pending": async ({ actionButton }) => {
-                await openPendingChargeForm(getCurrentSubscriptionItem(actionButton));
-            },
-            "open-cancellation-refund": async ({ actionButton }) => {
-                await openCancellationRefundForm(getCurrentSubscriptionItem(actionButton));
-            },
-            "cancel-renewal": async () => {
-                resetInlineForms();
-                renderDetail(currentDetail);
-            },
-            "cancel-upsale": async () => {
-                resetInlineForms();
-                renderDetail(currentDetail);
-            },
-            "cancel-pending": async () => {
-                resetInlineForms();
-                renderDetail(currentDetail);
-            },
-            "cancel-cancellation-refund": async () => {
-                resetInlineForms();
-                renderDetail(currentDetail);
-            },
-            "cancel-participants": async () => {
-                resetInlineForms();
-                renderDetail(currentDetail);
-            },
-            "save-new": async () => {
-                formError = "";
-                formNotice = "";
-                const selectedPlan = getSelectedPlan();
-                if (!selectedPartnerId) {
-                    formError = _t("Selecciona un cliente para agregar la suscripcion al ticket.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-                if (!newSubscriptionForm.productId) {
-                    formError = _t("Selecciona un producto de suscripcion.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-                if (!selectedPlan) {
-                    formError = _t("Selecciona un plan recurrente.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-                const existingSubscriptionPartnerIds = getSubscriptionPartnerIdsFromOrder(getCurrentOrder(this));
-                if (existingSubscriptionPartnerIds.length && !existingSubscriptionPartnerIds.includes(selectedPartnerId)) {
-                    formError = _t("La orden actual ya contiene suscripciones configuradas para otro cliente. Usa un solo titular por ticket.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-                const participantIds = [...new Set((newSubscriptionForm.participantIds || []).map((value) => Number(value || 0)).filter((value) => value > 0))];
-                if (!participantIds.includes(selectedPartnerId)) {
-                    participantIds.unshift(selectedPartnerId);
-                }
-                const posCharge = buildChargeBreakdown(this, null, newSubscriptionForm.charge || {});
-                if (participantIds.length > Number(newSubscriptionForm.maxParticipantsTotal || 1)) {
-                    formError = _t("Estas excediendo el cupo maximo de participantes para este paquete.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-                const automaticEndDate = getPlanPeriodEndDate(
-                    newSubscriptionForm.startDate,
-                    selectedPlan.interval_value,
-                    selectedPlan.interval_unit
-                );
-                if (!automaticEndDate) {
-                    formError = _t("No se pudo calcular la fecha de fin automática para el plan seleccionado.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-
-                const order = getCurrentOrder(this);
-                if (!order) {
-                    formError = _t("No hay una orden POS activa para agregar la suscripcion.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-                const partnerOnOrderId = getPartnerIdFromOrder(order);
-                if (partnerOnOrderId !== selectedPartnerId) {
-                    const partnerRecord = findPartnerInPos(this, selectedPartnerId);
-                    if (partnerRecord && setPartnerOnCurrentOrder(this, partnerRecord)) {
-                        // Partner aligned locally in POS.
-                    } else if (partnerOnOrderId) {
-                        formError = _t("La orden actual ya tiene otro cliente y no se pudo reemplazar desde esta sesion. Usa un solo cliente por ticket.");
-                        renderDetail(currentDetail);
-                        return;
-                    } else {
-                        formNotice = _t("El cliente no esta cargado en la sesion local del POS. La suscripcion se vinculara al titular al confirmar el pago.");
-                    }
-                }
-
-                const productRecord = findProductInPos(this, newSubscriptionForm.productId);
-                if (!productRecord) {
-                    formError = _t("El producto seleccionado no está cargado en la sesión actual del POS.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-
-                let targetLine = null;
-                try {
-                    const lineResult = await addConfiguredProductLineToOrder(this, order, productRecord, {
-                        quantity: 1,
-                        merge: false,
-                        charge: posCharge,
-                        metadata: {
-                            flow: "new",
-                            partner_id: selectedPartnerId,
-                            participant_ids: participantIds,
-                            plan_id: Number(selectedPlan.plan_id || 0) || false,
-                            pricing_id: Number(selectedPlan.pricing_id || 0) || false,
-                            start_date: newSubscriptionForm.startDate || formatTodayISO(),
-                            end_date: automaticEndDate || false,
-                            product_id: Number(newSubscriptionForm.productId || 0) || false,
-                            product_name: newSubscriptionForm.productName || false,
-                        },
-                    });
-                    targetLine = lineResult && lineResult.line ? lineResult.line : null;
-                    if (!targetLine && lineResult && lineResult.reason === "not_added") {
-                        formError = _t("No se pudo agregar el producto al ticket actual.");
-                        renderDetail(currentDetail);
-                        return;
-                    }
-                } catch (error) {
-                    console.error("Error al agregar producto de suscripcion al ticket POS", error);
-                    formError = _t("No se pudo agregar el producto al ticket actual.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-                if (!targetLine) {
-                    formError = _t("No se pudo identificar la linea agregada al ticket.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-
-                formMode = null;
-                formError = "";
-                formNotice = _t("Suscripcion agregada al ticket. Puedes continuar al cobro normal del POS.");
-                renderDetail(currentDetail);
-            },
-            "save-pending": async () => {
-                formError = "";
-                formNotice = "";
-                if (!pendingChargeForm || !pendingChargeForm.subscriptionId || !pendingChargeForm.pendingMoveId || !pendingChargeForm.productId) {
-                    formError = _t("El documento pendiente seleccionado no tiene datos suficientes para agregarse al ticket.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-
-                const order = getCurrentOrder(this);
-                if (!order) {
-                    formError = _t("No hay una orden POS activa para agregar el cobro pendiente.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-
-                const holderPartnerId = Number(pendingChargeForm.holderPartnerId || 0) || false;
-                const partnerOnOrderId = getPartnerIdFromOrder(order);
-                if (partnerOnOrderId !== holderPartnerId) {
-                    const partnerRecord = findPartnerInPos(this, holderPartnerId);
-                    if (partnerRecord && setPartnerOnCurrentOrder(this, partnerRecord)) {
-                        // Partner aligned locally in POS.
-                    } else if (partnerOnOrderId) {
-                        formError = _t("La orden actual ya tiene otro cliente y no se pudo reemplazar desde esta sesión. Usa un solo cliente por ticket.");
-                        renderDetail(currentDetail);
-                        return;
-                    } else {
-                        formNotice = _t("El titular no está cargado en la sesión local del POS. El cobro pendiente se vinculará al confirmar el pago.");
-                    }
-                }
-
-                const productRecord = findProductInPos(this, pendingChargeForm.productId);
-                if (!productRecord) {
-                    formError = _t("El producto recurrente de esta suscripción no está cargado en la sesión actual del POS.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-
-                let targetLine = null;
-                try {
-                    const lineResult = await addConfiguredProductLineToOrder(this, order, productRecord, {
-                        quantity: 1,
-                        merge: false,
-                        charge: pendingChargeForm.charge,
-                        metadata: {
-                            flow: "pending_charge",
-                            partner_id: holderPartnerId || false,
-                            participant_ids: [],
-                            plan_id: false,
-                            pricing_id: false,
-                            start_date: false,
-                            end_date: false,
-                            product_id: Number(pendingChargeForm.productId || 0) || false,
-                            product_name: pendingChargeForm.productName || false,
-                            source_subscription_id: Number(pendingChargeForm.subscriptionId || 0) || false,
-                            pending_move_id: Number(pendingChargeForm.pendingMoveId || 0) || false,
-                        },
-                    });
-                    targetLine = lineResult && lineResult.line ? lineResult.line : null;
-                    if (!targetLine && lineResult && lineResult.reason === "not_added") {
-                        formError = _t("No se pudo agregar el cobro pendiente al ticket actual.");
-                        renderDetail(currentDetail);
-                        return;
-                    }
-                } catch (error) {
-                    console.error("Error al agregar cobro pendiente al ticket POS", error);
-                    formError = _t("No se pudo agregar el cobro pendiente al ticket actual.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-
-                if (!targetLine) {
-                    formError = _t("No se pudo identificar la línea de cobro pendiente agregada al ticket.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-
-                formMode = null;
-                formError = "";
-                formNotice = _t("Cobro pendiente agregado al ticket. Puedes continuar al cobro normal del POS.");
-                renewalForm = null;
-                upsaleForm = null;
-                pendingChargeForm = null;
-                participantEditForm = null;
-                renderDetail(currentDetail);
-            },
-            "save-cancellation-refund": async () => {
-                formError = "";
-                formNotice = "";
-                if (!cancellationRefundForm || !cancellationRefundForm.subscriptionId || !cancellationRefundForm.originPosLineId || !cancellationRefundForm.productId) {
-                    formError = _t("No se encontró un cobro POS exacto para devolver esta suscripción.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-
-                const order = getCurrentOrder(this);
-                if (!order) {
-                    formError = _t("No hay una orden POS activa para agregar la devolución.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-
-                const holderPartnerId = Number(cancellationRefundForm.holderPartnerId || 0) || false;
-                const partnerOnOrderId = getPartnerIdFromOrder(order);
-                if (partnerOnOrderId !== holderPartnerId) {
-                    const partnerRecord = findPartnerInPos(this, holderPartnerId);
-                    if (partnerRecord && setPartnerOnCurrentOrder(this, partnerRecord)) {
-                        // Partner aligned locally in POS.
-                    } else if (partnerOnOrderId) {
-                        formError = _t("La orden actual ya tiene otro cliente y no se pudo reemplazar desde esta sesión. Usa un solo cliente por ticket.");
-                        renderDetail(currentDetail);
-                        return;
-                    } else {
-                        formNotice = _t("El titular no está cargado en la sesión local del POS. La devolución se vinculará al confirmar el pago.");
-                    }
-                }
-
-                const productRecord = findProductInPos(this, cancellationRefundForm.productId);
-                if (!productRecord) {
-                    formError = _t("El producto original de esta suscripción no está cargado en la sesión actual del POS.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-
-                let targetLine = null;
-                try {
-                    const lineResult = await addConfiguredProductLineToOrder(this, order, productRecord, {
-                        quantity: -Math.max(1, Number(cancellationRefundForm.qty || 1)),
-                        merge: false,
-                        lineUnitPrice: Number(cancellationRefundForm.priceUnit || 0),
-                        discount: Number(cancellationRefundForm.discount || 0),
-                        metadata: {
-                            flow: "cancellation_refund",
-                            partner_id: holderPartnerId || false,
-                            participant_ids: [],
-                            plan_id: false,
-                            pricing_id: false,
-                            start_date: false,
-                            end_date: false,
-                            product_id: Number(cancellationRefundForm.productId || 0) || false,
-                            product_name: cancellationRefundForm.productName || false,
-                            source_subscription_id: Number(cancellationRefundForm.subscriptionId || 0) || false,
-                            refund_origin_line_id: Number(cancellationRefundForm.originPosLineId || 0) || false,
-                        },
-                    });
-                    targetLine = lineResult && lineResult.line ? lineResult.line : null;
-                    if (!targetLine && lineResult && lineResult.reason === "not_added") {
-                        formError = _t("No se pudo agregar la devolución al ticket actual.");
-                        renderDetail(currentDetail);
-                        return;
-                    }
-                } catch (error) {
-                    console.error("Error al agregar devolución por cancelación al ticket POS", error);
-                    formError = _t("No se pudo agregar la devolución al ticket actual.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-
-                if (!targetLine) {
-                    formError = _t("No se pudo identificar la línea de devolución agregada al ticket.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-
-                formMode = null;
-                formError = "";
-                formNotice = _t("Devolución agregada al ticket. Al cobrarla, la suscripción se cancelará.");
-                renewalForm = null;
-                upsaleForm = null;
-                pendingChargeForm = null;
-                cancellationRefundForm = null;
-                participantEditForm = null;
-                renderDetail(currentDetail);
-            },
-            "save-participants": async () => {
-                formError = "";
-                formNotice = "";
-                if (!participantEditForm || !participantEditForm.subscriptionId) {
-                    formError = _t("La suscripción seleccionada no tiene datos suficientes para editar participantes.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-                const participantIds = [...new Set((participantEditForm.participantIds || []).map((value) => Number(value || 0)).filter((value) => value > 0))];
-                const holderPartnerId = Number(participantEditForm.holderPartnerId || 0) || false;
-                if (holderPartnerId && !participantIds.includes(holderPartnerId)) {
-                    participantIds.unshift(holderPartnerId);
-                }
-                if (participantIds.length > Number(participantEditForm.maxParticipantsTotal || 1)) {
-                    formError = _t("Estas excediendo el cupo máximo de participantes para este paquete.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-                try {
-                    const result = await this._saveSubscriptionParticipants(
-                        participantEditForm.subscriptionId,
-                        participantIds
-                    );
-                    formMode = null;
-                    participantEditForm = null;
-                    renewalForm = null;
-                    upsaleForm = null;
-                    pendingChargeForm = null;
-                    formNotice = _t("Participantes actualizados correctamente.");
-                    if (currentDetail && Array.isArray(currentDetail.items)) {
-                        detailCache.delete(Number(currentDetail.partner_id || 0));
-                    }
-                    await loadDetail(selectedPartnerId, { force: true });
-                    if (result && result.ok) {
-                        return;
-                    }
-                } catch (error) {
-                    console.error("Error al actualizar participantes de suscripción POS", error);
-                    formError = (error && error.message) ? error.message : _t("No se pudieron guardar los participantes de la suscripción.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-            },
-            "save-upsale": async () => {
-                formError = "";
-                formNotice = "";
-                if (!upsaleForm || !upsaleForm.subscriptionId || !upsaleForm.productId) {
-                    formError = _t("Selecciona el paquete destino para agregar el upsale al ticket.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-                const selectedUpsalePlan = getSelectedUpsalePlan();
-                if (!selectedUpsalePlan) {
-                    formError = _t("Selecciona el plan destino para el upsale.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-                const participantIds = [...new Set((upsaleForm.participantIds || []).map((value) => Number(value || 0)).filter((value) => value > 0))];
-                const holderPartnerId = Number(upsaleForm.holderPartnerId || 0) || false;
-                if (holderPartnerId && !participantIds.includes(holderPartnerId)) {
-                    participantIds.unshift(holderPartnerId);
-                }
-                if (participantIds.length > Number(upsaleForm.maxParticipantsTotal || 1)) {
-                    formError = _t("Estas excediendo el cupo maximo permitido para el paquete destino.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-
-                const order = getCurrentOrder(this);
-                if (!order) {
-                    formError = _t("No hay una orden POS activa para agregar el upsale.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-                const existingSubscriptionPartnerIds = getSubscriptionPartnerIdsFromOrder(order);
-                if (existingSubscriptionPartnerIds.length && !existingSubscriptionPartnerIds.includes(holderPartnerId)) {
-                    formError = _t("La orden actual ya contiene suscripciones configuradas para otro cliente. Usa un solo titular por ticket.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-                const partnerOnOrderId = getPartnerIdFromOrder(order);
-                if (partnerOnOrderId !== holderPartnerId) {
-                    const partnerRecord = findPartnerInPos(this, holderPartnerId);
-                    if (partnerRecord && setPartnerOnCurrentOrder(this, partnerRecord)) {
-                        // Partner aligned locally in POS.
-                    } else if (partnerOnOrderId) {
-                        formError = _t("La orden actual ya tiene otro cliente y no se pudo reemplazar desde esta sesión. Usa un solo cliente por ticket.");
-                        renderDetail(currentDetail);
-                        return;
-                    } else {
-                        formNotice = _t("El titular no está cargado en la sesión local del POS. El upsale se vinculará al confirmar el pago.");
-                    }
-                }
-
-                const productRecord = findProductInPos(this, upsaleForm.productId);
-                if (!productRecord) {
-                    formError = _t("El producto destino no está cargado en la sesión actual del POS.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-
-                let targetLine = null;
-                try {
-                    const lineResult = await addConfiguredProductLineToOrder(this, order, productRecord, {
-                        quantity: 1,
-                        merge: false,
-                        charge: upsaleForm.charge,
-                        metadata: {
-                            flow: "upsale",
-                            partner_id: holderPartnerId || false,
-                            participant_ids: participantIds,
-                            plan_id: Number(selectedUpsalePlan.plan_id || 0) || false,
-                            pricing_id: Number(selectedUpsalePlan.pricing_id || 0) || false,
-                            start_date: formatTodayISO(),
-                            end_date: false,
-                            product_id: Number(upsaleForm.productId || 0) || false,
-                            product_name: upsaleForm.productName || false,
-                            source_subscription_id: Number(upsaleForm.subscriptionId || 0) || false,
-                        },
-                    });
-                    targetLine = lineResult && lineResult.line ? lineResult.line : null;
-                    if (!targetLine && lineResult && lineResult.reason === "not_added") {
-                        formError = _t("No se pudo agregar el upsale al ticket actual.");
-                        renderDetail(currentDetail);
-                        return;
-                    }
-                } catch (error) {
-                    console.error("Error al agregar upsale al ticket POS", error);
-                    formError = _t("No se pudo agregar el upsale al ticket actual.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-
-                if (!targetLine) {
-                    formError = _t("No se pudo identificar la línea de upsale agregada al ticket.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-
-                formMode = null;
-                formError = "";
-                formNotice = _t("Upsale agregado al ticket. Puedes continuar al cobro normal del POS.");
-                renewalForm = null;
-                upsaleForm = null;
-                pendingChargeForm = null;
-                participantEditForm = null;
-                renderDetail(currentDetail);
-            },
-            "save-renewal": async () => {
-                formError = "";
-                formNotice = "";
-                if (!renewalForm || !renewalForm.subscriptionId || !renewalForm.productId) {
-                    formError = _t("La renovación seleccionada no tiene datos suficientes para agregarse al ticket.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-
-                const order = getCurrentOrder(this);
-                if (!order) {
-                    formError = _t("No hay una orden POS activa para agregar la renovación.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-
-                const holderPartnerId = Number(renewalForm.holderPartnerId || 0) || false;
-                const partnerOnOrderId = getPartnerIdFromOrder(order);
-                if (partnerOnOrderId !== holderPartnerId) {
-                    const partnerRecord = findPartnerInPos(this, holderPartnerId);
-                    if (partnerRecord && setPartnerOnCurrentOrder(this, partnerRecord)) {
-                        // Partner aligned locally in POS.
-                    } else if (partnerOnOrderId) {
-                        formError = _t("La orden actual ya tiene otro cliente y no se pudo reemplazar desde esta sesión. Usa un solo cliente por ticket.");
-                        renderDetail(currentDetail);
-                        return;
-                    } else {
-                        formNotice = _t("El titular no está cargado en la sesión local del POS. La renovación se vinculará al confirmar el pago.");
-                    }
-                }
-
-                const productRecord = findProductInPos(this, renewalForm.productId);
-                if (!productRecord) {
-                    formError = _t("El producto recurrente de esta suscripción no está cargado en la sesión actual del POS.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-
-                let targetLine = null;
-                try {
-                    const lineResult = await addConfiguredProductLineToOrder(this, order, productRecord, {
-                        quantity: 1,
-                        merge: false,
-                        charge: renewalForm.charge,
-                        metadata: {
-                            flow: "renewal",
-                            partner_id: holderPartnerId || false,
-                            participant_ids: [],
-                            plan_id: Number(renewalForm.planId || 0) || false,
-                            pricing_id: Number(renewalForm.pricingId || 0) || false,
-                            start_date: false,
-                            end_date: false,
-                            product_id: Number(renewalForm.productId || 0) || false,
-                            product_name: renewalForm.productName || false,
-                            source_subscription_id: Number(renewalForm.subscriptionId || 0) || false,
-                        },
-                    });
-                    targetLine = lineResult && lineResult.line ? lineResult.line : null;
-                    if (!targetLine && lineResult && lineResult.reason === "not_added") {
-                        formError = _t("No se pudo agregar la renovación al ticket actual.");
-                        renderDetail(currentDetail);
-                        return;
-                    }
-                } catch (error) {
-                    console.error("Error al agregar renovación al ticket POS", error);
-                    formError = _t("No se pudo agregar la renovación al ticket actual.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-
-                if (!targetLine) {
-                    formError = _t("No se pudo identificar la línea de renovación agregada al ticket.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-
-                formMode = null;
-                formError = "";
-                formNotice = _t("Renovación agregada al ticket. Puedes continuar al cobro normal del POS.");
-                renewalForm = null;
-                upsaleForm = null;
-                pendingChargeForm = null;
-                participantEditForm = null;
-                renderDetail(currentDetail);
-            },
+            ...buildSubscriptionInlineActionHandlers({
+                state: modalState,
+                clearFeedback,
+                renderDetail,
+                resetInlineForms,
+                openRenewalForm,
+                openUpsaleForm,
+                openParticipantEditForm,
+                openPendingChargeForm,
+                openCancellationRefundForm,
+                fetchResyncAccess: (subscriptionId) => this._resyncSubscriptionAccess(subscriptionId),
+                loadDetail,
+                detailCache,
+                getCurrentSubscriptionItem,
+                getSelectedPlan,
+                getSelectedUpsalePlan,
+                getPlanPeriodEndDate,
+                buildChargeBreakdown: (source, product, values) => buildChargeBreakdown(source, product, values),
+                addConfiguredProductLineToOrder: (order, product, options) => addConfiguredProductLineToOrder(this, order, product, options),
+                getCurrentOrder: () => getCurrentOrder(this),
+                getPartnerIdFromOrder,
+                findPartnerInPos: (partnerId) => findPartnerInPos(this, partnerId),
+                setPartnerOnCurrentOrder: (partner) => setPartnerOnCurrentOrder(this, partner),
+                findProductInPos: (productId) => findProductInPos(this, productId),
+                getSubscriptionPartnerIdsFromOrder,
+                saveSubscriptionParticipants: (subscriptionId, participantIds) => this._saveSubscriptionParticipants(subscriptionId, participantIds),
+                formatTodayISO,
+                _t,
+            }),
         };
         bindActionMap(detailPane, detailPaneActions);
 
@@ -2565,25 +2023,22 @@ patch(ControlButtons.prototype, {
             if (handledPartnerField) {
                 return;
             }
-            clearFeedback();
-            if (formMode === "new" && field === "product_id") {
-                await applySelectedProduct(target.value);
-            } else if (formMode === "new" && field === "plan_choice") {
-                await updateSelectedPlan(target.value);
-            } else if (formMode === "new" && field === "start_date") {
-                newSubscriptionForm.startDate = target.value || formatTodayISO();
-            } else if (formMode === "new" && field === "participant_toggle") {
-                toggleParticipant(target.value, target.checked);
-            } else if (formMode === "upsale" && field === "upsale_product_id") {
-                await applySelectedUpsaleProduct(target.value);
-            } else if (formMode === "upsale" && field === "upsale_plan_choice") {
-                await updateSelectedUpsalePlan(target.value);
-            } else if (formMode === "upsale" && field === "upsale_participant_toggle") {
-                toggleUpsaleParticipant(target.value, target.checked);
-            } else if (formMode === "participants" && field === "edit_participant_toggle") {
-                toggleEditedParticipant(target.value, target.checked);
-            }
-            renderDetail(currentDetail);
+            await handleSubscriptionInlineFieldChange(
+                { field, target },
+                {
+                    state: modalState,
+                    clearFeedback,
+                    applySelectedProduct,
+                    updateSelectedPlan,
+                    applySelectedUpsaleProduct,
+                    updateSelectedUpsalePlan,
+                    toggleParticipant,
+                    toggleUpsaleParticipant,
+                    toggleEditedParticipant,
+                    formatTodayISO,
+                    renderDetail,
+                }
+            );
         });
 
         bindFieldChange(listPane, async ({ field, target }) => {
@@ -2605,17 +2060,11 @@ patch(ControlButtons.prototype, {
         });
 
         bindFieldInput(detailPane, ({ field, target }) => {
-            let shouldRender = false;
-            if (formMode === "new" && field === "participant_search") {
-                newSubscriptionForm.participantSearch = target.value || "";
-                shouldRender = true;
-            } else if (formMode === "upsale" && field === "upsale_participant_search") {
-                upsaleForm.participantSearch = target.value || "";
-                shouldRender = true;
-            } else if (formMode === "participants" && field === "edit_participant_search") {
-                participantEditForm.participantSearch = target.value || "";
-                shouldRender = true;
-            } else if (!handleDetailPartnerFieldInput({ field, target }, { state: modalState })) {
+            const shouldRender = handleSubscriptionInlineFieldInput(
+                { field, target },
+                { state: modalState }
+            );
+            if (!shouldRender && !handleDetailPartnerFieldInput({ field, target }, { state: modalState })) {
                 return;
             }
             if (shouldRender) {
