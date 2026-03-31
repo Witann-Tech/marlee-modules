@@ -60,6 +60,13 @@ import {
     getDirectoryControls,
 } from "./subscription_directory_controls";
 import {
+    getCurrentSubscriptionItem as getCurrentSubscriptionItemFromDetail,
+    loadDetail as loadDetailController,
+    loadDirectoryRowsInBackground as loadDirectoryRowsInBackgroundController,
+    reloadDirectoryRows as reloadDirectoryRowsController,
+    selectDirectoryPartner as selectDirectoryPartnerController,
+} from "./subscription_data_controllers";
+import {
     bindActionMap,
     bindFieldChange,
     bindFieldInput,
@@ -100,6 +107,23 @@ import {
     handleSubscriptionInlineFieldChange,
     handleSubscriptionInlineFieldInput,
 } from "./subscription_inline_form_handlers";
+import {
+    applySelectedProduct as applySelectedProductFlow,
+    applySelectedUpsaleProduct as applySelectedUpsaleProductFlow,
+    clampParticipantIds,
+    filterParticipantRows as filterParticipantRowsFlow,
+    openNewSubscriptionForm as openNewSubscriptionFlow,
+    openParticipantEditForm as openParticipantEditFlow,
+    openPendingChargeForm as openPendingChargeFlow,
+    openRenewalForm as openRenewalFlow,
+    openUpsaleForm as openUpsaleFlow,
+    recalculateNewSubscriptionCharge as recalculateNewSubscriptionChargeFlow,
+    toggleEditedParticipant as toggleEditedParticipantFlow,
+    toggleParticipant as toggleParticipantFlow,
+    toggleUpsaleParticipant as toggleUpsaleParticipantFlow,
+    updateSelectedPlan as updateSelectedPlanFlow,
+    updateSelectedUpsalePlan as updateSelectedUpsalePlanFlow,
+} from "./subscription_flow_controllers";
 import { ControlButtons } from "@point_of_sale/app/screens/product_screen/control_buttons/control_buttons";
 import { PaymentScreen } from "@point_of_sale/app/screens/payment_screen/payment_screen";
 import { _t } from "@web/core/l10n/translation";
@@ -604,10 +628,23 @@ patch(ControlButtons.prototype, {
         const detailCache = new Map();
         let newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
         const modalState = {
+            get rows() { return rows; },
+            set rows(value) { rows = Array.isArray(value) ? value : []; },
+            get filteredSnapshot() { return filteredSnapshot; },
+            set filteredSnapshot(value) { filteredSnapshot = Array.isArray(value) ? value : []; },
             get selectedPartnerId() { return selectedPartnerId; },
             set selectedPartnerId(value) { selectedPartnerId = value; },
+            get detailRequestToken() { return detailRequestToken; },
+            set detailRequestToken(value) { detailRequestToken = Number(value || 0); },
+            get detailCache() { return detailCache; },
             get currentDetail() { return currentDetail; },
             set currentDetail(value) { currentDetail = value; },
+            get directoryLoading() { return directoryLoading; },
+            set directoryLoading(value) { directoryLoading = Boolean(value); },
+            get directoryFullyLoaded() { return directoryFullyLoaded; },
+            set directoryFullyLoaded(value) { directoryFullyLoaded = Boolean(value); },
+            get directoryLoadError() { return directoryLoadError; },
+            set directoryLoadError(value) { directoryLoadError = String(value || ""); },
             get formMode() { return formMode; },
             set formMode(value) { formMode = value; },
             get formError() { return formError; },
@@ -630,6 +667,10 @@ patch(ControlButtons.prototype, {
             set partnerPhotoForm(value) { partnerPhotoForm = value; },
             get newSubscriptionForm() { return newSubscriptionForm; },
             set newSubscriptionForm(value) { newSubscriptionForm = value; },
+            get productCatalog() { return productCatalog; },
+            set productCatalog(value) { productCatalog = value; },
+            get catalogLoading() { return catalogLoading; },
+            set catalogLoading(value) { catalogLoading = value; },
             getDefaultNewPartnerForm: () => this._getDefaultNewPartnerForm(),
         };
 
@@ -677,52 +718,25 @@ patch(ControlButtons.prototype, {
         };
 
         const loadDirectoryRowsInBackground = async ({ reset = false, preferredPartnerId = false } = {}) => {
-            if (directoryLoading) {
-                return;
-            }
-            if (reset) {
-                rows = [];
-                filteredSnapshot = [];
-                detailCache.clear();
-                currentDetail = null;
-                selectedPartnerId = Number(preferredPartnerId || 0) || false;
-                directoryFullyLoaded = false;
-                directoryLoadError = "";
-            }
-            directoryLoading = true;
-            render();
-            const batchSize = 250;
-            let offset = rows.length;
-            try {
-                while (overlay.isConnected) {
-                    const batch = await this.subscriptionPosApi.fetchPartnerDirectoryBatch(offset, batchSize);
-                    if (!Array.isArray(batch) || !batch.length) {
-                        directoryFullyLoaded = true;
-                        break;
-                    }
-                    rows.push(...batch);
-                    filteredSnapshot = [...rows];
-                    if (!selectedPartnerId && rows[0]) {
-                        selectedPartnerId = Number(preferredPartnerId || rows[0].id || 0) || false;
-                    }
-                    offset += batch.length;
-                    render();
-                    if (batch.length < batchSize) {
-                        directoryFullyLoaded = true;
-                        break;
-                    }
-                }
-            } catch (error) {
-                console.error("Error al consultar suscripciones en POS", error);
-                directoryLoadError = _t("No se pudo cargar el directorio completo en este momento.");
-            } finally {
-                directoryLoading = false;
-                render();
-            }
+            await loadDirectoryRowsInBackgroundController(modalState, {
+                overlay,
+                reset,
+                preferredPartnerId,
+                render,
+                fetchPartnerDirectoryBatch: (offset, limit) =>
+                    this.subscriptionPosApi.fetchPartnerDirectoryBatch(offset, limit),
+                _t,
+            });
         };
 
         const reloadDirectoryRows = async (preferredPartnerId = false) => {
-            await loadDirectoryRowsInBackground({ reset: true, preferredPartnerId });
+            await reloadDirectoryRowsController(modalState, {
+                overlay,
+                render,
+                fetchPartnerDirectoryBatch: (offset, limit) =>
+                    this.subscriptionPosApi.fetchPartnerDirectoryBatch(offset, limit),
+                _t,
+            }, preferredPartnerId);
         };
 
         const renderDetailEmpty = (title, message) => {
@@ -755,61 +769,14 @@ patch(ControlButtons.prototype, {
             }) || null;
         };
 
-        const clampParticipantIds = (participantIds, ownerId, maxTotal) => {
-            const numericOwnerId = Number(ownerId || 0) || false;
-            const limit = Math.max(1, Number(maxTotal || 1));
-            const cleaned = [...new Set((participantIds || []).map((value) => Number(value || 0)).filter((value) => value > 0))];
-            const withoutOwner = cleaned.filter((value) => value !== numericOwnerId);
-            const result = [];
-            if (numericOwnerId) {
-                result.push(numericOwnerId);
-            }
-            for (const partnerId of withoutOwner) {
-                if (result.length >= limit) {
-                    break;
-                }
-                result.push(partnerId);
-            }
-            return result;
-        };
-
         const openNewSubscriptionForm = async () => {
-            if (!selectedPartnerId) {
-                return;
-            }
-            formMode = "new";
-            formError = "";
-            formNotice = "";
-            stopPartnerCamera();
-            renewalForm = null;
-            upsaleForm = null;
-            pendingChargeForm = null;
-            cancellationRefundForm = null;
-            participantEditForm = null;
-            newPartnerForm = null;
-            partnerPhotoForm = null;
-            newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
-            renderDetail(currentDetail);
-            if (productCatalog.length || catalogLoading) {
-                return;
-            }
-            catalogLoading = true;
-            renderDetail(currentDetail);
-            try {
-                productCatalog = await this._fetchSubscriptionProductCatalog("");
-                if (!Array.isArray(productCatalog)) {
-                    productCatalog = [];
-                }
-                if (!productCatalog.length) {
-                    formError = _t("No hay productos de suscripción cargados en esta sesión del POS.");
-                }
-            } catch (error) {
-                console.error("Error al consultar catalogo de suscripciones en POS", error);
-                formError = _t("No se pudo cargar el catalogo de productos de suscripcion.");
-            } finally {
-                catalogLoading = false;
-                renderDetail(currentDetail);
-            }
+            await openNewSubscriptionFlow(modalState, {
+                stopPartnerCamera,
+                createNewSubscriptionForm: (partnerId) => this._getDefaultNewSubscriptionForm(partnerId),
+                renderDetail,
+                fetchSubscriptionProductCatalog: (searchTerm) => this._fetchSubscriptionProductCatalog(searchTerm),
+                _t,
+            });
         };
 
         const openNewPartnerForm = () => {
@@ -828,153 +795,26 @@ patch(ControlButtons.prototype, {
         };
 
         const openRenewalForm = async (item) => {
-            if (!item || !item.subscription_id) {
-                return;
-            }
-            formMode = "renewal";
-            formError = "";
-            formNotice = "";
-            stopPartnerCamera();
-            newPartnerForm = null;
-            pendingChargeForm = null;
-            cancellationRefundForm = null;
-            participantEditForm = null;
-            renewalForm = {
-                subscriptionId: Number(item.subscription_id || 0) || false,
-                subscriptionName: item.subscription_name || "",
-                holderPartnerId: Number(item.holder_partner_id || 0) || false,
-                holderPartnerName: item.holder_partner_name || "",
-                productId: Number(item.renewal_product_id || 0) || false,
-                productName: item.renewal_product_name || "",
-                planId: Number(item.renewal_plan_id || 0) || false,
-                pricingId: Number(item.renewal_pricing_id || 0) || false,
-                charge: buildChargeBreakdown(this, null, { baseAmount: 0, displayAmount: 0 }),
-                nextInvoiceDate: item.next_invoice_date || false,
-                loading: true,
-            };
-            renderDetail(currentDetail);
-            try {
-                const charge = await this._fetchSubscriptionRenewalCharge(
-                    renewalForm.subscriptionId,
-                    renewalForm.productId,
-                    renewalForm.planId,
-                    renewalForm.pricingId
-                );
-                renewalForm = {
-                    ...renewalForm,
-                    loading: false,
-                    charge: buildChargeBreakdown(this, null, {
-                        baseAmount: Number(charge && charge.charge_now ? charge.charge_now : 0),
-                        ticketUnitPrice: Number(
-                            charge && charge.ticket_charge_now !== undefined
-                                ? charge.ticket_charge_now
-                                : (charge && charge.charge_now ? charge.charge_now : 0)
-                        ),
-                        displayAmount: Number(
-                            charge && charge.display_charge_now !== undefined
-                                ? charge.display_charge_now
-                                : (charge && charge.charge_now ? charge.charge_now : 0)
-                        ),
-                    }),
-                    planId: Number(charge && charge.plan_id ? charge.plan_id : renewalForm.planId) || false,
-                    pricingId: Number(charge && charge.pricing_id ? charge.pricing_id : renewalForm.pricingId) || false,
-                };
-            } catch (error) {
-                console.error("Error al consultar cobro de renovación POS", error);
-                formError = _t("No se pudo consultar el cobro de renovación para esta suscripción.");
-                renewalForm = {
-                    ...renewalForm,
-                    loading: false,
-                };
-            }
-            renderDetail(currentDetail);
+            await openRenewalFlow(modalState, item, {
+                stopPartnerCamera,
+                renderDetail,
+                buildChargeBreakdown: (source, product, values) => buildChargeBreakdown(source, product, values),
+                fetchSubscriptionRenewalCharge: (subscriptionId, productId, planId, pricingId) =>
+                    this._fetchSubscriptionRenewalCharge(subscriptionId, productId, planId, pricingId),
+                _t,
+            });
         };
 
         const openPendingChargeForm = async (item) => {
-            if (!item || !item.subscription_id) {
-                return;
-            }
-            const pendingDocuments = Array.isArray(item.pending_documents) ? item.pending_documents : [];
-            if (!pendingDocuments.length) {
-                formError = _t("Esta suscripción no tiene documentos pendientes por cobrar.");
-                renderDetail(currentDetail);
-                return;
-            }
-            const firstPending = pendingDocuments[0];
-            formMode = "pending";
-            formError = "";
-            formNotice = "";
-            stopPartnerCamera();
-            newPartnerForm = null;
-            renewalForm = null;
-            upsaleForm = null;
-            pendingChargeForm = {
-                subscriptionId: Number(item.subscription_id || 0) || false,
-                subscriptionName: item.subscription_name || "",
-                holderPartnerId: Number(item.holder_partner_id || 0) || false,
-                holderPartnerName: item.holder_partner_name || "",
-                productId: Number(item.renewal_product_id || 0) || false,
-                productName: item.renewal_product_name || "",
-                pendingMoveId: Number(firstPending.document_id || 0) || false,
-                pendingMoveName: firstPending.name || "",
-                invoiceDate: firstPending.invoice_date || false,
-                invoiceDateDue: firstPending.invoice_date_due || false,
-                charge: buildChargeBreakdown(this, null, { baseAmount: 0, displayAmount: 0 }),
-                totalCharge: buildChargeBreakdown(this, null, {
-                    baseAmount: Number(firstPending.amount_total || 0),
-                    displayAmount: Number(firstPending.amount_total || 0),
-                }),
-                loading: true,
-            };
-            renderDetail(currentDetail);
-            try {
-                const charge = await this._fetchSubscriptionPendingCharge(
-                    pendingChargeForm.subscriptionId,
-                    pendingChargeForm.pendingMoveId
-                );
-                pendingChargeForm = {
-                    ...pendingChargeForm,
-                    loading: false,
-                    pendingMoveId: Number(charge && charge.pending_move_id ? charge.pending_move_id : pendingChargeForm.pendingMoveId) || false,
-                    pendingMoveName: charge && charge.pending_move_name ? charge.pending_move_name : pendingChargeForm.pendingMoveName,
-                    invoiceDate: charge && charge.invoice_date ? charge.invoice_date : pendingChargeForm.invoiceDate,
-                    invoiceDateDue: charge && charge.invoice_date_due ? charge.invoice_date_due : pendingChargeForm.invoiceDateDue,
-                    charge: buildChargeBreakdown(this, null, {
-                        baseAmount: Number(charge && charge.charge_now ? charge.charge_now : 0),
-                        ticketUnitPrice: Number(
-                            charge && charge.ticket_charge_now !== undefined
-                                ? charge.ticket_charge_now
-                                : (charge && charge.charge_now ? charge.charge_now : 0)
-                        ),
-                        displayAmount: Number(
-                            charge && charge.display_charge_now !== undefined
-                                ? charge.display_charge_now
-                                : (charge && charge.charge_now ? charge.charge_now : 0)
-                        ),
-                    }),
-                    totalCharge: buildChargeBreakdown(this, null, {
-                        baseAmount: Number(charge && charge.amount_total ? charge.amount_total : getChargeDisplayAmount(pendingChargeForm.totalCharge) || 0),
-                        ticketUnitPrice: Number(
-                            charge && charge.ticket_amount_total !== undefined
-                                ? charge.ticket_amount_total
-                                : (charge && charge.amount_total ? charge.amount_total : getChargeDisplayAmount(pendingChargeForm.totalCharge) || 0)
-                        ),
-                        displayAmount: Number(
-                            charge && charge.display_amount_total !== undefined
-                                ? charge.display_amount_total
-                                : (charge && charge.amount_total ? charge.amount_total : getChargeDisplayAmount(pendingChargeForm.totalCharge) || 0)
-                        ),
-                    }),
-                };
-            } catch (error) {
-                console.error("Error al consultar cobro pendiente POS", error);
-                formError = _t("No se pudo consultar el documento pendiente para esta suscripción.");
-                pendingChargeForm = {
-                    ...pendingChargeForm,
-                    loading: false,
-                };
-            }
-            renderDetail(currentDetail);
+            await openPendingChargeFlow(modalState, item, {
+                stopPartnerCamera,
+                renderDetail,
+                buildChargeBreakdown: (source, product, values) => buildChargeBreakdown(source, product, values),
+                getChargeDisplayAmount,
+                fetchSubscriptionPendingCharge: (subscriptionId, pendingMoveId) =>
+                    this._fetchSubscriptionPendingCharge(subscriptionId, pendingMoveId),
+                _t,
+            });
         };
 
         const openCancellationRefundForm = async (item) => {
@@ -1035,391 +875,83 @@ patch(ControlButtons.prototype, {
         };
 
         const recalculateNewSubscriptionCharge = async (product, preferredPlan = null) => {
-            if (!newSubscriptionForm || !product || !selectedPartnerId) {
-                return;
-            }
-            newSubscriptionForm.loading = true;
-            renderDetail(currentDetail);
-            try {
-                const charge = await this._fetchSubscriptionCharge(
-                    selectedPartnerId,
-                    Number(product.id || 0),
-                    Number(preferredPlan && preferredPlan.price ? preferredPlan.price : product.default_price || 0),
-                    preferredPlan ? Number(preferredPlan.plan_id || 0) || false : false,
-                    preferredPlan ? Number(preferredPlan.pricing_id || 0) || false : false
-                );
-                const displayRecurringPrice = Number(
-                    charge && charge.display_recurring_price !== undefined
-                        ? charge.display_recurring_price
-                        : (charge && charge.recurring_price ? charge.recurring_price : 0)
-                );
-                newSubscriptionForm.charge = buildChargeBreakdown(this, null, {
-                    baseAmount: Number(charge && charge.recurring_price ? charge.recurring_price : 0),
-                    ticketUnitPrice: Number(
-                        charge && charge.ticket_recurring_price !== undefined
-                            ? charge.ticket_recurring_price
-                            : (charge && charge.recurring_price ? charge.recurring_price : 0)
-                    ),
-                    displayAmount: displayRecurringPrice,
-                });
-                if (charge && (charge.plan_id || charge.pricing_id)) {
-                    newSubscriptionForm.planChoice = `${Number(charge.plan_id || 0)}:${Number(charge.pricing_id || 0)}`;
-                }
-            } catch (error) {
-                console.error("Error al recalcular cobro de suscripción POS", error);
-                formError = _t("No se pudo recalcular el precio de la suscripción.");
-            } finally {
-                newSubscriptionForm.loading = false;
-                renderDetail(currentDetail);
-            }
+            await recalculateNewSubscriptionChargeFlow(modalState, product, preferredPlan, {
+                renderDetail,
+                fetchSubscriptionCharge: (partnerId, productId, fallback, planId, pricingId) =>
+                    this._fetchSubscriptionCharge(partnerId, productId, fallback, planId, pricingId),
+                buildChargeBreakdown: (source, productArg, values) => buildChargeBreakdown(source, productArg, values),
+                _t,
+            });
         };
 
         const applySelectedUpsaleProduct = async (productId) => {
-            if (!upsaleForm) {
-                return;
-            }
-            const numericProductId = Number(productId || 0);
-            const product = productCatalog.find((item) => Number(item.id) === numericProductId) || null;
-            upsaleForm.productId = numericProductId;
-            upsaleForm.productName = product ? product.name || "" : "";
-            upsaleForm.maxParticipantsTotal = product ? Number(product.max_participants_total || 1) : 1;
-            upsaleForm.plans = product ? [...(product.plans || [])] : [];
-            upsaleForm.planChoice = "";
-            upsaleForm.recurringCharge = buildChargeBreakdown(this, null, { baseAmount: 0, displayAmount: 0 });
-            upsaleForm.creditCharge = buildChargeBreakdown(this, null, { baseAmount: 0, displayAmount: 0 });
-            upsaleForm.charge = buildChargeBreakdown(this, null, { baseAmount: 0, displayAmount: 0 });
-            upsaleForm.participantIds = clampParticipantIds(
-                upsaleForm.participantIds,
-                upsaleForm.holderPartnerId,
-                upsaleForm.maxParticipantsTotal
-            );
-
-            if (!product || !upsaleForm.plans.length) {
-                renderDetail(currentDetail);
-                return;
-            }
-
-            const defaultPlanId = Number(product.default_plan_id || 0);
-            const defaultPricingId = Number(product.default_pricing_id || 0);
-            const defaultChoice = upsaleForm.plans.find((item) => {
-                return Number(item.plan_id || 0) === defaultPlanId && Number(item.pricing_id || 0) === defaultPricingId;
-            }) || upsaleForm.plans[0] || null;
-            if (defaultChoice) {
-                upsaleForm.planChoice = `${Number(defaultChoice.plan_id || 0)}:${Number(defaultChoice.pricing_id || 0)}`;
-            }
-            upsaleForm.loading = true;
-            renderDetail(currentDetail);
-            try {
-                const selectedPlan = getSelectedUpsalePlan();
-                const charge = await this._fetchSubscriptionUpsaleCharge(
-                    upsaleForm.subscriptionId,
-                    upsaleForm.productId,
-                    Number(defaultChoice && defaultChoice.price ? defaultChoice.price : 0),
-                    selectedPlan ? Number(selectedPlan.plan_id || 0) || false : false,
-                    selectedPlan ? Number(selectedPlan.pricing_id || 0) || false : false
-                );
-                upsaleForm = {
-                    ...upsaleForm,
-                    loading: false,
-                    recurringCharge: buildChargeBreakdown(this, null, {
-                        baseAmount: Number(charge && charge.recurring_price ? charge.recurring_price : 0),
-                        ticketUnitPrice: Number(
-                            charge && charge.ticket_recurring_price !== undefined
-                                ? charge.ticket_recurring_price
-                                : (charge && charge.recurring_price ? charge.recurring_price : 0)
-                        ),
-                        displayAmount: Number(
-                            charge && charge.display_recurring_price !== undefined
-                                ? charge.display_recurring_price
-                                : (charge && charge.recurring_price ? charge.recurring_price : 0)
-                        ),
-                    }),
-                    creditCharge: buildChargeBreakdown(this, null, {
-                        baseAmount: Number(charge && charge.credit_amount ? charge.credit_amount : 0),
-                        ticketUnitPrice: Number(
-                            charge && charge.ticket_credit_amount !== undefined
-                                ? charge.ticket_credit_amount
-                                : (charge && charge.credit_amount ? charge.credit_amount : 0)
-                        ),
-                        displayAmount: Number(
-                            charge && charge.display_credit_amount !== undefined
-                                ? charge.display_credit_amount
-                                : (charge && charge.credit_amount ? charge.credit_amount : 0)
-                        ),
-                    }),
-                    charge: buildChargeBreakdown(this, null, {
-                        baseAmount: Number(charge && charge.charge_now ? charge.charge_now : 0),
-                        ticketUnitPrice: Number(
-                            charge && charge.ticket_charge_now !== undefined
-                                ? charge.ticket_charge_now
-                                : (charge && charge.charge_now ? charge.charge_now : 0)
-                        ),
-                        displayAmount: Number(
-                            charge && charge.display_charge_now !== undefined
-                                ? charge.display_charge_now
-                                : (charge && charge.charge_now ? charge.charge_now : 0)
-                        ),
-                    }),
-                    planChoice: `${Number(charge && charge.plan_id ? charge.plan_id : (selectedPlan && selectedPlan.plan_id) || 0)}:${Number(charge && charge.pricing_id ? charge.pricing_id : (selectedPlan && selectedPlan.pricing_id) || 0)}`,
-                };
-            } catch (error) {
-                console.error("Error al consultar cobro de upsale POS", error);
-                formError = _t("No se pudo calcular el cobro del upsale para esta suscripción.");
-                upsaleForm = {
-                    ...upsaleForm,
-                    loading: false,
-                    recurringCharge: buildChargeBreakdown(this, null, { baseAmount: 0, displayAmount: 0 }),
-                    creditCharge: buildChargeBreakdown(this, null, { baseAmount: 0, displayAmount: 0 }),
-                    charge: buildChargeBreakdown(this, null, { baseAmount: 0, displayAmount: 0 }),
-                };
-            }
-            renderDetail(currentDetail);
+            await applySelectedUpsaleProductFlow(modalState, productId, {
+                renderDetail,
+                getSelectedUpsalePlan,
+                fetchSubscriptionUpsaleCharge: (subscriptionId, productIdArg, fallback, planId, pricingId) =>
+                    this._fetchSubscriptionUpsaleCharge(subscriptionId, productIdArg, fallback, planId, pricingId),
+                buildChargeBreakdown: (source, productArg, values) => buildChargeBreakdown(source, productArg, values),
+                _t,
+            });
         };
 
         const updateSelectedUpsalePlan = async (planChoice) => {
-            if (!upsaleForm) {
-                return;
-            }
-            upsaleForm.planChoice = String(planChoice || "");
-            const selectedPlan = getSelectedUpsalePlan();
-            if (!selectedPlan || !upsaleForm.productId || !upsaleForm.subscriptionId) {
-                renderDetail(currentDetail);
-                return;
-            }
-            upsaleForm.loading = true;
-            renderDetail(currentDetail);
-            try {
-                const charge = await this._fetchSubscriptionUpsaleCharge(
-                    upsaleForm.subscriptionId,
-                    upsaleForm.productId,
-                    Number(selectedPlan.price || 0),
-                    Number(selectedPlan.plan_id || 0) || false,
-                    Number(selectedPlan.pricing_id || 0) || false
-                );
-                upsaleForm = {
-                    ...upsaleForm,
-                    loading: false,
-                    recurringCharge: buildChargeBreakdown(this, null, {
-                        baseAmount: Number(charge && charge.recurring_price ? charge.recurring_price : 0),
-                        ticketUnitPrice: Number(
-                            charge && charge.ticket_recurring_price !== undefined
-                                ? charge.ticket_recurring_price
-                                : (charge && charge.recurring_price ? charge.recurring_price : 0)
-                        ),
-                        displayAmount: Number(
-                            charge && charge.display_recurring_price !== undefined
-                                ? charge.display_recurring_price
-                                : (charge && charge.recurring_price ? charge.recurring_price : 0)
-                        ),
-                    }),
-                    creditCharge: buildChargeBreakdown(this, null, {
-                        baseAmount: Number(charge && charge.credit_amount ? charge.credit_amount : 0),
-                        ticketUnitPrice: Number(
-                            charge && charge.ticket_credit_amount !== undefined
-                                ? charge.ticket_credit_amount
-                                : (charge && charge.credit_amount ? charge.credit_amount : 0)
-                        ),
-                        displayAmount: Number(
-                            charge && charge.display_credit_amount !== undefined
-                                ? charge.display_credit_amount
-                                : (charge && charge.credit_amount ? charge.credit_amount : 0)
-                        ),
-                    }),
-                    charge: buildChargeBreakdown(this, null, {
-                        baseAmount: Number(charge && charge.charge_now ? charge.charge_now : 0),
-                        ticketUnitPrice: Number(
-                            charge && charge.ticket_charge_now !== undefined
-                                ? charge.ticket_charge_now
-                                : (charge && charge.charge_now ? charge.charge_now : 0)
-                        ),
-                        displayAmount: Number(
-                            charge && charge.display_charge_now !== undefined
-                                ? charge.display_charge_now
-                                : (charge && charge.charge_now ? charge.charge_now : 0)
-                        ),
-                    }),
-                    planChoice: `${Number(charge && charge.plan_id ? charge.plan_id : selectedPlan.plan_id || 0)}:${Number(charge && charge.pricing_id ? charge.pricing_id : selectedPlan.pricing_id || 0)}`,
-                };
-            } catch (error) {
-                console.error("Error al actualizar cobro de upsale POS", error);
-                formError = _t("No se pudo recalcular el cobro del upsale.");
-                upsaleForm = {
-                    ...upsaleForm,
-                    loading: false,
-                };
-            }
-            renderDetail(currentDetail);
+            await updateSelectedUpsalePlanFlow(modalState, planChoice, {
+                getSelectedUpsalePlan,
+                renderDetail,
+                fetchSubscriptionUpsaleCharge: (subscriptionId, productIdArg, fallback, planId, pricingId) =>
+                    this._fetchSubscriptionUpsaleCharge(subscriptionId, productIdArg, fallback, planId, pricingId),
+                buildChargeBreakdown: (source, productArg, values) => buildChargeBreakdown(source, productArg, values),
+                _t,
+            });
         };
 
-        const toggleUpsaleParticipant = (partnerId, checked) => {
-            if (!upsaleForm) {
-                return;
-            }
-            const numericPartnerId = Number(partnerId || 0);
-            const holderPartnerId = Number(upsaleForm.holderPartnerId || 0);
-            let values = [...(upsaleForm.participantIds || [])].map((item) => Number(item));
-            values = values.filter((item) => item > 0 && item !== holderPartnerId && item !== numericPartnerId);
-            if (checked && numericPartnerId > 0 && numericPartnerId !== holderPartnerId) {
-                values.push(numericPartnerId);
-            }
-            upsaleForm.participantIds = clampParticipantIds(
-                holderPartnerId ? [holderPartnerId, ...new Set(values)] : [...new Set(values)],
-                holderPartnerId,
-                upsaleForm.maxParticipantsTotal
-            );
+        const toggleUpsaleParticipantHandler = (partnerId, checked) => {
+            toggleUpsaleParticipantFlow(modalState, partnerId, checked);
         };
 
         const openUpsaleForm = async (item) => {
-            if (!item || !item.subscription_id) {
-                return;
-            }
-            formMode = "upsale";
-            formError = "";
-            formNotice = "";
-            stopPartnerCamera();
-            newPartnerForm = null;
-            renewalForm = null;
-            upsaleForm = this._getDefaultUpsaleForm(item);
-            pendingChargeForm = null;
-            cancellationRefundForm = null;
-            participantEditForm = null;
-            renderDetail(currentDetail);
-            if (!productCatalog.length && !catalogLoading) {
-                catalogLoading = true;
-                renderDetail(currentDetail);
-                try {
-                    productCatalog = await this._fetchSubscriptionProductCatalog("");
-                    if (!Array.isArray(productCatalog)) {
-                        productCatalog = [];
-                    }
-                    if (!productCatalog.length) {
-                        formError = _t("No hay productos de suscripción cargados en esta sesión del POS.");
-                    }
-                } catch (error) {
-                    console.error("Error al consultar catalogo de upsale en POS", error);
-                    formError = _t("No se pudo cargar el catalogo de productos para upsale.");
-                } finally {
-                    catalogLoading = false;
-                }
-            }
-            renderDetail(currentDetail);
+            await openUpsaleFlow(modalState, item, {
+                stopPartnerCamera,
+                renderDetail,
+                createDefaultUpsaleForm: (payload) => this._getDefaultUpsaleForm(payload),
+                fetchSubscriptionProductCatalog: (searchTerm) => this._fetchSubscriptionProductCatalog(searchTerm),
+                _t,
+            });
         };
 
-        const toggleEditedParticipant = (partnerId, checked) => {
-            if (!participantEditForm) {
-                return;
-            }
-            const numericPartnerId = Number(partnerId || 0);
-            const holderPartnerId = Number(participantEditForm.holderPartnerId || 0);
-            let values = [...(participantEditForm.participantIds || [])].map((item) => Number(item));
-            values = values.filter((item) => item > 0 && item !== holderPartnerId && item !== numericPartnerId);
-            if (checked && numericPartnerId > 0 && numericPartnerId !== holderPartnerId) {
-                values.push(numericPartnerId);
-            }
-            participantEditForm.participantIds = clampParticipantIds(
-                holderPartnerId ? [holderPartnerId, ...new Set(values)] : [...new Set(values)],
-                holderPartnerId,
-                participantEditForm.maxParticipantsTotal
-            );
+        const toggleEditedParticipantHandler = (partnerId, checked) => {
+            toggleEditedParticipantFlow(modalState, partnerId, checked);
         };
 
         const openParticipantEditForm = async (item) => {
-            if (!item || !item.subscription_id) {
-                return;
-            }
-            formMode = "participants";
-            formError = "";
-            formNotice = "";
-            stopPartnerCamera();
-            newPartnerForm = null;
-            renewalForm = null;
-            upsaleForm = null;
-            pendingChargeForm = null;
-            participantEditForm = this._getDefaultParticipantEditForm(item);
-            renderDetail(currentDetail);
+            await openParticipantEditFlow(modalState, item, {
+                stopPartnerCamera,
+                renderDetail,
+                createDefaultParticipantEditForm: (payload) => this._getDefaultParticipantEditForm(payload),
+            });
         };
 
         const applySelectedProduct = async (productId) => {
-            const numericProductId = Number(productId || 0);
-            const product = productCatalog.find((item) => Number(item.id) === numericProductId) || null;
-            newSubscriptionForm.productId = numericProductId;
-            newSubscriptionForm.productName = product ? product.name || "" : "";
-            newSubscriptionForm.maxParticipantsTotal = product ? Number(product.max_participants_total || 1) : 1;
-            newSubscriptionForm.plans = product ? [...(product.plans || [])] : [];
-            const defaultPlanId = product ? Number(product.default_plan_id || 0) : 0;
-            const defaultPricingId = product ? Number(product.default_pricing_id || 0) : 0;
-            const defaultChoice = newSubscriptionForm.plans.find((item) => {
-                return Number(item.plan_id || 0) === defaultPlanId && Number(item.pricing_id || 0) === defaultPricingId;
-            }) || newSubscriptionForm.plans[0] || null;
-            if (defaultChoice) {
-                newSubscriptionForm.planChoice = `${Number(defaultChoice.plan_id || 0)}:${Number(defaultChoice.pricing_id || 0)}`;
-            } else {
-                newSubscriptionForm.planChoice = "";
-                newSubscriptionForm.charge = buildChargeBreakdown(this, null, {
-                    baseAmount: Number(product ? (product.default_price || 0) : 0),
-                    displayAmount: Number(
-                        product ? (product.default_display_price !== undefined ? product.default_display_price : (product.default_price || 0)) : 0
-                    ),
-                });
-            }
-            newSubscriptionForm.participantIds = clampParticipantIds(
-                newSubscriptionForm.participantIds,
-                selectedPartnerId,
-                newSubscriptionForm.maxParticipantsTotal
-            );
-            if (product) {
-                await recalculateNewSubscriptionCharge(product, defaultChoice);
-                return;
-            }
-            renderDetail(currentDetail);
-        };
-
-        const updateSelectedPlan = async (planChoice) => {
-            newSubscriptionForm.planChoice = String(planChoice || "");
-            const plan = getSelectedPlan();
-            const product = productCatalog.find((item) => Number(item.id) === Number(newSubscriptionForm.productId || 0)) || null;
-            if (plan) {
-                newSubscriptionForm.charge = buildChargeBreakdown(this, null, {
-                    baseAmount: Number(plan.price || 0),
-                    displayAmount: Number(
-                        plan.display_price !== undefined ? plan.display_price : (plan.price || 0)
-                    ),
-                });
-            }
-            if (product && plan) {
-                await recalculateNewSubscriptionCharge(product, plan);
-                return;
-            }
-            renderDetail(currentDetail);
-        };
-
-        const toggleParticipant = (partnerId, checked) => {
-            const numericPartnerId = Number(partnerId || 0);
-            let values = [...(newSubscriptionForm.participantIds || [])].map((item) => Number(item));
-            values = values.filter((item) => item > 0 && item !== selectedPartnerId && item !== numericPartnerId);
-            if (checked && numericPartnerId > 0 && numericPartnerId !== selectedPartnerId) {
-                values.push(numericPartnerId);
-            }
-            newSubscriptionForm.participantIds = clampParticipantIds(
-                [selectedPartnerId, ...new Set(values)],
-                selectedPartnerId,
-                newSubscriptionForm.maxParticipantsTotal
-            );
-        };
-
-        const filterParticipantRows = (searchTerm = "") => {
-            const query = String(searchTerm || "").trim().toLowerCase();
-            const sourceRows = rows
-                .slice()
-                .sort((a, b) => (a.name || "").localeCompare(b.name || "", "es"));
-            if (!query) {
-                return sourceRows;
-            }
-            return sourceRows.filter((row) => {
-                const haystack = `${row.name || ""} ${row.phone || ""} ${row.email || ""}`.toLowerCase();
-                return haystack.includes(query);
+            await applySelectedProductFlow(modalState, productId, {
+                renderDetail,
+                recalculateNewSubscriptionCharge,
             });
         };
+
+        const updateSelectedPlanHandler = async (planChoice) => {
+            await updateSelectedPlanFlow(modalState, planChoice, {
+                getSelectedPlan,
+                renderDetail,
+                recalculateNewSubscriptionCharge,
+            });
+        };
+
+        const toggleParticipantHandler = (partnerId, checked) => {
+            toggleParticipantFlow(modalState, partnerId, checked);
+        };
+
+        const filterParticipantRowsByTerm = (searchTerm = "") => filterParticipantRowsFlow(rows, searchTerm);
 
         const renderNewSubscriptionForm = () => {
             if (formMode !== "new") {
@@ -1429,7 +961,7 @@ patch(ControlButtons.prototype, {
             const automaticEndDate = plan
                 ? getPlanPeriodEndDate(newSubscriptionForm.startDate, plan.interval_value, plan.interval_unit)
                 : "";
-            const filteredParticipants = filterParticipantRows(newSubscriptionForm.participantSearch);
+            const filteredParticipants = filterParticipantRowsByTerm(newSubscriptionForm.participantSearch);
             const participantOptions = Number(newSubscriptionForm.maxParticipantsTotal || 1) > 1
                 ? filteredParticipants
                     .map((row) => {
@@ -1654,7 +1186,7 @@ patch(ControlButtons.prototype, {
             ) {
                 return "";
             }
-            const filteredParticipants = filterParticipantRows(participantEditForm.participantSearch);
+            const filteredParticipants = filterParticipantRowsByTerm(participantEditForm.participantSearch);
             return buildParticipantEditFormHtml({
                 item,
                 formMode,
@@ -1675,7 +1207,7 @@ patch(ControlButtons.prototype, {
             ) {
                 return "";
             }
-            const filteredParticipants = filterParticipantRows(upsaleForm.participantSearch);
+            const filteredParticipants = filterParticipantRowsByTerm(upsaleForm.participantSearch);
             return buildUpsaleFormHtml({
                 item,
                 formMode,
@@ -1795,42 +1327,14 @@ patch(ControlButtons.prototype, {
         };
 
         const loadDetail = async (partnerId, options = {}) => {
-            const force = Boolean(options && options.force);
-            if (!partnerId) {
-                renderDetailEmpty(
-                    _t("Selecciona un cliente"),
-                    _t("Aqui veras sus suscripciones nativas, participantes y acciones disponibles.")
-                );
-                return;
-            }
-            if (!force && detailCache.has(partnerId)) {
-                renderDetail(detailCache.get(partnerId));
-                return;
-            }
-
-            renderDetailLoading();
-            const requestId = ++detailRequestToken;
-            try {
-                const detail = await this._fetchPartnerSubscriptionDetail(partnerId);
-                if (requestId !== detailRequestToken) {
-                    return;
-                }
-                detailCache.set(partnerId, detail);
-                if (selectedPartnerId === partnerId) {
-                    renderDetail(detail);
-                }
-            } catch (error) {
-                if (requestId !== detailRequestToken) {
-                    return;
-                }
-                detailPane.innerHTML = `
-                    <div class="wgs-detail-empty">
-                        <strong>${this._escapeHtml(_t("Error al cargar detalle"))}</strong>
-                        <p>${this._escapeHtml(_t("No se pudo consultar el detalle de suscripciones para este cliente."))}</p>
-                    </div>
-                `;
-                console.error("Error al consultar detalle de suscripciones en POS", error);
-            }
+            await loadDetailController(modalState, partnerId, {
+                force: Boolean(options && options.force),
+                renderDetail,
+                renderDetailEmpty,
+                renderDetailLoading,
+                fetchPartnerSubscriptionDetail: (targetPartnerId) => this._fetchPartnerSubscriptionDetail(targetPartnerId),
+                _t,
+            });
         };
 
         const render = () => {
@@ -1909,12 +1413,10 @@ patch(ControlButtons.prototype, {
         };
 
         bindDirectoryRowSelection(tbody, (partnerId) => {
-            if (!partnerId || partnerId === selectedPartnerId) {
-                return;
-            }
-            selectedPartnerId = partnerId;
-            resetForPartnerSelection();
-            render();
+            selectDirectoryPartnerController(modalState, partnerId, {
+                resetForPartnerSelection,
+                render,
+            });
         });
 
         const listPaneActions = {
@@ -1939,12 +1441,8 @@ patch(ControlButtons.prototype, {
         };
         bindActionMap(listPane, listPaneActions);
 
-        const getCurrentSubscriptionItem = (actionButton) => {
-            const subscriptionId = Number(actionButton.dataset.subscriptionId || 0);
-            return (currentDetail && Array.isArray(currentDetail.items) ? currentDetail.items : []).find(
-                (row) => Number(row.subscription_id || 0) === subscriptionId
-            );
-        };
+        const getCurrentSubscriptionItem = (actionButton) =>
+            getCurrentSubscriptionItemFromDetail(currentDetail, actionButton);
 
         const detailPaneActions = {
             "open-new": async () => {
@@ -2029,12 +1527,12 @@ patch(ControlButtons.prototype, {
                     state: modalState,
                     clearFeedback,
                     applySelectedProduct,
-                    updateSelectedPlan,
+                    updateSelectedPlan: updateSelectedPlanHandler,
                     applySelectedUpsaleProduct,
                     updateSelectedUpsalePlan,
-                    toggleParticipant,
-                    toggleUpsaleParticipant,
-                    toggleEditedParticipant,
+                    toggleParticipant: toggleParticipantHandler,
+                    toggleUpsaleParticipant: toggleUpsaleParticipantHandler,
+                    toggleEditedParticipant: toggleEditedParticipantHandler,
                     formatTodayISO,
                     renderDetail,
                 }
