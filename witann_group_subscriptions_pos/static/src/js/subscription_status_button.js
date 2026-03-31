@@ -55,6 +55,11 @@ import {
     sortDirectoryRows,
 } from "./subscription_directory_state";
 import {
+    bindDirectoryRowSelection,
+    bindDirectoryToolbarEvents,
+    getDirectoryControls,
+} from "./subscription_directory_controls";
+import {
     renderDetailEmpty as buildDetailEmptyHtml,
     renderDetailHeader,
     renderDetailLoading as buildDetailLoadingHtml,
@@ -67,6 +72,7 @@ import { renderPartnerDetailAvatar } from "./subscription_partner_render";
 import { renderPendingChargeForm as buildPendingChargeFormHtml } from "./subscription_pending_render";
 import { renderParticipantEditForm as buildParticipantEditFormHtml } from "./subscription_participants_render";
 import { renderRenewalForm as buildRenewalFormHtml } from "./subscription_renewal_render";
+import { renderUpsaleForm as buildUpsaleFormHtml } from "./subscription_upsale_render";
 import { ControlButtons } from "@point_of_sale/app/screens/product_screen/control_buttons/control_buttons";
 import { PaymentScreen } from "@point_of_sale/app/screens/payment_screen/payment_screen";
 import { _t } from "@web/core/l10n/translation";
@@ -540,12 +546,14 @@ patch(ControlButtons.prototype, {
 
         document.body.appendChild(overlay);
 
-        const searchInput = toolbar.querySelector(".wgs-filter-search");
-        const stateSelect = toolbar.querySelector(".wgs-filter-state");
-        const birthdaySelect = toolbar.querySelector(".wgs-filter-birthday");
-        const sortSelect = toolbar.querySelector(".wgs-sort");
-        const exportButton = toolbar.querySelector(".wgs-btn-export");
-        const tbody = table.querySelector("tbody");
+        const {
+            searchInput,
+            stateSelect,
+            birthdaySelect,
+            sortSelect,
+            exportButton,
+            tbody,
+        } = getDirectoryControls({ toolbar, table });
 
         let filteredSnapshot = [...rows];
         let selectedPartnerId = rows[0] ? rows[0].id : false;
@@ -1604,81 +1612,21 @@ patch(ControlButtons.prototype, {
             ) {
                 return "";
             }
-            const holderPartnerId = Number(upsaleForm.holderPartnerId || 0);
-            const productOptions = productCatalog.map((product) => {
-                const selected = Number(product.id) === Number(upsaleForm.productId || 0) ? "selected" : "";
-                return `<option value="${this._escapeHtml(String(product.id))}" ${selected}>${this._escapeHtml(product.name || "-")}</option>`;
-            }).join("");
-            const planOptions = (upsaleForm.plans || []).map((itemPlan) => {
-                const value = `${Number(itemPlan.plan_id || 0)}:${Number(itemPlan.pricing_id || 0)}`;
-                const selected = value === String(upsaleForm.planChoice || "") ? "selected" : "";
-                const label = `${itemPlan.plan_name || _t("Plan recurrente")} | ${this._formatMoney(itemPlan.display_price !== undefined ? itemPlan.display_price : (itemPlan.price || 0))}${itemPlan.interval_label ? ` | ${itemPlan.interval_label}` : ""}`;
-                return `<option value="${this._escapeHtml(value)}" ${selected}>${this._escapeHtml(label)}</option>`;
-            }).join("");
             const filteredParticipants = filterParticipantRows(upsaleForm.participantSearch);
-            const participantOptions = Number(upsaleForm.maxParticipantsTotal || 1) > 1
-                ? filteredParticipants
-                    .map((row) => {
-                        const rowId = Number(row.id || 0);
-                        const selected = (upsaleForm.participantIds || []).includes(rowId);
-                        const isOwner = rowId === holderPartnerId;
-                        return `
-                            <label class="wgs-checkbox-option ${isOwner ? "wgs-checkbox-owner" : ""}">
-                                <input type="checkbox" data-field="upsale_participant_toggle" value="${this._escapeHtml(String(rowId))}" ${selected ? "checked" : ""} ${isOwner ? "disabled" : ""} />
-                                <span>${this._escapeHtml(row.name || "-")}${isOwner ? ` ${this._escapeHtml(_t("(Titular)"))}` : ""}</span>
-                            </label>
-                        `;
-                    }).join("")
-                : "";
-            return `
-                <div class="wgs-inline-form-card">
-                    <div class="wgs-inline-form-header">
-                        <strong>${this._escapeHtml(_t("Upsale de suscripción"))}</strong>
-                        <button type="button" class="wgs-inline-close-btn" data-action="cancel-upsale">${this._escapeHtml(_t("Cancelar"))}</button>
-                    </div>
-                    ${formError ? `<div class="wgs-inline-error">${this._escapeHtml(formError)}</div>` : ""}
-                    ${formNotice ? `<div class="wgs-inline-notice">${this._escapeHtml(formNotice)}</div>` : ""}
-                    ${catalogLoading ? `<div class="wgs-inline-loading">${this._escapeHtml(_t("Cargando productos de suscripción..."))}</div>` : ""}
-                    ${upsaleForm.loading ? `<div class="wgs-inline-loading">${this._escapeHtml(_t("Calculando bonificación e importe del upsale..."))}</div>` : ""}
-                    <div class="wgs-inline-form-grid">
-                        <label>
-                            <span>${this._escapeHtml(_t("Producto destino"))}</span>
-                            <select data-field="upsale_product_id">
-                                <option value="">${this._escapeHtml(_t("Selecciona un producto"))}</option>
-                                ${productOptions}
-                            </select>
-                        </label>
-                        <label>
-                            <span>${this._escapeHtml(_t("Plan destino"))}</span>
-                            <select data-field="upsale_plan_choice" ${(upsaleForm.plans || []).length ? "" : "disabled"}>
-                                <option value="">${this._escapeHtml(_t("Selecciona un plan"))}</option>
-                                ${planOptions}
-                            </select>
-                        </label>
-                    </div>
-                    <div class="wgs-inline-form-meta">
-                        <div><span>${this._escapeHtml(_t("Suscripción"))}</span><strong>${this._escapeHtml(upsaleForm.subscriptionName || "-")}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Titular"))}</span><strong>${this._escapeHtml(upsaleForm.holderPartnerName || "-")}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Paquete actual"))}</span><strong>${this._escapeHtml((item.package_names || []).join(", ") || "-")}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Plan actual"))}</span><strong>${this._escapeHtml(upsaleForm.sourcePlanName || item.plan_name || "-")}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Nuevo recurrente"))}</span><strong>${this._escapeHtml(this._formatMoney(getChargeDisplayAmount(upsaleForm.recurringCharge)))}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Bonificación"))}</span><strong>${this._escapeHtml(this._formatMoney(getChargeDisplayAmount(upsaleForm.creditCharge)))}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Cobro ahora"))}</span><strong>${this._escapeHtml(this._formatMoney(getChargeDisplayAmount(upsaleForm.charge)))}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Cupo destino"))}</span><strong>${this._escapeHtml(String(upsaleForm.maxParticipantsTotal || 1))}</strong></div>
-                    </div>
-                    ${Number(upsaleForm.maxParticipantsTotal || 1) > 1 ? `
-                        <div class="wgs-inline-participants">
-                            <span class="wgs-inline-section-title">${this._escapeHtml(_t("Participantes resultantes"))}</span>
-                            <input type="text" class="wgs-inline-search" data-field="upsale_participant_search" placeholder="${this._escapeHtml(_t("Buscar participante"))}" value="${this._escapeHtml(upsaleForm.participantSearch || "")}" />
-                            <div class="wgs-inline-participant-list">${participantOptions}</div>
-                        </div>
-                    ` : ""}
-                    <div class="wgs-inline-actions">
-                        <button type="button" class="wgs-primary-action-btn" data-action="save-upsale" ${upsaleForm.loading ? "disabled" : ""}>${this._escapeHtml(_t("Agregar al ticket"))}</button>
-                        <button type="button" class="wgs-secondary-action-btn" data-action="cancel-upsale">${this._escapeHtml(_t("Cancelar"))}</button>
-                    </div>
-                </div>
-            `;
+            return buildUpsaleFormHtml({
+                item,
+                formMode,
+                upsaleForm,
+                productCatalog,
+                filteredParticipants,
+                formError,
+                formNotice,
+                catalogLoading,
+                escapeHtml: (value) => this._escapeHtml(value),
+                formatMoney: (value) => this._formatMoney(value),
+                getChargeDisplayAmount,
+                _t,
+            });
         };
 
         const renderDetail = (detail) => {
@@ -1916,12 +1864,7 @@ patch(ControlButtons.prototype, {
             restoreFocusState(overlay, focusState);
         };
 
-        tbody.addEventListener("click", (event) => {
-            const rowElement = event.target.closest("tr[data-partner-id]");
-            if (!rowElement) {
-                return;
-            }
-            const partnerId = Number(rowElement.dataset.partnerId || 0);
+        bindDirectoryRowSelection(tbody, (partnerId) => {
             if (!partnerId || partnerId === selectedPartnerId) {
                 return;
             }
@@ -2908,12 +2851,19 @@ patch(ControlButtons.prototype, {
             }
         });
 
-        searchInput.addEventListener("input", renderPreservingFocus);
-        stateSelect.addEventListener("change", render);
-        birthdaySelect.addEventListener("change", render);
-        sortSelect.addEventListener("change", render);
-        exportButton.addEventListener("click", () => {
-            this._downloadDirectoryAsXls(filteredSnapshot);
+        bindDirectoryToolbarEvents({
+            searchInput,
+            stateSelect,
+            birthdaySelect,
+            sortSelect,
+            exportButton,
+            onSearchInput: renderPreservingFocus,
+            onStateChange: render,
+            onBirthdayChange: render,
+            onSortChange: render,
+            onExport: () => {
+                this._downloadDirectoryAsXls(filteredSnapshot);
+            },
         });
 
         render();
