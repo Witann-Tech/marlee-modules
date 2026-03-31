@@ -33,6 +33,12 @@ import {
     parseISODate,
     toTimestamp,
 } from "./subscription_view_utils";
+import {
+    escapeHtml,
+    formatDateDisplay,
+    formatDateTimeDisplay,
+    formatMoney,
+} from "./subscription_format_utils";
 import { ControlButtons } from "@point_of_sale/app/screens/product_screen/control_buttons/control_buttons";
 import { PaymentScreen } from "@point_of_sale/app/screens/payment_screen/payment_screen";
 import { _t } from "@web/core/l10n/translation";
@@ -3158,16 +3164,7 @@ patch(ControlButtons.prototype, {
     },
 
     _formatMoney(value) {
-        const amount = Number(value || 0);
-        try {
-            return new Intl.NumberFormat("es-MX", {
-                style: "currency",
-                currency: "MXN",
-                minimumFractionDigits: 2,
-            }).format(amount);
-        } catch {
-            return `$ ${amount.toFixed(2)}`;
-        }
+        return formatMoney(value);
     },
 
     _toTimestamp(value) {
@@ -3183,36 +3180,11 @@ patch(ControlButtons.prototype, {
     },
 
     _formatDateDisplay(value) {
-        if (!value) {
-            return "";
-        }
-        const parsed = parseISODate(String(value).slice(0, 10));
-        if (!parsed) {
-            return String(value);
-        }
-        const date = new Date(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate());
-        return date.toLocaleDateString("es-MX", {
-            day: "2-digit",
-            month: "short",
-            year: "numeric",
-        });
+        return formatDateDisplay(value);
     },
 
     _formatDateTimeDisplay(value) {
-        if (!value) {
-            return "";
-        }
-        const ts = this._toTimestamp(value);
-        if (ts === null) {
-            return String(value);
-        }
-        return new Date(ts).toLocaleString("es-MX", {
-            day: "2-digit",
-            month: "short",
-            year: "numeric",
-            hour: "2-digit",
-            minute: "2-digit",
-        });
+        return formatDateTimeDisplay(value);
     },
 
     _downloadDirectoryAsXls(rows) {
@@ -3327,12 +3299,7 @@ patch(ControlButtons.prototype, {
     },
 
     _escapeHtml(value) {
-        return String(value)
-            .replaceAll("&", "&amp;")
-            .replaceAll("<", "&lt;")
-            .replaceAll(">", "&gt;")
-            .replaceAll('"', "&quot;")
-            .replaceAll("'", "&#39;");
+        return escapeHtml(value);
     },
 
     _ensureStatusStyles() {
