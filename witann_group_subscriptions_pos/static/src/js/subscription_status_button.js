@@ -24,6 +24,15 @@ import {
     getDefaultParticipantEditForm,
     getDefaultUpsaleForm,
 } from "./subscription_form_defaults";
+import {
+    formatTodayISO,
+    getBirthdaySortRank,
+    getStateClass,
+    getStateRank,
+    matchesBirthdayFilter,
+    parseISODate,
+    toTimestamp,
+} from "./subscription_view_utils";
 import { ControlButtons } from "@point_of_sale/app/screens/product_screen/control_buttons/control_buttons";
 import { PaymentScreen } from "@point_of_sale/app/screens/payment_screen/payment_screen";
 import { _t } from "@web/core/l10n/translation";
@@ -33,36 +42,6 @@ import { onWillUnmount } from "@odoo/owl";
 
 const MODAL_ID = "wgs-subscription-status-modal";
 const STYLE_ID = "wgs-subscription-status-style";
-const STATE_SORT_RANK = {
-    progress: 0,
-    renew: 1,
-    paused: 2,
-    draft: 3,
-    cancel: 4,
-    closed: 5,
-    upsell: 6,
-    other: 7,
-    none: 8,
-};
-
-function parseISODate(value) {
-    if (!value || typeof value !== "string") {
-        return null;
-    }
-    const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (!match) {
-        return null;
-    }
-    const year = Number(match[1]);
-    const month = Number(match[2]) - 1;
-    const day = Number(match[3]);
-    const date = new Date(Date.UTC(year, month, day));
-    return Number.isNaN(date.getTime()) ? null : date;
-}
-
-function formatTodayISO() {
-    return new Date().toISOString().slice(0, 10);
-}
 
 function captureFocusState(root) {
     const active = document.activeElement;
@@ -3171,21 +3150,11 @@ patch(ControlButtons.prototype, {
     },
 
     _getStateRank(state) {
-        return STATE_SORT_RANK[state || "other"] ?? STATE_SORT_RANK.other;
+        return getStateRank(state);
     },
 
     _getStateClass(state) {
-        const value = state || "none";
-        if (value === "progress") {
-            return "wgs-state-positive";
-        }
-        if (value === "renew" || value === "paused" || value === "draft" || value === "upsell") {
-            return "wgs-state-warning";
-        }
-        if (value === "cancel" || value === "closed") {
-            return "wgs-state-negative";
-        }
-        return "wgs-state-neutral";
+        return getStateClass(state);
     },
 
     _formatMoney(value) {
@@ -3202,56 +3171,15 @@ patch(ControlButtons.prototype, {
     },
 
     _toTimestamp(value) {
-        if (!value) {
-            return null;
-        }
-        const ts = Date.parse(String(value).trim());
-        return Number.isNaN(ts) ? null : ts;
+        return toTimestamp(value);
     },
 
     _birthdaySortRank(birthdayValue) {
-        const parsed = parseISODate(String(birthdayValue || "").trim());
-        if (!parsed) {
-            return 367;
-        }
-        const today = new Date();
-        const currentYear = today.getFullYear();
-        let nextBirthday = new Date(currentYear, parsed.getUTCMonth(), parsed.getUTCDate());
-        if (nextBirthday < new Date(currentYear, today.getMonth(), today.getDate())) {
-            nextBirthday = new Date(currentYear + 1, parsed.getUTCMonth(), parsed.getUTCDate());
-        }
-        const diffMs = nextBirthday.getTime() - new Date(currentYear, today.getMonth(), today.getDate()).getTime();
-        return Math.floor(diffMs / 86400000);
+        return getBirthdaySortRank(birthdayValue);
     },
 
     _matchesBirthdayFilter(birthdayValue, filterMode) {
-        if (filterMode === "all") {
-            return true;
-        }
-        const parsed = parseISODate(String(birthdayValue || "").trim());
-        if (!parsed) {
-            return filterMode === "missing";
-        }
-        if (filterMode === "missing") {
-            return false;
-        }
-
-        const today = new Date();
-        const todayMonth = today.getMonth() + 1;
-        const todayDay = today.getDate();
-        const birthMonth = parsed.getUTCMonth() + 1;
-        const birthDay = parsed.getUTCDate();
-
-        if (filterMode === "today") {
-            return birthMonth === todayMonth && birthDay === todayDay;
-        }
-        if (filterMode === "this_month") {
-            return birthMonth === todayMonth;
-        }
-        if (filterMode === "next_7") {
-            return this._birthdaySortRank(birthdayValue) <= 7;
-        }
-        return true;
+        return matchesBirthdayFilter(birthdayValue, filterMode);
     },
 
     _formatDateDisplay(value) {
