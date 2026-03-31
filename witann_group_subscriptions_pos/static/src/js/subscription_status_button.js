@@ -73,6 +73,7 @@ import {
 } from "./subscription_event_bindings";
 import {
     renderDetailEmpty as buildDetailEmptyHtml,
+    renderDetailHeader,
     renderDetailLoading as buildDetailLoadingHtml,
 } from "./subscription_detail_render";
 import { renderDetailContent } from "./subscription_detail_composer";
@@ -1234,6 +1235,7 @@ patch(ControlButtons.prototype, {
                 return;
             }
             detailPane.innerHTML = renderDetailContent(detail, {
+                renderDetailHeader,
                 renderPartnerDetailAvatar,
                 renderSubscriptionCard,
                 renderPendingDocumentSummary,
