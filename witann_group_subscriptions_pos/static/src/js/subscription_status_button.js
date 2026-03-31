@@ -63,6 +63,7 @@ import {
     renderPendingDocumentSummary,
     renderSubscriptionCard,
 } from "./subscription_card_render";
+import { renderPartnerDetailAvatar } from "./subscription_partner_render";
 import { ControlButtons } from "@point_of_sale/app/screens/product_screen/control_buttons/control_buttons";
 import { PaymentScreen } from "@point_of_sale/app/screens/payment_screen/payment_screen";
 import { _t } from "@web/core/l10n/translation";
@@ -1760,42 +1761,15 @@ patch(ControlButtons.prototype, {
             const subscriptions = Array.isArray(detail.items) ? detail.items : [];
             const summaryStateClass = this._getStateClass(detail.state);
             const isEditingPartnerPhoto = formMode === "partner_photo" && partnerPhotoForm && Number(partnerPhotoForm.partnerId || 0) === Number(detail.partner_id || 0);
-            const detailAvatarHtml = isEditingPartnerPhoto
-                ? `
-                    <div class="wgs-detail-avatar-stack wgs-detail-avatar-stack-editing">
-                        <div class="wgs-detail-avatar-editor">
-                            ${partnerPhotoForm.cameraActive
-                                ? `<video class="wgs-camera-preview" data-role="partner-camera-preview" autoplay playsinline muted></video>`
-                                : partnerPhotoForm.imageDataUrl
-                                ? `<img class="wgs-detail-avatar" src="${this._escapeHtml(partnerPhotoForm.imageDataUrl)}" alt="${this._escapeHtml(_t("Foto del cliente"))}" loading="lazy" />`
-                                : `<div class="wgs-new-partner-empty-photo">${this._escapeHtml(_t("Sin foto"))}</div>`
-                            }
-                        </div>
-                        ${formError ? `<div class="wgs-inline-error wgs-inline-error-compact">${this._escapeHtml(formError)}</div>` : ""}
-                        ${formNotice ? `<div class="wgs-inline-notice wgs-inline-notice-compact">${this._escapeHtml(formNotice)}</div>` : ""}
-                        <div class="wgs-inline-actions wgs-photo-actions-grid wgs-detail-photo-actions">
-                            <label class="wgs-secondary-action-btn wgs-file-action-btn">
-                                <span>${this._escapeHtml(_t("Subir foto"))}</span>
-                                <input type="file" accept="image/*" data-field="existing_partner_image_file" hidden />
-                            </label>
-                            ${!partnerPhotoForm.cameraActive
-                                ? `<button type="button" class="wgs-secondary-action-btn" data-action="start-existing-partner-camera">${this._escapeHtml(_t("Usar cámara"))}</button>`
-                                : `
-                                    <button type="button" class="wgs-primary-action-btn" data-action="capture-existing-partner-camera">${this._escapeHtml(_t("Capturar"))}</button>
-                                    <button type="button" class="wgs-secondary-action-btn" data-action="stop-existing-partner-camera">${this._escapeHtml(_t("Apagar cámara"))}</button>
-                                `
-                            }
-                            <button type="button" class="wgs-primary-action-btn" data-action="save-partner-photo">${this._escapeHtml(_t("Guardar foto"))}</button>
-                            <button type="button" class="wgs-secondary-action-btn" data-action="cancel-partner-photo">${this._escapeHtml(_t("Cancelar"))}</button>
-                        </div>
-                    </div>
-                `
-                : `
-                    <div class="wgs-detail-avatar-stack">
-                        <img class="wgs-detail-avatar" src="${this._escapeHtml(detail.image_url || "")}" alt="${this._escapeHtml(detail.partner_name || "")}" loading="lazy" />
-                        <button type="button" class="wgs-secondary-action-btn wgs-avatar-edit-btn" data-action="open-partner-photo">${this._escapeHtml(_t("Editar foto"))}</button>
-                    </div>
-                `;
+            const detailAvatarHtml = renderPartnerDetailAvatar({
+                detail,
+                partnerPhotoForm,
+                isEditingPartnerPhoto,
+                formError,
+                formNotice,
+                escapeHtml: (value) => this._escapeHtml(value),
+                _t,
+            });
             const subscriptionsHtml = subscriptions.length
                 ? subscriptions.map((item) => {
                     const stateClass = this._getStateClass(item.native_state_key);
@@ -3310,7 +3284,9 @@ patch(ControlButtons.prototype, {
             }
             .wgs-avatar-edit-btn {
                 width: 100%;
-                white-space: nowrap;
+                white-space: normal;
+                text-align: center;
+                line-height: 1.2;
             }
             .wgs-detail-photo-actions {
                 width: 100%;
