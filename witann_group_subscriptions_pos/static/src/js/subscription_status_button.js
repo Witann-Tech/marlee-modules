@@ -54,6 +54,11 @@ import {
     filterDirectoryRows,
     sortDirectoryRows,
 } from "./subscription_directory_state";
+import {
+    renderDetailEmpty as buildDetailEmptyHtml,
+    renderDetailHeader,
+    renderDetailLoading as buildDetailLoadingHtml,
+} from "./subscription_detail_render";
 import { ControlButtons } from "@point_of_sale/app/screens/product_screen/control_buttons/control_buttons";
 import { PaymentScreen } from "@point_of_sale/app/screens/payment_screen/payment_screen";
 import { _t } from "@web/core/l10n/translation";
@@ -619,21 +624,19 @@ patch(ControlButtons.prototype, {
         };
 
         const renderDetailEmpty = (title, message) => {
-            detailPane.innerHTML = `
-                <div class="wgs-detail-empty">
-                    <strong>${this._escapeHtml(title)}</strong>
-                    <p>${this._escapeHtml(message)}</p>
-                </div>
-            `;
+            detailPane.innerHTML = buildDetailEmptyHtml({
+                title,
+                message,
+                escapeHtml: (value) => this._escapeHtml(value),
+            });
         };
 
         const renderDetailLoading = () => {
-            detailPane.innerHTML = `
-                <div class="wgs-detail-empty">
-                    <strong>${this._escapeHtml(_t("Cargando detalle"))}</strong>
-                    <p>${this._escapeHtml(_t("Estamos consultando las suscripciones del cliente seleccionado."))}</p>
-                </div>
-            `;
+            detailPane.innerHTML = buildDetailLoadingHtml({
+                title: _t("Cargando detalle"),
+                message: _t("Estamos consultando las suscripciones del cliente seleccionado."),
+                escapeHtml: (value) => this._escapeHtml(value),
+            });
         };
 
         const getSelectedPlan = () => {
@@ -1893,23 +1896,16 @@ patch(ControlButtons.prototype, {
                 `;
 
             detailPane.innerHTML = `
-                <div class="wgs-detail-header-card ${isEditingPartnerPhoto ? "wgs-detail-header-card-editing" : ""}">
-                    ${detailAvatarHtml}
-                    <div class="wgs-detail-header-text">
-                        <div class="wgs-detail-title-row">
-                            <h4>${this._escapeHtml(detail.partner_name || "-")}</h4>
-                            <span class="wgs-state-badge ${summaryStateClass}">${this._escapeHtml(detail.state_label || _t("Sin suscripcion"))}</span>
-                        </div>
-                        <div class="wgs-detail-contact-grid">
-                            <div><span>${this._escapeHtml(_t("Telefono"))}</span><strong>${this._escapeHtml(detail.phone || "-")}</strong></div>
-                            <div><span>${this._escapeHtml(_t("Email"))}</span><strong>${this._escapeHtml(detail.email || "-")}</strong></div>
-                            <div><span>${this._escapeHtml(_t("Genero"))}</span><strong>${this._escapeHtml(detail.gender || "-")}</strong></div>
-                            <div><span>${this._escapeHtml(_t("Cumpleanos"))}</span><strong>${this._escapeHtml(this._formatDateDisplay(detail.birthday) || "-")}</strong></div>
-                            <div><span>${this._escapeHtml(_t("Ultimo acceso"))}</span><strong>${this._escapeHtml(this._formatDateTimeDisplay(detail.last_access) || "-")}</strong></div>
-                            <div><span>${this._escapeHtml(_t("Resumen"))}</span><strong>${this._escapeHtml(detail.package_label || _t("Sin suscripcion"))}</strong></div>
-                        </div>
-                    </div>
-                </div>
+                ${renderDetailHeader({
+                    detail,
+                    isEditingPartnerPhoto,
+                    detailAvatarHtml,
+                    summaryStateClass,
+                    escapeHtml: (value) => this._escapeHtml(value),
+                    formatDateDisplay: (value) => this._formatDateDisplay(value),
+                    formatDateTimeDisplay: (value) => this._formatDateTimeDisplay(value),
+                    _t,
+                })}
                 <div class="wgs-detail-actions-bar">
                     <button type="button" class="wgs-primary-action-btn" data-action="open-new">${this._escapeHtml(_t("Nueva suscripcion"))}</button>
                 </div>
