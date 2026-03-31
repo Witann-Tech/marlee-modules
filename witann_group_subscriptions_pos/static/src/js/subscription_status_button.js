@@ -85,6 +85,16 @@ import {
     resetForSelectedPartner,
     resetListPartnerFormState,
 } from "./subscription_modal_state";
+import {
+    buildDetailPartnerActionHandlers,
+    buildListPartnerActionHandlers,
+    handleDetailPartnerFieldChange,
+    handleDetailPartnerFieldInput,
+    handleListPartnerFieldChange,
+    handleListPartnerFieldInput,
+    openNewPartnerForm as openNewPartnerFormState,
+    openPartnerPhotoForm as openPartnerPhotoFormState,
+} from "./subscription_partner_handlers";
 import { ControlButtons } from "@point_of_sale/app/screens/product_screen/control_buttons/control_buttons";
 import { PaymentScreen } from "@point_of_sale/app/screens/payment_screen/payment_screen";
 import { _t } from "@web/core/l10n/translation";
@@ -615,6 +625,7 @@ patch(ControlButtons.prototype, {
             set partnerPhotoForm(value) { partnerPhotoForm = value; },
             get newSubscriptionForm() { return newSubscriptionForm; },
             set newSubscriptionForm(value) { newSubscriptionForm = value; },
+            getDefaultNewPartnerForm: () => this._getDefaultNewPartnerForm(),
         };
 
         const syncPartnerCameraPreview = () => {
@@ -797,41 +808,18 @@ patch(ControlButtons.prototype, {
         };
 
         const openNewPartnerForm = () => {
-            formMode = "new_partner";
-            formError = "";
-            formNotice = "";
-            stopPartnerCamera();
-            renewalForm = null;
-            upsaleForm = null;
-            pendingChargeForm = null;
-            cancellationRefundForm = null;
-            participantEditForm = null;
-            newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
-            newPartnerForm = this._getDefaultNewPartnerForm();
-            partnerPhotoForm = null;
-            renderDetail(currentDetail);
+            openNewPartnerFormState(modalState, {
+                stopPartnerCamera,
+                createNewSubscriptionForm: (partnerId) => this._getDefaultNewSubscriptionForm(partnerId),
+                renderDetail,
+            });
         };
 
         const openPartnerPhotoForm = () => {
-            if (!currentDetail || !currentDetail.partner_id) {
-                return;
-            }
-            formMode = "partner_photo";
-            formError = "";
-            formNotice = "";
-            stopPartnerCamera();
-            renewalForm = null;
-            upsaleForm = null;
-            pendingChargeForm = null;
-            participantEditForm = null;
-            newPartnerForm = null;
-            partnerPhotoForm = {
-                partnerId: Number(currentDetail.partner_id || 0) || false,
-                imageDataUrl: currentDetail.image_url || "",
-                imageBase64: "",
-                cameraActive: false,
-            };
-            renderDetail(currentDetail);
+            openPartnerPhotoFormState(modalState, {
+                stopPartnerCamera,
+                renderDetail,
+            });
         };
 
         const openRenewalForm = async (item) => {
@@ -1925,55 +1913,24 @@ patch(ControlButtons.prototype, {
         });
 
         const listPaneActions = {
-            "open-new-partner": async () => {
-                openNewPartnerForm();
-                render();
-            },
-            "cancel-new-partner": async () => {
-                resetListPartnerForm();
-                render();
-            },
-            "start-partner-camera": async () => {
-                await startPartnerCameraForForm(newPartnerForm, render, "Error al abrir cámara para partner POS");
-            },
-            "stop-partner-camera": async () => {
-                stopPartnerCameraForForm(newPartnerForm, render);
-            },
-            "capture-partner-camera": async () => {
-                capturePartnerCameraForForm(newPartnerForm, overlay, render);
-            },
-            "save-new-partner": async () => {
-                clearFeedback();
-                if (!newPartnerForm || !String(newPartnerForm.name || "").trim()) {
-                    formError = _t("Debes capturar el nombre del cliente.");
-                    render();
-                    return;
-                }
-                try {
-                    const result = await this._createPartnerForPos({
-                        name: newPartnerForm.name || "",
-                        phone: newPartnerForm.phone || "",
-                        email: newPartnerForm.email || "",
-                        gender: newPartnerForm.gender || false,
-                        birthday: newPartnerForm.birthday || false,
-                        image_1920: newPartnerForm.imageBase64 || false,
-                    });
-                    stopPartnerCamera();
-                    formMode = null;
-                    newPartnerForm = null;
-                    formError = "";
-                    formNotice = _t("Cliente creado correctamente.");
-                    await reloadDirectoryRows(result && result.partner_id ? result.partner_id : false);
-                    if (result && result.partner_id) {
-                        newSubscriptionForm = this._getDefaultNewSubscriptionForm(result.partner_id);
-                        await loadDetail(result.partner_id, { force: true });
-                    }
-                } catch (error) {
-                    console.error("Error al crear cliente desde POS", error);
-                    formError = (error && error.message) ? error.message : _t("No se pudo crear el cliente.");
-                    render();
-                }
-            },
+            ...buildListPartnerActionHandlers({
+                state: modalState,
+                clearFeedback,
+                render,
+                renderDetail,
+                resetListPartnerForm,
+                startPartnerCameraForForm,
+                stopPartnerCameraForForm,
+                capturePartnerCameraForForm,
+                createPartner: (values) => this._createPartnerForPos(values),
+                stopPartnerCamera,
+                reloadDirectoryRows,
+                loadDetail,
+                createNewSubscriptionForm: (partnerId) => this._getDefaultNewSubscriptionForm(partnerId),
+                openNewPartnerForm,
+                overlayRoot: overlay,
+                _t,
+            }),
         };
         bindActionMap(listPane, listPaneActions);
 
@@ -1988,45 +1945,32 @@ patch(ControlButtons.prototype, {
             "open-new": async () => {
                 await openNewSubscriptionForm();
             },
-            "open-new-partner": async () => {
-                openNewPartnerForm();
-            },
             "cancel-new": async () => {
                 resetInlineForms();
                 renderDetail(currentDetail);
             },
-            "cancel-new-partner": async () => {
-                resetListPartnerForm();
-                render();
-            },
-            "start-partner-camera": async () => {
-                await startPartnerCameraForForm(newPartnerForm, () => renderDetail(currentDetail), "Error al abrir cámara para partner POS");
-            },
-            "stop-partner-camera": async () => {
-                stopPartnerCameraForForm(newPartnerForm, () => renderDetail(currentDetail));
-            },
-            "open-partner-photo": async () => {
-                openPartnerPhotoForm();
-            },
-            "cancel-partner-photo": async () => {
-                clearFeedback();
-                stopPartnerCamera();
-                formMode = null;
-                partnerPhotoForm = null;
-                renderDetail(currentDetail);
-            },
-            "start-existing-partner-camera": async () => {
-                await startPartnerCameraForForm(partnerPhotoForm, () => renderDetail(currentDetail), "Error al abrir cámara para editar foto POS");
-            },
-            "stop-existing-partner-camera": async () => {
-                stopPartnerCameraForForm(partnerPhotoForm, () => renderDetail(currentDetail));
-            },
-            "capture-existing-partner-camera": async () => {
-                capturePartnerCameraForForm(partnerPhotoForm, overlay, () => renderDetail(currentDetail));
-            },
-            "capture-partner-camera": async () => {
-                capturePartnerCameraForForm(newPartnerForm, detailPane, () => renderDetail(currentDetail));
-            },
+            ...buildDetailPartnerActionHandlers({
+                state: modalState,
+                clearFeedback,
+                render,
+                renderDetail,
+                resetListPartnerForm,
+                startPartnerCameraForForm,
+                stopPartnerCameraForForm,
+                capturePartnerCameraForForm,
+                createPartner: (values) => this._createPartnerForPos(values),
+                updatePartnerPhoto: (partnerId, imageBase64) => this._updatePartnerPhotoForPos(partnerId, imageBase64),
+                stopPartnerCamera,
+                reloadDirectoryRows,
+                loadDetail,
+                createNewSubscriptionForm: (partnerId) => this._getDefaultNewSubscriptionForm(partnerId),
+                openNewPartnerForm,
+                openPartnerPhotoForm,
+                overlayRoot: overlay,
+                detailRoot: detailPane,
+                detailCache,
+                _t,
+            }),
             "open-renewal": async ({ actionButton }) => {
                 await openRenewalForm(getCurrentSubscriptionItem(actionButton));
             },
@@ -2413,65 +2357,6 @@ patch(ControlButtons.prototype, {
                     return;
                 }
             },
-            "save-new-partner": async () => {
-                formError = "";
-                formNotice = "";
-                if (!newPartnerForm || !String(newPartnerForm.name || "").trim()) {
-                    formError = _t("Debes capturar el nombre del cliente.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-                try {
-                    const result = await this._createPartnerForPos({
-                        name: newPartnerForm.name || "",
-                        phone: newPartnerForm.phone || "",
-                        email: newPartnerForm.email || "",
-                        gender: newPartnerForm.gender || false,
-                        birthday: newPartnerForm.birthday || false,
-                        image_1920: newPartnerForm.imageBase64 || false,
-                    });
-                    stopPartnerCamera();
-                    formMode = null;
-                    newPartnerForm = null;
-                    formError = "";
-                    formNotice = _t("Cliente creado correctamente.");
-                    await reloadDirectoryRows(result && result.partner_id ? result.partner_id : false);
-                    if (result && result.partner_id) {
-                        newSubscriptionForm = this._getDefaultNewSubscriptionForm(result.partner_id);
-                        await loadDetail(result.partner_id, { force: true });
-                    }
-                } catch (error) {
-                    console.error("Error al crear cliente desde POS", error);
-                    formError = (error && error.message) ? error.message : _t("No se pudo crear el cliente.");
-                    renderDetail(currentDetail);
-                }
-            },
-            "save-partner-photo": async () => {
-                formError = "";
-                formNotice = "";
-                if (!partnerPhotoForm || !partnerPhotoForm.partnerId || !partnerPhotoForm.imageBase64) {
-                    formError = _t("Debes seleccionar o capturar una foto antes de guardar.");
-                    renderDetail(currentDetail);
-                    return;
-                }
-                try {
-                    const result = await this._updatePartnerPhotoForPos(partnerPhotoForm.partnerId, partnerPhotoForm.imageBase64);
-                    stopPartnerCamera();
-                    if (currentDetail && Number(currentDetail.partner_id || 0) === Number(partnerPhotoForm.partnerId || 0)) {
-                        currentDetail.image_url = result && result.image_url ? result.image_url : partnerPhotoForm.imageDataUrl;
-                    }
-                    formMode = null;
-                    partnerPhotoForm = null;
-                    formNotice = _t("Foto actualizada correctamente.");
-                    detailCache.delete(Number(currentDetail && currentDetail.partner_id ? currentDetail.partner_id : 0));
-                    await reloadDirectoryRows(result && result.partner_id ? result.partner_id : false);
-                    await loadDetail(selectedPartnerId, { force: true });
-                } catch (error) {
-                    console.error("Error al actualizar foto de cliente POS", error);
-                    formError = (error && error.message) ? error.message : _t("No se pudo actualizar la foto del cliente.");
-                    renderDetail(currentDetail);
-                }
-            },
             "save-upsale": async () => {
                 formError = "";
                 formNotice = "";
@@ -2666,6 +2551,20 @@ patch(ControlButtons.prototype, {
         bindActionMap(detailPane, detailPaneActions);
 
         bindFieldChange(detailPane, async ({ field, target }) => {
+            const handledPartnerField = await handleDetailPartnerFieldChange(
+                { field, target },
+                {
+                    state: modalState,
+                    clearFeedback,
+                    readFileAsDataUrl: (file) => this._readFileAsDataUrl(file),
+                    applyImageDataUrlToForm,
+                    renderDetail,
+                    _t,
+                }
+            );
+            if (handledPartnerField) {
+                return;
+            }
             clearFeedback();
             if (formMode === "new" && field === "product_id") {
                 await applySelectedProduct(target.value);
@@ -2675,10 +2574,6 @@ patch(ControlButtons.prototype, {
                 newSubscriptionForm.startDate = target.value || formatTodayISO();
             } else if (formMode === "new" && field === "participant_toggle") {
                 toggleParticipant(target.value, target.checked);
-            } else if (formMode === "new_partner" && field === "partner_gender") {
-                newPartnerForm.gender = target.value || "";
-            } else if (formMode === "new_partner" && field === "partner_birthday") {
-                newPartnerForm.birthday = target.value || "";
             } else if (formMode === "upsale" && field === "upsale_product_id") {
                 await applySelectedUpsaleProduct(target.value);
             } else if (formMode === "upsale" && field === "upsale_plan_choice") {
@@ -2687,52 +2582,26 @@ patch(ControlButtons.prototype, {
                 toggleUpsaleParticipant(target.value, target.checked);
             } else if (formMode === "participants" && field === "edit_participant_toggle") {
                 toggleEditedParticipant(target.value, target.checked);
-            } else if (formMode === "partner_photo" && field === "existing_partner_image_file") {
-                const file = target.files && target.files[0];
-                if (file) {
-                    try {
-                        const dataUrl = await this._readFileAsDataUrl(file);
-                        applyImageDataUrlToForm(partnerPhotoForm, dataUrl);
-                    } catch (error) {
-                        console.error("Error al leer foto existente de partner POS", error);
-                        formError = _t("No se pudo procesar la foto seleccionada.");
-                    }
-                }
             }
             renderDetail(currentDetail);
         });
 
         bindFieldChange(listPane, async ({ field, target }) => {
-            clearFeedback();
-            if (formMode === "new_partner" && field === "partner_gender") {
-                newPartnerForm.gender = target.value || "";
-            } else if (formMode === "new_partner" && field === "partner_birthday") {
-                newPartnerForm.birthday = target.value || "";
-            } else if (formMode === "new_partner" && field === "partner_image_file") {
-                const file = target.files && target.files[0];
-                if (file) {
-                    try {
-                        const dataUrl = await this._readFileAsDataUrl(file);
-                        applyImageDataUrlToForm(newPartnerForm, dataUrl);
-                    } catch (error) {
-                        console.error("Error al leer foto de partner POS", error);
-                        formError = _t("No se pudo procesar la foto seleccionada.");
-                    }
+            await handleListPartnerFieldChange(
+                { field, target },
+                {
+                    state: modalState,
+                    clearFeedback,
+                    readFileAsDataUrl: (file) => this._readFileAsDataUrl(file),
+                    applyImageDataUrlToForm,
+                    render,
+                    _t,
                 }
-                render();
-            }
+            );
         });
 
         bindFieldInput(listPane, ({ field, target }) => {
-            if (formMode === "new_partner" && field === "partner_name") {
-                newPartnerForm.name = target.value || "";
-            } else if (formMode === "new_partner" && field === "partner_phone") {
-                newPartnerForm.phone = target.value || "";
-            } else if (formMode === "new_partner" && field === "partner_email") {
-                newPartnerForm.email = target.value || "";
-            } else {
-                return;
-            }
+            handleListPartnerFieldInput({ field, target }, { state: modalState });
         });
 
         bindFieldInput(detailPane, ({ field, target }) => {
@@ -2740,19 +2609,13 @@ patch(ControlButtons.prototype, {
             if (formMode === "new" && field === "participant_search") {
                 newSubscriptionForm.participantSearch = target.value || "";
                 shouldRender = true;
-            } else if (formMode === "new_partner" && field === "partner_name") {
-                newPartnerForm.name = target.value || "";
-            } else if (formMode === "new_partner" && field === "partner_phone") {
-                newPartnerForm.phone = target.value || "";
-            } else if (formMode === "new_partner" && field === "partner_email") {
-                newPartnerForm.email = target.value || "";
             } else if (formMode === "upsale" && field === "upsale_participant_search") {
                 upsaleForm.participantSearch = target.value || "";
                 shouldRender = true;
             } else if (formMode === "participants" && field === "edit_participant_search") {
                 participantEditForm.participantSearch = target.value || "";
                 shouldRender = true;
-            } else {
+            } else if (!handleDetailPartnerFieldInput({ field, target }, { state: modalState })) {
                 return;
             }
             if (shouldRender) {
