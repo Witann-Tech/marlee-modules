@@ -755,21 +755,14 @@ class SaleOrder(models.Model):
 
         should_mark_for_renewal = bool(next_invoice_date and next_invoice_date <= today)
 
-        force_closed = bool(
-            has_replacement_subscription
-            or (hard_end_date and hard_end_date <= today)
-            or (start_date and hard_end_date and hard_end_date < start_date)
-        )
+        force_closed = bool(has_replacement_subscription)
 
         if force_closed:
             access_state = False
             is_valid = False
             native_state_key = 'closed'
             native_state_label = _('Cerrada')
-            if has_replacement_subscription:
-                reason = _('La suscripción fue reemplazada por un upsale posterior.')
-            else:
-                reason = _('La suscripción ya terminó y no debe contarse como vigente.')
+            reason = _('La suscripción fue reemplazada por un upsale posterior.')
         elif start_date and start_date > today:
             access_state = False
             is_valid = False
