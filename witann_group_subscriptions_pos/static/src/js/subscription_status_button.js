@@ -73,9 +73,9 @@ import {
 } from "./subscription_event_bindings";
 import {
     renderDetailEmpty as buildDetailEmptyHtml,
-    renderDetailHeader,
     renderDetailLoading as buildDetailLoadingHtml,
 } from "./subscription_detail_render";
+import { renderDetailContent } from "./subscription_detail_composer";
 import {
     renderPendingDocumentSummary,
     renderSubscriptionCard,
@@ -1233,90 +1233,27 @@ patch(ControlButtons.prototype, {
                 );
                 return;
             }
-
-            const subscriptions = Array.isArray(detail.items) ? detail.items : [];
-            const summaryStateClass = this._getStateClass(detail.state);
-            const isEditingPartnerPhoto = formMode === "partner_photo" && partnerPhotoForm && Number(partnerPhotoForm.partnerId || 0) === Number(detail.partner_id || 0);
-            const detailAvatarHtml = renderPartnerDetailAvatar({
-                detail,
+            detailPane.innerHTML = renderDetailContent(detail, {
+                renderPartnerDetailAvatar,
+                renderSubscriptionCard,
+                renderPendingDocumentSummary,
+                renderParticipantEditForm,
+                renderPendingChargeForm,
+                renderCancellationRefundForm,
+                renderRenewalForm,
+                renderUpsaleForm,
+                renderNewSubscriptionForm,
+                getStateClass: (state) => this._getStateClass(state),
+                formMode,
                 partnerPhotoForm,
-                isEditingPartnerPhoto,
                 formError,
                 formNotice,
                 escapeHtml: (value) => this._escapeHtml(value),
+                formatDateDisplay: (value) => this._formatDateDisplay(value),
+                formatDateTimeDisplay: (value) => this._formatDateTimeDisplay(value),
+                formatMoney: (value) => this._formatMoney(value),
                 _t,
             });
-            const subscriptionsHtml = subscriptions.length
-                ? subscriptions.map((item) => {
-                    const stateClass = this._getStateClass(item.native_state_key);
-                    const nativeStateKey = String(item.native_state_key || "").toLowerCase();
-                    const canOperateSubscription = Boolean(
-                        item.subscription_id
-                        && (item.access_state === "enabled" || ["progress", "renew"].includes(nativeStateKey))
-                    );
-                    const participantNames = (item.participant_names || []).length
-                        ? item.participant_names.map((name) => this._escapeHtml(name)).join(", ")
-                        : this._escapeHtml(_t("Sin participantes"));
-                    const accessSummary = item.access_people_summary || {};
-                    const accessSiteLabel = (accessSummary.site_names || []).length
-                        ? this._escapeHtml((accessSummary.site_names || []).join(", "))
-                        : this._escapeHtml(_t("Sin sitios"));
-                    const pendingDocumentHtml = renderPendingDocumentSummary({
-                        item,
-                        escapeHtml: (value) => this._escapeHtml(value),
-                        formatMoney: (value) => this._formatMoney(value),
-                        _t,
-                    });
-                    const inlineFormsHtml = [
-                        renderParticipantEditForm(item),
-                        renderPendingChargeForm(item),
-                        renderCancellationRefundForm(item),
-                        renderRenewalForm(item),
-                        renderUpsaleForm(item),
-                    ].join("");
-                    return renderSubscriptionCard({
-                        item,
-                        canOperateSubscription,
-                        stateClass,
-                        participantNames,
-                        accessSummary,
-                        accessSiteLabel,
-                        pendingDocumentHtml,
-                        inlineFormsHtml,
-                        escapeHtml: (value) => this._escapeHtml(value),
-                        formatDateDisplay: (value) => this._formatDateDisplay(value),
-                        formatMoney: (value) => this._formatMoney(value),
-                        _t,
-                    });
-                }).join("")
-                : `
-                    <div class="wgs-detail-empty wgs-detail-empty-inline">
-                        <strong>${this._escapeHtml(_t("Sin suscripciones relacionadas"))}</strong>
-                        <p>${this._escapeHtml(_t("Este cliente no tiene suscripciones nativas vigentes o historicas visibles para POS."))}</p>
-                    </div>
-                `;
-
-            detailPane.innerHTML = `
-                ${renderDetailHeader({
-                    detail,
-                    isEditingPartnerPhoto,
-                    detailAvatarHtml,
-                    summaryStateClass,
-                    escapeHtml: (value) => this._escapeHtml(value),
-                    formatDateDisplay: (value) => this._formatDateDisplay(value),
-                    formatDateTimeDisplay: (value) => this._formatDateTimeDisplay(value),
-                    _t,
-                })}
-                <div class="wgs-detail-actions-bar">
-                    <button type="button" class="wgs-primary-action-btn" data-action="open-new">${this._escapeHtml(_t("Nueva suscripcion"))}</button>
-                </div>
-                ${renderNewSubscriptionForm()}
-                <div class="wgs-detail-note">${this._escapeHtml(_t("Renovación, upsale, cobro pendiente y participantes se operan desde cada tarjeta de suscripción."))}</div>
-                <div class="wgs-detail-section">
-                    <div class="wgs-detail-section-title">${this._escapeHtml(_t("Suscripciones del cliente"))}</div>
-                    <div class="wgs-subscription-cards">${subscriptionsHtml}</div>
-                </div>
-            `;
             syncPartnerCameraPreview();
         };
 

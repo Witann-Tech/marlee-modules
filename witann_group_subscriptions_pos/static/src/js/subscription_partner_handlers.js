@@ -1,5 +1,14 @@
 /** @odoo-module **/
 
+function withUniqueImageUrl(imageUrl) {
+    const raw = String(imageUrl || "").trim();
+    if (!raw) {
+        return "";
+    }
+    const separator = raw.includes("?") ? "&" : "?";
+    return `${raw}${separator}unique=${Date.now()}`;
+}
+
 function openNewPartnerForm(state, {
     stopPartnerCamera,
     createNewSubscriptionForm,
@@ -216,12 +225,30 @@ function buildDetailPartnerActionHandlers({
             try {
                 const result = await updatePartnerPhoto(state.partnerPhotoForm.partnerId, state.partnerPhotoForm.imageBase64);
                 stopPartnerCamera();
+                const freshImageUrl = withUniqueImageUrl(
+                    result && result.image_url ? result.image_url : state.partnerPhotoForm.imageDataUrl
+                );
                 if (state.currentDetail && Number(state.currentDetail.partner_id || 0) === Number(state.partnerPhotoForm.partnerId || 0)) {
-                    state.currentDetail.image_url = result && result.image_url ? result.image_url : state.partnerPhotoForm.imageDataUrl;
+                    state.currentDetail = {
+                        ...state.currentDetail,
+                        image_url: freshImageUrl,
+                    };
+                }
+                if (Array.isArray(state.rows)) {
+                    state.rows = state.rows.map((row) => {
+                        if (Number(row && row.id ? row.id : 0) !== Number(state.partnerPhotoForm.partnerId || 0)) {
+                            return row;
+                        }
+                        return {
+                            ...row,
+                            image_url: freshImageUrl,
+                        };
+                    });
                 }
                 state.formMode = null;
                 state.partnerPhotoForm = null;
                 state.formNotice = _t("Foto actualizada correctamente.");
+                renderDetail(state.currentDetail);
                 detailCache.delete(Number(state.currentDetail && state.currentDetail.partner_id ? state.currentDetail.partner_id : 0));
                 await reloadDirectoryRows(result && result.partner_id ? result.partner_id : false);
                 await loadDetail(state.selectedPartnerId, { force: true });
