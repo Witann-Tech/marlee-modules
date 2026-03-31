@@ -59,6 +59,10 @@ import {
     renderDetailHeader,
     renderDetailLoading as buildDetailLoadingHtml,
 } from "./subscription_detail_render";
+import {
+    renderPendingDocumentSummary,
+    renderSubscriptionCard,
+} from "./subscription_card_render";
 import { ControlButtons } from "@point_of_sale/app/screens/product_screen/control_buttons/control_buttons";
 import { PaymentScreen } from "@point_of_sale/app/screens/payment_screen/payment_screen";
 import { _t } from "@web/core/l10n/translation";
@@ -1807,86 +1811,33 @@ patch(ControlButtons.prototype, {
                     const accessSiteLabel = (accessSummary.site_names || []).length
                         ? this._escapeHtml((accessSummary.site_names || []).join(", "))
                         : this._escapeHtml(_t("Sin sitios"));
-                return `
-                    <div class="wgs-subscription-card">
-                            <div class="wgs-subscription-card-header">
-                                <div>
-                                    <strong>${this._escapeHtml(item.subscription_name || "-")}</strong>
-                                    <div class="wgs-subscription-card-meta">${this._escapeHtml(item.partner_role_label || "-")}</div>
-                                </div>
-                                <span class="wgs-state-badge ${stateClass}">${this._escapeHtml(item.native_state_label || _t("Sin estado"))}</span>
-                            </div>
-                            <div class="wgs-subscription-grid">
-                                <div><span>${this._escapeHtml(_t("Paquete"))}</span><strong>${this._escapeHtml((item.package_names || []).join(", ") || "-")}</strong></div>
-                                <div><span>${this._escapeHtml(_t("Plan"))}</span><strong>${this._escapeHtml(item.plan_name || "-")}</strong></div>
-                                <div><span>${this._escapeHtml(_t("Inicio"))}</span><strong>${this._escapeHtml(this._formatDateDisplay(item.start_date) || "-")}</strong></div>
-                                <div><span>${this._escapeHtml(_t("Vencimiento"))}</span><strong>${this._escapeHtml(this._formatDateDisplay(item.valid_until) || "-")}</strong></div>
-                                <div><span>${this._escapeHtml(_t("Proxima fecha"))}</span><strong>${this._escapeHtml(this._formatDateDisplay(item.next_invoice_date) || "-")}</strong></div>
-                                <div><span>${this._escapeHtml(_t("Participantes"))}</span><strong>${this._escapeHtml(String(item.participant_count || 0))}</strong></div>
-                            </div>
-                            <div class="wgs-subscription-participants">
-                                <span>${this._escapeHtml(_t("Listado de participantes"))}</span>
-                                <p>${participantNames}</p>
-                            </div>
-                            <div class="wgs-subscription-participants">
-                                <span>${this._escapeHtml(_t("Control de acceso"))}</span>
-                                <p>${this._escapeHtml(_t("Personas"))}: ${this._escapeHtml(String(accessSummary.person_count || 0))} · ${this._escapeHtml(_t("Activas"))}: ${this._escapeHtml(String(accessSummary.active_count || 0))} · ${this._escapeHtml(_t("Sin person"))}: ${this._escapeHtml(String(accessSummary.missing_count || 0))}</p>
-                                <p>${this._escapeHtml(_t("Sitios"))}: ${accessSiteLabel}</p>
-                            </div>
-                            <div class="wgs-subscription-actions">
-                                <button
-                                    type="button"
-                                    class="wgs-action-btn"
-                                    data-action="open-renewal"
-                                    data-subscription-id="${this._escapeHtml(String(item.subscription_id || 0))}"
-                                    ${canOperateSubscription ? "" : "disabled"}
-                                >${this._escapeHtml(_t("Renovar"))}</button>
-                                <button
-                                    type="button"
-                                    class="wgs-action-btn"
-                                    data-action="open-upsale"
-                                    data-subscription-id="${this._escapeHtml(String(item.subscription_id || 0))}"
-                                    ${canOperateSubscription ? "" : "disabled"}
-                                >${this._escapeHtml(_t("Upsale"))}</button>
-                                <button
-                                    type="button"
-                                    class="wgs-action-btn"
-                                    data-action="open-pending"
-                                    data-subscription-id="${this._escapeHtml(String(item.subscription_id || 0))}"
-                                    ${item.has_pending_document ? "" : "disabled"}
-                                >${this._escapeHtml(_t("Cobrar pendiente"))}</button>
-                                <button
-                                    type="button"
-                                    class="wgs-action-btn"
-                                    data-action="open-participants"
-                                    data-subscription-id="${this._escapeHtml(String(item.subscription_id || 0))}"
-                                >${this._escapeHtml(_t("Editar participantes"))}</button>
-                                <button
-                                    type="button"
-                                    class="wgs-action-btn"
-                                    data-action="resync-access"
-                                    data-subscription-id="${this._escapeHtml(String(item.subscription_id || 0))}"
-                                >${this._escapeHtml(_t("Resincronizar acceso"))}</button>
-                                <button
-                                    type="button"
-                                    class="wgs-action-btn"
-                                    data-action="open-cancellation-refund"
-                                    data-subscription-id="${this._escapeHtml(String(item.subscription_id || 0))}"
-                                >${this._escapeHtml(_t("Cancelar suscripción"))}</button>
-                            </div>
-                            ${item.has_pending_document ? `
-                                <div class="wgs-subscription-participants">
-                                    <span>${this._escapeHtml(_t("Documento pendiente"))}</span>
-                                    <p>${this._escapeHtml(item.pending_document_name || "-")} · ${this._escapeHtml(this._formatMoney(item.pending_amount_total || 0))}</p>
-                                </div>
-                            ` : ""}
-                            ${renderParticipantEditForm(item)}
-                            ${renderPendingChargeForm(item)}
-                            ${renderCancellationRefundForm(item)}
-                            ${renderRenewalForm(item)}
-                            ${renderUpsaleForm(item)}
-                        </div>
-                    `;
+                    const pendingDocumentHtml = renderPendingDocumentSummary({
+                        item,
+                        escapeHtml: (value) => this._escapeHtml(value),
+                        formatMoney: (value) => this._formatMoney(value),
+                        _t,
+                    });
+                    const inlineFormsHtml = [
+                        renderParticipantEditForm(item),
+                        renderPendingChargeForm(item),
+                        renderCancellationRefundForm(item),
+                        renderRenewalForm(item),
+                        renderUpsaleForm(item),
+                    ].join("");
+                    return renderSubscriptionCard({
+                        item,
+                        canOperateSubscription,
+                        stateClass,
+                        participantNames,
+                        accessSummary,
+                        accessSiteLabel,
+                        pendingDocumentHtml,
+                        inlineFormsHtml,
+                        escapeHtml: (value) => this._escapeHtml(value),
+                        formatDateDisplay: (value) => this._formatDateDisplay(value),
+                        formatMoney: (value) => this._formatMoney(value),
+                        _t,
+                    });
                 }).join("")
                 : `
                     <div class="wgs-detail-empty wgs-detail-empty-inline">
