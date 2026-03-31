@@ -64,6 +64,7 @@ import {
     renderSubscriptionCard,
 } from "./subscription_card_render";
 import { renderPartnerDetailAvatar } from "./subscription_partner_render";
+import { renderPendingChargeForm as buildPendingChargeFormHtml } from "./subscription_pending_render";
 import { ControlButtons } from "@point_of_sale/app/screens/product_screen/control_buttons/control_buttons";
 import { PaymentScreen } from "@point_of_sale/app/screens/payment_screen/payment_screen";
 import { _t } from "@web/core/l10n/translation";
@@ -1541,37 +1542,18 @@ patch(ControlButtons.prototype, {
         };
 
         const renderPendingChargeForm = (item) => {
-            if (
-                formMode !== "pending"
-                || !pendingChargeForm
-                || Number(pendingChargeForm.subscriptionId || 0) !== Number(item.subscription_id || 0)
-            ) {
-                return "";
-            }
-            return `
-                <div class="wgs-inline-form-card">
-                    <div class="wgs-inline-form-header">
-                        <strong>${this._escapeHtml(_t("Cobrar pendiente"))}</strong>
-                        <button type="button" class="wgs-inline-close-btn" data-action="cancel-pending">${this._escapeHtml(_t("Cancelar"))}</button>
-                    </div>
-                    ${formError ? `<div class="wgs-inline-error">${this._escapeHtml(formError)}</div>` : ""}
-                    ${formNotice ? `<div class="wgs-inline-notice">${this._escapeHtml(formNotice)}</div>` : ""}
-                    ${pendingChargeForm.loading ? `<div class="wgs-inline-loading">${this._escapeHtml(_t("Consultando factura pendiente..."))}</div>` : ""}
-                    <div class="wgs-inline-form-meta">
-                        <div><span>${this._escapeHtml(_t("Suscripción"))}</span><strong>${this._escapeHtml(pendingChargeForm.subscriptionName || "-")}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Titular"))}</span><strong>${this._escapeHtml(pendingChargeForm.holderPartnerName || "-")}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Documento"))}</span><strong>${this._escapeHtml(pendingChargeForm.pendingMoveName || "-")}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Fecha factura"))}</span><strong>${this._escapeHtml(this._formatDateDisplay(pendingChargeForm.invoiceDate) || "-")}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Vencimiento"))}</span><strong>${this._escapeHtml(this._formatDateDisplay(pendingChargeForm.invoiceDateDue) || "-")}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Total documento"))}</span><strong>${this._escapeHtml(this._formatMoney(getChargeDisplayAmount(pendingChargeForm.totalCharge)))}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Saldo pendiente"))}</span><strong>${this._escapeHtml(this._formatMoney(getChargeDisplayAmount(pendingChargeForm.charge)))}</strong></div>
-                    </div>
-                    <div class="wgs-inline-actions">
-                        <button type="button" class="wgs-primary-action-btn" data-action="save-pending" ${pendingChargeForm.loading ? "disabled" : ""}>${this._escapeHtml(_t("Agregar al ticket"))}</button>
-                        <button type="button" class="wgs-secondary-action-btn" data-action="cancel-pending">${this._escapeHtml(_t("Cancelar"))}</button>
-                    </div>
-                </div>
-            `;
+            return buildPendingChargeFormHtml({
+                item,
+                formMode,
+                pendingChargeForm,
+                formError,
+                formNotice,
+                escapeHtml: (value) => this._escapeHtml(value),
+                formatDateDisplay: (value) => this._formatDateDisplay(value),
+                formatMoney: (value) => this._formatMoney(value),
+                getChargeDisplayAmount,
+                _t,
+            });
         };
 
         const renderCancellationRefundForm = (item) => {
