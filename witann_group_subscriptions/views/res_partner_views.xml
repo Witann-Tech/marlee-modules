@@ -7,6 +7,7 @@
         <field name="arch" type="xml">
             <xpath expr="//field[@name='vat']" position="after">
                 <newline/>
+                <label for="wgs_curp" string="CURP"/>
                 <field name="wgs_curp" placeholder="ABCD010101HDFRRN09"/>
             </xpath>
         </field>
