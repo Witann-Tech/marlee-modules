@@ -107,6 +107,13 @@ function buildListPartnerActionHandlers({
                     birthday: state.newPartnerForm.birthday || false,
                     image_1920: state.newPartnerForm.imageBase64 || false,
                 });
+                if (!result || result.ok === false) {
+                    state.formError = result && result.error_message
+                        ? result.error_message
+                        : _t("No se pudo crear el cliente.");
+                    render();
+                    return;
+                }
                 stopPartnerCamera();
                 state.formMode = null;
                 state.newPartnerForm = null;
@@ -201,6 +208,13 @@ function buildDetailPartnerActionHandlers({
                     birthday: state.newPartnerForm.birthday || false,
                     image_1920: state.newPartnerForm.imageBase64 || false,
                 });
+                if (!result || result.ok === false) {
+                    state.formError = result && result.error_message
+                        ? result.error_message
+                        : _t("No se pudo crear el cliente.");
+                    renderDetail(state.currentDetail);
+                    return;
+                }
                 stopPartnerCamera();
                 state.formMode = null;
                 state.newPartnerForm = null;

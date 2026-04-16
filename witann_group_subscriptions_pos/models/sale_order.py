@@ -4,7 +4,7 @@ from datetime import date, datetime
 from dateutil.relativedelta import relativedelta
 
 from odoo import _, api, fields, models
-from odoo.exceptions import AccessError
+from odoo.exceptions import AccessError, ValidationError
 
 _logger = logging.getLogger(__name__)
 
@@ -304,6 +304,15 @@ class SaleOrder(models.Model):
         birthday = values.get('birthday') or False
         gender = values.get('gender') or False
 
+        if curp:
+            curp_validation = self._wgs_validate_partner_curp_for_pos(curp)
+            if not curp_validation.get('ok'):
+                return {
+                    'ok': False,
+                    'error_message': curp_validation.get('message') or _('No se pudo validar la CURP del cliente.'),
+                }
+            curp = curp_validation.get('normalized') or curp
+
         if 'phone' in Partner._fields and phone:
             create_vals['phone'] = phone
         if 'mobile' in Partner._fields and phone:
@@ -317,7 +326,13 @@ class SaleOrder(models.Model):
         self._assign_partner_field_for_pos(Partner, create_vals, self._PARTNER_GENDER_FIELD_CANDIDATES, gender)
         self._assign_partner_field_for_pos(Partner, create_vals, self._PARTNER_CURP_FIELD_CANDIDATES, curp)
 
-        partner = Partner.create(create_vals)
+        try:
+            partner = Partner.create(create_vals)
+        except ValidationError as error:
+            return {
+                'ok': False,
+                'error_message': str(error),
+            }
 
         return {
             'ok': True,
@@ -339,17 +354,30 @@ class SaleOrder(models.Model):
         if not partner:
             raise AccessError(_('El cliente seleccionado no existe.'))
 
+        curp_validation = self._wgs_validate_partner_curp_for_pos(curp, exclude_partner=partner)
+        if not curp_validation.get('ok'):
+            return {
+                'ok': False,
+                'error_message': curp_validation.get('message') or _('No se pudo validar la CURP del cliente.'),
+            }
+
         write_vals = {}
         field_name = self._assign_partner_field_for_pos(
             partner,
             write_vals,
             self._PARTNER_CURP_FIELD_CANDIDATES,
-            curp,
+            curp_validation.get('normalized') or curp,
         )
         if not field_name:
             raise AccessError(_('Este entorno no permite capturar CURP desde Punto de Venta.'))
 
-        partner.write(write_vals)
+        try:
+            partner.write(write_vals)
+        except ValidationError as error:
+            return {
+                'ok': False,
+                'error_message': str(error),
+            }
         return {
             'ok': True,
             'partner_id': partner.id,
@@ -1143,6 +1171,41 @@ class SaleOrder(models.Model):
         if hasattr(partner, '_wgs_get_curp_value'):
             return partner._wgs_get_curp_value()
         return self._get_partner_field_value_for_pos(partner, self._PARTNER_CURP_FIELD_CANDIDATES)
+
+    def _wgs_validate_partner_curp_for_pos(self, curp, exclude_partner=False):
+        Partner = self._wgs_partner_model_for_pos()
+        if not hasattr(Partner, '_wgs_has_curp_field') or not Partner._wgs_has_curp_field():
+            return {
+                'ok': False,
+                'message': _('Este entorno no permite capturar CURP desde Punto de Venta.'),
+            }
+
+        normalized = Partner._wgs_normalize_curp(curp)
+        if not normalized:
+            return {
+                'ok': False,
+                'message': _('Debes capturar una CURP válida.'),
+            }
+
+        domain = [(self._PARTNER_CURP_FIELD_CANDIDATES[0], '=', normalized)]
+        if exclude_partner:
+            domain.insert(0, ('id', '!=', exclude_partner.id))
+        duplicate = Partner.search(domain, limit=1)
+        if duplicate:
+            return {
+                'ok': False,
+                'message': _(
+                    'La CURP %(curp)s ya está asignada al contacto %(partner)s. '
+                    'No se permiten contactos duplicados con la misma CURP.'
+                ) % {
+                    'curp': normalized,
+                    'partner': duplicate.display_name,
+                },
+            }
+        return {
+            'ok': True,
+            'normalized': normalized,
+        }
 
     def _assign_partner_field_for_pos(self, partner_model, values, field_candidates, raw_value):
         raw_value = raw_value if raw_value not in (None, '') else False

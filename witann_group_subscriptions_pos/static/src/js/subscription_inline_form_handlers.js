@@ -179,6 +179,14 @@ function buildSubscriptionInlineActionHandlers({
             if (state.newSubscriptionForm.requiresCurp && !currentPartnerCurp && enteredCurp) {
                 try {
                     const curpResult = await updatePartnerCurp(state.selectedPartnerId, enteredCurp);
+                    if (!curpResult || curpResult.ok === false) {
+                        state.formError = curpResult && curpResult.error_message
+                            ? curpResult.error_message
+                            : _t("No se pudo guardar la CURP del cliente.");
+                        renderDetail(state.currentDetail);
+                        return;
+                    }
+                    state.newSubscriptionForm.curp = curpResult && curpResult.curp ? curpResult.curp : enteredCurp;
                     if (state.currentDetail && Number(state.currentDetail.partner_id || 0) === Number(state.selectedPartnerId || 0)) {
                         state.currentDetail = {
                             ...state.currentDetail,
