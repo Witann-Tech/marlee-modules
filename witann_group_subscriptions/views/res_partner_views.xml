@@ -5,10 +5,8 @@
         <field name="model">res.partner</field>
         <field name="inherit_id" ref="base.view_partner_form"/>
         <field name="arch" type="xml">
-            <xpath expr="//field[@name='image_1920'][1]/.." position="inside">
-                <div class="mt-2">
-                    <field name="wgs_curp" placeholder="ABCD010101HDFRRN09"/>
-                </div>
+            <xpath expr="//field[@name='vat']" position="after">
+                <field name="wgs_curp" placeholder="ABCD010101HDFRRN09"/>
             </xpath>
         </field>
     </record>
