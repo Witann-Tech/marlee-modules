@@ -905,6 +905,28 @@ class SaleOrder(models.Model):
         fields_map = sale_order_model._fields
         relation_field_names = []
 
+        pos_line_model_name = 'pos.order.line'
+        if pos_line_model_name in self.env.registry:
+            pos_line_model = self.env[pos_line_model_name].sudo()
+            pos_line_domain = [('wgs_subscription_source_id', '=', self.id)]
+            if 'wgs_subscription_flow' in pos_line_model._fields:
+                pos_line_domain.append(('wgs_subscription_flow', '=', 'upsale'))
+            if 'order_id' in pos_line_model._fields:
+                pos_line_domain.append(('order_id.state', 'not in', ('draft', 'cancel')))
+            replacement_lines = pos_line_model.search(pos_line_domain, order='id desc')
+            replacement_orders = replacement_lines.mapped('wgs_sale_order_id').filtered(
+                lambda order: order
+                and order != self
+                and order._is_subscription_record_for_pos()
+                and (
+                    not self.partner_id
+                    or not order.partner_id
+                    or order.partner_id.id == self.partner_id.id
+                )
+            )
+            if replacement_orders:
+                return True
+
         for field_name in ('subscription_id', 'origin_order_id', 'note_order'):
             field = fields_map.get(field_name)
             if field and field.type == 'many2one' and getattr(field, 'comodel_name', '') == 'sale.order':
@@ -953,7 +975,7 @@ class SaleOrder(models.Model):
 
         today = today or fields.Date.context_today(self)
         native_state_key = item.get('native_state_key') or False
-        if item.get('has_replacement_subscription') and native_state_key == 'closed' and not item.get('has_pending_document'):
+        if item.get('has_replacement_subscription'):
             return False
 
         if native_state_key in ('draft', 'upsell') and not item.get('has_pending_document'):

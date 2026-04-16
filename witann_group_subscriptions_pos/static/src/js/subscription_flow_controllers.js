@@ -36,6 +36,7 @@ async function openNewSubscriptionForm(state, {
     stopPartnerCamera,
     createNewSubscriptionForm,
     renderDetail,
+    loadDetail,
     fetchSubscriptionProductCatalog,
     _t,
 }) {
@@ -55,6 +56,9 @@ async function openNewSubscriptionForm(state, {
     state.partnerPhotoForm = null;
     state.newSubscriptionForm = createNewSubscriptionForm(state.selectedPartnerId);
     renderDetail(state.currentDetail);
+    if (loadDetail) {
+        await loadDetail(state.selectedPartnerId, { force: true });
+    }
     if (state.productCatalog.length || state.catalogLoading) {
         return;
     }

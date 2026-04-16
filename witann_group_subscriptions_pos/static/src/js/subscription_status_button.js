@@ -780,6 +780,7 @@ patch(ControlButtons.prototype, {
                 stopPartnerCamera,
                 createNewSubscriptionForm: (partnerId) => this._getDefaultNewSubscriptionForm(partnerId),
                 renderDetail,
+                loadDetail,
                 fetchSubscriptionProductCatalog: (searchTerm) => this._fetchSubscriptionProductCatalog(searchTerm),
                 _t,
             });
@@ -1041,22 +1042,12 @@ patch(ControlButtons.prototype, {
                             <strong class="wgs-inline-static-value">${this._escapeHtml(this._formatDateDisplay(automaticEndDate) || "-")}</strong>
                         </div>
                     </div>
-                    ${requiresCurp ? `
+                    ${needsCurpCapture ? `
                         <div class="wgs-inline-form-grid">
-                            ${needsCurpCapture
-                                ? `
-                                    <label>
-                                        <span>${this._escapeHtml(_t("CURP"))}</span>
-                                        <input type="text" data-field="subscription_curp" value="${this._escapeHtml(newSubscriptionForm.curp || "")}" placeholder="${this._escapeHtml(_t("Captura la CURP del cliente"))}" />
-                                    </label>
-                                `
-                                : `
-                                    <div>
-                                        <span>${this._escapeHtml(_t("CURP validada"))}</span>
-                                        <strong class="wgs-inline-static-value">${this._escapeHtml(partnerCurp || "-")}</strong>
-                                    </div>
-                                `
-                            }
+                            <label>
+                                <span>${this._escapeHtml(_t("CURP"))}</span>
+                                <input type="text" data-field="subscription_curp" value="${this._escapeHtml(newSubscriptionForm.curp || "")}" placeholder="${this._escapeHtml(_t("Captura la CURP del cliente"))}" />
+                            </label>
                         </div>
                         <div class="wgs-inline-notice">${this._escapeHtml(_t("Este producto requiere CURP para continuar con la venta."))}</div>
                     ` : ""}
