@@ -102,6 +102,7 @@ function buildListPartnerActionHandlers({
                     name: state.newPartnerForm.name || "",
                     phone: state.newPartnerForm.phone || "",
                     email: state.newPartnerForm.email || "",
+                    curp: state.newPartnerForm.curp || "",
                     gender: state.newPartnerForm.gender || false,
                     birthday: state.newPartnerForm.birthday || false,
                     image_1920: state.newPartnerForm.imageBase64 || false,
@@ -195,6 +196,7 @@ function buildDetailPartnerActionHandlers({
                     name: state.newPartnerForm.name || "",
                     phone: state.newPartnerForm.phone || "",
                     email: state.newPartnerForm.email || "",
+                    curp: state.newPartnerForm.curp || "",
                     gender: state.newPartnerForm.gender || false,
                     birthday: state.newPartnerForm.birthday || false,
                     image_1920: state.newPartnerForm.imageBase64 || false,
@@ -296,6 +298,8 @@ function handleListPartnerFieldInput({ field, target }, { state }) {
         state.newPartnerForm.phone = target.value || "";
     } else if (state.formMode === "new_partner" && field === "partner_email") {
         state.newPartnerForm.email = target.value || "";
+    } else if (state.formMode === "new_partner" && field === "partner_curp") {
+        state.newPartnerForm.curp = target.value || "";
     }
 }
 
@@ -343,6 +347,10 @@ function handleDetailPartnerFieldInput({ field, target }, {
     }
     if (state.formMode === "new_partner" && field === "partner_email") {
         state.newPartnerForm.email = target.value || "";
+        return true;
+    }
+    if (state.formMode === "new_partner" && field === "partner_curp") {
+        state.newPartnerForm.curp = target.value || "";
         return true;
     }
     return false;

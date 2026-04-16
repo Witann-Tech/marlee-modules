@@ -5,6 +5,11 @@ from odoo.exceptions import ValidationError
 class ProductTemplate(models.Model):
     _inherit = 'product.template'
 
+    wgs_requires_curp = fields.Boolean(
+        string='Requiere CURP en POS',
+        default=False,
+        help='Obliga a capturar o validar la CURP del contacto antes de vender esta suscripción desde Punto de Venta.',
+    )
     max_participants_total = fields.Integer(
         string='Máximo de participantes (total)',
         default=1,

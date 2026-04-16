@@ -39,6 +39,7 @@ function renderDetailHeader({
                 <div class="wgs-detail-contact-grid">
                     <div><span>${escapeHtml(_t("Telefono"))}</span><strong>${escapeHtml(detail.phone || "-")}</strong></div>
                     <div><span>${escapeHtml(_t("Email"))}</span><strong>${escapeHtml(detail.email || "-")}</strong></div>
+                    <div><span>${escapeHtml(_t("CURP"))}</span><strong>${escapeHtml(detail.curp || "-")}</strong></div>
                     <div><span>${escapeHtml(_t("Genero"))}</span><strong>${escapeHtml(detail.gender || "-")}</strong></div>
                     <div><span>${escapeHtml(_t("Cumpleanos"))}</span><strong>${escapeHtml(formatDateDisplay(detail.birthday) || "-")}</strong></div>
                     <div><span>${escapeHtml(_t("Ultimo acceso"))}</span><strong>${escapeHtml(formatDateTimeDisplay(detail.last_access) || "-")}</strong></div>

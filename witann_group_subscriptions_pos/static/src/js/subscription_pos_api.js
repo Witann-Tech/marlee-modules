@@ -11,6 +11,9 @@ export function createSubscriptionPosApi(orm) {
         async createPartner(values) {
             return orm.call("pos.order", "wgs_create_partner_for_pos", [values || {}]);
         },
+        async updatePartnerCurp(partnerId, curp) {
+            return orm.call("pos.order", "wgs_update_partner_curp_for_pos", [partnerId, curp || false]);
+        },
         async updatePartnerPhoto(partnerId, imageBase64) {
             return orm.call("pos.order", "wgs_update_partner_photo_for_pos", [partnerId, imageBase64 || false]);
         },

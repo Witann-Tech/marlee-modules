@@ -22,6 +22,7 @@ function buildSubscriptionInlineActionHandlers({
     addConfiguredProductLineToOrder,
     getCurrentOrder,
     getPartnerIdFromOrder,
+    updatePartnerCurp,
     findPartnerInPos,
     setPartnerOnCurrentOrder,
     findProductInPos,
@@ -125,6 +126,16 @@ function buildSubscriptionInlineActionHandlers({
             if (!participantIds.includes(state.selectedPartnerId)) {
                 participantIds.unshift(state.selectedPartnerId);
             }
+            const currentPartnerCurp = state.currentDetail
+                && Number(state.currentDetail.partner_id || 0) === Number(state.selectedPartnerId || 0)
+                ? String(state.currentDetail.curp || "").trim()
+                : "";
+            const enteredCurp = String(state.newSubscriptionForm.curp || "").trim();
+            if (state.newSubscriptionForm.requiresCurp && !currentPartnerCurp && !enteredCurp) {
+                state.formError = _t("Este producto requiere CURP. Captúrala antes de agregar la suscripción al ticket.");
+                renderDetail(state.currentDetail);
+                return;
+            }
             const posCharge = buildChargeBreakdown(null, null, state.newSubscriptionForm.charge || {});
             if (participantIds.length > Number(state.newSubscriptionForm.maxParticipantsTotal || 1)) {
                 state.formError = _t("Estas excediendo el cupo maximo de participantes para este paquete.");
@@ -164,6 +175,26 @@ function buildSubscriptionInlineActionHandlers({
                 state.formError = _t("El producto seleccionado no está cargado en la sesión actual del POS.");
                 renderDetail(state.currentDetail);
                 return;
+            }
+            if (state.newSubscriptionForm.requiresCurp && !currentPartnerCurp && enteredCurp) {
+                try {
+                    const curpResult = await updatePartnerCurp(state.selectedPartnerId, enteredCurp);
+                    if (state.currentDetail && Number(state.currentDetail.partner_id || 0) === Number(state.selectedPartnerId || 0)) {
+                        state.currentDetail = {
+                            ...state.currentDetail,
+                            curp: curpResult && curpResult.curp ? curpResult.curp : enteredCurp,
+                        };
+                    }
+                    detailCache.delete(Number(state.selectedPartnerId || 0));
+                    await loadDetail(state.selectedPartnerId, { force: true });
+                } catch (error) {
+                    console.error("Error al actualizar CURP de cliente desde POS", error);
+                    state.formError = (error && error.message)
+                        ? error.message
+                        : _t("No se pudo guardar la CURP del cliente.");
+                    renderDetail(state.currentDetail);
+                    return;
+                }
             }
             let targetLine = null;
             try {
@@ -709,6 +740,10 @@ function handleSubscriptionInlineFieldInput({ field, target }, {
 }) {
     if (state.formMode === "new" && field === "participant_search") {
         state.newSubscriptionForm.participantSearch = target.value || "";
+        return true;
+    }
+    if (state.formMode === "new" && field === "subscription_curp") {
+        state.newSubscriptionForm.curp = target.value || "";
         return true;
     }
     if (state.formMode === "upsale" && field === "upsale_participant_search") {

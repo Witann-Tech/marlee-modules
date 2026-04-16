@@ -327,6 +327,10 @@ patch(ControlButtons.prototype, {
         return this.subscriptionPosApi.createPartner(values || {});
     },
 
+    async _updatePartnerCurpForPos(partnerId, curp) {
+        return this.subscriptionPosApi.updatePartnerCurp(partnerId, curp || false);
+    },
+
     async _updatePartnerPhotoForPos(partnerId, imageBase64) {
         return this.subscriptionPosApi.updatePartnerPhoto(partnerId, imageBase64 || false);
     },
@@ -974,6 +978,9 @@ patch(ControlButtons.prototype, {
             const automaticEndDate = plan
                 ? getPlanPeriodEndDate(newSubscriptionForm.startDate, plan.interval_value, plan.interval_unit)
                 : "";
+            const partnerCurp = String(currentDetail && currentDetail.curp ? currentDetail.curp : "").trim();
+            const requiresCurp = Boolean(newSubscriptionForm.requiresCurp);
+            const needsCurpCapture = requiresCurp && !partnerCurp;
             const filteredParticipants = filterParticipantRowsByTerm(newSubscriptionForm.participantSearch);
             const participantOptions = Number(newSubscriptionForm.maxParticipantsTotal || 1) > 1
                 ? filteredParticipants
@@ -1034,6 +1041,25 @@ patch(ControlButtons.prototype, {
                             <strong class="wgs-inline-static-value">${this._escapeHtml(this._formatDateDisplay(automaticEndDate) || "-")}</strong>
                         </div>
                     </div>
+                    ${requiresCurp ? `
+                        <div class="wgs-inline-form-grid">
+                            ${needsCurpCapture
+                                ? `
+                                    <label>
+                                        <span>${this._escapeHtml(_t("CURP"))}</span>
+                                        <input type="text" data-field="subscription_curp" value="${this._escapeHtml(newSubscriptionForm.curp || "")}" placeholder="${this._escapeHtml(_t("Captura la CURP del cliente"))}" />
+                                    </label>
+                                `
+                                : `
+                                    <div>
+                                        <span>${this._escapeHtml(_t("CURP validada"))}</span>
+                                        <strong class="wgs-inline-static-value">${this._escapeHtml(partnerCurp || "-")}</strong>
+                                    </div>
+                                `
+                            }
+                        </div>
+                        <div class="wgs-inline-notice">${this._escapeHtml(_t("Este producto requiere CURP para continuar con la venta."))}</div>
+                    ` : ""}
                     <div class="wgs-inline-form-meta">
                         <div><span>${this._escapeHtml(_t("Precio"))}</span><strong>${this._escapeHtml(this._formatMoney(getChargeDisplayAmount(newSubscriptionForm.charge)))}</strong></div>
                         <div><span>${this._escapeHtml(_t("Cupo total"))}</span><strong>${this._escapeHtml(String(newSubscriptionForm.maxParticipantsTotal || 1))}</strong></div>
@@ -1103,6 +1129,10 @@ patch(ControlButtons.prototype, {
                             <label>
                                 <span>${this._escapeHtml(_t("Email"))}</span>
                                 <input type="email" data-field="partner_email" value="${this._escapeHtml(newPartnerForm.email || "")}" />
+                            </label>
+                            <label>
+                                <span>${this._escapeHtml(_t("CURP"))}</span>
+                                <input type="text" data-field="partner_curp" value="${this._escapeHtml(newPartnerForm.curp || "")}" />
                             </label>
                             <label>
                                 <span>${this._escapeHtml(_t("Género"))}</span>
@@ -1447,6 +1477,7 @@ patch(ControlButtons.prototype, {
                 addConfiguredProductLineToOrder: (order, product, options) => addConfiguredProductLineToOrder(this, order, product, options),
                 getCurrentOrder: () => getCurrentOrder(this),
                 getPartnerIdFromOrder,
+                updatePartnerCurp: (partnerId, curp) => this._updatePartnerCurpForPos(partnerId, curp),
                 findPartnerInPos: (partnerId) => findPartnerInPos(this, partnerId),
                 setPartnerOnCurrentOrder: (partner) => setPartnerOnCurrentOrder(this, partner),
                 findProductInPos: (productId) => findProductInPos(this, productId),

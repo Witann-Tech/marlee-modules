@@ -75,6 +75,9 @@ class SaleOrder(models.Model):
         'x_studio_last_access',
         'x_studio_ultimo_acceso',
     )
+    _PARTNER_CURP_FIELD_CANDIDATES = (
+        'x_studio_curp',
+    )
 
     @api.model
     def _wgs_ensure_pos_user_for_pos(self, error_message):
@@ -218,6 +221,7 @@ class SaleOrder(models.Model):
         )
         phone_value = summary.get('phone') or self._get_partner_field_value_for_pos(partner, ('phone', 'mobile'))
         email_value = summary.get('email') or self._get_partner_field_value_for_pos(partner, ('email',))
+        curp_value = self._get_partner_curp_for_pos(partner)
 
         return {
             'partner_id': partner.id,
@@ -230,6 +234,7 @@ class SaleOrder(models.Model):
             'valid_until': summary.get('valid_until') or False,
             'phone': phone_value or False,
             'email': email_value or False,
+            'curp': curp_value or False,
             'gender': gender_value or False,
             'birthday': birthday_value or False,
             'last_access': last_access_value or False,
@@ -294,6 +299,7 @@ class SaleOrder(models.Model):
 
         phone = (values.get('phone') or '').strip()
         email = (values.get('email') or '').strip()
+        curp = values.get('curp') or False
         image_1920 = values.get('image_1920') or False
         birthday = values.get('birthday') or False
         gender = values.get('gender') or False
@@ -309,6 +315,7 @@ class SaleOrder(models.Model):
 
         self._assign_partner_field_for_pos(Partner, create_vals, self._PARTNER_BIRTHDAY_FIELD_CANDIDATES, birthday)
         self._assign_partner_field_for_pos(Partner, create_vals, self._PARTNER_GENDER_FIELD_CANDIDATES, gender)
+        self._assign_partner_field_for_pos(Partner, create_vals, self._PARTNER_CURP_FIELD_CANDIDATES, curp)
 
         partner = Partner.create(create_vals)
 
@@ -318,9 +325,35 @@ class SaleOrder(models.Model):
             'partner_name': partner.display_name,
             'phone': self._get_partner_field_value_for_pos(partner, ('phone', 'mobile')) or False,
             'email': self._get_partner_field_value_for_pos(partner, ('email',)) or False,
+            'curp': self._get_partner_curp_for_pos(partner) or False,
             'gender': self._get_partner_field_value_for_pos(partner, self._PARTNER_GENDER_FIELD_CANDIDATES) or False,
             'birthday': self._get_partner_field_value_for_pos(partner, self._PARTNER_BIRTHDAY_FIELD_CANDIDATES) or False,
             'image_url': '/web/image/res.partner/%s/image_128' % partner.id,
+        }
+
+    @api.model
+    def wgs_update_partner_curp_for_pos(self, partner_id, curp):
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para actualizar la CURP desde Punto de Venta.'))
+
+        partner = self._wgs_browse_partner_for_pos(partner_id)
+        if not partner:
+            raise AccessError(_('El cliente seleccionado no existe.'))
+
+        write_vals = {}
+        field_name = self._assign_partner_field_for_pos(
+            partner,
+            write_vals,
+            self._PARTNER_CURP_FIELD_CANDIDATES,
+            curp,
+        )
+        if not field_name:
+            raise AccessError(_('Este entorno no permite capturar CURP desde Punto de Venta.'))
+
+        partner.write(write_vals)
+        return {
+            'ok': True,
+            'partner_id': partner.id,
+            'curp': self._get_partner_curp_for_pos(partner) or False,
         }
 
     @api.model
@@ -1104,6 +1137,12 @@ class SaleOrder(models.Model):
             if formatted:
                 return formatted
         return False
+
+    def _get_partner_curp_for_pos(self, partner):
+        partner.ensure_one()
+        if hasattr(partner, '_wgs_get_curp_value'):
+            return partner._wgs_get_curp_value()
+        return self._get_partner_field_value_for_pos(partner, self._PARTNER_CURP_FIELD_CANDIDATES)
 
     def _assign_partner_field_for_pos(self, partner_model, values, field_candidates, raw_value):
         raw_value = raw_value if raw_value not in (None, '') else False

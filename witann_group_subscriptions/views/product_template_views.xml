@@ -9,6 +9,7 @@
                 <page string="Suscripción grupal" name="group_subscription_settings" invisible="not recurring_invoice">
                     <group>
                         <field name="max_participants_total"/>
+                        <field name="wgs_requires_curp"/>
                     </group>
                 </page>
             </xpath>

@@ -190,6 +190,10 @@ class PosOrder(models.Model):
         return self.env['sale.order'].wgs_create_partner_for_pos(vals)
 
     @api.model
+    def wgs_update_partner_curp_for_pos(self, partner_id, curp):
+        return self.env['sale.order'].wgs_update_partner_curp_for_pos(partner_id, curp)
+
+    @api.model
     def wgs_update_partner_photo_for_pos(self, partner_id, image_1920):
         return self.env['sale.order'].wgs_update_partner_photo_for_pos(partner_id, image_1920)
 
@@ -552,10 +556,12 @@ class PosOrder(models.Model):
         default_plan_id = choice.get('plan_id') or False
         default_pricing_id = choice.get('pricing_id') or False
         default_display_price = self._wgs_get_price_with_taxes_for_pos(product, choice.get('price') or fallback or 0.0)
+        requires_curp = bool(getattr(product.product_tmpl_id, 'wgs_requires_curp', False))
 
         return {
             'is_subscription': is_subscription,
             'max_participants_total': max_total,
+            'requires_curp': requires_curp,
             'default_plan_id': default_plan_id,
             'default_pricing_id': default_pricing_id,
             'default_price': float(choice.get('price') or fallback or 0.0),
@@ -610,6 +616,7 @@ class PosOrder(models.Model):
                 'name': product.display_name,
                 'default_code': product.default_code or False,
                 'max_participants_total': int(context.get('max_participants_total') or 1),
+                'requires_curp': bool(context.get('requires_curp')),
                 'default_plan_id': context.get('default_plan_id') or False,
                 'default_pricing_id': context.get('default_pricing_id') or False,
                 'default_price': float(context.get('default_price') or 0.0),
