@@ -2,7 +2,6 @@
 
 function renderSubscriptionCard({
     item,
-    canOperateSubscription,
     stateClass,
     participantNames,
     accessSummary,
@@ -44,16 +43,16 @@ function renderSubscriptionCard({
                 <button
                     type="button"
                     class="wgs-action-btn"
-                    data-action="open-renewal"
+                    data-action="${escapeHtml(item.can_reenroll ? "open-reenroll" : "open-renewal")}"
                     data-subscription-id="${escapeHtml(String(item.subscription_id || 0))}"
-                    ${canOperateSubscription ? "" : "disabled"}
-                >${escapeHtml(_t("Renovar"))}</button>
+                    ${(item.can_renew || item.can_reenroll) ? "" : "disabled"}
+                >${escapeHtml(item.can_reenroll ? _t("Reinscribir") : _t("Renovar"))}</button>
                 <button
                     type="button"
                     class="wgs-action-btn"
                     data-action="open-upsale"
                     data-subscription-id="${escapeHtml(String(item.subscription_id || 0))}"
-                    ${canOperateSubscription ? "" : "disabled"}
+                    ${item.can_renew ? "" : "disabled"}
                 >${escapeHtml(_t("Upsale"))}</button>
                 <button
                     type="button"

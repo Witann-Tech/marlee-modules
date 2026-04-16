@@ -757,6 +757,9 @@ class SaleOrder(models.Model):
 
         force_closed = bool(has_replacement_subscription)
 
+        can_renew = False
+        can_reenroll = False
+
         if force_closed:
             access_state = False
             is_valid = False
@@ -771,14 +774,19 @@ class SaleOrder(models.Model):
             native_state_key = 'renew'
             native_state_label = _('Por renovar')
             is_valid = True
+            can_renew = True
             reason = _('La suscripción sigue activa, pero ya venció su siguiente fecha de cobro y debe renovarse.')
         elif access_state == 'enabled':
             is_valid = True
+            can_renew = True
             reason = _('Suscripción en progreso o en renovación.')
         elif access_state == 'suspended':
             reason = _('La suscripción está pausada o suspendida.')
         else:
             reason = _('La suscripción no está en progreso ni en renovación.')
+
+        if native_state_key in ('cancel', 'closed') and not force_closed:
+            can_reenroll = True
 
         pending_documents = []
         for move in self._wgs_get_pending_invoice_records_for_pos():
@@ -825,6 +833,9 @@ class SaleOrder(models.Model):
             'has_pending_document': bool(pending_documents),
             'pending_amount_total': first_pending[0]['amount_residual'] if first_pending else 0.0,
             'pending_document_name': first_pending[0]['name'] if first_pending else False,
+            'has_replacement_subscription': bool(has_replacement_subscription),
+            'can_renew': bool(can_renew),
+            'can_reenroll': bool(can_reenroll),
         }
 
     def _wgs_has_replacement_subscription_for_pos(self):
@@ -881,8 +892,14 @@ class SaleOrder(models.Model):
 
         today = today or fields.Date.context_today(self)
         native_state_key = item.get('native_state_key') or False
-        if native_state_key in ('closed', 'cancel', 'draft', 'upsell') and not item.get('has_pending_document'):
+        if item.get('has_replacement_subscription') and native_state_key == 'closed' and not item.get('has_pending_document'):
             return False
+
+        if native_state_key in ('draft', 'upsell') and not item.get('has_pending_document'):
+            return False
+
+        if native_state_key in ('closed', 'cancel'):
+            return True
 
         access_state = item.get('access_state') or False
         if access_state in ('enabled', 'suspended'):

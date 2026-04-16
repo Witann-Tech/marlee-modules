@@ -31,6 +31,13 @@ export function createSubscriptionPosApi(orm) {
                 [subscriptionId, productId || false, planId || false, pricingId || false]
             );
         },
+        async fetchSubscriptionReenrollCharge(subscriptionId, productId = false, planId = false, pricingId = false) {
+            return orm.call(
+                "pos.order",
+                "wgs_get_subscription_reenroll_charge_for_pos",
+                [subscriptionId, productId || false, planId || false, pricingId || false]
+            );
+        },
         async fetchSubscriptionUpsaleCharge(subscriptionId, productId, fallback = 0, planId = false, pricingId = false) {
             return orm.call(
                 "pos.order",

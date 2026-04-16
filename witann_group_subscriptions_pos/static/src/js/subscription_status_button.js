@@ -116,6 +116,7 @@ import {
     openNewSubscriptionForm as openNewSubscriptionFlow,
     openParticipantEditForm as openParticipantEditFlow,
     openPendingChargeForm as openPendingChargeFlow,
+    openReenrollForm as openReenrollFlow,
     openRenewalForm as openRenewalFlow,
     openUpsaleForm as openUpsaleFlow,
     recalculateNewSubscriptionCharge as recalculateNewSubscriptionChargeFlow,
@@ -806,6 +807,17 @@ patch(ControlButtons.prototype, {
             });
         };
 
+        const openReenrollForm = async (item) => {
+            await openReenrollFlow(modalState, item, {
+                stopPartnerCamera,
+                renderDetail,
+                buildChargeBreakdown: (source, product, values) => buildChargeBreakdown(source, product, values),
+                fetchSubscriptionReenrollCharge: (subscriptionId, productId, planId, pricingId) =>
+                    this.subscriptionPosApi.fetchSubscriptionReenrollCharge(subscriptionId, productId, planId, pricingId),
+                _t,
+            });
+        };
+
         const openPendingChargeForm = async (item) => {
             await openPendingChargeFlow(modalState, item, {
                 stopPartnerCamera,
@@ -1419,6 +1431,7 @@ patch(ControlButtons.prototype, {
                 renderDetail,
                 resetInlineForms,
                 openRenewalForm,
+                openReenrollForm,
                 openUpsaleForm,
                 openParticipantEditForm,
                 openPendingChargeForm,

@@ -41,6 +41,7 @@ class PosOrderLine(models.Model):
         selection=[
             ('new', 'Nueva suscripción'),
             ('renewal', 'Renovación recurrente'),
+            ('reenroll', 'Reinscripción'),
             ('upsale', 'Upsale inmediato'),
             ('pending_charge', 'Cobro pendiente'),
             ('cancellation_refund', 'Cancelación con devolución'),
@@ -354,70 +355,44 @@ class PosOrder(models.Model):
         if not self._wgs_is_subscription_order_active_for_upsell(source_order):
             raise UserError(_('La suscripción origen no está activa para renovación.'))
 
-        recurring_lines = source_order.order_line.filtered(lambda so_line: self._wgs_is_recurring_so_line(so_line))
-        if not recurring_lines:
-            raise UserError(_('La suscripción origen no tiene líneas recurrentes configuradas.'))
+        return self._wgs_build_subscription_recurring_charge_payload(
+            source_order,
+            product_id=product_id,
+            preferred_plan_id=preferred_plan_id,
+            preferred_pricing_id=preferred_pricing_id,
+            is_renewal=True,
+        )
+
+    @api.model
+    def wgs_get_subscription_reenroll_charge_for_pos(
+        self,
+        subscription_id,
+        product_id=False,
+        preferred_plan_id=False,
+        preferred_pricing_id=False,
+    ):
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar reinscripción desde Punto de Venta.'))
 
         try:
-            preferred_product_id = int(product_id or 0)
+            subscription_id = int(subscription_id or 0)
         except (TypeError, ValueError):
-            preferred_product_id = 0
-        recurring_line = self.env['sale.order.line']
-        if preferred_product_id > 0:
-            recurring_line = recurring_lines.filtered(lambda so_line: so_line.product_id.id == preferred_product_id)[:1]
-        if not recurring_line:
-            recurring_line = recurring_lines.sorted(key=lambda so_line: so_line.id)[:1]
+            subscription_id = 0
+        source_order = self._wgs_browse_source_subscription_for_pos(subscription_id)
+        if not source_order:
+            raise UserError(_('La suscripción origen no existe.'))
+        if not self._wgs_order_has_subscription_signal(source_order):
+            raise UserError(_('La orden origen no corresponde a una suscripción válida.'))
+        if not self._wgs_is_subscription_order_closed_for_reenroll(source_order):
+            raise UserError(_('La suscripción origen no está cerrada ni cancelada para reinscripción.'))
 
-        recurring_price = self._wgs_get_order_recurring_total_amount(source_order)
-        display_recurring_price = self._wgs_get_order_recurring_total_amount(source_order, include_taxes=True)
-        if recurring_line:
-            qty = abs(self._wgs_get_so_line_qty(recurring_line))
-            discount = float(recurring_line.discount or 0.0) if 'discount' in recurring_line._fields else 0.0
-            recurring_price = qty * float(recurring_line.price_unit or 0.0) * (1 - (discount / 100.0))
-            display_recurring_price = self._wgs_get_sale_order_line_total_with_tax(recurring_line, qty_override=qty)
-        recurring_price = round(max(float(recurring_price or 0.0), 0.0), 2)
-        display_recurring_price = round(max(float(display_recurring_price or 0.0), 0.0), 2)
-
-        plan_id = False
-        pricing_id = False
-        if recurring_line:
-            for field_name in ('subscription_plan_id', 'plan_id', 'recurring_plan_id'):
-                if field_name in recurring_line._fields and recurring_line[field_name]:
-                    plan_id = recurring_line[field_name].id
-                    break
-            for field_name in ('subscription_pricing_id', 'pricing_id', 'recurring_pricing_id'):
-                if field_name in recurring_line._fields and recurring_line[field_name]:
-                    pricing_id = recurring_line[field_name].id
-                    break
-
-        try:
-            preferred_plan_id = int(preferred_plan_id or 0)
-        except (TypeError, ValueError):
-            preferred_plan_id = 0
-        try:
-            preferred_pricing_id = int(preferred_pricing_id or 0)
-        except (TypeError, ValueError):
-            preferred_pricing_id = 0
-        resolved_plan_id = preferred_plan_id or plan_id or False
-        resolved_pricing_id = preferred_pricing_id or pricing_id or False
-
-        return {
-            'charge_now': float(recurring_price),
-            'credit_amount': 0.0,
-            'recurring_price': float(recurring_price),
-            'ticket_charge_now': float(recurring_price),
-            'ticket_credit_amount': 0.0,
-            'ticket_recurring_price': float(recurring_price),
-            'display_charge_now': float(display_recurring_price),
-            'display_credit_amount': 0.0,
-            'display_recurring_price': float(display_recurring_price),
-            'plan_id': resolved_plan_id,
-            'pricing_id': resolved_pricing_id,
-            'is_upgrade': False,
-            'is_renewal': True,
-            'source_subscription_id': source_order.id,
-            'source_subscription_name': source_order.name,
-        }
+        return self._wgs_build_subscription_recurring_charge_payload(
+            source_order,
+            product_id=product_id,
+            preferred_plan_id=preferred_plan_id,
+            preferred_pricing_id=preferred_pricing_id,
+            is_renewal=False,
+            is_reenroll=True,
+        )
 
     @api.model
     def wgs_get_subscription_upsale_charge_for_pos(
@@ -685,7 +660,7 @@ class PosOrder(models.Model):
                 values['wgs_subscription_start_date'] = start_date
 
         flow_value = str(config_payload.get('flow') or 'new').strip().lower()
-        values['wgs_subscription_flow'] = flow_value if flow_value in ('renewal', 'upsale', 'pending_charge', 'cancellation_refund') else 'new'
+        values['wgs_subscription_flow'] = flow_value if flow_value in ('renewal', 'reenroll', 'upsale', 'pending_charge', 'cancellation_refund') else 'new'
 
         source_subscription_id = self._wgs_to_int(config_payload.get('source_subscription_id'))
         if source_subscription_id > 0:
@@ -949,7 +924,7 @@ class PosOrder(models.Model):
                     write_values['wgs_subscription_start_date'] = start_date
 
             flow_value = str(config.get('flow') or 'new').strip().lower()
-            write_values['wgs_subscription_flow'] = flow_value if flow_value in ('renewal', 'upsale', 'pending_charge', 'cancellation_refund') else 'new'
+            write_values['wgs_subscription_flow'] = flow_value if flow_value in ('renewal', 'reenroll', 'upsale', 'pending_charge', 'cancellation_refund') else 'new'
 
             source_subscription_id = self._wgs_to_int(config.get('source_subscription_id'))
             if source_subscription_id > 0:
@@ -1028,7 +1003,7 @@ class PosOrder(models.Model):
                 continue
             config = self._wgs_extract_subscription_config_payload(payload)
             has_renewal_metadata = (
-                str(config.get('flow') or '').strip().lower() in ('renewal', 'pending_charge')
+                str(config.get('flow') or '').strip().lower() in ('renewal', 'reenroll', 'pending_charge')
                 or self._wgs_to_int(config.get('source_subscription_id')) > 0
                 or self._wgs_to_int(config.get('pending_move_id')) > 0
             )
@@ -1140,6 +1115,9 @@ class PosOrder(models.Model):
                         continue
                     pos_order._wgs_process_subscription_renewal_line(line)
                     continue
+                if line.wgs_subscription_flow == 'reenroll':
+                    if line.wgs_sale_order_id:
+                        continue
                 if line.wgs_subscription_flow == 'pending_charge':
                     pos_order._wgs_process_subscription_pending_charge_line(line)
                     continue
@@ -1874,6 +1852,93 @@ class PosOrder(models.Model):
         if not state_value:
             return True
         return not any(token in state_value for token in self._WGS_INVALID_SUBSCRIPTION_STATE_TOKENS)
+
+    def _wgs_is_subscription_order_closed_for_reenroll(self, sale_order):
+        sale_order.ensure_one()
+        if 'subscription_state' not in sale_order._fields:
+            return False
+        state_value = (sale_order.subscription_state or '').strip().lower()
+        if not state_value:
+            return False
+        return any(token in state_value for token in ('cancel', 'close'))
+
+    def _wgs_build_subscription_recurring_charge_payload(
+        self,
+        source_order,
+        *,
+        product_id=False,
+        preferred_plan_id=False,
+        preferred_pricing_id=False,
+        is_renewal=False,
+        is_reenroll=False,
+    ):
+        source_order.ensure_one()
+
+        recurring_lines = source_order.order_line.filtered(lambda so_line: self._wgs_is_recurring_so_line(so_line))
+        if not recurring_lines:
+            raise UserError(_('La suscripción origen no tiene líneas recurrentes configuradas.'))
+
+        try:
+            preferred_product_id = int(product_id or 0)
+        except (TypeError, ValueError):
+            preferred_product_id = 0
+        recurring_line = self.env['sale.order.line']
+        if preferred_product_id > 0:
+            recurring_line = recurring_lines.filtered(lambda so_line: so_line.product_id.id == preferred_product_id)[:1]
+        if not recurring_line:
+            recurring_line = recurring_lines.sorted(key=lambda so_line: so_line.id)[:1]
+
+        recurring_price = self._wgs_get_order_recurring_total_amount(source_order)
+        display_recurring_price = self._wgs_get_order_recurring_total_amount(source_order, include_taxes=True)
+        if recurring_line:
+            qty = abs(self._wgs_get_so_line_qty(recurring_line))
+            discount = float(recurring_line.discount or 0.0) if 'discount' in recurring_line._fields else 0.0
+            recurring_price = qty * float(recurring_line.price_unit or 0.0) * (1 - (discount / 100.0))
+            display_recurring_price = self._wgs_get_sale_order_line_total_with_tax(recurring_line, qty_override=qty)
+        recurring_price = round(max(float(recurring_price or 0.0), 0.0), 2)
+        display_recurring_price = round(max(float(display_recurring_price or 0.0), 0.0), 2)
+
+        plan_id = False
+        pricing_id = False
+        if recurring_line:
+            for field_name in ('subscription_plan_id', 'plan_id', 'recurring_plan_id'):
+                if field_name in recurring_line._fields and recurring_line[field_name]:
+                    plan_id = recurring_line[field_name].id
+                    break
+            for field_name in ('subscription_pricing_id', 'pricing_id', 'recurring_pricing_id'):
+                if field_name in recurring_line._fields and recurring_line[field_name]:
+                    pricing_id = recurring_line[field_name].id
+                    break
+
+        try:
+            preferred_plan_id = int(preferred_plan_id or 0)
+        except (TypeError, ValueError):
+            preferred_plan_id = 0
+        try:
+            preferred_pricing_id = int(preferred_pricing_id or 0)
+        except (TypeError, ValueError):
+            preferred_pricing_id = 0
+        resolved_plan_id = preferred_plan_id or plan_id or False
+        resolved_pricing_id = preferred_pricing_id or pricing_id or False
+
+        return {
+            'charge_now': float(recurring_price),
+            'credit_amount': 0.0,
+            'recurring_price': float(recurring_price),
+            'ticket_charge_now': float(recurring_price),
+            'ticket_credit_amount': 0.0,
+            'ticket_recurring_price': float(recurring_price),
+            'display_charge_now': float(display_recurring_price),
+            'display_credit_amount': 0.0,
+            'display_recurring_price': float(display_recurring_price),
+            'plan_id': resolved_plan_id,
+            'pricing_id': resolved_pricing_id,
+            'is_upgrade': False,
+            'is_renewal': bool(is_renewal),
+            'is_reenroll': bool(is_reenroll),
+            'source_subscription_id': source_order.id,
+            'source_subscription_name': source_order.name,
+        }
 
     def _wgs_is_order_recognized_as_subscription(self, sale_order):
         sale_order.ensure_one()

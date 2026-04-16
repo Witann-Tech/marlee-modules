@@ -141,3 +141,19 @@ class TestPosSubscriptionPricing(TransactionCase):
             fields.Date.to_date(schedule['next_billing_date']),
             fields.Date.to_date('2026-04-26'),
         )
+
+    def test_reenroll_charge_allows_closed_subscription(self):
+        order = self._create_subscription_like_order()
+        if 'subscription_state' in order._fields:
+            order.write({'subscription_state': 'closed'})
+
+        charge = self.PosOrder.sudo().wgs_get_subscription_reenroll_charge_for_pos(
+            order.id,
+            self.product.id,
+            preferred_plan_id=False,
+            preferred_pricing_id=False,
+        )
+
+        self.assertEqual(charge['recurring_price'], 100.0)
+        self.assertEqual(charge['display_recurring_price'], 116.0)
+        self.assertTrue(charge['is_reenroll'])

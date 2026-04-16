@@ -82,12 +82,15 @@ async function openRenewalForm(state, item, {
     renderDetail,
     buildChargeBreakdown,
     fetchSubscriptionRenewalCharge,
+    mode = "renewal",
+    title = false,
+    submitLabel = false,
     _t,
 }) {
     if (!item || !item.subscription_id) {
         return;
     }
-    state.formMode = "renewal";
+    state.formMode = mode;
     state.formError = "";
     state.formNotice = "";
     stopPartnerCamera();
@@ -104,6 +107,11 @@ async function openRenewalForm(state, item, {
         productName: item.renewal_product_name || "",
         planId: Number(item.renewal_plan_id || 0) || false,
         pricingId: Number(item.renewal_pricing_id || 0) || false,
+        participantIds: Array.isArray(item.participant_ids) ? [...item.participant_ids] : [],
+        title: title || (mode === "reenroll" ? _t("Reinscribir suscripción") : _t("Renovar suscripción")),
+        submitLabel: submitLabel || (mode === "reenroll" ? _t("Agregar reinscripción al ticket") : _t("Agregar al ticket")),
+        isReenroll: mode === "reenroll",
+        startDate: mode === "reenroll" ? new Date().toISOString().slice(0, 10) : false,
         charge: buildChargeBreakdown(null, null, { baseAmount: 0, displayAmount: 0 }),
         nextInvoiceDate: item.next_invoice_date || false,
         loading: true,
@@ -144,6 +152,14 @@ async function openRenewalForm(state, item, {
         };
     }
     renderDetail(state.currentDetail);
+}
+
+async function openReenrollForm(state, item, deps) {
+    await openRenewalForm(state, item, {
+        ...deps,
+        mode: "reenroll",
+        fetchSubscriptionRenewalCharge: deps.fetchSubscriptionReenrollCharge,
+    });
 }
 
 async function openPendingChargeForm(state, item, {
@@ -651,6 +667,7 @@ export {
     openNewSubscriptionForm,
     openParticipantEditForm,
     openPendingChargeForm,
+    openReenrollForm,
     openRenewalForm,
     openUpsaleForm,
     recalculateNewSubscriptionCharge,

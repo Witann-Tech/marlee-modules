@@ -26,11 +26,6 @@ function renderSubscriptionCards(detail, {
 
     return subscriptions.map((item) => {
         const stateClass = getStateClass(item.native_state_key);
-        const nativeStateKey = String(item.native_state_key || "").toLowerCase();
-        const canOperateSubscription = Boolean(
-            item.subscription_id
-            && (item.access_state === "enabled" || ["progress", "renew"].includes(nativeStateKey))
-        );
         const participantNames = (item.participant_names || []).length
             ? item.participant_names.map((name) => escapeHtml(name)).join(", ")
             : escapeHtml(_t("Sin participantes"));
@@ -53,7 +48,6 @@ function renderSubscriptionCards(detail, {
         ].join("");
         return renderSubscriptionCard({
             item,
-            canOperateSubscription,
             stateClass,
             participantNames,
             accessSummary,

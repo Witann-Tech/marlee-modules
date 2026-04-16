@@ -6,6 +6,7 @@ function buildSubscriptionInlineActionHandlers({
     renderDetail,
     resetInlineForms,
     openRenewalForm,
+    openReenrollForm,
     openUpsaleForm,
     openParticipantEditForm,
     openPendingChargeForm,
@@ -32,6 +33,9 @@ function buildSubscriptionInlineActionHandlers({
     return {
         "open-renewal": async ({ actionButton }) => {
             await openRenewalForm(getCurrentSubscriptionItem(actionButton));
+        },
+        "open-reenroll": async ({ actionButton }) => {
+            await openReenrollForm(getCurrentSubscriptionItem(actionButton));
         },
         "open-upsale": async ({ actionButton }) => {
             await openUpsaleForm(getCurrentSubscriptionItem(actionButton));
@@ -68,6 +72,10 @@ function buildSubscriptionInlineActionHandlers({
             await openCancellationRefundForm(getCurrentSubscriptionItem(actionButton));
         },
         "cancel-renewal": async () => {
+            resetInlineForms();
+            renderDetail(state.currentDetail);
+        },
+        "cancel-reenroll": async () => {
             resetInlineForms();
             renderDetail(state.currentDetail);
         },
@@ -571,6 +579,85 @@ function buildSubscriptionInlineActionHandlers({
             state.formMode = null;
             state.formError = "";
             state.formNotice = _t("Renovación agregada al ticket. Puedes continuar al cobro normal del POS.");
+            state.renewalForm = null;
+            state.upsaleForm = null;
+            state.pendingChargeForm = null;
+            state.participantEditForm = null;
+            renderDetail(state.currentDetail);
+        },
+        "save-reenroll": async () => {
+            state.formError = "";
+            state.formNotice = "";
+            if (!state.renewalForm || !state.renewalForm.subscriptionId || !state.renewalForm.productId) {
+                state.formError = _t("La reinscripción seleccionada no tiene datos suficientes para agregarse al ticket.");
+                renderDetail(state.currentDetail);
+                return;
+            }
+            const order = getCurrentOrder();
+            if (!order) {
+                state.formError = _t("No hay una orden POS activa para agregar la reinscripción.");
+                renderDetail(state.currentDetail);
+                return;
+            }
+            const holderPartnerId = Number(state.renewalForm.holderPartnerId || 0) || false;
+            const partnerOnOrderId = getPartnerIdFromOrder(order);
+            if (partnerOnOrderId !== holderPartnerId) {
+                const partnerRecord = findPartnerInPos(holderPartnerId);
+                if (partnerRecord && setPartnerOnCurrentOrder(partnerRecord)) {
+                    // Partner aligned locally in POS.
+                } else if (partnerOnOrderId) {
+                    state.formError = _t("La orden actual ya tiene otro cliente y no se pudo reemplazar desde esta sesión. Usa un solo cliente por ticket.");
+                    renderDetail(state.currentDetail);
+                    return;
+                } else {
+                    state.formNotice = _t("El titular no está cargado en la sesión local del POS. La reinscripción se vinculará al confirmar el pago.");
+                }
+            }
+            const productRecord = findProductInPos(state.renewalForm.productId);
+            if (!productRecord) {
+                state.formError = _t("El producto recurrente de esta suscripción no está cargado en la sesión actual del POS.");
+                renderDetail(state.currentDetail);
+                return;
+            }
+            let targetLine = null;
+            try {
+                const lineResult = await addConfiguredProductLineToOrder(order, productRecord, {
+                    quantity: 1,
+                    merge: false,
+                    charge: state.renewalForm.charge,
+                    metadata: {
+                        flow: "reenroll",
+                        partner_id: holderPartnerId || false,
+                        participant_ids: Array.isArray(state.renewalForm.participantIds) ? state.renewalForm.participantIds : [],
+                        plan_id: Number(state.renewalForm.planId || 0) || false,
+                        pricing_id: Number(state.renewalForm.pricingId || 0) || false,
+                        start_date: formatTodayISO(),
+                        end_date: false,
+                        product_id: Number(state.renewalForm.productId || 0) || false,
+                        product_name: state.renewalForm.productName || false,
+                        source_subscription_id: Number(state.renewalForm.subscriptionId || 0) || false,
+                    },
+                });
+                targetLine = lineResult && lineResult.line ? lineResult.line : null;
+                if (!targetLine && lineResult && lineResult.reason === "not_added") {
+                    state.formError = _t("No se pudo agregar la reinscripción al ticket actual.");
+                    renderDetail(state.currentDetail);
+                    return;
+                }
+            } catch (error) {
+                console.error("Error al agregar reinscripción al ticket POS", error);
+                state.formError = _t("No se pudo agregar la reinscripción al ticket actual.");
+                renderDetail(state.currentDetail);
+                return;
+            }
+            if (!targetLine) {
+                state.formError = _t("No se pudo identificar la línea de reinscripción agregada al ticket.");
+                renderDetail(state.currentDetail);
+                return;
+            }
+            state.formMode = null;
+            state.formError = "";
+            state.formNotice = _t("Reinscripción agregada al ticket. Puedes continuar al cobro normal del POS.");
             state.renewalForm = null;
             state.upsaleForm = null;
             state.pendingChargeForm = null;
