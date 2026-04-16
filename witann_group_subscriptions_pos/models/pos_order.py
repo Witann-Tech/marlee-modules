@@ -1450,9 +1450,6 @@ class PosOrder(models.Model):
         subscription_end_date = line.wgs_get_subscription_end_date()
         sale_start_date = subscription_start_date
         next_billing_date = False
-        if plan_record:
-            next_billing_date = self._wgs_get_plan_min_end_threshold(plan_record, sale_start_date)
-            subscription_end_date = self._wgs_get_plan_period_end_date(plan_record, sale_start_date)
 
         sale_order_line_fields = self.env['sale.order.line']._fields
         line_values = {'product_id': product.id}
@@ -1515,6 +1512,18 @@ class PosOrder(models.Model):
             upsell_source_order = self._wgs_resolve_upsell_source_order_for_line(line)
         else:
             upsell_source_order = self._wgs_find_partner_active_subscription_for_upsell()
+        if upsell_source_order:
+            upsale_schedule = self._wgs_get_upsale_schedule_from_source(
+                upsell_source_order,
+                today=today,
+            )
+            sale_start_date = upsale_schedule['sale_start_date']
+            subscription_start_date = sale_start_date
+            subscription_end_date = upsale_schedule['subscription_end_date']
+            next_billing_date = upsale_schedule['next_billing_date']
+        elif plan_record:
+            next_billing_date = self._wgs_get_plan_min_end_threshold(plan_record, sale_start_date)
+            subscription_end_date = self._wgs_get_plan_period_end_date(plan_record, sale_start_date)
         if upsell_source_order:
             recurring_total = max(0.0, float(recurring_price_unit or 0.0) * float(qty or 0.0))
             paid_total = max(0.0, float(line.price_unit or 0.0) * float(qty or 0.0))
@@ -1603,7 +1612,8 @@ class PosOrder(models.Model):
             if upsell_order.state in ('draft', 'sent'):
                 upsell_order.action_confirm()
 
-            # On upsell we keep original contract/start dates; only sync participant and optional end date.
+            # On upsell we keep the original renewal anchor from the source subscription
+            # while starting the upgraded package immediately on the POS sale date.
             self._wgs_sync_subscription_metadata(
                 sale_order=upsell_order,
                 participant_ids=participant_ids,
@@ -2214,6 +2224,31 @@ class PosOrder(models.Model):
                     source_order.name,
                     error,
                 )
+
+    def _wgs_get_upsale_schedule_from_source(self, source_order, today=False):
+        source_order.ensure_one()
+
+        sale_start_date = fields.Date.to_date(today) or fields.Date.context_today(self)
+        _period_start, period_end = self._wgs_get_current_subscription_period_bounds(
+            source_order,
+            today=sale_start_date,
+        )
+        next_billing_date = self._wgs_get_first_date_from_order(
+            source_order,
+            ('recurring_next_date', 'next_invoice_date'),
+        ) or period_end
+        subscription_end_date = self._wgs_get_first_date_from_order(
+            source_order,
+            ('end_date', 'date_end', 'subscription_end_date', 'recurring_end_date'),
+        )
+        if not subscription_end_date and next_billing_date:
+            subscription_end_date = next_billing_date - timedelta(days=1)
+
+        return {
+            'sale_start_date': sale_start_date,
+            'subscription_end_date': subscription_end_date,
+            'next_billing_date': next_billing_date,
+        }
 
     def _wgs_link_pos_and_sale_records(self, pos_line, sale_order, sale_order_line=False):
         self.ensure_one()

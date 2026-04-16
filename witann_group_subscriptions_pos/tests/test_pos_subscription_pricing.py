@@ -69,6 +69,14 @@ class TestPosSubscriptionPricing(TransactionCase):
         for field_name in ('subscription_state',):
             if field_name in order._fields:
                 order_updates[field_name] = 'progress'
+        for field_name in ('recurring_next_date', 'next_invoice_date'):
+            if field_name in order._fields:
+                order_updates[field_name] = '2026-04-26'
+                break
+        for field_name in ('end_date', 'date_end', 'subscription_end_date', 'recurring_end_date'):
+            if field_name in order._fields:
+                order_updates[field_name] = '2026-04-25'
+                break
         if order_updates:
             order.write(order_updates)
         return order
@@ -111,4 +119,25 @@ class TestPosSubscriptionPricing(TransactionCase):
         self.assertEqual(
             fields.Date.to_date(order[end_field]),
             fields.Date.to_date('2026-04-25'),
+        )
+
+    def test_upsale_schedule_keeps_source_renewal_anchor(self):
+        order = self._create_subscription_like_order()
+
+        schedule = self.PosOrder._wgs_get_upsale_schedule_from_source(
+            order,
+            today='2026-04-10',
+        )
+
+        self.assertEqual(
+            fields.Date.to_date(schedule['sale_start_date']),
+            fields.Date.to_date('2026-04-10'),
+        )
+        self.assertEqual(
+            fields.Date.to_date(schedule['subscription_end_date']),
+            fields.Date.to_date('2026-04-25'),
+        )
+        self.assertEqual(
+            fields.Date.to_date(schedule['next_billing_date']),
+            fields.Date.to_date('2026-04-26'),
         )
