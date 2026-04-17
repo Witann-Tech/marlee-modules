@@ -8,6 +8,7 @@ class ResPartner(models.Model):
     _inherit = 'res.partner'
 
     _WGS_CURP_FIELD = 'x_studio_curp'
+    _WGS_CURP_SYNC_CONTEXT_KEY = 'wgs_skip_curp_storage_sync'
 
     @api.model
     def _wgs_has_curp_field(self):
@@ -60,13 +61,28 @@ class ResPartner(models.Model):
                     }
                 )
 
+    def _wgs_sync_curp_storage(self):
+        if not self._wgs_has_curp_field() or self.env.context.get(self._WGS_CURP_SYNC_CONTEXT_KEY):
+            return
+        for partner in self:
+            raw_value = partner[self._WGS_CURP_FIELD]
+            normalized_value = partner._wgs_normalize_curp(raw_value)
+            if raw_value == normalized_value:
+                continue
+            super(
+                ResPartner,
+                partner.with_context(**{self._WGS_CURP_SYNC_CONTEXT_KEY: True}),
+            ).write({self._WGS_CURP_FIELD: normalized_value})
+
     @api.model_create_multi
     def create(self, vals_list):
         partners = super().create([self._wgs_normalize_curp_in_vals(vals) for vals in vals_list])
+        partners._wgs_sync_curp_storage()
         partners._wgs_check_curp_uniqueness()
         return partners
 
     def write(self, vals):
         result = super().write(self._wgs_normalize_curp_in_vals(vals))
+        self._wgs_sync_curp_storage()
         self._wgs_check_curp_uniqueness()
         return result

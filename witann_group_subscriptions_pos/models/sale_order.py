@@ -1266,22 +1266,38 @@ class SaleOrder(models.Model):
             return partner._wgs_get_curp_value()
         return self._get_partner_field_value_for_pos(partner, self._PARTNER_CURP_FIELD_CANDIDATES)
 
+    def _wgs_get_partner_curp_field_for_pos(self, partner_model=None):
+        Partner = partner_model or self._wgs_partner_model_for_pos()
+        for field_name in self._PARTNER_CURP_FIELD_CANDIDATES:
+            if Partner._fields.get(field_name):
+                return field_name
+        return False
+
+    def _wgs_normalize_partner_curp_for_pos(self, curp):
+        Partner = self._wgs_partner_model_for_pos()
+        if hasattr(Partner, '_wgs_normalize_curp'):
+            return Partner._wgs_normalize_curp(curp)
+        if not curp:
+            return False
+        return re.sub(r'[\s-]+', '', str(curp)).upper() or False
+
     def _wgs_validate_partner_curp_for_pos(self, curp, exclude_partner=False):
         Partner = self._wgs_partner_model_for_pos()
-        if not hasattr(Partner, '_wgs_has_curp_field') or not Partner._wgs_has_curp_field():
+        curp_field = self._wgs_get_partner_curp_field_for_pos(Partner)
+        if not curp_field:
             return {
                 'ok': False,
                 'message': _('Este entorno no permite capturar CURP desde Punto de Venta.'),
             }
 
-        normalized = Partner._wgs_normalize_curp(curp)
+        normalized = self._wgs_normalize_partner_curp_for_pos(curp)
         if not normalized:
             return {
                 'ok': False,
                 'message': _('Debes capturar una CURP válida.'),
             }
 
-        domain = [(self._PARTNER_CURP_FIELD_CANDIDATES[0], '=', normalized)]
+        domain = [(curp_field, '=', normalized)]
         if exclude_partner:
             domain.insert(0, ('id', '!=', exclude_partner.id))
         duplicate = Partner.search(domain, limit=1)

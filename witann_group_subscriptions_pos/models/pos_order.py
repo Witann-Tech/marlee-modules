@@ -478,11 +478,13 @@ class PosOrder(models.Model):
     def _wgs_has_free_trial_usage_for_curp(self, curp):
         sale_order_model = self.env['sale.order'].sudo()
         partner_model = self._wgs_partner_model_for_pos()
-        normalized = partner_model._wgs_normalize_curp(curp) if hasattr(partner_model, '_wgs_normalize_curp') else False
+        normalized = sale_order_model._wgs_normalize_partner_curp_for_pos(curp)
         if not normalized:
             return False
 
-        curp_field = sale_order_model._PARTNER_CURP_FIELD_CANDIDATES[0]
+        curp_field = sale_order_model._wgs_get_partner_curp_field_for_pos(partner_model)
+        if not curp_field:
+            return False
         sale_line_model = self.env['sale.order.line'].sudo()
         sale_domain = [
             ('order_id.partner_id.%s' % curp_field, '=', normalized),
