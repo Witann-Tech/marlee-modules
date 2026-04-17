@@ -10,6 +10,12 @@ class ProductTemplate(models.Model):
         default=False,
         help='Obliga a capturar o validar la CURP del contacto antes de vender esta suscripción desde Punto de Venta.',
     )
+    wgs_student_age_lock = fields.Boolean(
+        string='Restringir a estudiante menor de 25 en POS',
+        default=False,
+        help='Bloquea venta, renovación, reinscripción y upsale en POS si el titular ya cumplió 25 años. '
+             'La validación se hace con la CURP del contacto.',
+    )
     max_participants_total = fields.Integer(
         string='Máximo de participantes (total)',
         default=1,

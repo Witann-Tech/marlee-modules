@@ -45,6 +45,7 @@ function renderPartnerDetailAvatar({
         <div class="wgs-detail-avatar-stack">
             <img class="wgs-detail-avatar" src="${escapeHtml(detail.image_url || "")}" alt="${escapeHtml(detail.partner_name || "")}" loading="lazy" />
             <button type="button" class="wgs-secondary-action-btn wgs-avatar-edit-btn" data-action="open-partner-photo">${escapeHtml(_t("Editar foto"))}</button>
+            <button type="button" class="wgs-secondary-action-btn wgs-avatar-edit-btn" data-action="open-partner-edit">${escapeHtml(_t("Editar datos"))}</button>
         </div>
     `;
 }

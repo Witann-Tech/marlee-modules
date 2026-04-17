@@ -89,13 +89,7 @@ function renderDetailHeader({
             <div class="wgs-detail-header-text">
                 <div class="wgs-detail-title-row">
                     <h4>${escapeHtml(detail.partner_name || "-")}</h4>
-                    <div class="wgs-detail-title-actions">
-                        ${!isEditingPartnerInfo
-                            ? `<button type="button" class="wgs-secondary-action-btn wgs-inline-edit-btn" data-action="open-partner-edit">${escapeHtml(_t("Editar datos"))}</button>`
-                            : ""
-                        }
-                        <span class="wgs-state-badge ${summaryStateClass}">${escapeHtml(detail.state_label || _t("Sin suscripcion"))}</span>
-                    </div>
+                    <span class="wgs-state-badge ${summaryStateClass}">${escapeHtml(detail.state_label || _t("Sin suscripcion"))}</span>
                 </div>
                 ${detailBodyHtml}
             </div>

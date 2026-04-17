@@ -337,6 +337,10 @@ patch(ControlButtons.prototype, {
         return this.subscriptionPosApi.updatePartner(partnerId, values || {});
     },
 
+    async _validateSubscriptionProductEligibilityForPos(partnerId, productId) {
+        return this.subscriptionPosApi.validateSubscriptionProductEligibility(partnerId, productId);
+    },
+
     async _updatePartnerPhotoForPos(partnerId, imageBase64) {
         return this.subscriptionPosApi.updatePartnerPhoto(partnerId, imageBase64 || false);
     },
@@ -1495,6 +1499,8 @@ patch(ControlButtons.prototype, {
                 findProductInPos: (productId) => findProductInPos(this, productId),
                 getSubscriptionPartnerIdsFromOrder,
                 saveSubscriptionParticipants: (subscriptionId, participantIds) => this._saveSubscriptionParticipants(subscriptionId, participantIds),
+                validateSubscriptionProductEligibility: (partnerId, productId) =>
+                    this._validateSubscriptionProductEligibilityForPos(partnerId, productId),
                 formatTodayISO,
                 _t,
             }),
@@ -1898,18 +1904,6 @@ patch(ControlButtons.prototype, {
                 gap: 0.6rem;
                 align-items: center;
                 margin-bottom: 0.75rem;
-            }
-            .wgs-detail-title-actions {
-                display: flex;
-                align-items: center;
-                gap: 0.5rem;
-                flex-wrap: wrap;
-                justify-content: flex-end;
-            }
-            .wgs-inline-edit-btn {
-                width: auto;
-                min-width: 0;
-                padding-inline: 0.9rem;
             }
             .wgs-detail-title-row h4 {
                 margin: 0;

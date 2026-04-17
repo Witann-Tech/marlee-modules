@@ -10,6 +10,7 @@
                     <group>
                         <field name="max_participants_total"/>
                         <field name="wgs_requires_curp"/>
+                        <field name="wgs_student_age_lock"/>
                     </group>
                 </page>
             </xpath>

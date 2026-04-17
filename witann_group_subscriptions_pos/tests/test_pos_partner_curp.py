@@ -21,6 +21,17 @@ class TestPosPartnerCurp(TransactionCase):
                 'wgs_requires_curp': True,
             }
         )
+        self.student_product = self.env['product.product'].create(
+            {
+                'name': 'Plan Estudiante POS',
+                'detailed_type': 'service',
+                'list_price': 120.0,
+                'sale_ok': True,
+                'available_in_pos': True,
+                'recurring_invoice': True,
+                'wgs_student_age_lock': True,
+            }
+        )
 
     def test_create_partner_for_pos_accepts_curp(self):
         result = self.PosOrder.sudo().wgs_create_partner_for_pos(
@@ -89,3 +100,44 @@ class TestPosPartnerCurp(TransactionCase):
 
         self.assertTrue(item)
         self.assertTrue(item['requires_curp'])
+
+    def test_student_product_context_requires_curp(self):
+        context = self.PosOrder.sudo().wgs_get_subscription_product_context_for_pos(
+            self.student_product.id,
+            fallback=120.0,
+        )
+
+        self.assertTrue(context['student_age_lock'])
+        self.assertTrue(context['requires_curp'])
+
+    def test_validate_subscription_product_eligibility_rejects_age_25_or_more(self):
+        partner = self.Partner.create(
+            {
+                'name': 'Cliente estudiante excedido',
+                self.curp_field: 'ABCD990101HDFRRN09',
+            }
+        )
+
+        result = self.PosOrder.sudo().wgs_validate_subscription_product_eligibility_for_pos(
+            partner.id,
+            self.student_product.id,
+        )
+
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['error_code'], 'student_age_limit')
+
+    def test_validate_subscription_product_eligibility_accepts_under_25(self):
+        partner = self.Partner.create(
+            {
+                'name': 'Cliente estudiante vigente',
+                self.curp_field: 'ABCD080101HDFRRNA9',
+            }
+        )
+
+        result = self.PosOrder.sudo().wgs_validate_subscription_product_eligibility_for_pos(
+            partner.id,
+            self.student_product.id,
+        )
+
+        self.assertTrue(result['ok'])
+        self.assertTrue(result['student_age_lock'])

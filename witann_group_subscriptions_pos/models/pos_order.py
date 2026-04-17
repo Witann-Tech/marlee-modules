@@ -1,6 +1,6 @@
 import json
 import logging
-from datetime import timedelta
+from datetime import date, timedelta
 
 from odoo import _, api, fields, models
 from odoo.fields import Command
@@ -198,12 +198,109 @@ class PosOrder(models.Model):
         return self.env['sale.order'].wgs_update_partner_for_pos(partner_id, vals)
 
     @api.model
+    def wgs_validate_subscription_product_eligibility_for_pos(self, partner_id, product_id):
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para validar productos de suscripción desde Punto de Venta.'))
+
+        partner = self._wgs_browse_partner_for_pos(partner_id)
+        if not partner:
+            return {
+                'ok': False,
+                'error_message': _('El cliente seleccionado no existe.'),
+            }
+
+        product = self._wgs_browse_product_for_pos(product_id)
+        if not product:
+            return {
+                'ok': False,
+                'error_message': _('El producto seleccionado no existe o no está disponible.'),
+            }
+
+        if not bool(getattr(product.product_tmpl_id, 'wgs_student_age_lock', False)):
+            return {'ok': True}
+
+        sale_order_model = self.env['sale.order'].sudo()
+        curp = sale_order_model._get_partner_curp_for_pos(partner)
+        if not curp:
+            return {
+                'ok': False,
+                'error_code': 'missing_curp',
+                'error_message': _(
+                    'Este paquete de estudiante requiere CURP para validar la edad del titular antes de agregarlo al ticket.'
+                ),
+            }
+
+        birthdate = self._wgs_get_birthdate_from_curp_for_pos(curp)
+        if not birthdate:
+            return {
+                'ok': False,
+                'error_code': 'invalid_curp',
+                'error_message': _(
+                    'La CURP %(curp)s no tiene un formato válido para calcular la edad del titular.'
+                ) % {'curp': curp},
+            }
+
+        age = self._wgs_get_age_for_pos(birthdate)
+        if age >= 25:
+            return {
+                'ok': False,
+                'error_code': 'student_age_limit',
+                'error_message': _(
+                    'El paquete %(product)s solo permite titulares menores de 25 años. '
+                    '%(partner)s tiene %(age)s años según su CURP.'
+                ) % {
+                    'product': product.display_name,
+                    'partner': partner.display_name,
+                    'age': age,
+                },
+            }
+
+        return {
+            'ok': True,
+            'student_age_lock': True,
+            'age': age,
+            'curp': curp,
+            'birthdate': fields.Date.to_string(birthdate),
+        }
+
+    @api.model
     def wgs_update_partner_photo_for_pos(self, partner_id, image_1920):
         return self.env['sale.order'].wgs_update_partner_photo_for_pos(partner_id, image_1920)
 
     @api.model
     def wgs_resync_subscription_access_for_pos(self, subscription_id):
         return self.env['sale.order'].wgs_resync_subscription_access_for_pos(subscription_id)
+
+    @api.model
+    def _wgs_get_birthdate_from_curp_for_pos(self, curp):
+        partner_model = self._wgs_partner_model_for_pos()
+        normalized = partner_model._wgs_normalize_curp(curp) if hasattr(partner_model, '_wgs_normalize_curp') else False
+        if not normalized or len(normalized) != 18:
+            return False
+
+        try:
+            year = int(normalized[4:6])
+            month = int(normalized[6:8])
+            day = int(normalized[8:10])
+        except (TypeError, ValueError):
+            return False
+
+        differentiator = normalized[16]
+        century = 2000 if differentiator.isalpha() else 1900
+        try:
+            return date(century + year, month, day)
+        except ValueError:
+            return False
+
+    @api.model
+    def _wgs_get_age_for_pos(self, birthdate, today=False):
+        if not birthdate:
+            return 0
+        birthdate = fields.Date.to_date(birthdate)
+        today = fields.Date.to_date(today) if today else fields.Date.context_today(self)
+        age = today.year - birthdate.year
+        if (today.month, today.day) < (birthdate.month, birthdate.day):
+            age -= 1
+        return max(age, 0)
 
     @api.model
     def _wgs_is_subscription_buffer_ready(self):
@@ -560,12 +657,14 @@ class PosOrder(models.Model):
         default_plan_id = choice.get('plan_id') or False
         default_pricing_id = choice.get('pricing_id') or False
         default_display_price = self._wgs_get_price_with_taxes_for_pos(product, choice.get('price') or fallback or 0.0)
-        requires_curp = bool(getattr(product.product_tmpl_id, 'wgs_requires_curp', False))
+        student_age_lock = bool(getattr(product.product_tmpl_id, 'wgs_student_age_lock', False))
+        requires_curp = bool(getattr(product.product_tmpl_id, 'wgs_requires_curp', False) or student_age_lock)
 
         return {
             'is_subscription': is_subscription,
             'max_participants_total': max_total,
             'requires_curp': requires_curp,
+            'student_age_lock': student_age_lock,
             'default_plan_id': default_plan_id,
             'default_pricing_id': default_pricing_id,
             'default_price': float(choice.get('price') or fallback or 0.0),
@@ -621,6 +720,7 @@ class PosOrder(models.Model):
                 'default_code': product.default_code or False,
                 'max_participants_total': int(context.get('max_participants_total') or 1),
                 'requires_curp': bool(context.get('requires_curp')),
+                'student_age_lock': bool(context.get('student_age_lock')),
                 'default_plan_id': context.get('default_plan_id') or False,
                 'default_pricing_id': context.get('default_pricing_id') or False,
                 'default_price': float(context.get('default_price') or 0.0),

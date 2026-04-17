@@ -1,5 +1,30 @@
 /** @odoo-module **/
 
+async function ensureEligibleProductForPartner(state, partnerId, productId, {
+    validateSubscriptionProductEligibility,
+    renderDetail,
+    _t,
+}) {
+    try {
+        const result = await validateSubscriptionProductEligibility(partnerId, productId);
+        if (!result || result.ok === false) {
+            state.formError = result && result.error_message
+                ? result.error_message
+                : _t("El cliente no cumple las reglas de elegibilidad para este paquete.");
+            renderDetail(state.currentDetail);
+            return false;
+        }
+        return true;
+    } catch (error) {
+        console.error("Error al validar elegibilidad de producto POS", error);
+        state.formError = (error && error.message)
+            ? error.message
+            : _t("No se pudo validar la elegibilidad del cliente para este paquete.");
+        renderDetail(state.currentDetail);
+        return false;
+    }
+}
+
 function buildSubscriptionInlineActionHandlers({
     state,
     clearFeedback,
@@ -28,6 +53,7 @@ function buildSubscriptionInlineActionHandlers({
     findProductInPos,
     getSubscriptionPartnerIdsFromOrder,
     saveSubscriptionParticipants,
+    validateSubscriptionProductEligibility,
     formatTodayISO,
     _t,
 }) {
@@ -203,6 +229,13 @@ function buildSubscriptionInlineActionHandlers({
                     renderDetail(state.currentDetail);
                     return;
                 }
+            }
+            if (!(await ensureEligibleProductForPartner(state, state.selectedPartnerId, state.newSubscriptionForm.productId, {
+                validateSubscriptionProductEligibility,
+                renderDetail,
+                _t,
+            }))) {
+                return;
             }
             let targetLine = null;
             try {
@@ -500,6 +533,13 @@ function buildSubscriptionInlineActionHandlers({
                 renderDetail(state.currentDetail);
                 return;
             }
+            if (!(await ensureEligibleProductForPartner(state, holderPartnerId, state.upsaleForm.productId, {
+                validateSubscriptionProductEligibility,
+                renderDetail,
+                _t,
+            }))) {
+                return;
+            }
             let targetLine = null;
             try {
                 const lineResult = await addConfiguredProductLineToOrder(order, productRecord, {
@@ -579,6 +619,13 @@ function buildSubscriptionInlineActionHandlers({
                 renderDetail(state.currentDetail);
                 return;
             }
+            if (!(await ensureEligibleProductForPartner(state, holderPartnerId, state.renewalForm.productId, {
+                validateSubscriptionProductEligibility,
+                renderDetail,
+                _t,
+            }))) {
+                return;
+            }
             let targetLine = null;
             try {
                 const lineResult = await addConfiguredProductLineToOrder(order, productRecord, {
@@ -656,6 +703,13 @@ function buildSubscriptionInlineActionHandlers({
             if (!productRecord) {
                 state.formError = _t("El producto recurrente de esta suscripción no está cargado en la sesión actual del POS.");
                 renderDetail(state.currentDetail);
+                return;
+            }
+            if (!(await ensureEligibleProductForPartner(state, holderPartnerId, state.renewalForm.productId, {
+                validateSubscriptionProductEligibility,
+                renderDetail,
+                _t,
+            }))) {
                 return;
             }
             let targetLine = null;

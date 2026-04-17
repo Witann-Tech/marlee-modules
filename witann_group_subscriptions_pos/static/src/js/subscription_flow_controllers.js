@@ -375,7 +375,8 @@ async function applySelectedProduct(state, productId, {
     const product = state.productCatalog.find((item) => Number(item.id) === numericProductId) || null;
     state.newSubscriptionForm.productId = numericProductId;
     state.newSubscriptionForm.productName = product ? product.name || "" : "";
-    state.newSubscriptionForm.requiresCurp = Boolean(product && product.requires_curp);
+    state.newSubscriptionForm.requiresCurp = Boolean(product && (product.requires_curp || product.student_age_lock));
+    state.newSubscriptionForm.studentAgeLock = Boolean(product && product.student_age_lock);
     state.newSubscriptionForm.maxParticipantsTotal = product ? Number(product.max_participants_total || 1) : 1;
     state.newSubscriptionForm.plans = product ? [...(product.plans || [])] : [];
     const defaultPlanId = product ? Number(product.default_plan_id || 0) : 0;
