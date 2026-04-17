@@ -425,10 +425,16 @@ class PosOrderPricingMixin(models.Model):
                         seen_pricing_ids.add(pricing.id)
                         candidates.append(candidate)
 
-        candidates.extend(self._wgs_search_product_pricelist_item_records(product))
+        for candidate in self._wgs_search_subscription_pricing_records(product):
+            pricing_id = int(candidate.get('pricing_id') or 0)
+            if pricing_id and pricing_id in seen_pricing_ids:
+                continue
+            if pricing_id:
+                seen_pricing_ids.add(pricing_id)
+            candidates.append(candidate)
 
         if not candidates:
-            candidates.extend(self._wgs_search_subscription_pricing_records(product))
+            candidates.extend(self._wgs_search_product_pricelist_item_records(product))
 
         if not candidates:
             _logger.warning(

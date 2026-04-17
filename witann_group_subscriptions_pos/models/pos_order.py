@@ -495,6 +495,17 @@ class PosOrder(models.Model):
         today = fields.Date.to_date(today) if today else fields.Date.context_today(self)
         normalized_flow = str(flow or 'new').strip().lower()
 
+        if normalized_flow in ('new', 'renewal', 'reenroll') and bool(
+            getattr(product.product_tmpl_id, 'wgs_requires_family_authorization', False)
+        ):
+            return [{
+                'code': 'family_authorization',
+                'label': _('Venta familiar autorizada'),
+                'discount_percent': 0.0,
+                'discount_fixed_amount': 0.0,
+                'authorization_required': True,
+            }]
+
         if normalized_flow in ('new', 'reenroll'):
             last_end_date = self._wgs_get_last_subscription_end_date_for_partner_for_pos(partner, today=today)
             if last_end_date:
@@ -522,32 +533,6 @@ class PosOrder(models.Model):
                     'authorization_required': True,
                     'birthday_year': today.year,
                     'valid_until': False,
-                })
-
-        if normalized_flow in ('new', 'renewal', 'reenroll'):
-            if bool(getattr(product.product_tmpl_id, 'wgs_requires_family_authorization', False)):
-                offers.append({
-                    'code': 'family_authorization',
-                    'label': _('Venta familiar autorizada'),
-                    'discount_percent': 0.0,
-                    'discount_fixed_amount': 0.0,
-                    'authorization_required': True,
-                })
-            if bool(getattr(product.product_tmpl_id, 'wgs_single_day_access', False)):
-                offers.append({
-                    'code': 'single_day_authorization',
-                    'label': _('Suscripción de 1 día autorizada'),
-                    'discount_percent': 0.0,
-                    'discount_fixed_amount': 0.0,
-                    'authorization_required': True,
-                })
-            if normalized_flow == 'new' and bool(getattr(product.product_tmpl_id, 'wgs_free_trial_day', False)):
-                offers.append({
-                    'code': 'free_trial_authorization',
-                    'label': _('Día de prueba gratis autorizado'),
-                    'discount_percent': 0.0,
-                    'discount_fixed_amount': 0.0,
-                    'authorization_required': True,
                 })
 
         return offers

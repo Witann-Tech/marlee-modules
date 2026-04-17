@@ -126,6 +126,56 @@ class TestPosSubscriptionPricing(TransactionCase):
         self.assertEqual(threshold, fields.Date.to_date('2026-03-27'))
         self.assertEqual(period_end, fields.Date.to_date('2026-03-26'))
 
+    def test_subscription_pricing_beats_generic_pricelist_candidate(self):
+        pricing_model_name = 'sale.subscription.pricing'
+        if pricing_model_name not in self.env.registry:
+            self.skipTest('sale.subscription.pricing no existe en este runtime.')
+
+        self.product.write({'list_price': 90.0})
+
+        pricelist_item_model = self.env['product.pricelist.item']
+        pricelist_item_vals = {'fixed_price': 90.0}
+        if 'product_tmpl_id' in pricelist_item_model._fields:
+            pricelist_item_vals['product_tmpl_id'] = self.product.product_tmpl_id.id
+        elif 'product_template_id' in pricelist_item_model._fields:
+            pricelist_item_vals['product_template_id'] = self.product.product_tmpl_id.id
+        if 'compute_price' in pricelist_item_model._fields:
+            pricelist_item_vals['compute_price'] = 'fixed'
+        pricelist_item_model.create(pricelist_item_vals)
+
+        pricing_model = self.env[pricing_model_name]
+        pricing_vals = {}
+        for field_name in ('product_tmpl_id', 'product_template_id'):
+            if field_name in pricing_model._fields:
+                pricing_vals[field_name] = self.product.product_tmpl_id.id
+                break
+        for field_name in ('plan_id', 'subscription_plan_id', 'recurring_plan_id'):
+            if field_name in pricing_model._fields:
+                pricing_vals[field_name] = self.plan.id
+                break
+        for field_name in ('fixed_price', 'price', 'recurring_price', 'price_unit', 'list_price', 'amount'):
+            if field_name in pricing_model._fields:
+                pricing_vals[field_name] = 50.0
+                break
+        for field_name in ('name',):
+            if field_name in pricing_model._fields and field_name not in pricing_vals:
+                pricing_vals[field_name] = 'Pricing recurrente POS'
+
+        try:
+            pricing_model.create(pricing_vals)
+        except Exception:
+            self.skipTest('No se pudo crear sale.subscription.pricing en este runtime.')
+
+        charge = self.PosOrder.sudo().wgs_get_subscription_charge_for_pos(
+            self.partner.id,
+            self.product.id,
+            fallback=90.0,
+            preferred_plan_id=self.plan.id,
+            preferred_pricing_id=False,
+        )
+
+        self.assertEqual(charge['recurring_price'], 50.0)
+
     def test_close_source_subscription_after_upgrade_sets_previous_day_end(self):
         order = self._create_subscription_like_order()
         end_field = self.PosOrder._wgs_find_subscription_end_date_field(order)

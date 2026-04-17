@@ -1,5 +1,7 @@
 /** @odoo-module **/
 
+import { getAuthorizationOnlyOffer } from "./subscription_discount_render";
+
 async function ensureEligibleProductForPartner(state, partnerId, productId, {
     validateSubscriptionProductEligibility,
     renderDetail,
@@ -59,18 +61,32 @@ function hasPendingDiscountAuthorization(form) {
     return !form.authorizedDiscount || String(form.authorizedDiscount.code || "") !== selectedCode;
 }
 
+function getPendingAuthorizationMessage(form, _t) {
+    return getAuthorizationOnlyOffer(form)
+        ? _t("Debes autorizar esta venta antes de agregarla al ticket.")
+        : _t("Debes autorizar el descuento seleccionado antes de agregarla al ticket.");
+}
+
 async function authorizeDiscountForForm(state, form, { partnerId, productId, flow, sourceSubscriptionId = false }, {
     authorizeSubscriptionDiscount,
     renderDetail,
     _t,
 }) {
+    const authorizationOnlyOffer = getAuthorizationOnlyOffer(form);
+    if (authorizationOnlyOffer && !String(form.selectedDiscountCode || "").trim()) {
+        form.selectedDiscountCode = String(authorizationOnlyOffer.code || "");
+    }
     if (!form || !String(form.selectedDiscountCode || "").trim()) {
-        state.formError = _t("Selecciona un beneficio antes de autorizar el descuento.");
+        state.formError = authorizationOnlyOffer
+            ? _t("No se encontró la autorización requerida para esta venta.")
+            : _t("Selecciona un beneficio antes de autorizar el descuento.");
         renderDetail(state.currentDetail);
         return false;
     }
     if (!String(form.supervisorPin || "").trim()) {
-        state.formError = _t("Captura el PIN supervisor para autorizar el descuento.");
+        state.formError = authorizationOnlyOffer
+            ? _t("Captura el PIN supervisor para autorizar esta venta.")
+            : _t("Captura el PIN supervisor para autorizar el descuento.");
         renderDetail(state.currentDetail);
         return false;
     }
@@ -86,7 +102,11 @@ async function authorizeDiscountForForm(state, form, { partnerId, productId, flo
         if (!result || result.ok === false) {
             state.formError = result && result.error_message
                 ? result.error_message
-                : _t("No se pudo autorizar el descuento solicitado.");
+                : (
+                    authorizationOnlyOffer
+                        ? _t("No se pudo autorizar la venta solicitada.")
+                        : _t("No se pudo autorizar el descuento solicitado.")
+                );
             renderDetail(state.currentDetail);
             return false;
         }
@@ -100,14 +120,20 @@ async function authorizeDiscountForForm(state, form, { partnerId, productId, flo
             authorizedAt: result.authorized_at || false,
             birthdayYear: Number(result.birthday_year || 0) || false,
         };
-        state.formNotice = _t("Descuento autorizado correctamente.");
+        state.formNotice = authorizationOnlyOffer
+            ? _t("Venta autorizada correctamente.")
+            : _t("Descuento autorizado correctamente.");
         renderDetail(state.currentDetail);
         return true;
     } catch (error) {
         console.error("Error al autorizar descuento POS", error);
         state.formError = (error && error.message)
             ? error.message
-            : _t("No se pudo autorizar el descuento solicitado.");
+            : (
+                authorizationOnlyOffer
+                    ? _t("No se pudo autorizar la venta solicitada.")
+                    : _t("No se pudo autorizar el descuento solicitado.")
+            );
         renderDetail(state.currentDetail);
         return false;
     }
@@ -398,7 +424,7 @@ function buildSubscriptionInlineActionHandlers({
                 return;
             }
             if (hasPendingDiscountAuthorization(state.newSubscriptionForm)) {
-                state.formError = _t("Debes autorizar el descuento seleccionado antes de agregar la suscripción al ticket.");
+                state.formError = getPendingAuthorizationMessage(state.newSubscriptionForm, _t);
                 renderDetail(state.currentDetail);
                 return;
             }
@@ -794,7 +820,7 @@ function buildSubscriptionInlineActionHandlers({
                 return;
             }
             if (hasPendingDiscountAuthorization(state.renewalForm)) {
-                state.formError = _t("Debes autorizar el descuento seleccionado antes de agregar la renovación al ticket.");
+                state.formError = getPendingAuthorizationMessage(state.renewalForm, _t);
                 renderDetail(state.currentDetail);
                 return;
             }
@@ -887,7 +913,7 @@ function buildSubscriptionInlineActionHandlers({
                 return;
             }
             if (hasPendingDiscountAuthorization(state.renewalForm)) {
-                state.formError = _t("Debes autorizar el descuento seleccionado antes de agregar la reinscripción al ticket.");
+                state.formError = getPendingAuthorizationMessage(state.renewalForm, _t);
                 renderDetail(state.currentDetail);
                 return;
             }

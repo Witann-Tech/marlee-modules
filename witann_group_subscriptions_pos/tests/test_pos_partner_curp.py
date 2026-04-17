@@ -62,6 +62,17 @@ class TestPosPartnerCurp(TransactionCase):
                 'wgs_single_day_access': True,
             }
         )
+        self.family_product = self.env['product.product'].create(
+            {
+                'name': 'Plan Familiar POS',
+                'detailed_type': 'service',
+                'list_price': 319.0,
+                'sale_ok': True,
+                'available_in_pos': True,
+                'recurring_invoice': True,
+                'wgs_requires_family_authorization': True,
+            }
+        )
         self.trial_product = self.env['product.product'].create(
             {
                 'name': 'Trial gratis POS',
@@ -348,3 +359,41 @@ class TestPosPartnerCurp(TransactionCase):
         self.assertTrue(result['ok'])
         self.assertEqual(result['authorized_employee_id'], employee.id)
         self.assertEqual(result['discount_percent'], 10.0)
+
+    def test_family_product_returns_only_authorization_offer(self):
+        partner = self.Partner.create({'name': 'Cliente familiar POS'})
+
+        offers = self.PosOrder.sudo().wgs_get_subscription_discount_offers_for_pos(
+            partner.id,
+            self.family_product.id,
+            'new',
+            False,
+        )
+
+        self.assertEqual(len(offers), 1)
+        self.assertEqual(offers[0]['code'], 'family_authorization')
+        self.assertEqual(float(offers[0]['discount_percent']), 0.0)
+
+    def test_day_pass_and_trial_do_not_require_supervisor_authorization(self):
+        partner = self.Partner.create(
+            {
+                'name': 'Cliente day pass POS',
+                self.curp_field: 'ABCD020202HDFRRN01',
+            }
+        )
+
+        day_pass_offers = self.PosOrder.sudo().wgs_get_subscription_discount_offers_for_pos(
+            partner.id,
+            self.day_pass_product.id,
+            'new',
+            False,
+        )
+        trial_offers = self.PosOrder.sudo().wgs_get_subscription_discount_offers_for_pos(
+            partner.id,
+            self.trial_product.id,
+            'new',
+            False,
+        )
+
+        self.assertFalse(any(offer['code'] == 'single_day_authorization' for offer in day_pass_offers))
+        self.assertFalse(any(offer['code'] == 'free_trial_authorization' for offer in trial_offers))

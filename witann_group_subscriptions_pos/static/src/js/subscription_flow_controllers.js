@@ -159,6 +159,12 @@ async function openRenewalForm(state, item, {
                 mode === "reenroll" ? "reenroll" : "renewal",
                 state.renewalForm.subscriptionId
             );
+            if (state.renewalForm.discountOffers.length === 1) {
+                const [onlyOffer] = state.renewalForm.discountOffers;
+                if (!Number(onlyOffer.discount_percent || 0) && !Number(onlyOffer.discount_fixed_amount || 0)) {
+                    state.renewalForm.selectedDiscountCode = String(onlyOffer.code || "");
+                }
+            }
         }
     } catch (error) {
         console.error("Error al consultar cobro de renovación POS", error);
@@ -422,6 +428,12 @@ async function applySelectedProduct(state, productId, {
             );
         } catch (error) {
             console.error("Error al consultar descuentos de suscripción POS", error);
+        }
+    }
+    if (state.newSubscriptionForm.discountOffers.length === 1) {
+        const [onlyOffer] = state.newSubscriptionForm.discountOffers;
+        if (!Number(onlyOffer.discount_percent || 0) && !Number(onlyOffer.discount_fixed_amount || 0)) {
+            state.newSubscriptionForm.selectedDiscountCode = String(onlyOffer.code || "");
         }
     }
     state.newSubscriptionForm.participantIds = clampParticipantIds(
