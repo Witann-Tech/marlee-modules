@@ -413,6 +413,42 @@ function convertDisplayPriceToTaxExcluded(source, product, displayPrice) {
     return Math.round(baseAmount * 1000000) / 1000000;
 }
 
+export function convertTaxExcludedPriceToDisplay(source, product, basePrice) {
+    const netAmount = Number(basePrice || 0);
+    if (!netAmount || !product) {
+        return netAmount;
+    }
+    const normalizedProduct = normalizeProductTaxesForCurrentCompany(source, product);
+    const taxIds = getProductTaxIds(normalizedProduct);
+    if (!taxIds.length) {
+        return netAmount;
+    }
+    const taxes = taxIds.map((taxId) => findTaxInPos(source, taxId)).filter(Boolean);
+    if (!taxes.length) {
+        return netAmount;
+    }
+
+    let totalAmount = netAmount;
+    for (const tax of taxes) {
+        const amountType = String(tax.amount_type || tax.amountType || "percent");
+        const isPriceIncluded = Boolean(tax.price_include ?? tax.priceInclude ?? false);
+        if (isPriceIncluded) {
+            continue;
+        }
+        const amount = Number(tax.amount || 0);
+        if (amountType === "fixed") {
+            totalAmount += amount;
+            continue;
+        }
+        if (amountType === "percent") {
+            totalAmount += netAmount * (amount / 100);
+            continue;
+        }
+        return netAmount;
+    }
+    return Math.round(totalAmount * 1000000) / 1000000;
+}
+
 export async function addConfiguredProductLineToOrder(source, order, product, options = {}) {
     const {
         quantity = 1,

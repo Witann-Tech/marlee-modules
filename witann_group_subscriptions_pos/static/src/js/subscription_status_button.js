@@ -3,6 +3,7 @@
 import {
     addConfiguredProductLineToOrder,
     collectSubscriptionConfigsFromOrder,
+    convertTaxExcludedPriceToDisplay,
     findPartnerInPos,
     findProductInPos,
     getAllLocalPosProducts,
@@ -1029,13 +1030,35 @@ patch(ControlButtons.prototype, {
                 return "";
             }
             const plan = getSelectedPlan();
+            const localProductRecord = findProductInPos(this, newSubscriptionForm.productId);
             const automaticEndDate = plan
                 ? getPlanPeriodEndDate(newSubscriptionForm.startDate, plan.interval_value, plan.interval_unit)
                 : "";
             const partnerCurp = String(currentDetail && currentDetail.curp ? currentDetail.curp : "").trim();
             const requiresCurp = Boolean(newSubscriptionForm.requiresCurp);
             const needsCurpCapture = requiresCurp && !partnerCurp;
-            const discountedChargeDisplay = getDiscountedDisplayAmount(newSubscriptionForm.charge, newSubscriptionForm);
+            const localDisplayAmount = convertTaxExcludedPriceToDisplay(
+                this,
+                localProductRecord,
+                Number(
+                    newSubscriptionForm.charge
+                    && newSubscriptionForm.charge.ticketUnitPrice !== undefined
+                        ? newSubscriptionForm.charge.ticketUnitPrice
+                        : (newSubscriptionForm.charge && newSubscriptionForm.charge.baseAmount !== undefined
+                            ? newSubscriptionForm.charge.baseAmount
+                            : 0)
+                )
+            );
+            const discountPercent = Number(
+                newSubscriptionForm
+                && newSubscriptionForm.authorizedDiscount
+                && newSubscriptionForm.authorizedDiscount.discountPercent !== undefined
+                    ? newSubscriptionForm.authorizedDiscount.discountPercent
+                    : 0
+            ) || 0;
+            const discountedChargeDisplay = discountPercent
+                ? localDisplayAmount * (1 - (discountPercent / 100))
+                : localDisplayAmount;
             const filteredParticipants = filterParticipantRowsByTerm(newSubscriptionForm.participantSearch);
             const participantOptions = Number(newSubscriptionForm.maxParticipantsTotal || 1) > 1
                 ? filteredParticipants
@@ -1058,7 +1081,12 @@ patch(ControlButtons.prototype, {
             const planOptions = (newSubscriptionForm.plans || []).map((item) => {
                 const value = `${Number(item.plan_id || 0)}:${Number(item.pricing_id || 0)}`;
                 const selected = value === String(newSubscriptionForm.planChoice || "") ? "selected" : "";
-                const label = `${item.plan_name || _t("Plan recurrente")} | ${this._formatMoney(item.display_price !== undefined ? item.display_price : (item.price || 0))}${item.interval_label ? ` | ${item.interval_label}` : ""}`;
+                const planDisplayPrice = convertTaxExcludedPriceToDisplay(
+                    this,
+                    localProductRecord,
+                    Number(item.price || 0)
+                );
+                const label = `${item.plan_name || _t("Plan recurrente")} | ${this._formatMoney(planDisplayPrice)}${item.interval_label ? ` | ${item.interval_label}` : ""}`;
                 return `<option value="${this._escapeHtml(value)}" ${selected}>${this._escapeHtml(label)}</option>`;
             }).join("");
 
