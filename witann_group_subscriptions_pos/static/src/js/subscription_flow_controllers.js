@@ -360,11 +360,33 @@ async function recalculateNewSubscriptionCharge(state, product, preferredPlan, {
             preferredPlan ? Number(preferredPlan.plan_id || 0) || false : false,
             preferredPlan ? Number(preferredPlan.pricing_id || 0) || false : false
         );
-        const displayRecurringPrice = Number(
+        let displayRecurringPrice = Number(
             charge && charge.display_recurring_price !== undefined
                 ? charge.display_recurring_price
                 : (charge && charge.recurring_price ? charge.recurring_price : 0)
         );
+        if (product && (product.single_day_access || product.free_trial_day)) {
+            displayRecurringPrice = Number(
+                charge && charge.ticket_recurring_price !== undefined
+                    ? charge.ticket_recurring_price
+                    : (charge && charge.recurring_price ? charge.recurring_price : 0)
+            );
+        }
+        const resolvedPlanId = Number(charge && charge.plan_id ? charge.plan_id : (preferredPlan && preferredPlan.plan_id) || 0);
+        const resolvedPricingId = Number(charge && charge.pricing_id ? charge.pricing_id : (preferredPlan && preferredPlan.pricing_id) || 0);
+        state.newSubscriptionForm.plans = (state.newSubscriptionForm.plans || []).map((item) => {
+            const samePlan = Number(item.plan_id || 0) === resolvedPlanId;
+            const samePricing = Number(item.pricing_id || 0) === resolvedPricingId;
+            const match = resolvedPricingId ? samePricing : samePlan;
+            if (!match) {
+                return item;
+            }
+            return {
+                ...item,
+                price: Number(charge && charge.recurring_price ? charge.recurring_price : item.price || 0),
+                display_price: displayRecurringPrice,
+            };
+        });
         state.newSubscriptionForm.charge = buildChargeBreakdown(null, null, {
             baseAmount: Number(charge && charge.recurring_price ? charge.recurring_price : 0),
             ticketUnitPrice: Number(
