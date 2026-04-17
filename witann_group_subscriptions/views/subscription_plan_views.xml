@@ -5,7 +5,7 @@
         <field name="model">sale.subscription.plan</field>
         <field name="inherit_id" ref="sale_subscription.sale_subscription_plan_view_form"/>
         <field name="arch" type="xml">
-            <xpath expr="//field[@name='recurring_rule_type']" position="after">
+            <xpath expr="//field[@name='company_id']" position="after">
                 <field name="wgs_single_day_plan"/>
             </xpath>
         </field>
