@@ -361,7 +361,7 @@ class TestPosPartnerCurp(TransactionCase):
         employee = self.Employee.create(
             {
                 'name': 'Supervisor POS',
-                'wgs_authorization_pin2': '2468',
+                'pin': '2468',
             }
         )
 
