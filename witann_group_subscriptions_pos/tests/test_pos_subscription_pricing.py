@@ -109,6 +109,22 @@ class TestPosSubscriptionPricing(TransactionCase):
         period_end = self.PosOrder._wgs_get_plan_period_end_date(self.plan, start_date)
         self.assertEqual(period_end, fields.Date.to_date('2026-04-25'))
 
+    def test_plan_period_end_date_supports_daily_plans(self):
+        daily_plan = self.env['sale.subscription.plan'].create(
+            {
+                'name': 'Plan Diario POS',
+                'recurring_interval': 1,
+                'recurring_rule_type': 'day',
+            }
+        )
+
+        start_date = fields.Date.to_date('2026-03-26')
+        period_end = self.PosOrder._wgs_get_plan_period_end_date(daily_plan, start_date)
+        threshold = self.PosOrder._wgs_get_plan_min_end_threshold(daily_plan, start_date)
+
+        self.assertEqual(threshold, fields.Date.to_date('2026-03-27'))
+        self.assertEqual(period_end, fields.Date.to_date('2026-03-26'))
+
     def test_close_source_subscription_after_upgrade_sets_previous_day_end(self):
         order = self._create_subscription_like_order()
         end_field = self.PosOrder._wgs_find_subscription_end_date_field(order)

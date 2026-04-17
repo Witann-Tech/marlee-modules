@@ -1,10 +1,15 @@
 from lxml import etree
 
-from odoo import api, models
+from odoo import api, fields, models
 
 
 class SaleSubscriptionPlan(models.Model):
     _inherit = 'sale.subscription.plan'
+
+    recurring_rule_type = fields.Selection(
+        selection_add=[('day', 'Días')],
+        ondelete={'day': 'set default'},
+    )
 
     @api.model
     def _wgs_strip_removed_min_term_field(self, arch):
