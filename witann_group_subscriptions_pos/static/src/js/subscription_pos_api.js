@@ -20,6 +20,20 @@ export function createSubscriptionPosApi(orm) {
         async validateSubscriptionProductEligibility(partnerId, productId) {
             return orm.call("pos.order", "wgs_validate_subscription_product_eligibility_for_pos", [partnerId, productId]);
         },
+        async fetchSubscriptionDiscountOffers(partnerId, productId, flow = "new", sourceSubscriptionId = false) {
+            return orm.call(
+                "pos.order",
+                "wgs_get_subscription_discount_offers_for_pos",
+                [partnerId, productId, flow || "new", sourceSubscriptionId || false]
+            );
+        },
+        async authorizeSubscriptionDiscount(partnerId, productId, flow = "new", discountCode = false, supervisorPin = false, sourceSubscriptionId = false) {
+            return orm.call(
+                "pos.order",
+                "wgs_authorize_subscription_discount_for_pos",
+                [partnerId, productId, flow || "new", discountCode || false, supervisorPin || false, sourceSubscriptionId || false]
+            );
+        },
         async updatePartnerPhoto(partnerId, imageBase64) {
             return orm.call("pos.order", "wgs_update_partner_photo_for_pos", [partnerId, imageBase64 || false]);
         },

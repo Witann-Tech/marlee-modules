@@ -86,6 +86,7 @@ async function openRenewalForm(state, item, {
     renderDetail,
     buildChargeBreakdown,
     fetchSubscriptionRenewalCharge,
+    fetchSubscriptionDiscountOffers,
     mode = "renewal",
     title = false,
     submitLabel = false,
@@ -117,6 +118,10 @@ async function openRenewalForm(state, item, {
         isReenroll: mode === "reenroll",
         startDate: mode === "reenroll" ? new Date().toISOString().slice(0, 10) : false,
         charge: buildChargeBreakdown(null, null, { baseAmount: 0, displayAmount: 0 }),
+        discountOffers: [],
+        selectedDiscountCode: "",
+        supervisorPin: "",
+        authorizedDiscount: null,
         nextInvoiceDate: item.next_invoice_date || false,
         loading: true,
     };
@@ -147,6 +152,14 @@ async function openRenewalForm(state, item, {
             planId: Number(charge && charge.plan_id ? charge.plan_id : state.renewalForm.planId) || false,
             pricingId: Number(charge && charge.pricing_id ? charge.pricing_id : state.renewalForm.pricingId) || false,
         };
+        if (fetchSubscriptionDiscountOffers) {
+            state.renewalForm.discountOffers = await fetchSubscriptionDiscountOffers(
+                state.renewalForm.holderPartnerId,
+                state.renewalForm.productId,
+                mode === "reenroll" ? "reenroll" : "renewal",
+                state.renewalForm.subscriptionId
+            );
+        }
     } catch (error) {
         console.error("Error al consultar cobro de renovación POS", error);
         state.formError = _t("No se pudo consultar el cobro de renovación para esta suscripción.");
@@ -370,6 +383,7 @@ async function recalculateNewSubscriptionCharge(state, product, preferredPlan, {
 async function applySelectedProduct(state, productId, {
     renderDetail,
     recalculateNewSubscriptionCharge,
+    fetchSubscriptionDiscountOffers,
 }) {
     const numericProductId = Number(productId || 0);
     const product = state.productCatalog.find((item) => Number(item.id) === numericProductId) || null;
@@ -393,6 +407,22 @@ async function applySelectedProduct(state, productId, {
             displayAmount: Number(product ? (product.default_display_price !== undefined ? product.default_display_price : (product.default_price || 0)) : 0),
             ticketUnitPrice: Number(product ? (product.default_price || 0) : 0),
         };
+    }
+    state.newSubscriptionForm.discountOffers = [];
+    state.newSubscriptionForm.selectedDiscountCode = "";
+    state.newSubscriptionForm.supervisorPin = "";
+    state.newSubscriptionForm.authorizedDiscount = null;
+    if (product && fetchSubscriptionDiscountOffers && state.selectedPartnerId) {
+        try {
+            state.newSubscriptionForm.discountOffers = await fetchSubscriptionDiscountOffers(
+                state.selectedPartnerId,
+                numericProductId,
+                "new",
+                false
+            );
+        } catch (error) {
+            console.error("Error al consultar descuentos de suscripción POS", error);
+        }
     }
     state.newSubscriptionForm.participantIds = clampParticipantIds(
         state.newSubscriptionForm.participantIds,

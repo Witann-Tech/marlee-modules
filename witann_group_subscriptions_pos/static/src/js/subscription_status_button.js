@@ -41,6 +41,10 @@ import {
     formatMoney,
 } from "./subscription_format_utils";
 import {
+    getDiscountedDisplayAmount,
+    renderDiscountAuthorizationSection,
+} from "./subscription_discount_render";
+import {
     readFileAsDataUrl,
     showSimpleInfoModal,
     stripDataUrlPrefix,
@@ -339,6 +343,26 @@ patch(ControlButtons.prototype, {
 
     async _validateSubscriptionProductEligibilityForPos(partnerId, productId) {
         return this.subscriptionPosApi.validateSubscriptionProductEligibility(partnerId, productId);
+    },
+
+    async _fetchSubscriptionDiscountOffersForPos(partnerId, productId, flow = "new", sourceSubscriptionId = false) {
+        return this.subscriptionPosApi.fetchSubscriptionDiscountOffers(
+            partnerId,
+            productId,
+            flow || "new",
+            sourceSubscriptionId || false
+        );
+    },
+
+    async _authorizeSubscriptionDiscountForPos(partnerId, productId, flow = "new", discountCode = false, supervisorPin = false, sourceSubscriptionId = false) {
+        return this.subscriptionPosApi.authorizeSubscriptionDiscount(
+            partnerId,
+            productId,
+            flow || "new",
+            discountCode || false,
+            supervisorPin || false,
+            sourceSubscriptionId || false
+        );
     },
 
     async _updatePartnerPhotoForPos(partnerId, imageBase64) {
@@ -795,6 +819,8 @@ patch(ControlButtons.prototype, {
                 renderDetail,
                 loadDetail,
                 fetchSubscriptionProductCatalog: (searchTerm) => this._fetchSubscriptionProductCatalog(searchTerm),
+                fetchSubscriptionDiscountOffers: (partnerId, productId, flow, sourceSubscriptionId) =>
+                    this._fetchSubscriptionDiscountOffersForPos(partnerId, productId, flow, sourceSubscriptionId),
                 _t,
             });
         };
@@ -829,6 +855,8 @@ patch(ControlButtons.prototype, {
                 buildChargeBreakdown: (source, product, values) => buildChargeBreakdown(source, product, values),
                 fetchSubscriptionRenewalCharge: (subscriptionId, productId, planId, pricingId) =>
                     this._fetchSubscriptionRenewalCharge(subscriptionId, productId, planId, pricingId),
+                fetchSubscriptionDiscountOffers: (partnerId, productId, flow, sourceSubscriptionId) =>
+                    this._fetchSubscriptionDiscountOffersForPos(partnerId, productId, flow, sourceSubscriptionId),
                 _t,
             });
         };
@@ -840,6 +868,8 @@ patch(ControlButtons.prototype, {
                 buildChargeBreakdown: (source, product, values) => buildChargeBreakdown(source, product, values),
                 fetchSubscriptionReenrollCharge: (subscriptionId, productId, planId, pricingId) =>
                     this.subscriptionPosApi.fetchSubscriptionReenrollCharge(subscriptionId, productId, planId, pricingId),
+                fetchSubscriptionDiscountOffers: (partnerId, productId, flow, sourceSubscriptionId) =>
+                    this._fetchSubscriptionDiscountOffersForPos(partnerId, productId, flow, sourceSubscriptionId),
                 _t,
             });
         };
@@ -975,6 +1005,8 @@ patch(ControlButtons.prototype, {
             await applySelectedProductFlow(modalState, productId, {
                 renderDetail,
                 recalculateNewSubscriptionCharge,
+                fetchSubscriptionDiscountOffers: (partnerId, productIdValue, flow, sourceSubscriptionId) =>
+                    this._fetchSubscriptionDiscountOffersForPos(partnerId, productIdValue, flow, sourceSubscriptionId),
             });
         };
 
@@ -1003,6 +1035,7 @@ patch(ControlButtons.prototype, {
             const partnerCurp = String(currentDetail && currentDetail.curp ? currentDetail.curp : "").trim();
             const requiresCurp = Boolean(newSubscriptionForm.requiresCurp);
             const needsCurpCapture = requiresCurp && !partnerCurp;
+            const discountedChargeDisplay = getDiscountedDisplayAmount(newSubscriptionForm.charge, newSubscriptionForm);
             const filteredParticipants = filterParticipantRowsByTerm(newSubscriptionForm.participantSearch);
             const participantOptions = Number(newSubscriptionForm.maxParticipantsTotal || 1) > 1
                 ? filteredParticipants
@@ -1073,11 +1106,21 @@ patch(ControlButtons.prototype, {
                         <div class="wgs-inline-notice">${this._escapeHtml(_t("Este producto requiere CURP para continuar con la venta."))}</div>
                     ` : ""}
                     <div class="wgs-inline-form-meta">
-                        <div><span>${this._escapeHtml(_t("Precio"))}</span><strong>${this._escapeHtml(this._formatMoney(getChargeDisplayAmount(newSubscriptionForm.charge)))}</strong></div>
+                        <div><span>${this._escapeHtml(_t("Precio"))}</span><strong>${this._escapeHtml(this._formatMoney(discountedChargeDisplay))}</strong></div>
                         <div><span>${this._escapeHtml(_t("Cupo total"))}</span><strong>${this._escapeHtml(String(newSubscriptionForm.maxParticipantsTotal || 1))}</strong></div>
                         ${Number(newSubscriptionForm.maxParticipantsTotal || 1) > 1 ? `<div><span>${this._escapeHtml(_t("Participantes seleccionados"))}</span><strong>${this._escapeHtml(String((newSubscriptionForm.participantIds || []).length || 0))}</strong></div>` : ""}
                         <div><span>${this._escapeHtml(_t("Cobertura del plan"))}</span><strong>${this._escapeHtml(this._formatDateDisplay(automaticEndDate) || "-")}</strong></div>
                     </div>
+                    ${renderDiscountAuthorizationSection({
+                        form: newSubscriptionForm,
+                        formError,
+                        escapeHtml: (value) => this._escapeHtml(value),
+                        formatMoney: (value) => this._formatMoney(value),
+                        authorizeAction: "authorize-new-discount",
+                        codeField: "new_discount_code",
+                        pinField: "new_supervisor_pin",
+                        _t,
+                    })}
                     ${Number(newSubscriptionForm.maxParticipantsTotal || 1) > 1 ? `
                         <div class="wgs-inline-participants">
                             <span class="wgs-inline-section-title">${this._escapeHtml(_t("Participantes permitidos"))}</span>
@@ -1501,6 +1544,8 @@ patch(ControlButtons.prototype, {
                 saveSubscriptionParticipants: (subscriptionId, participantIds) => this._saveSubscriptionParticipants(subscriptionId, participantIds),
                 validateSubscriptionProductEligibility: (partnerId, productId) =>
                     this._validateSubscriptionProductEligibilityForPos(partnerId, productId),
+                authorizeSubscriptionDiscount: (partnerId, productId, flow, discountCode, supervisorPin, sourceSubscriptionId) =>
+                    this._authorizeSubscriptionDiscountForPos(partnerId, productId, flow, discountCode, supervisorPin, sourceSubscriptionId),
                 formatTodayISO,
                 _t,
             }),
@@ -2005,6 +2050,16 @@ patch(ControlButtons.prototype, {
                 flex-direction: column;
                 gap: 0.75rem;
                 margin-bottom: 0.85rem;
+            }
+            .wgs-inline-discount-card {
+                border: 1px solid #dbeafe;
+                border-radius: 0.75rem;
+                background: #f8fbff;
+                padding: 0.85rem;
+            }
+            .wgs-inline-note {
+                font-size: 0.82rem;
+                color: #64748b;
             }
             .wgs-subscription-card-header,
             .wgs-inline-form-header {

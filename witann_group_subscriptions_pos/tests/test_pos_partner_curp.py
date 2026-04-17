@@ -1,5 +1,5 @@
 from odoo.tests.common import TransactionCase
-from odoo import fields
+from odoo import Command, fields
 
 
 class TestPosPartnerCurp(TransactionCase):
@@ -7,7 +7,25 @@ class TestPosPartnerCurp(TransactionCase):
         super().setUp()
         self.PosOrder = self.env['pos.order']
         self.Partner = self.env['res.partner']
+        self.Employee = self.env['hr.employee']
         self.curp_field = 'x_studio_curp'
+        self.birthday_field = next(
+            (
+                field_name
+                for field_name in (
+                    'x_studio_fecha_de_nacimiento',
+                    'birthday',
+                    'birthdate_date',
+                    'date_of_birth',
+                    'x_birthday',
+                    'x_studio_birthday',
+                    'x_studio_cumpleanos',
+                    'x_studio_fecha_nacimiento',
+                )
+                if field_name in self.Partner._fields
+            ),
+            False,
+        )
         if self.curp_field not in self.Partner._fields:
             self.skipTest('x_studio_curp no existe en este runtime.')
 
@@ -33,6 +51,48 @@ class TestPosPartnerCurp(TransactionCase):
                 'wgs_student_age_lock': True,
             }
         )
+        self.plan = self.env['sale.subscription.plan'].create(
+            {
+                'name': 'Plan test descuentos POS',
+                'recurring_interval': 1,
+                'recurring_rule_type': 'month',
+            }
+        )
+
+    def _create_subscription_like_order(self, partner, *, end_date='2026-03-01'):
+        order = self.env['sale.order'].create(
+            {
+                'partner_id': partner.id,
+                'order_line': [
+                    Command.create(
+                        {
+                            'name': self.product.display_name,
+                            'product_id': self.product.id,
+                            'product_uom_qty': 1,
+                            'price_unit': 100.0,
+                        }
+                    )
+                ],
+            }
+        )
+        order.action_confirm()
+        line = order.order_line[:1]
+        line_updates = {}
+        for field_name in ('subscription_plan_id', 'plan_id', 'recurring_plan_id'):
+            if field_name in line._fields:
+                line_updates[field_name] = self.plan.id
+        if line_updates:
+            line.write(line_updates)
+        order_updates = {}
+        if 'subscription_state' in order._fields:
+            order_updates['subscription_state'] = 'closed'
+        for field_name in ('end_date', 'date_end', 'subscription_end_date', 'recurring_end_date'):
+            if field_name in order._fields:
+                order_updates[field_name] = end_date
+                break
+        if order_updates:
+            order.write(order_updates)
+        return order
 
     def test_create_partner_for_pos_accepts_curp(self):
         result = self.PosOrder.sudo().wgs_create_partner_for_pos(
@@ -161,3 +221,63 @@ class TestPosPartnerCurp(TransactionCase):
         )
 
         self.assertTrue(result['ok'])
+
+    def test_get_subscription_discount_offers_for_pos_supports_comeback(self):
+        partner = self.Partner.create({'name': 'Cliente regreso POS'})
+        self._create_subscription_like_order(partner, end_date='2026-03-01')
+
+        offers = self.PosOrder.sudo().wgs_get_subscription_discount_offers_for_pos(
+            partner.id,
+            self.product.id,
+            'new',
+            False,
+        )
+
+        codes = {offer['code'] for offer in offers}
+        self.assertIn('comeback_10', codes)
+        self.assertIn('comeback_20', codes)
+
+    def test_get_subscription_discount_offers_for_pos_supports_birthday_once_per_year(self):
+        if not self.birthday_field:
+            self.skipTest('No existe campo de cumpleaños en este runtime.')
+
+        today = fields.Date.context_today(self.PosOrder)
+        partner = self.Partner.create(
+            {
+                'name': 'Cliente cumpleaños POS',
+                self.birthday_field: fields.Date.to_string(today.replace(year=2000)),
+            }
+        )
+
+        offers = self.PosOrder.sudo().wgs_get_subscription_discount_offers_for_pos(
+            partner.id,
+            self.product.id,
+            'renewal',
+            False,
+        )
+
+        codes = {offer['code'] for offer in offers}
+        self.assertIn('birthday_10', codes)
+
+    def test_authorize_subscription_discount_for_pos_validates_pin(self):
+        partner = self.Partner.create({'name': 'Cliente autorización POS'})
+        self._create_subscription_like_order(partner, end_date='2026-03-01')
+        employee = self.Employee.create(
+            {
+                'name': 'Supervisor POS',
+                'wgs_authorization_pin2': '2468',
+            }
+        )
+
+        result = self.PosOrder.sudo().wgs_authorize_subscription_discount_for_pos(
+            partner.id,
+            self.product.id,
+            'new',
+            'comeback_10',
+            '2468',
+            False,
+        )
+
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['authorized_employee_id'], employee.id)
+        self.assertEqual(result['discount_percent'], 10.0)

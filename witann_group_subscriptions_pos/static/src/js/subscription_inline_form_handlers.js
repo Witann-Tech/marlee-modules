@@ -25,6 +25,94 @@ async function ensureEligibleProductForPartner(state, partnerId, productId, {
     }
 }
 
+function getAuthorizedDiscountPercent(form) {
+    return Number(
+        form
+        && form.authorizedDiscount
+        && form.authorizedDiscount.discountPercent !== undefined
+            ? form.authorizedDiscount.discountPercent
+            : 0
+    ) || 0;
+}
+
+function buildAuthorizedDiscountMetadata(form) {
+    if (!form || !form.authorizedDiscount) {
+        return {};
+    }
+    return {
+        discount_code: form.authorizedDiscount.code || false,
+        discount_label: form.authorizedDiscount.label || false,
+        discount_percent: Number(form.authorizedDiscount.discountPercent || 0) || 0,
+        discount_fixed_amount: Number(form.authorizedDiscount.discountFixedAmount || 0) || 0,
+        discount_authorized_employee_id: Number(form.authorizedDiscount.authorizedEmployeeId || 0) || false,
+        discount_authorized_by: form.authorizedDiscount.authorizedBy || false,
+        discount_authorized_at: form.authorizedDiscount.authorizedAt || false,
+        discount_birthday_year: Number(form.authorizedDiscount.birthdayYear || 0) || false,
+    };
+}
+
+function hasPendingDiscountAuthorization(form) {
+    const selectedCode = String(form && form.selectedDiscountCode ? form.selectedDiscountCode : "");
+    if (!selectedCode) {
+        return false;
+    }
+    return !form.authorizedDiscount || String(form.authorizedDiscount.code || "") !== selectedCode;
+}
+
+async function authorizeDiscountForForm(state, form, { partnerId, productId, flow, sourceSubscriptionId = false }, {
+    authorizeSubscriptionDiscount,
+    renderDetail,
+    _t,
+}) {
+    if (!form || !String(form.selectedDiscountCode || "").trim()) {
+        state.formError = _t("Selecciona un beneficio antes de autorizar el descuento.");
+        renderDetail(state.currentDetail);
+        return false;
+    }
+    if (!String(form.supervisorPin || "").trim()) {
+        state.formError = _t("Captura el PIN supervisor para autorizar el descuento.");
+        renderDetail(state.currentDetail);
+        return false;
+    }
+    try {
+        const result = await authorizeSubscriptionDiscount(
+            partnerId,
+            productId,
+            flow,
+            form.selectedDiscountCode,
+            form.supervisorPin,
+            sourceSubscriptionId || false
+        );
+        if (!result || result.ok === false) {
+            state.formError = result && result.error_message
+                ? result.error_message
+                : _t("No se pudo autorizar el descuento solicitado.");
+            renderDetail(state.currentDetail);
+            return false;
+        }
+        form.authorizedDiscount = {
+            code: result.code || form.selectedDiscountCode,
+            label: result.label || form.selectedDiscountCode,
+            discountPercent: Number(result.discount_percent || 0) || 0,
+            discountFixedAmount: Number(result.discount_fixed_amount || 0) || 0,
+            authorizedEmployeeId: Number(result.authorized_employee_id || 0) || false,
+            authorizedBy: result.authorized_by || "",
+            authorizedAt: result.authorized_at || false,
+            birthdayYear: Number(result.birthday_year || 0) || false,
+        };
+        state.formNotice = _t("Descuento autorizado correctamente.");
+        renderDetail(state.currentDetail);
+        return true;
+    } catch (error) {
+        console.error("Error al autorizar descuento POS", error);
+        state.formError = (error && error.message)
+            ? error.message
+            : _t("No se pudo autorizar el descuento solicitado.");
+        renderDetail(state.currentDetail);
+        return false;
+    }
+}
+
 function buildSubscriptionInlineActionHandlers({
     state,
     clearFeedback,
@@ -54,6 +142,7 @@ function buildSubscriptionInlineActionHandlers({
     getSubscriptionPartnerIdsFromOrder,
     saveSubscriptionParticipants,
     validateSubscriptionProductEligibility,
+    authorizeSubscriptionDiscount,
     formatTodayISO,
     _t,
 }) {
@@ -121,6 +210,77 @@ function buildSubscriptionInlineActionHandlers({
         "cancel-participants": async () => {
             resetInlineForms();
             renderDetail(state.currentDetail);
+        },
+        "authorize-new-discount": async () => {
+            state.formError = "";
+            state.formNotice = "";
+            if (!state.newSubscriptionForm || !state.selectedPartnerId || !state.newSubscriptionForm.productId) {
+                state.formError = _t("No hay un producto de suscripción listo para autorizar descuento.");
+                renderDetail(state.currentDetail);
+                return;
+            }
+            await authorizeDiscountForForm(
+                state,
+                state.newSubscriptionForm,
+                {
+                    partnerId: state.selectedPartnerId,
+                    productId: state.newSubscriptionForm.productId,
+                    flow: "new",
+                },
+                {
+                    authorizeSubscriptionDiscount,
+                    renderDetail,
+                    _t,
+                }
+            );
+        },
+        "authorize-renewal-discount": async () => {
+            state.formError = "";
+            state.formNotice = "";
+            if (!state.renewalForm || !state.renewalForm.holderPartnerId || !state.renewalForm.productId) {
+                state.formError = _t("No hay una renovación lista para autorizar descuento.");
+                renderDetail(state.currentDetail);
+                return;
+            }
+            await authorizeDiscountForForm(
+                state,
+                state.renewalForm,
+                {
+                    partnerId: state.renewalForm.holderPartnerId,
+                    productId: state.renewalForm.productId,
+                    flow: "renewal",
+                    sourceSubscriptionId: state.renewalForm.subscriptionId,
+                },
+                {
+                    authorizeSubscriptionDiscount,
+                    renderDetail,
+                    _t,
+                }
+            );
+        },
+        "authorize-reenroll-discount": async () => {
+            state.formError = "";
+            state.formNotice = "";
+            if (!state.renewalForm || !state.renewalForm.holderPartnerId || !state.renewalForm.productId) {
+                state.formError = _t("No hay una reinscripción lista para autorizar descuento.");
+                renderDetail(state.currentDetail);
+                return;
+            }
+            await authorizeDiscountForForm(
+                state,
+                state.renewalForm,
+                {
+                    partnerId: state.renewalForm.holderPartnerId,
+                    productId: state.renewalForm.productId,
+                    flow: "reenroll",
+                    sourceSubscriptionId: state.renewalForm.subscriptionId,
+                },
+                {
+                    authorizeSubscriptionDiscount,
+                    renderDetail,
+                    _t,
+                }
+            );
         },
         "save-new": async () => {
             state.formError = "";
@@ -237,12 +397,18 @@ function buildSubscriptionInlineActionHandlers({
             }))) {
                 return;
             }
+            if (hasPendingDiscountAuthorization(state.newSubscriptionForm)) {
+                state.formError = _t("Debes autorizar el descuento seleccionado antes de agregar la suscripción al ticket.");
+                renderDetail(state.currentDetail);
+                return;
+            }
             let targetLine = null;
             try {
                 const lineResult = await addConfiguredProductLineToOrder(order, productRecord, {
                     quantity: 1,
                     merge: false,
                     charge: posCharge,
+                    discount: getAuthorizedDiscountPercent(state.newSubscriptionForm),
                     metadata: {
                         flow: "new",
                         partner_id: state.selectedPartnerId,
@@ -253,6 +419,7 @@ function buildSubscriptionInlineActionHandlers({
                         end_date: automaticEndDate || false,
                         product_id: Number(state.newSubscriptionForm.productId || 0) || false,
                         product_name: state.newSubscriptionForm.productName || false,
+                        ...buildAuthorizedDiscountMetadata(state.newSubscriptionForm),
                     },
                 });
                 targetLine = lineResult && lineResult.line ? lineResult.line : null;
@@ -626,12 +793,18 @@ function buildSubscriptionInlineActionHandlers({
             }))) {
                 return;
             }
+            if (hasPendingDiscountAuthorization(state.renewalForm)) {
+                state.formError = _t("Debes autorizar el descuento seleccionado antes de agregar la renovación al ticket.");
+                renderDetail(state.currentDetail);
+                return;
+            }
             let targetLine = null;
             try {
                 const lineResult = await addConfiguredProductLineToOrder(order, productRecord, {
                     quantity: 1,
                     merge: false,
                     charge: state.renewalForm.charge,
+                    discount: getAuthorizedDiscountPercent(state.renewalForm),
                     metadata: {
                         flow: "renewal",
                         partner_id: holderPartnerId || false,
@@ -643,6 +816,7 @@ function buildSubscriptionInlineActionHandlers({
                         product_id: Number(state.renewalForm.productId || 0) || false,
                         product_name: state.renewalForm.productName || false,
                         source_subscription_id: Number(state.renewalForm.subscriptionId || 0) || false,
+                        ...buildAuthorizedDiscountMetadata(state.renewalForm),
                     },
                 });
                 targetLine = lineResult && lineResult.line ? lineResult.line : null;
@@ -712,12 +886,18 @@ function buildSubscriptionInlineActionHandlers({
             }))) {
                 return;
             }
+            if (hasPendingDiscountAuthorization(state.renewalForm)) {
+                state.formError = _t("Debes autorizar el descuento seleccionado antes de agregar la reinscripción al ticket.");
+                renderDetail(state.currentDetail);
+                return;
+            }
             let targetLine = null;
             try {
                 const lineResult = await addConfiguredProductLineToOrder(order, productRecord, {
                     quantity: 1,
                     merge: false,
                     charge: state.renewalForm.charge,
+                    discount: getAuthorizedDiscountPercent(state.renewalForm),
                     metadata: {
                         flow: "reenroll",
                         partner_id: holderPartnerId || false,
@@ -729,6 +909,7 @@ function buildSubscriptionInlineActionHandlers({
                         product_id: Number(state.renewalForm.productId || 0) || false,
                         product_name: state.renewalForm.productName || false,
                         source_subscription_id: Number(state.renewalForm.subscriptionId || 0) || false,
+                        ...buildAuthorizedDiscountMetadata(state.renewalForm),
                     },
                 });
                 targetLine = lineResult && lineResult.line ? lineResult.line : null;
@@ -778,10 +959,18 @@ async function handleSubscriptionInlineFieldChange({ field, target }, {
         await applySelectedProduct(target.value);
     } else if (state.formMode === "new" && field === "plan_choice") {
         await updateSelectedPlan(target.value);
+    } else if (state.formMode === "new" && field === "new_discount_code") {
+        state.newSubscriptionForm.selectedDiscountCode = target.value || "";
+        state.newSubscriptionForm.supervisorPin = "";
+        state.newSubscriptionForm.authorizedDiscount = null;
     } else if (state.formMode === "new" && field === "start_date") {
         state.newSubscriptionForm.startDate = target.value || formatTodayISO();
     } else if (state.formMode === "new" && field === "participant_toggle") {
         toggleParticipant(target.value, target.checked);
+    } else if ((state.formMode === "renewal" || state.formMode === "reenroll") && field === "renewal_discount_code") {
+        state.renewalForm.selectedDiscountCode = target.value || "";
+        state.renewalForm.supervisorPin = "";
+        state.renewalForm.authorizedDiscount = null;
     } else if (state.formMode === "upsale" && field === "upsale_product_id") {
         await applySelectedUpsaleProduct(target.value);
     } else if (state.formMode === "upsale" && field === "upsale_plan_choice") {
@@ -804,8 +993,16 @@ function handleSubscriptionInlineFieldInput({ field, target }, {
         state.newSubscriptionForm.participantSearch = target.value || "";
         return true;
     }
+    if (state.formMode === "new" && field === "new_supervisor_pin") {
+        state.newSubscriptionForm.supervisorPin = target.value || "";
+        return true;
+    }
     if (state.formMode === "new" && field === "subscription_curp") {
         state.newSubscriptionForm.curp = target.value || "";
+        return true;
+    }
+    if ((state.formMode === "renewal" || state.formMode === "reenroll") && field === "renewal_supervisor_pin") {
+        state.renewalForm.supervisorPin = target.value || "";
         return true;
     }
     if (state.formMode === "upsale" && field === "upsale_participant_search") {

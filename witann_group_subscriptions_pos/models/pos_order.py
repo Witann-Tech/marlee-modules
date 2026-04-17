@@ -65,6 +65,18 @@ class PosOrderLine(models.Model):
         string='Línea POS origen para devolución (POS)',
         copy=False,
     )
+    wgs_discount_code = fields.Char(string='Código de descuento WGS', copy=False)
+    wgs_discount_label = fields.Char(string='Etiqueta descuento WGS', copy=False)
+    wgs_discount_percent = fields.Float(string='Porcentaje descuento WGS', copy=False)
+    wgs_discount_fixed_amount = fields.Float(string='Monto fijo descuento WGS', copy=False)
+    wgs_discount_authorized_employee_id = fields.Many2one(
+        'hr.employee',
+        string='Autorizado por empleado WGS',
+        copy=False,
+    )
+    wgs_discount_authorized_by = fields.Char(string='Autorizado por WGS', copy=False)
+    wgs_discount_authorized_at = fields.Datetime(string='Fecha autorización WGS', copy=False)
+    wgs_discount_birthday_year = fields.Integer(string='Año descuento cumpleaños WGS', copy=False)
 
     def wgs_get_participant_ids(self):
         self.ensure_one()
@@ -112,6 +124,7 @@ class PosOrderLine(models.Model):
             or self.wgs_subscription_source_id
             or self.wgs_subscription_pending_move_id
             or self.wgs_subscription_refund_origin_line_id
+            or self.wgs_discount_code
         )
 
 
@@ -263,6 +276,84 @@ class PosOrder(models.Model):
         }
 
     @api.model
+    def wgs_get_subscription_discount_offers_for_pos(self, partner_id, product_id, flow='new', source_subscription_id=False):
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar descuentos de suscripción desde Punto de Venta.'))
+
+        partner = self._wgs_browse_partner_for_pos(partner_id)
+        product = self._wgs_browse_product_for_pos(product_id)
+        source_subscription = self._wgs_browse_source_subscription_for_pos(source_subscription_id)
+        if not partner or not product:
+            return []
+        return self._wgs_build_subscription_discount_offers_for_pos(
+            partner=partner,
+            product=product,
+            flow=flow,
+            source_subscription=source_subscription,
+        )
+
+    @api.model
+    def wgs_authorize_subscription_discount_for_pos(
+        self,
+        partner_id,
+        product_id,
+        flow='new',
+        discount_code=False,
+        supervisor_pin=False,
+        source_subscription_id=False,
+    ):
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para autorizar descuentos desde Punto de Venta.'))
+
+        partner = self._wgs_browse_partner_for_pos(partner_id)
+        product = self._wgs_browse_product_for_pos(product_id)
+        source_subscription = self._wgs_browse_source_subscription_for_pos(source_subscription_id)
+        if not partner:
+            return {
+                'ok': False,
+                'error_message': _('El cliente seleccionado no existe.'),
+            }
+        if not product:
+            return {
+                'ok': False,
+                'error_message': _('El producto seleccionado no existe o no está disponible.'),
+            }
+
+        offers = self._wgs_build_subscription_discount_offers_for_pos(
+            partner=partner,
+            product=product,
+            flow=flow,
+            source_subscription=source_subscription,
+        )
+        offer = next(
+            (row for row in offers if str(row.get('code') or '') == str(discount_code or '')),
+            False,
+        )
+        if not offer:
+            return {
+                'ok': False,
+                'error_message': _('El descuento solicitado ya no está disponible para este cliente.'),
+            }
+
+        authorizer = self._wgs_find_discount_authorizer_for_pos(supervisor_pin)
+        if not authorizer:
+            return {
+                'ok': False,
+                'error_message': _('El PIN2 de autorización no es válido.'),
+            }
+
+        authorized_at = fields.Datetime.now()
+        return {
+            'ok': True,
+            'code': offer.get('code'),
+            'label': offer.get('label'),
+            'discount_percent': float(offer.get('discount_percent') or 0.0),
+            'discount_fixed_amount': float(offer.get('discount_fixed_amount') or 0.0),
+            'authorized_employee_id': authorizer.id,
+            'authorized_by': authorizer.display_name,
+            'authorized_at': fields.Datetime.to_string(authorized_at),
+            'birthday_year': int(offer.get('birthday_year') or 0),
+        }
+
+    @api.model
     def wgs_update_partner_photo_for_pos(self, partner_id, image_1920):
         return self.env['sale.order'].wgs_update_partner_photo_for_pos(partner_id, image_1920)
 
@@ -301,6 +392,91 @@ class PosOrder(models.Model):
         if (today.month, today.day) < (birthdate.month, birthdate.day):
             age -= 1
         return max(age, 0)
+
+    @api.model
+    def _wgs_find_discount_authorizer_for_pos(self, supervisor_pin):
+        pin = str(supervisor_pin or '').strip()
+        if not pin:
+            return self.env['hr.employee']
+        return self.env['hr.employee'].sudo().with_context(active_test=False).search(
+            [('wgs_authorization_pin2', '=', pin)],
+            limit=1,
+        )
+
+    @api.model
+    def _wgs_get_partner_birthday_for_pos(self, partner):
+        sale_order_model = self.env['sale.order'].sudo()
+        if not hasattr(sale_order_model, '_get_partner_field_value_for_pos'):
+            return False
+        birthday_field_candidates = getattr(sale_order_model, '_PARTNER_BIRTHDAY_FIELD_CANDIDATES', ())
+        birthday_value = sale_order_model._get_partner_field_value_for_pos(partner, birthday_field_candidates)
+        return fields.Date.to_date(birthday_value) if birthday_value else False
+
+    @api.model
+    def _wgs_get_last_subscription_end_date_for_partner_for_pos(self, partner, today=False):
+        sale_order_model = self.env['sale.order'].sudo()
+        if not hasattr(sale_order_model, '_get_pos_subscription_orders'):
+            return False
+        today = fields.Date.to_date(today) if today else fields.Date.context_today(self)
+        subscriptions = sale_order_model._get_pos_subscription_orders(partner)
+        last_end_date = False
+        for subscription in subscriptions:
+            try:
+                item = subscription._build_pos_subscription_status_item(today)
+            except Exception:
+                continue
+            valid_until = fields.Date.to_date(item.get('valid_until')) if item and item.get('valid_until') else False
+            if valid_until and (not last_end_date or valid_until > last_end_date):
+                last_end_date = valid_until
+        return last_end_date
+
+    @api.model
+    def _wgs_has_birthday_discount_in_year_for_pos(self, partner, year):
+        line_model = self.env['pos.order.line'].sudo()
+        domain = [
+            ('order_id.partner_id', '=', partner.id),
+            ('wgs_discount_code', '=', 'birthday_10'),
+            ('wgs_discount_birthday_year', '=', int(year or 0)),
+            ('order_id.state', 'not in', ('draft', 'cancel')),
+        ]
+        return bool(line_model.search_count(domain))
+
+    @api.model
+    def _wgs_build_subscription_discount_offers_for_pos(self, partner, product, flow='new', source_subscription=False, today=False):
+        offers = []
+        today = fields.Date.to_date(today) if today else fields.Date.context_today(self)
+        normalized_flow = str(flow or 'new').strip().lower()
+
+        if normalized_flow in ('new', 'reenroll'):
+            last_end_date = self._wgs_get_last_subscription_end_date_for_partner_for_pos(partner, today=today)
+            if last_end_date:
+                absence_days = (today - last_end_date).days
+                if absence_days > 30:
+                    for percent in (10.0, 20.0):
+                        offers.append({
+                            'code': 'comeback_%s' % int(percent),
+                            'label': _('Regreso después de 30 días (%s%%)') % int(percent),
+                            'discount_percent': percent,
+                            'discount_fixed_amount': 0.0,
+                            'authorization_required': True,
+                            'absence_days': absence_days,
+                            'valid_until': False,
+                        })
+
+        if normalized_flow in ('renewal', 'reenroll'):
+            birthday = self._wgs_get_partner_birthday_for_pos(partner)
+            if birthday and birthday.month == today.month and not self._wgs_has_birthday_discount_in_year_for_pos(partner, today.year):
+                offers.append({
+                    'code': 'birthday_10',
+                    'label': _('Cumpleaños (%s%%)') % 10,
+                    'discount_percent': 10.0,
+                    'discount_fixed_amount': 0.0,
+                    'authorization_required': True,
+                    'birthday_year': today.year,
+                    'valid_until': False,
+                })
+
+        return offers
 
     @api.model
     def _wgs_is_subscription_buffer_ready(self):
@@ -783,6 +959,31 @@ class PosOrder(models.Model):
         if refund_origin_line_id > 0:
             values['wgs_subscription_refund_origin_line_id'] = refund_origin_line_id
 
+        discount_percent = self._wgs_to_float(config_payload.get('discount_percent'))
+        if discount_percent > 0:
+            values['wgs_discount_percent'] = discount_percent
+        discount_fixed_amount = self._wgs_to_float(config_payload.get('discount_fixed_amount'))
+        if discount_fixed_amount > 0:
+            values['wgs_discount_fixed_amount'] = discount_fixed_amount
+        discount_code = str(config_payload.get('discount_code') or '').strip()
+        if discount_code:
+            values['wgs_discount_code'] = discount_code
+        discount_label = str(config_payload.get('discount_label') or '').strip()
+        if discount_label:
+            values['wgs_discount_label'] = discount_label
+        authorized_employee_id = self._wgs_to_int(config_payload.get('discount_authorized_employee_id'))
+        if authorized_employee_id > 0:
+            values['wgs_discount_authorized_employee_id'] = authorized_employee_id
+        authorized_by = str(config_payload.get('discount_authorized_by') or '').strip()
+        if authorized_by:
+            values['wgs_discount_authorized_by'] = authorized_by
+        authorized_at = fields.Datetime.to_datetime(config_payload.get('discount_authorized_at'))
+        if authorized_at:
+            values['wgs_discount_authorized_at'] = fields.Datetime.to_string(authorized_at)
+        birthday_year = self._wgs_to_int(config_payload.get('discount_birthday_year'))
+        if birthday_year > 0:
+            values['wgs_discount_birthday_year'] = birthday_year
+
         return values
 
     @api.model
@@ -815,6 +1016,14 @@ class PosOrder(models.Model):
             'source_subscription_id': False,
             'pending_move_id': False,
             'refund_origin_line_id': False,
+            'discount_code': False,
+            'discount_label': False,
+            'discount_percent': 0.0,
+            'discount_fixed_amount': 0.0,
+            'discount_authorized_employee_id': False,
+            'discount_authorized_by': False,
+            'discount_authorized_at': False,
+            'discount_birthday_year': False,
         }
         if not isinstance(ui_line, dict):
             return data
@@ -897,6 +1106,62 @@ class PosOrder(models.Model):
             or ui_line.get('wgsSubscriptionRefundOriginLineId')
             or raw_config.get('refund_origin_line_id')
             or raw_config.get('refundOriginLineId')
+            or False
+        )
+        data['discount_code'] = (
+            ui_line.get('wgs_discount_code')
+            or ui_line.get('wgsDiscountCode')
+            or raw_config.get('discount_code')
+            or raw_config.get('discountCode')
+            or False
+        )
+        data['discount_label'] = (
+            ui_line.get('wgs_discount_label')
+            or ui_line.get('wgsDiscountLabel')
+            or raw_config.get('discount_label')
+            or raw_config.get('discountLabel')
+            or False
+        )
+        data['discount_percent'] = (
+            ui_line.get('wgs_discount_percent')
+            or ui_line.get('wgsDiscountPercent')
+            or raw_config.get('discount_percent')
+            or raw_config.get('discountPercent')
+            or 0.0
+        )
+        data['discount_fixed_amount'] = (
+            ui_line.get('wgs_discount_fixed_amount')
+            or ui_line.get('wgsDiscountFixedAmount')
+            or raw_config.get('discount_fixed_amount')
+            or raw_config.get('discountFixedAmount')
+            or 0.0
+        )
+        data['discount_authorized_employee_id'] = (
+            ui_line.get('wgs_discount_authorized_employee_id')
+            or ui_line.get('wgsDiscountAuthorizedEmployeeId')
+            or raw_config.get('discount_authorized_employee_id')
+            or raw_config.get('discountAuthorizedEmployeeId')
+            or False
+        )
+        data['discount_authorized_by'] = (
+            ui_line.get('wgs_discount_authorized_by')
+            or ui_line.get('wgsDiscountAuthorizedBy')
+            or raw_config.get('discount_authorized_by')
+            or raw_config.get('discountAuthorizedBy')
+            or False
+        )
+        data['discount_authorized_at'] = (
+            ui_line.get('wgs_discount_authorized_at')
+            or ui_line.get('wgsDiscountAuthorizedAt')
+            or raw_config.get('discount_authorized_at')
+            or raw_config.get('discountAuthorizedAt')
+            or False
+        )
+        data['discount_birthday_year'] = (
+            ui_line.get('wgs_discount_birthday_year')
+            or ui_line.get('wgsDiscountBirthdayYear')
+            or raw_config.get('discount_birthday_year')
+            or raw_config.get('discountBirthdayYear')
             or False
         )
 
@@ -1046,6 +1311,31 @@ class PosOrder(models.Model):
             refund_origin_line_id = self._wgs_to_int(config.get('refund_origin_line_id'))
             if refund_origin_line_id > 0:
                 write_values['wgs_subscription_refund_origin_line_id'] = refund_origin_line_id
+
+            discount_percent = self._wgs_to_float(config.get('discount_percent'))
+            if discount_percent > 0:
+                write_values['wgs_discount_percent'] = discount_percent
+            discount_fixed_amount = self._wgs_to_float(config.get('discount_fixed_amount'))
+            if discount_fixed_amount > 0:
+                write_values['wgs_discount_fixed_amount'] = discount_fixed_amount
+            discount_code = str(config.get('discount_code') or '').strip()
+            if discount_code:
+                write_values['wgs_discount_code'] = discount_code
+            discount_label = str(config.get('discount_label') or '').strip()
+            if discount_label:
+                write_values['wgs_discount_label'] = discount_label
+            authorized_employee_id = self._wgs_to_int(config.get('discount_authorized_employee_id'))
+            if authorized_employee_id > 0:
+                write_values['wgs_discount_authorized_employee_id'] = authorized_employee_id
+            authorized_by = str(config.get('discount_authorized_by') or '').strip()
+            if authorized_by:
+                write_values['wgs_discount_authorized_by'] = authorized_by
+            authorized_at = fields.Datetime.to_datetime(config.get('discount_authorized_at'))
+            if authorized_at:
+                write_values['wgs_discount_authorized_at'] = fields.Datetime.to_string(authorized_at)
+            birthday_year = self._wgs_to_int(config.get('discount_birthday_year'))
+            if birthday_year > 0:
+                write_values['wgs_discount_birthday_year'] = birthday_year
 
             if write_values:
                 target_line.write(write_values)
