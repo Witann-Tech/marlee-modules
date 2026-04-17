@@ -385,6 +385,75 @@ class SaleOrder(models.Model):
         }
 
     @api.model
+    def wgs_update_partner_for_pos(self, partner_id, vals):
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para actualizar clientes desde Punto de Venta.'))
+
+        partner = self._wgs_browse_partner_for_pos(partner_id)
+        if not partner:
+            raise AccessError(_('El cliente seleccionado no existe.'))
+
+        values = dict(vals or {})
+        name = (values.get('name') or '').strip()
+        if not name:
+            return {
+                'ok': False,
+                'error_message': _('Debes capturar el nombre del cliente.'),
+            }
+
+        phone = (values.get('phone') or '').strip()
+        email = (values.get('email') or '').strip()
+        curp = values.get('curp') or False
+        birthday = values.get('birthday') or False
+        gender = values.get('gender') or False
+
+        if curp:
+            curp_validation = self._wgs_validate_partner_curp_for_pos(curp, exclude_partner=partner)
+            if not curp_validation.get('ok'):
+                return {
+                    'ok': False,
+                    'error_message': curp_validation.get('message') or _('No se pudo validar la CURP del cliente.'),
+                }
+            curp = curp_validation.get('normalized') or curp
+
+        write_vals = {'name': name}
+
+        if 'phone' in partner._fields:
+            write_vals['phone'] = phone or False
+        if 'mobile' in partner._fields:
+            write_vals['mobile'] = phone or False
+        if 'email' in partner._fields:
+            write_vals['email'] = email or False
+
+        self._assign_or_clear_partner_field_for_pos(partner, write_vals, self._PARTNER_BIRTHDAY_FIELD_CANDIDATES, birthday)
+        self._assign_or_clear_partner_field_for_pos(partner, write_vals, self._PARTNER_GENDER_FIELD_CANDIDATES, gender)
+        field_name = self._assign_or_clear_partner_field_for_pos(partner, write_vals, self._PARTNER_CURP_FIELD_CANDIDATES, curp)
+        if not curp and not field_name and any(partner._fields.get(field) for field in self._PARTNER_CURP_FIELD_CANDIDATES):
+            for field in self._PARTNER_CURP_FIELD_CANDIDATES:
+                if partner._fields.get(field):
+                    write_vals[field] = False
+                    break
+
+        try:
+            partner.write(write_vals)
+        except ValidationError as error:
+            return {
+                'ok': False,
+                'error_message': str(error),
+            }
+
+        return {
+            'ok': True,
+            'partner_id': partner.id,
+            'partner_name': partner.display_name,
+            'phone': self._get_partner_field_value_for_pos(partner, ('phone', 'mobile')) or False,
+            'email': self._get_partner_field_value_for_pos(partner, ('email',)) or False,
+            'curp': self._get_partner_curp_for_pos(partner) or False,
+            'gender': self._get_partner_field_value_for_pos(partner, self._PARTNER_GENDER_FIELD_CANDIDATES) or False,
+            'birthday': self._get_partner_field_value_for_pos(partner, self._PARTNER_BIRTHDAY_FIELD_CANDIDATES) or False,
+            'image_url': '/web/image/res.partner/%s/image_128' % partner.id,
+        }
+
+    @api.model
     def wgs_update_partner_photo_for_pos(self, partner_id, image_1920):
         self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para actualizar la foto desde Punto de Venta.'))
 
@@ -1255,6 +1324,16 @@ class SaleOrder(models.Model):
             values[field_name] = formatted_value
             return field_name
         return False
+
+    def _assign_or_clear_partner_field_for_pos(self, partner_model, values, field_candidates, raw_value):
+        raw_value = raw_value if raw_value not in (None, '') else False
+        if raw_value is False:
+            for field_name in field_candidates:
+                if partner_model._fields.get(field_name):
+                    values[field_name] = False
+                    return field_name
+            return False
+        return self._assign_partner_field_for_pos(partner_model, values, field_candidates, raw_value)
 
     def _map_partner_selection_value_for_pos(self, field, raw_value):
         normalized = str(raw_value or '').strip().lower()

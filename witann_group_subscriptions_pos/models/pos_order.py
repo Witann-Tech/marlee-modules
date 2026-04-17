@@ -194,6 +194,10 @@ class PosOrder(models.Model):
         return self.env['sale.order'].wgs_update_partner_curp_for_pos(partner_id, curp)
 
     @api.model
+    def wgs_update_partner_for_pos(self, partner_id, vals):
+        return self.env['sale.order'].wgs_update_partner_for_pos(partner_id, vals)
+
+    @api.model
     def wgs_update_partner_photo_for_pos(self, partner_id, image_1920):
         return self.env['sale.order'].wgs_update_partner_photo_for_pos(partner_id, image_1920)
 

@@ -10,6 +10,7 @@ function resetListPartnerFormState(state, { stopPartnerCamera }) {
     stopPartnerCamera();
     state.formMode = null;
     state.newPartnerForm = null;
+    state.partnerEditForm = null;
 }
 
 function resetDetailInlineForms(state, {
@@ -27,6 +28,7 @@ function resetDetailInlineForms(state, {
     state.participantEditForm = null;
     state.newPartnerForm = null;
     state.partnerPhotoForm = null;
+    state.partnerEditForm = null;
     state.newSubscriptionForm = createNewSubscriptionForm(selectedPartnerId);
 }
 
@@ -57,6 +59,7 @@ function clearDirectorySelectionState(state, {
     state.participantEditForm = null;
     state.newPartnerForm = null;
     state.partnerPhotoForm = null;
+    state.partnerEditForm = null;
 }
 
 export {

@@ -26,6 +26,7 @@ function openNewPartnerForm(state, {
     state.newSubscriptionForm = createNewSubscriptionForm(state.selectedPartnerId);
     state.newPartnerForm = state.getDefaultNewPartnerForm();
     state.partnerPhotoForm = null;
+    state.partnerEditForm = null;
     renderDetail(state.currentDetail);
 }
 
@@ -43,14 +44,39 @@ function openPartnerPhotoForm(state, {
     state.renewalForm = null;
     state.upsaleForm = null;
     state.pendingChargeForm = null;
+    state.cancellationRefundForm = null;
     state.participantEditForm = null;
     state.newPartnerForm = null;
+    state.partnerEditForm = null;
     state.partnerPhotoForm = {
         partnerId: Number(state.currentDetail.partner_id || 0) || false,
         imageDataUrl: state.currentDetail.image_url || "",
         imageBase64: "",
         cameraActive: false,
     };
+    renderDetail(state.currentDetail);
+}
+
+function openPartnerEditForm(state, {
+    stopPartnerCamera,
+    createPartnerEditForm,
+    renderDetail,
+}) {
+    if (!state.currentDetail || !state.currentDetail.partner_id) {
+        return;
+    }
+    state.formMode = "partner_edit";
+    state.formError = "";
+    state.formNotice = "";
+    stopPartnerCamera();
+    state.renewalForm = null;
+    state.upsaleForm = null;
+    state.pendingChargeForm = null;
+    state.cancellationRefundForm = null;
+    state.participantEditForm = null;
+    state.newPartnerForm = null;
+    state.partnerPhotoForm = null;
+    state.partnerEditForm = createPartnerEditForm(state.currentDetail);
     renderDetail(state.currentDetail);
 }
 
@@ -143,13 +169,16 @@ function buildDetailPartnerActionHandlers({
     stopPartnerCameraForForm,
     capturePartnerCameraForForm,
     createPartner,
+    updatePartner,
     updatePartnerPhoto,
     stopPartnerCamera,
     reloadDirectoryRows,
     loadDetail,
     createNewSubscriptionForm,
+    createPartnerEditForm,
     openNewPartnerForm,
     openPartnerPhotoForm,
+    openPartnerEditForm,
     overlayRoot,
     detailRoot,
     detailCache,
@@ -172,11 +201,22 @@ function buildDetailPartnerActionHandlers({
         "open-partner-photo": async () => {
             openPartnerPhotoForm();
         },
+        "open-partner-edit": async () => {
+            openPartnerEditForm();
+        },
+        "cancel-partner-edit": async () => {
+            clearFeedback();
+            stopPartnerCamera();
+            state.formMode = null;
+            state.partnerEditForm = null;
+            renderDetail(state.currentDetail);
+        },
         "cancel-partner-photo": async () => {
             clearFeedback();
             stopPartnerCamera();
             state.formMode = null;
             state.partnerPhotoForm = null;
+            state.partnerEditForm = null;
             renderDetail(state.currentDetail);
         },
         "start-existing-partner-camera": async () => {
@@ -228,6 +268,57 @@ function buildDetailPartnerActionHandlers({
             } catch (error) {
                 console.error("Error al crear cliente desde POS", error);
                 state.formError = (error && error.message) ? error.message : _t("No se pudo crear el cliente.");
+                renderDetail(state.currentDetail);
+            }
+        },
+        "save-partner-edit": async () => {
+            clearFeedback();
+            if (!state.partnerEditForm || !state.partnerEditForm.partnerId) {
+                state.formError = _t("No se encontró el cliente a editar.");
+                renderDetail(state.currentDetail);
+                return;
+            }
+            if (!String(state.partnerEditForm.name || "").trim()) {
+                state.formError = _t("Debes capturar el nombre del cliente.");
+                renderDetail(state.currentDetail);
+                return;
+            }
+            try {
+                const result = await updatePartner(state.partnerEditForm.partnerId, {
+                    name: state.partnerEditForm.name || "",
+                    phone: state.partnerEditForm.phone || "",
+                    email: state.partnerEditForm.email || "",
+                    curp: state.partnerEditForm.curp || "",
+                    gender: state.partnerEditForm.gender || false,
+                    birthday: state.partnerEditForm.birthday || false,
+                });
+                if (!result || result.ok === false) {
+                    state.formError = result && result.error_message
+                        ? result.error_message
+                        : _t("No se pudo actualizar el cliente.");
+                    renderDetail(state.currentDetail);
+                    return;
+                }
+                if (state.currentDetail && Number(state.currentDetail.partner_id || 0) === Number(result.partner_id || 0)) {
+                    state.currentDetail = {
+                        ...state.currentDetail,
+                        partner_name: result.partner_name || state.currentDetail.partner_name,
+                        phone: result.phone || false,
+                        email: result.email || false,
+                        curp: result.curp || false,
+                        gender: result.gender || false,
+                        birthday: result.birthday || false,
+                    };
+                }
+                state.formMode = null;
+                state.partnerEditForm = null;
+                renderDetail(state.currentDetail);
+                detailCache.delete(Number(result && result.partner_id ? result.partner_id : 0));
+                await reloadDirectoryRows(result && result.partner_id ? result.partner_id : false);
+                await loadDetail(state.selectedPartnerId, { force: true });
+            } catch (error) {
+                console.error("Error al actualizar cliente POS", error);
+                state.formError = (error && error.message) ? error.message : _t("No se pudo actualizar el cliente.");
                 renderDetail(state.currentDetail);
             }
         },
@@ -288,8 +379,12 @@ async function handleListPartnerFieldChange({ field, target }, {
     clearFeedback();
     if (state.formMode === "new_partner" && field === "partner_gender") {
         state.newPartnerForm.gender = target.value || "";
+    } else if (state.formMode === "partner_edit" && field === "partner_gender") {
+        state.partnerEditForm.gender = target.value || "";
     } else if (state.formMode === "new_partner" && field === "partner_birthday") {
         state.newPartnerForm.birthday = target.value || "";
+    } else if (state.formMode === "partner_edit" && field === "partner_birthday") {
+        state.partnerEditForm.birthday = target.value || "";
     } else if (state.formMode === "new_partner" && field === "partner_image_file") {
         const file = target.files && target.files[0];
         if (file) {
@@ -308,12 +403,20 @@ async function handleListPartnerFieldChange({ field, target }, {
 function handleListPartnerFieldInput({ field, target }, { state }) {
     if (state.formMode === "new_partner" && field === "partner_name") {
         state.newPartnerForm.name = target.value || "";
+    } else if (state.formMode === "partner_edit" && field === "partner_name") {
+        state.partnerEditForm.name = target.value || "";
     } else if (state.formMode === "new_partner" && field === "partner_phone") {
         state.newPartnerForm.phone = target.value || "";
+    } else if (state.formMode === "partner_edit" && field === "partner_phone") {
+        state.partnerEditForm.phone = target.value || "";
     } else if (state.formMode === "new_partner" && field === "partner_email") {
         state.newPartnerForm.email = target.value || "";
+    } else if (state.formMode === "partner_edit" && field === "partner_email") {
+        state.partnerEditForm.email = target.value || "";
     } else if (state.formMode === "new_partner" && field === "partner_curp") {
         state.newPartnerForm.curp = target.value || "";
+    } else if (state.formMode === "partner_edit" && field === "partner_curp") {
+        state.partnerEditForm.curp = target.value || "";
     }
 }
 
@@ -328,8 +431,12 @@ async function handleDetailPartnerFieldChange({ field, target }, {
     clearFeedback();
     if (state.formMode === "new_partner" && field === "partner_gender") {
         state.newPartnerForm.gender = target.value || "";
+    } else if (state.formMode === "partner_edit" && field === "partner_gender") {
+        state.partnerEditForm.gender = target.value || "";
     } else if (state.formMode === "new_partner" && field === "partner_birthday") {
         state.newPartnerForm.birthday = target.value || "";
+    } else if (state.formMode === "partner_edit" && field === "partner_birthday") {
+        state.partnerEditForm.birthday = target.value || "";
     } else if (state.formMode === "partner_photo" && field === "existing_partner_image_file") {
         const file = target.files && target.files[0];
         if (file) {
@@ -355,16 +462,32 @@ function handleDetailPartnerFieldInput({ field, target }, {
         state.newPartnerForm.name = target.value || "";
         return true;
     }
+    if (state.formMode === "partner_edit" && field === "partner_name") {
+        state.partnerEditForm.name = target.value || "";
+        return true;
+    }
     if (state.formMode === "new_partner" && field === "partner_phone") {
         state.newPartnerForm.phone = target.value || "";
+        return true;
+    }
+    if (state.formMode === "partner_edit" && field === "partner_phone") {
+        state.partnerEditForm.phone = target.value || "";
         return true;
     }
     if (state.formMode === "new_partner" && field === "partner_email") {
         state.newPartnerForm.email = target.value || "";
         return true;
     }
+    if (state.formMode === "partner_edit" && field === "partner_email") {
+        state.partnerEditForm.email = target.value || "";
+        return true;
+    }
     if (state.formMode === "new_partner" && field === "partner_curp") {
         state.newPartnerForm.curp = target.value || "";
+        return true;
+    }
+    if (state.formMode === "partner_edit" && field === "partner_curp") {
+        state.partnerEditForm.curp = target.value || "";
         return true;
     }
     return false;
@@ -378,5 +501,6 @@ export {
     handleListPartnerFieldChange,
     handleListPartnerFieldInput,
     openNewPartnerForm,
+    openPartnerEditForm,
     openPartnerPhotoForm,
 };

@@ -19,6 +19,7 @@ import {
 } from "./subscription_ticket";
 import { createSubscriptionPosApi } from "./subscription_pos_api";
 import {
+    getDefaultExistingPartnerForm,
     getDefaultNewPartnerForm,
     getDefaultNewSubscriptionForm,
     getDefaultParticipantEditForm,
@@ -101,6 +102,7 @@ import {
     handleListPartnerFieldChange,
     handleListPartnerFieldInput,
     openNewPartnerForm as openNewPartnerFormState,
+    openPartnerEditForm as openPartnerEditFormState,
     openPartnerPhotoForm as openPartnerPhotoFormState,
 } from "./subscription_partner_handlers";
 import {
@@ -329,6 +331,10 @@ patch(ControlButtons.prototype, {
 
     async _updatePartnerCurpForPos(partnerId, curp) {
         return this.subscriptionPosApi.updatePartnerCurp(partnerId, curp || false);
+    },
+
+    async _updatePartnerForPos(partnerId, values) {
+        return this.subscriptionPosApi.updatePartner(partnerId, values || {});
     },
 
     async _updatePartnerPhotoForPos(partnerId, imageBase64) {
@@ -631,6 +637,7 @@ patch(ControlButtons.prototype, {
         let participantEditForm = null;
         let newPartnerForm = null;
         let partnerPhotoForm = null;
+        let partnerEditForm = null;
         const detailCache = new Map();
         let newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
         const modalState = {
@@ -671,6 +678,8 @@ patch(ControlButtons.prototype, {
             set newPartnerForm(value) { newPartnerForm = value; },
             get partnerPhotoForm() { return partnerPhotoForm; },
             set partnerPhotoForm(value) { partnerPhotoForm = value; },
+            get partnerEditForm() { return partnerEditForm; },
+            set partnerEditForm(value) { partnerEditForm = value; },
             get newSubscriptionForm() { return newSubscriptionForm; },
             set newSubscriptionForm(value) { newSubscriptionForm = value; },
             get productCatalog() { return productCatalog; },
@@ -797,6 +806,14 @@ patch(ControlButtons.prototype, {
         const openPartnerPhotoForm = () => {
             openPartnerPhotoFormState(modalState, {
                 stopPartnerCamera,
+                renderDetail,
+            });
+        };
+
+        const openPartnerEditForm = () => {
+            openPartnerEditFormState(modalState, {
+                stopPartnerCamera,
+                createPartnerEditForm: (detail) => this._getDefaultExistingPartnerForm(detail),
                 renderDetail,
             });
         };
@@ -1281,6 +1298,7 @@ patch(ControlButtons.prototype, {
                 getStateClass: (state) => this._getStateClass(state),
                 formMode,
                 partnerPhotoForm,
+                partnerEditForm,
                 formError,
                 formNotice,
                 escapeHtml: (value) => this._escapeHtml(value),
@@ -1434,13 +1452,16 @@ patch(ControlButtons.prototype, {
                 stopPartnerCameraForForm,
                 capturePartnerCameraForForm,
                 createPartner: (values) => this._createPartnerForPos(values),
+                updatePartner: (partnerId, values) => this._updatePartnerForPos(partnerId, values),
                 updatePartnerPhoto: (partnerId, imageBase64) => this._updatePartnerPhotoForPos(partnerId, imageBase64),
                 stopPartnerCamera,
                 reloadDirectoryRows,
                 loadDetail,
                 createNewSubscriptionForm: (partnerId) => this._getDefaultNewSubscriptionForm(partnerId),
+                createPartnerEditForm: (detail) => this._getDefaultExistingPartnerForm(detail),
                 openNewPartnerForm,
                 openPartnerPhotoForm,
+                openPartnerEditForm,
                 overlayRoot: overlay,
                 detailRoot: detailPane,
                 detailCache,
@@ -1572,6 +1593,10 @@ patch(ControlButtons.prototype, {
 
     _getDefaultNewPartnerForm() {
         return getDefaultNewPartnerForm();
+    },
+
+    _getDefaultExistingPartnerForm(detail) {
+        return getDefaultExistingPartnerForm(detail);
     },
 
     _getDefaultUpsaleForm(item = null) {
@@ -1874,6 +1899,18 @@ patch(ControlButtons.prototype, {
                 align-items: center;
                 margin-bottom: 0.75rem;
             }
+            .wgs-detail-title-actions {
+                display: flex;
+                align-items: center;
+                gap: 0.5rem;
+                flex-wrap: wrap;
+                justify-content: flex-end;
+            }
+            .wgs-inline-edit-btn {
+                width: auto;
+                min-width: 0;
+                padding-inline: 0.9rem;
+            }
             .wgs-detail-title-row h4 {
                 margin: 0;
                 color: #0f172a;
@@ -1908,6 +1945,9 @@ patch(ControlButtons.prototype, {
             .wgs-inline-form-meta strong {
                 color: #0f172a;
                 font-size: 0.9rem;
+            }
+            .wgs-detail-inline-editor {
+                margin-bottom: 0.75rem;
             }
             .wgs-detail-actions-bar,
             .wgs-subscription-actions,

@@ -1,4 +1,3 @@
-from odoo.exceptions import ValidationError
 from odoo.tests.common import TransactionCase
 
 
@@ -55,11 +54,34 @@ class TestPosPartnerCurp(TransactionCase):
         )
         partner = self.Partner.create({'name': 'Cliente duplicado'})
 
-        with self.assertRaises(ValidationError):
-            self.PosOrder.sudo().wgs_update_partner_curp_for_pos(
-                partner.id,
-                'abcd 010101 hdfrrn09',
-            )
+        result = self.PosOrder.sudo().wgs_update_partner_curp_for_pos(
+            partner.id,
+            'abcd 010101 hdfrrn09',
+        )
+
+        self.assertFalse(result['ok'])
+        self.assertIn('ABCD010101HDFRRN09', result['error_message'])
+
+    def test_update_partner_for_pos_updates_general_fields(self):
+        partner = self.Partner.create({'name': 'Cliente edición POS'})
+
+        result = self.PosOrder.sudo().wgs_update_partner_for_pos(
+            partner.id,
+            {
+                'name': 'Cliente edición POS actualizada',
+                'phone': '4491234567',
+                'email': 'cliente@example.com',
+                'curp': 'mopl-900101-mdfabc01',
+            },
+        )
+
+        partner.invalidate_recordset(['name', 'phone', 'mobile', 'email', self.curp_field])
+        self.assertTrue(result['ok'])
+        self.assertEqual(partner.name, 'Cliente edición POS actualizada')
+        self.assertEqual(partner.phone, '4491234567')
+        self.assertEqual(partner.mobile, '4491234567')
+        self.assertEqual(partner.email, 'cliente@example.com')
+        self.assertEqual(partner[self.curp_field], 'MOPL900101MDFABC01')
 
     def test_product_catalog_exposes_curp_requirement(self):
         catalog = self.PosOrder.sudo().wgs_get_subscription_product_catalog_for_pos(limit=20)

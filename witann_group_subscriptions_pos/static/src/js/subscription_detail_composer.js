@@ -76,6 +76,7 @@ function renderDetailContent(detail, {
     getStateClass,
     formMode,
     partnerPhotoForm,
+    partnerEditForm,
     formError,
     formNotice,
     escapeHtml,
@@ -88,6 +89,9 @@ function renderDetailContent(detail, {
     const isEditingPartnerPhoto = formMode === "partner_photo"
         && partnerPhotoForm
         && Number(partnerPhotoForm.partnerId || 0) === Number(detail.partner_id || 0);
+    const isEditingPartnerInfo = formMode === "partner_edit"
+        && partnerEditForm
+        && Number(partnerEditForm.partnerId || 0) === Number(detail.partner_id || 0);
     const detailAvatarHtml = renderPartnerDetailAvatar({
         detail,
         partnerPhotoForm,
@@ -116,8 +120,12 @@ function renderDetailContent(detail, {
         ${renderDetailHeader({
             detail,
             isEditingPartnerPhoto,
+            isEditingPartnerInfo,
+            partnerEditForm,
             detailAvatarHtml,
             summaryStateClass,
+            formError,
+            formNotice,
             escapeHtml,
             formatDateDisplay,
             formatDateTimeDisplay,

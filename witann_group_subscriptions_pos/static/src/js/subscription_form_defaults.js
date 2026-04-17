@@ -49,6 +49,18 @@ export function getDefaultNewPartnerForm() {
     };
 }
 
+export function getDefaultExistingPartnerForm(detail = null) {
+    return {
+        partnerId: Number(detail && detail.partner_id ? detail.partner_id : 0) || false,
+        name: detail && detail.partner_name ? detail.partner_name : "",
+        phone: detail && detail.phone ? detail.phone : "",
+        email: detail && detail.email ? detail.email : "",
+        curp: detail && detail.curp ? detail.curp : "",
+        gender: detail && detail.gender ? detail.gender : "",
+        birthday: detail && detail.birthday ? detail.birthday : "",
+    };
+}
+
 export function getDefaultUpsaleForm(item = null, { buildChargeBreakdown }) {
     const subscriptionId = Number(item && item.subscription_id ? item.subscription_id : 0) || false;
     const holderPartnerId = Number(item && item.holder_partner_id ? item.holder_partner_id : 0) || false;
