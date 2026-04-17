@@ -7,28 +7,12 @@ from odoo.exceptions import ValidationError
 class ResPartner(models.Model):
     _inherit = 'res.partner'
 
-    _WGS_CURP_FIELD_CANDIDATES = (
-        'x_studio_curp',
-    )
+    _WGS_CURP_FIELD = 'x_studio_curp'
     _WGS_CURP_SYNC_CONTEXT_KEY = 'wgs_skip_curp_storage_sync'
 
     @api.model
     def _wgs_get_curp_field_name(self, vals=None):
-        if vals:
-            for field_name in vals.keys():
-                field = self._fields.get(field_name)
-                if field and field.type in ('char', 'text') and 'curp' in field_name.lower():
-                    return field_name
-
-        for field_name in self._WGS_CURP_FIELD_CANDIDATES:
-            field = self._fields.get(field_name)
-            if field and field.type in ('char', 'text'):
-                return field_name
-
-        for field_name, field in self._fields.items():
-            if field.type in ('char', 'text') and 'curp' in field_name.lower():
-                return field_name
-        return False
+        return self._WGS_CURP_FIELD if self._WGS_CURP_FIELD in self._fields else False
 
     @api.model
     def _wgs_has_curp_field(self):

@@ -1275,9 +1275,6 @@ class SaleOrder(models.Model):
         for field_name in self._PARTNER_CURP_FIELD_CANDIDATES:
             if Partner._fields.get(field_name):
                 return field_name
-        for field_name, field in Partner._fields.items():
-            if field.type in ('char', 'text') and 'curp' in field_name.lower():
-                return field_name
         return False
 
     def _wgs_normalize_partner_curp_for_pos(self, curp):
