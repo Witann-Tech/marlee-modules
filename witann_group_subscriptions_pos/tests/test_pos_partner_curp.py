@@ -1,4 +1,5 @@
 from odoo.tests.common import TransactionCase
+from odoo import fields
 
 
 class TestPosPartnerCurp(TransactionCase):
@@ -141,3 +142,22 @@ class TestPosPartnerCurp(TransactionCase):
 
         self.assertTrue(result['ok'])
         self.assertTrue(result['student_age_lock'])
+
+    def test_curp_birthdate_interprets_02_as_2002(self):
+        birthdate = self.PosOrder.sudo()._wgs_get_birthdate_from_curp_for_pos('PEKA020202DERFNR01')
+        self.assertEqual(fields.Date.to_string(birthdate), '2002-02-02')
+
+    def test_validate_subscription_product_eligibility_accepts_2002_birth_year(self):
+        partner = self.Partner.create(
+            {
+                'name': 'Cliente 2002 válido',
+                self.curp_field: 'PEKA020202DERFNR01',
+            }
+        )
+
+        result = self.PosOrder.sudo().wgs_validate_subscription_product_eligibility_for_pos(
+            partner.id,
+            self.student_product.id,
+        )
+
+        self.assertTrue(result['ok'])

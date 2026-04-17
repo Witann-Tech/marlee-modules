@@ -284,8 +284,8 @@ class PosOrder(models.Model):
         except (TypeError, ValueError):
             return False
 
-        differentiator = normalized[16]
-        century = 2000 if differentiator.isalpha() else 1900
+        current_two_digit_year = fields.Date.context_today(self).year % 100
+        century = 2000 if year <= current_two_digit_year else 1900
         try:
             return date(century + year, month, day)
         except ValueError:
