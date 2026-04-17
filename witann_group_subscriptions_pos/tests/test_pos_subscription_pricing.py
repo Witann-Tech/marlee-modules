@@ -114,7 +114,8 @@ class TestPosSubscriptionPricing(TransactionCase):
             {
                 'name': 'Plan Diario POS',
                 'recurring_interval': 1,
-                'recurring_rule_type': 'day',
+                'recurring_rule_type': 'week',
+                'wgs_single_day_plan': True,
             }
         )
 

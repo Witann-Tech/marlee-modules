@@ -6,9 +6,10 @@ from odoo import api, fields, models
 class SaleSubscriptionPlan(models.Model):
     _inherit = 'sale.subscription.plan'
 
-    recurring_rule_type = fields.Selection(
-        selection_add=[('day', 'Días')],
-        ondelete={'day': 'set default'},
+    wgs_single_day_plan = fields.Boolean(
+        string='Vigencia de 1 día WGS',
+        default=False,
+        help='Cuando está activo, Witann Group Subscriptions tratará este plan como una vigencia exacta de un día.',
     )
 
     @api.model

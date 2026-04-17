@@ -278,6 +278,9 @@ class PosOrderPricingMixin(models.Model):
         if not plan:
             return interval_value, interval_unit
 
+        if 'wgs_single_day_plan' in plan._fields and plan.wgs_single_day_plan:
+            return 1, 'day'
+
         if {'recurring_interval', 'recurring_rule_type'}.issubset(plan._fields):
             interval_value = int(plan.recurring_interval or 1)
             interval_unit = plan.recurring_rule_type or 'month'

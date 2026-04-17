@@ -1223,7 +1223,10 @@ class SaleOrder(models.Model):
             unit = self.recurring_rule_type or 'month'
         elif 'plan_id' in self._fields and self.plan_id:
             plan = self.plan_id
-            if {'recurring_interval', 'recurring_rule_type'}.issubset(plan._fields):
+            if 'wgs_single_day_plan' in plan._fields and plan.wgs_single_day_plan:
+                interval = 1
+                unit = 'day'
+            elif {'recurring_interval', 'recurring_rule_type'}.issubset(plan._fields):
                 interval = plan.recurring_interval or 1
                 unit = plan.recurring_rule_type or 'month'
             elif {'billing_period_value', 'billing_period_unit'}.issubset(plan._fields):

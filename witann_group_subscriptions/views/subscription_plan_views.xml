@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_sale_subscription_plan_form_wgs" model="ir.ui.view">
+        <field name="name">sale.subscription.plan.form.wgs</field>
+        <field name="model">sale.subscription.plan</field>
+        <field name="inherit_id" ref="sale_subscription.sale_subscription_plan_view_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='recurring_rule_type']" position="after">
+                <field name="wgs_single_day_plan"/>
+            </xpath>
+        </field>
+    </record>
+</odoo>
