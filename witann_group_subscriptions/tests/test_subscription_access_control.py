@@ -14,6 +14,13 @@ class TestSubscriptionAccessControl(TransactionCase):
                 'company_id': self.env.company.id,
             }
         )
+        self.site_b = self.env['access_control.site'].create(
+            {
+                'name': 'Centro acceso B',
+                'code': 'MX-ACB',
+                'company_id': self.env.company.id,
+            }
+        )
         self.product = self.env['product.product'].create(
             {
                 'name': 'Plan acceso',
@@ -128,3 +135,54 @@ class TestSubscriptionAccessControl(TransactionCase):
 
         self.assertEqual(owner_person.access_state, 'enabled')
         self.assertEqual(participant_person.access_state, 'enabled')
+
+    def test_configured_access_sites_override_company_wide_sites(self):
+        order = self._create_subscription_order()
+        progress_state = self._find_subscription_state_value('progress', 'en progreso', 'renew', 'por renovar')
+        self.product.product_tmpl_id.write({'wgs_access_site_ids': [Command.set([self.site_b.id])]})
+
+        order.write({'subscription_state': progress_state})
+
+        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
+        participant_person = self.env['access_control.person'].search([('partner_id', '=', self.participant.id)], limit=1)
+
+        self.assertEqual(set(owner_person.site_ids.ids), {self.site_b.id})
+        self.assertEqual(set(participant_person.site_ids.ids), {self.site_b.id})
+
+    def test_access_sites_are_aggregated_across_multisite_subscriptions(self):
+        progress_state = self._find_subscription_state_value('progress', 'en progreso', 'renew', 'por renovar')
+
+        self.product.product_tmpl_id.write({'wgs_access_site_ids': [Command.set([self.site.id])]})
+        order_a = self._create_subscription_order()
+        order_a.write({'subscription_state': progress_state})
+
+        second_product = self.product.copy({
+            'name': 'Plan acceso multisede',
+            'max_participants_total': 3,
+        })
+        second_product.product_tmpl_id.write({'wgs_access_site_ids': [Command.set([self.site_b.id])]})
+        order_b = self.env['sale.order'].create(
+            {
+                'partner_id': self.owner.id,
+                'company_id': self.env.company.id,
+                'order_line': [
+                    Command.create(
+                        {
+                            'product_id': second_product.id,
+                            'name': second_product.name,
+                            'product_uom_qty': 1,
+                            'product_uom': second_product.uom_id.id,
+                            'price_unit': second_product.list_price,
+                        }
+                    )
+                ],
+            }
+        )
+        order_b.write({'participant_ids': [Command.set([self.owner.id, self.participant.id])]})
+        order_b.write({'subscription_state': progress_state})
+
+        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
+        participant_person = self.env['access_control.person'].search([('partner_id', '=', self.participant.id)], limit=1)
+
+        self.assertEqual(set(owner_person.site_ids.ids), {self.site.id, self.site_b.id})
+        self.assertEqual(set(participant_person.site_ids.ids), {self.site.id, self.site_b.id})

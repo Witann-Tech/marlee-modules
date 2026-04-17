@@ -17,8 +17,12 @@ export function createSubscriptionPosApi(orm) {
         async updatePartner(partnerId, values) {
             return orm.call("pos.order", "wgs_update_partner_for_pos", [partnerId, values || {}]);
         },
-        async validateSubscriptionProductEligibility(partnerId, productId) {
-            return orm.call("pos.order", "wgs_validate_subscription_product_eligibility_for_pos", [partnerId, productId]);
+        async validateSubscriptionProductEligibility(partnerId, productId, flow = "new", sourceSubscriptionId = false) {
+            return orm.call(
+                "pos.order",
+                "wgs_validate_subscription_product_eligibility_for_pos",
+                [partnerId, productId, flow || "new", sourceSubscriptionId || false]
+            );
         },
         async fetchSubscriptionDiscountOffers(partnerId, productId, flow = "new", sourceSubscriptionId = false) {
             return orm.call(

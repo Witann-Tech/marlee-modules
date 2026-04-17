@@ -31,6 +31,15 @@ class ProductTemplate(models.Model):
         default=False,
         help='Disponible una sola vez por CURP. Al venderlo desde POS se crea una vigencia de un solo día.',
     )
+    wgs_access_site_ids = fields.Many2many(
+        'access_control.site',
+        'product_template_wgs_access_site_rel',
+        'product_tmpl_id',
+        'site_id',
+        string='Sitios de acceso WGS',
+        help='Si se configuran, la suscripción otorgará acceso únicamente a estos sitios. '
+             'Si se dejan vacíos, se mantiene el comportamiento actual por empresa.',
+    )
     max_participants_total = fields.Integer(
         string='Máximo de participantes (total)',
         default=1,

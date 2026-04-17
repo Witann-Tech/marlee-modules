@@ -211,7 +211,13 @@ class PosOrder(models.Model):
         return self.env['sale.order'].wgs_update_partner_for_pos(partner_id, vals)
 
     @api.model
-    def wgs_validate_subscription_product_eligibility_for_pos(self, partner_id, product_id):
+    def wgs_validate_subscription_product_eligibility_for_pos(
+        self,
+        partner_id,
+        product_id,
+        flow='new',
+        source_subscription_id=False,
+    ):
         self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para validar productos de suscripción desde Punto de Venta.'))
 
         partner = self._wgs_browse_partner_for_pos(partner_id)
@@ -230,6 +236,9 @@ class PosOrder(models.Model):
 
         student_age_check_required = bool(getattr(product.product_tmpl_id, 'wgs_student_age_lock', False))
         free_trial_day = bool(getattr(product.product_tmpl_id, 'wgs_free_trial_day', False))
+        normalized_flow = str(flow or 'new').strip().lower()
+        if normalized_flow not in ('new', 'renewal', 'reenroll', 'upsale'):
+            normalized_flow = 'new'
 
         sale_order_model = self.env['sale.order'].sudo()
         curp = sale_order_model._get_partner_curp_for_pos(partner)
@@ -239,6 +248,15 @@ class PosOrder(models.Model):
                 'error_code': 'missing_curp',
                 'error_message': _(
                     'Este producto requiere CURP para validar la operación antes de agregarlo al ticket.'
+                ),
+            }
+
+        if free_trial_day and normalized_flow != 'new':
+            return {
+                'ok': False,
+                'error_code': 'free_trial_invalid_flow',
+                'error_message': _(
+                    'El día de prueba gratis solo puede venderse como alta nueva.'
                 ),
             }
 
@@ -282,6 +300,9 @@ class PosOrder(models.Model):
         return {
             'ok': True,
             'student_age_lock': student_age_check_required,
+            'free_trial_day': free_trial_day,
+            'flow': normalized_flow,
+            'source_subscription_id': int(source_subscription_id or 0) or False,
             'age': age,
             'curp': curp,
             'birthdate': fields.Date.to_string(birthdate) if birthdate else False,

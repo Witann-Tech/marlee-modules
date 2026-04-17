@@ -3,12 +3,19 @@
 import { getAuthorizationOnlyOffer } from "./subscription_discount_render";
 
 async function ensureEligibleProductForPartner(state, partnerId, productId, {
+    flow = "new",
+    sourceSubscriptionId = false,
     validateSubscriptionProductEligibility,
     renderDetail,
     _t,
 }) {
     try {
-        const result = await validateSubscriptionProductEligibility(partnerId, productId);
+        const result = await validateSubscriptionProductEligibility(
+            partnerId,
+            productId,
+            flow,
+            sourceSubscriptionId || false
+        );
         if (!result || result.ok === false) {
             state.formError = result && result.error_message
                 ? result.error_message
@@ -417,6 +424,7 @@ function buildSubscriptionInlineActionHandlers({
                 }
             }
             if (!(await ensureEligibleProductForPartner(state, state.selectedPartnerId, state.newSubscriptionForm.productId, {
+                flow: "new",
                 validateSubscriptionProductEligibility,
                 renderDetail,
                 _t,
@@ -727,6 +735,8 @@ function buildSubscriptionInlineActionHandlers({
                 return;
             }
             if (!(await ensureEligibleProductForPartner(state, holderPartnerId, state.upsaleForm.productId, {
+                flow: "upsale",
+                sourceSubscriptionId: state.upsaleForm.subscriptionId,
                 validateSubscriptionProductEligibility,
                 renderDetail,
                 _t,
@@ -813,6 +823,8 @@ function buildSubscriptionInlineActionHandlers({
                 return;
             }
             if (!(await ensureEligibleProductForPartner(state, holderPartnerId, state.renewalForm.productId, {
+                flow: "renewal",
+                sourceSubscriptionId: state.renewalForm.subscriptionId,
                 validateSubscriptionProductEligibility,
                 renderDetail,
                 _t,
@@ -906,6 +918,8 @@ function buildSubscriptionInlineActionHandlers({
                 return;
             }
             if (!(await ensureEligibleProductForPartner(state, holderPartnerId, state.renewalForm.productId, {
+                flow: "reenroll",
+                sourceSubscriptionId: state.renewalForm.subscriptionId,
                 validateSubscriptionProductEligibility,
                 renderDetail,
                 _t,

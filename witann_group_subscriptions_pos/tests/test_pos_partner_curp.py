@@ -300,6 +300,24 @@ class TestPosPartnerCurp(TransactionCase):
         self.assertFalse(result['ok'])
         self.assertEqual(result['error_code'], 'free_trial_already_used')
 
+    def test_validate_subscription_product_eligibility_blocks_free_trial_outside_new_flow(self):
+        partner = self.Partner.create(
+            {
+                'name': 'Cliente trial reenroll',
+                self.curp_field: 'ABCD020202HDFRRN01',
+            }
+        )
+
+        result = self.PosOrder.sudo().wgs_validate_subscription_product_eligibility_for_pos(
+            partner.id,
+            self.trial_product.id,
+            'reenroll',
+            False,
+        )
+
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['error_code'], 'free_trial_invalid_flow')
+
     def test_get_subscription_discount_offers_for_pos_supports_comeback(self):
         partner = self.Partner.create({'name': 'Cliente regreso POS'})
         self._create_subscription_like_order(partner, end_date='2026-03-01')
@@ -373,6 +391,18 @@ class TestPosPartnerCurp(TransactionCase):
         self.assertEqual(len(offers), 1)
         self.assertEqual(offers[0]['code'], 'family_authorization')
         self.assertEqual(float(offers[0]['discount_percent']), 0.0)
+
+    def test_day_pass_is_allowed_in_reenroll_flow(self):
+        partner = self.Partner.create({'name': 'Cliente day pass reinscripción'})
+
+        result = self.PosOrder.sudo().wgs_validate_subscription_product_eligibility_for_pos(
+            partner.id,
+            self.day_pass_product.id,
+            'reenroll',
+            False,
+        )
+
+        self.assertTrue(result['ok'])
 
     def test_day_pass_and_trial_do_not_require_supervisor_authorization(self):
         partner = self.Partner.create(

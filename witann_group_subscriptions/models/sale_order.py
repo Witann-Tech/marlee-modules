@@ -178,7 +178,26 @@ class SaleOrder(models.Model):
 
     def _wgs_get_access_site_ids(self):
         self.ensure_one()
-        company_ids = self._wgs_get_access_product_company_ids()
+        explicit_site_ids = set()
+        company_ids = set()
+        for line in self._get_subscription_recurring_lines():
+            product = line.product_id
+            product_tmpl = product.product_tmpl_id if product else False
+            if product_tmpl and 'wgs_access_site_ids' in product_tmpl._fields and product_tmpl.wgs_access_site_ids:
+                explicit_site_ids.update(
+                    product_tmpl.wgs_access_site_ids.filtered(lambda site: getattr(site, 'active', True)).ids
+                )
+                continue
+            if product and 'company_id' in product._fields and product.company_id:
+                company_ids.add(product.company_id.id)
+                continue
+            if product_tmpl and 'company_id' in product_tmpl._fields and product_tmpl.company_id:
+                company_ids.add(product_tmpl.company_id.id)
+                continue
+        if explicit_site_ids:
+            return sorted(explicit_site_ids)
+
+        company_ids = sorted(company_ids) if company_ids else self._wgs_get_access_product_company_ids()
         if not company_ids:
             return []
         Site = self.env['access_control.site'].sudo()
