@@ -444,7 +444,42 @@ class PosOrderPricingMixin(models.Model):
                 bool(getattr(product.product_tmpl_id, 'recurring_invoice', False)),
             )
 
-        return candidates
+        return self._wgs_normalize_recurring_pricing_candidates(candidates)
+
+    def _wgs_normalize_recurring_pricing_candidates(self, candidates):
+        if not candidates:
+            return []
+
+        best_by_key = {}
+        for candidate in candidates:
+            plan_id = int(candidate.get('plan_id') or 0)
+            pricing_id = int(candidate.get('pricing_id') or 0)
+            key = ('plan', plan_id) if plan_id else ('pricing', pricing_id)
+            current = best_by_key.get(key)
+            if not current:
+                best_by_key[key] = candidate
+                continue
+
+            current_has_pricing = bool(int(current.get('pricing_id') or 0))
+            candidate_has_pricing = bool(pricing_id)
+            current_sequence = int(current.get('sequence') or 0)
+            candidate_sequence = int(candidate.get('sequence') or 0)
+
+            should_replace = False
+            if candidate_has_pricing and not current_has_pricing:
+                should_replace = True
+            elif candidate_has_pricing == current_has_pricing:
+                if candidate_sequence < current_sequence:
+                    should_replace = True
+                elif candidate_sequence == current_sequence and pricing_id and pricing_id < int(current.get('pricing_id') or 0):
+                    should_replace = True
+
+            if should_replace:
+                best_by_key[key] = candidate
+
+        output = list(best_by_key.values())
+        output.sort(key=lambda row: (int(row.get('sequence') or 0), int(row.get('pricing_id') or 0), int(row.get('plan_id') or 0)))
+        return output
 
     def _wgs_search_product_pricelist_item_records(self, product):
         model_name = 'product.pricelist.item'
