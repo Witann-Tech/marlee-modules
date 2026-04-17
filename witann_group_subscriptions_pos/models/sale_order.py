@@ -1268,8 +1268,15 @@ class SaleOrder(models.Model):
 
     def _wgs_get_partner_curp_field_for_pos(self, partner_model=None):
         Partner = partner_model or self._wgs_partner_model_for_pos()
+        if hasattr(Partner, '_wgs_get_curp_field_name'):
+            field_name = Partner._wgs_get_curp_field_name()
+            if field_name and Partner._fields.get(field_name):
+                return field_name
         for field_name in self._PARTNER_CURP_FIELD_CANDIDATES:
             if Partner._fields.get(field_name):
+                return field_name
+        for field_name, field in Partner._fields.items():
+            if field.type in ('char', 'text') and 'curp' in field_name.lower():
                 return field_name
         return False
 

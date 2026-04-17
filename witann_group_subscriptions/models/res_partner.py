@@ -7,12 +7,32 @@ from odoo.exceptions import ValidationError
 class ResPartner(models.Model):
     _inherit = 'res.partner'
 
-    _WGS_CURP_FIELD = 'x_studio_curp'
+    _WGS_CURP_FIELD_CANDIDATES = (
+        'x_studio_curp',
+    )
     _WGS_CURP_SYNC_CONTEXT_KEY = 'wgs_skip_curp_storage_sync'
 
     @api.model
+    def _wgs_get_curp_field_name(self, vals=None):
+        if vals:
+            for field_name in vals.keys():
+                field = self._fields.get(field_name)
+                if field and field.type in ('char', 'text') and 'curp' in field_name.lower():
+                    return field_name
+
+        for field_name in self._WGS_CURP_FIELD_CANDIDATES:
+            field = self._fields.get(field_name)
+            if field and field.type in ('char', 'text'):
+                return field_name
+
+        for field_name, field in self._fields.items():
+            if field.type in ('char', 'text') and 'curp' in field_name.lower():
+                return field_name
+        return False
+
+    @api.model
     def _wgs_has_curp_field(self):
-        return self._WGS_CURP_FIELD in self._fields
+        return bool(self._wgs_get_curp_field_name())
 
     @api.model
     def _wgs_normalize_curp(self, value):
@@ -23,19 +43,22 @@ class ResPartner(models.Model):
 
     def _wgs_get_curp_value(self):
         self.ensure_one()
-        if not self._wgs_has_curp_field():
+        field_name = self._wgs_get_curp_field_name()
+        if not field_name:
             return False
-        return self._wgs_normalize_curp(self[self._WGS_CURP_FIELD])
+        return self._wgs_normalize_curp(self[field_name])
 
     def _wgs_normalize_curp_in_vals(self, vals):
-        if not self._wgs_has_curp_field() or self._WGS_CURP_FIELD not in vals:
+        field_name = self._wgs_get_curp_field_name(vals)
+        if not field_name or field_name not in vals:
             return vals
         normalized_vals = dict(vals)
-        normalized_vals[self._WGS_CURP_FIELD] = self._wgs_normalize_curp(vals.get(self._WGS_CURP_FIELD))
+        normalized_vals[field_name] = self._wgs_normalize_curp(vals.get(field_name))
         return normalized_vals
 
     def _wgs_check_curp_uniqueness(self):
-        if not self._wgs_has_curp_field():
+        field_name = self._wgs_get_curp_field_name()
+        if not field_name:
             return
         Partner = self.with_context(active_test=False).sudo()
         for partner in self:
@@ -45,7 +68,7 @@ class ResPartner(models.Model):
             duplicate = Partner.search(
                 [
                     ('id', '!=', partner.id),
-                    (self._WGS_CURP_FIELD, '=', curp),
+                    (field_name, '=', curp),
                 ],
                 limit=1,
             )
@@ -65,14 +88,17 @@ class ResPartner(models.Model):
         if not self._wgs_has_curp_field() or self.env.context.get(self._WGS_CURP_SYNC_CONTEXT_KEY):
             return
         for partner in self:
-            raw_value = partner[self._WGS_CURP_FIELD]
+            field_name = partner._wgs_get_curp_field_name()
+            if not field_name:
+                continue
+            raw_value = partner[field_name]
             normalized_value = partner._wgs_normalize_curp(raw_value)
             if raw_value == normalized_value:
                 continue
             super(
                 ResPartner,
                 partner.with_context(**{self._WGS_CURP_SYNC_CONTEXT_KEY: True}),
-            ).write({self._WGS_CURP_FIELD: normalized_value})
+            ).write({field_name: normalized_value})
 
     @api.model_create_multi
     def create(self, vals_list):
