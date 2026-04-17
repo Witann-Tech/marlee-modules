@@ -57,7 +57,7 @@ function renderDiscountAuthorizationSection({
 
     return `
         <div class="wgs-inline-discount-card">
-            <div class="wgs-inline-section-title">${escapeHtml(_t("Descuento autorizado"))}</div>
+            <div class="wgs-inline-section-title">${escapeHtml(_t("Beneficio autorizado"))}</div>
             <div class="wgs-inline-form-grid">
                 <label>
                     <span>${escapeHtml(_t("Beneficio"))}</span>

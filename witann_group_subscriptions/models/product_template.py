@@ -16,6 +16,21 @@ class ProductTemplate(models.Model):
         help='Bloquea venta, renovación, reinscripción y upsale en POS si el titular ya cumplió 25 años. '
              'La validación se hace con la CURP del contacto.',
     )
+    wgs_requires_family_authorization = fields.Boolean(
+        string='Producto familiar con autorización POS',
+        default=False,
+        help='Requiere autorización por PIN supervisor antes de vender este producto desde Suscripciones POS.',
+    )
+    wgs_single_day_access = fields.Boolean(
+        string='Vigencia de 1 día en POS',
+        default=False,
+        help='La suscripción vendida desde POS inicia y termina el mismo día, sin programación de siguiente factura.',
+    )
+    wgs_free_trial_day = fields.Boolean(
+        string='Día de prueba gratis en POS',
+        default=False,
+        help='Disponible una sola vez por CURP. Al venderlo desde POS se crea una vigencia de un solo día.',
+    )
     max_participants_total = fields.Integer(
         string='Máximo de participantes (total)',
         default=1,

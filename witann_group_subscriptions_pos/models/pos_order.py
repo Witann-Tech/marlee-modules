@@ -228,51 +228,63 @@ class PosOrder(models.Model):
                 'error_message': _('El producto seleccionado no existe o no está disponible.'),
             }
 
-        if not bool(getattr(product.product_tmpl_id, 'wgs_student_age_lock', False)):
-            return {'ok': True}
+        student_age_check_required = bool(getattr(product.product_tmpl_id, 'wgs_student_age_lock', False))
+        free_trial_day = bool(getattr(product.product_tmpl_id, 'wgs_free_trial_day', False))
 
         sale_order_model = self.env['sale.order'].sudo()
         curp = sale_order_model._get_partner_curp_for_pos(partner)
-        if not curp:
+        if (student_age_check_required or free_trial_day) and not curp:
             return {
                 'ok': False,
                 'error_code': 'missing_curp',
                 'error_message': _(
-                    'Este paquete de estudiante requiere CURP para validar la edad del titular antes de agregarlo al ticket.'
+                    'Este producto requiere CURP para validar la operación antes de agregarlo al ticket.'
                 ),
             }
 
-        birthdate = self._wgs_get_birthdate_from_curp_for_pos(curp)
-        if not birthdate:
+        if free_trial_day and self._wgs_has_free_trial_usage_for_curp(curp):
             return {
                 'ok': False,
-                'error_code': 'invalid_curp',
+                'error_code': 'free_trial_already_used',
                 'error_message': _(
-                    'La CURP %(curp)s no tiene un formato válido para calcular la edad del titular.'
+                    'La CURP %(curp)s ya utilizó previamente el día de prueba gratis. Solo se permite una vez en la vida.'
                 ) % {'curp': curp},
             }
 
-        age = self._wgs_get_age_for_pos(birthdate)
-        if age >= 25:
-            return {
-                'ok': False,
-                'error_code': 'student_age_limit',
-                'error_message': _(
-                    'El paquete %(product)s solo permite titulares menores de 25 años. '
-                    '%(partner)s tiene %(age)s años según su CURP.'
-                ) % {
-                    'product': product.display_name,
-                    'partner': partner.display_name,
-                    'age': age,
-                },
-            }
+        birthdate = False
+        age = 0
+        if student_age_check_required:
+            birthdate = self._wgs_get_birthdate_from_curp_for_pos(curp)
+            if not birthdate:
+                return {
+                    'ok': False,
+                    'error_code': 'invalid_curp',
+                    'error_message': _(
+                        'La CURP %(curp)s no tiene un formato válido para calcular la edad del titular.'
+                    ) % {'curp': curp},
+                }
+
+            age = self._wgs_get_age_for_pos(birthdate)
+            if age >= 25:
+                return {
+                    'ok': False,
+                    'error_code': 'student_age_limit',
+                    'error_message': _(
+                        'El paquete %(product)s solo permite titulares menores de 25 años. '
+                        '%(partner)s tiene %(age)s años según su CURP.'
+                    ) % {
+                        'product': product.display_name,
+                        'partner': partner.display_name,
+                        'age': age,
+                    },
+                }
 
         return {
             'ok': True,
-            'student_age_lock': True,
+            'student_age_lock': student_age_check_required,
             'age': age,
             'curp': curp,
-            'birthdate': fields.Date.to_string(birthdate),
+            'birthdate': fields.Date.to_string(birthdate) if birthdate else False,
         }
 
     @api.model
@@ -442,6 +454,42 @@ class PosOrder(models.Model):
         return bool(line_model.search_count(domain))
 
     @api.model
+    def _wgs_has_free_trial_usage_for_curp(self, curp):
+        sale_order_model = self.env['sale.order'].sudo()
+        partner_model = self._wgs_partner_model_for_pos()
+        normalized = partner_model._wgs_normalize_curp(curp) if hasattr(partner_model, '_wgs_normalize_curp') else False
+        if not normalized:
+            return False
+
+        curp_field = sale_order_model._PARTNER_CURP_FIELD_CANDIDATES[0]
+        sale_line_model = self.env['sale.order.line'].sudo()
+        sale_domain = [
+            ('order_id.partner_id.%s' % curp_field, '=', normalized),
+            ('product_id.product_tmpl_id.wgs_free_trial_day', '=', True),
+        ]
+        if sale_line_model.search_count(sale_domain):
+            return True
+
+        pos_line_model = self.env['pos.order.line'].sudo()
+        pos_domain = [
+            ('order_id.partner_id.%s' % curp_field, '=', normalized),
+            ('product_id.product_tmpl_id.wgs_free_trial_day', '=', True),
+            ('order_id.state', 'not in', ('draft', 'cancel')),
+        ]
+        return bool(pos_line_model.search_count(pos_domain))
+
+    @api.model
+    def _wgs_product_has_single_day_term(self, product):
+        product = product.exists() if hasattr(product, 'exists') else product
+        if not product:
+            return False
+        tmpl = product.product_tmpl_id if getattr(product, 'product_tmpl_id', False) else product
+        return bool(
+            getattr(tmpl, 'wgs_single_day_access', False)
+            or getattr(tmpl, 'wgs_free_trial_day', False)
+        )
+
+    @api.model
     def _wgs_build_subscription_discount_offers_for_pos(self, partner, product, flow='new', source_subscription=False, today=False):
         offers = []
         today = fields.Date.to_date(today) if today else fields.Date.context_today(self)
@@ -474,6 +522,32 @@ class PosOrder(models.Model):
                     'authorization_required': True,
                     'birthday_year': today.year,
                     'valid_until': False,
+                })
+
+        if normalized_flow in ('new', 'renewal', 'reenroll'):
+            if bool(getattr(product.product_tmpl_id, 'wgs_requires_family_authorization', False)):
+                offers.append({
+                    'code': 'family_authorization',
+                    'label': _('Venta familiar autorizada'),
+                    'discount_percent': 0.0,
+                    'discount_fixed_amount': 0.0,
+                    'authorization_required': True,
+                })
+            if bool(getattr(product.product_tmpl_id, 'wgs_single_day_access', False)):
+                offers.append({
+                    'code': 'single_day_authorization',
+                    'label': _('Suscripción de 1 día autorizada'),
+                    'discount_percent': 0.0,
+                    'discount_fixed_amount': 0.0,
+                    'authorization_required': True,
+                })
+            if normalized_flow == 'new' and bool(getattr(product.product_tmpl_id, 'wgs_free_trial_day', False)):
+                offers.append({
+                    'code': 'free_trial_authorization',
+                    'label': _('Día de prueba gratis autorizado'),
+                    'discount_percent': 0.0,
+                    'discount_fixed_amount': 0.0,
+                    'authorization_required': True,
                 })
 
         return offers
@@ -834,13 +908,23 @@ class PosOrder(models.Model):
         default_pricing_id = choice.get('pricing_id') or False
         default_display_price = self._wgs_get_price_with_taxes_for_pos(product, choice.get('price') or fallback or 0.0)
         student_age_lock = bool(getattr(product.product_tmpl_id, 'wgs_student_age_lock', False))
-        requires_curp = bool(getattr(product.product_tmpl_id, 'wgs_requires_curp', False) or student_age_lock)
+        family_authorization = bool(getattr(product.product_tmpl_id, 'wgs_requires_family_authorization', False))
+        single_day_access = bool(getattr(product.product_tmpl_id, 'wgs_single_day_access', False))
+        free_trial_day = bool(getattr(product.product_tmpl_id, 'wgs_free_trial_day', False))
+        requires_curp = bool(
+            getattr(product.product_tmpl_id, 'wgs_requires_curp', False)
+            or student_age_lock
+            or free_trial_day
+        )
 
         return {
             'is_subscription': is_subscription,
             'max_participants_total': max_total,
             'requires_curp': requires_curp,
             'student_age_lock': student_age_lock,
+            'family_authorization': family_authorization,
+            'single_day_access': single_day_access,
+            'free_trial_day': free_trial_day,
             'default_plan_id': default_plan_id,
             'default_pricing_id': default_pricing_id,
             'default_price': float(choice.get('price') or fallback or 0.0),
@@ -897,6 +981,9 @@ class PosOrder(models.Model):
                 'max_participants_total': int(context.get('max_participants_total') or 1),
                 'requires_curp': bool(context.get('requires_curp')),
                 'student_age_lock': bool(context.get('student_age_lock')),
+                'family_authorization': bool(context.get('family_authorization')),
+                'single_day_access': bool(context.get('single_day_access')),
+                'free_trial_day': bool(context.get('free_trial_day')),
                 'default_plan_id': context.get('default_plan_id') or False,
                 'default_pricing_id': context.get('default_pricing_id') or False,
                 'default_price': float(context.get('default_price') or 0.0),
@@ -1903,6 +1990,10 @@ class PosOrder(models.Model):
         elif plan_record:
             next_billing_date = self._wgs_get_plan_min_end_threshold(plan_record, sale_start_date)
             subscription_end_date = self._wgs_get_plan_period_end_date(plan_record, sale_start_date)
+        if self._wgs_product_has_single_day_term(product):
+            subscription_start_date = sale_start_date
+            subscription_end_date = sale_start_date
+            next_billing_date = False
         if upsell_source_order:
             recurring_total = max(0.0, float(recurring_price_unit or 0.0) * float(qty or 0.0))
             paid_total = max(0.0, float(line.price_unit or 0.0) * float(qty or 0.0))
@@ -2000,6 +2091,7 @@ class PosOrder(models.Model):
                 subscription_start_date=sale_start_date,
                 subscription_end_date=subscription_end_date,
                 next_billing_date=next_billing_date,
+                clear_next_billing_date=self._wgs_product_has_single_day_term(product),
             )
             if self._wgs_is_order_recognized_as_subscription(upsell_order):
                 self._wgs_close_source_subscription_after_upgrade(
@@ -2098,6 +2190,7 @@ class PosOrder(models.Model):
             subscription_start_date=subscription_start_date,
             subscription_end_date=subscription_end_date,
             next_billing_date=next_billing_date,
+            clear_next_billing_date=self._wgs_product_has_single_day_term(product),
         )
 
         _logger.info(
@@ -2771,6 +2864,7 @@ class PosOrder(models.Model):
         subscription_start_date=False,
         subscription_end_date=False,
         next_billing_date=False,
+        clear_next_billing_date=False,
     ):
         target_orders = self._wgs_get_subscription_orders_from_base(sale_order)
         for target_order in target_orders:
@@ -2802,6 +2896,10 @@ class PosOrder(models.Model):
                 next_field = self._wgs_find_subscription_next_invoice_date_field(target_order)
                 if next_field:
                     values[next_field] = next_billing_date
+            elif clear_next_billing_date:
+                next_field = self._wgs_find_subscription_next_invoice_date_field(target_order)
+                if next_field:
+                    values[next_field] = False
             if values:
                 target_order.write(values)
                 _logger.info(

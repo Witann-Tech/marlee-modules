@@ -51,6 +51,28 @@ class TestPosPartnerCurp(TransactionCase):
                 'wgs_student_age_lock': True,
             }
         )
+        self.day_pass_product = self.env['product.product'].create(
+            {
+                'name': 'Pase 1 día POS',
+                'detailed_type': 'service',
+                'list_price': 80.0,
+                'sale_ok': True,
+                'available_in_pos': True,
+                'recurring_invoice': True,
+                'wgs_single_day_access': True,
+            }
+        )
+        self.trial_product = self.env['product.product'].create(
+            {
+                'name': 'Trial gratis POS',
+                'detailed_type': 'service',
+                'list_price': 0.0,
+                'sale_ok': True,
+                'available_in_pos': True,
+                'recurring_invoice': True,
+                'wgs_free_trial_day': True,
+            }
+        )
         self.plan = self.env['sale.subscription.plan'].create(
             {
                 'name': 'Plan test descuentos POS',
@@ -221,6 +243,51 @@ class TestPosPartnerCurp(TransactionCase):
         )
 
         self.assertTrue(result['ok'])
+
+    def test_product_context_exposes_single_day_and_trial_flags(self):
+        context = self.PosOrder.sudo().wgs_get_subscription_product_context_for_pos(
+            self.day_pass_product.id,
+            fallback=80.0,
+        )
+        self.assertTrue(context['single_day_access'])
+
+        trial_context = self.PosOrder.sudo().wgs_get_subscription_product_context_for_pos(
+            self.trial_product.id,
+            fallback=0.0,
+        )
+        self.assertTrue(trial_context['free_trial_day'])
+        self.assertTrue(trial_context['requires_curp'])
+
+    def test_validate_subscription_product_eligibility_blocks_reused_free_trial(self):
+        partner = self.Partner.create(
+            {
+                'name': 'Cliente trial usado',
+                self.curp_field: 'ABCD020202HDFRRN01',
+            }
+        )
+        self.env['sale.order'].create(
+            {
+                'partner_id': partner.id,
+                'order_line': [
+                    Command.create(
+                        {
+                            'name': self.trial_product.display_name,
+                            'product_id': self.trial_product.id,
+                            'product_uom_qty': 1,
+                            'price_unit': 0.0,
+                        }
+                    )
+                ],
+            }
+        )
+
+        result = self.PosOrder.sudo().wgs_validate_subscription_product_eligibility_for_pos(
+            partner.id,
+            self.trial_product.id,
+        )
+
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['error_code'], 'free_trial_already_used')
 
     def test_get_subscription_discount_offers_for_pos_supports_comeback(self):
         partner = self.Partner.create({'name': 'Cliente regreso POS'})
