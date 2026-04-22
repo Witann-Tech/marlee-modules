@@ -1,5 +1,7 @@
 /** @odoo-module **/
 
+import { buildChargeFromSnapshot } from "./subscription_pricing_snapshot";
+
 function isAuthorizationOnlyOffer(offer) {
     if (!offer) {
         return false;
@@ -26,11 +28,14 @@ function getAuthorizedDiscountPercent(form) {
 }
 
 function getDiscountedDisplayAmount(charge, form) {
-    const displayAmount = Number(
-        charge && charge.displayAmount !== undefined
-            ? charge.displayAmount
-            : 0
-    ) || 0;
+    const snapshotFlow = String(form && form.pricingSnapshot && form.pricingSnapshot.flow ? form.pricingSnapshot.flow : "new");
+    const derivedChargeType = ["renewal", "reenroll", "pending_charge", "upsale"].includes(snapshotFlow)
+        ? "charge_now"
+        : "recurring";
+    const effectiveCharge = charge && charge.displayAmount !== undefined
+        ? charge
+        : buildChargeFromSnapshot(form, derivedChargeType);
+    const displayAmount = Number(effectiveCharge && effectiveCharge.displayAmount !== undefined ? effectiveCharge.displayAmount : 0) || 0;
     const percent = getAuthorizedDiscountPercent(form);
     if (!percent) {
         return displayAmount;

@@ -19,6 +19,7 @@ import {
     waitForNextTick,
 } from "./subscription_ticket";
 import { createSubscriptionPosApi } from "./subscription_pos_api";
+import { buildChargeFromSnapshot } from "./subscription_pricing_snapshot";
 import {
     getDefaultExistingPartnerForm,
     getDefaultNewPartnerForm,
@@ -1016,17 +1017,11 @@ patch(ControlButtons.prototype, {
             const partnerCurp = String(currentDetail && currentDetail.curp ? currentDetail.curp : "").trim();
             const requiresCurp = Boolean(newSubscriptionForm.requiresCurp);
             const needsCurpCapture = requiresCurp && !partnerCurp;
+            const snapshotCharge = buildChargeFromSnapshot(newSubscriptionForm, "recurring");
             const localDisplayAmount = convertTaxExcludedPriceToDisplay(
                 this,
                 localProductRecord,
-                Number(
-                    newSubscriptionForm.charge
-                    && newSubscriptionForm.charge.ticketUnitPrice !== undefined
-                        ? newSubscriptionForm.charge.ticketUnitPrice
-                        : (newSubscriptionForm.charge && newSubscriptionForm.charge.baseAmount !== undefined
-                            ? newSubscriptionForm.charge.baseAmount
-                            : 0)
-                )
+                Number(snapshotCharge.ticketUnitPrice || snapshotCharge.baseAmount || 0)
             );
             const discountPercent = Number(
                 newSubscriptionForm

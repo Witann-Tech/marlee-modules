@@ -4,6 +4,7 @@ import {
     getDiscountedDisplayAmount,
     renderDiscountAuthorizationSection,
 } from "./subscription_discount_render";
+import { buildChargeFromSnapshot } from "./subscription_pricing_snapshot";
 
 function renderRenewalForm({
     item,
@@ -30,7 +31,10 @@ function renderRenewalForm({
     const saveAction = formMode === "reenroll" ? "save-reenroll" : "save-renewal";
     const dateLabel = formMode === "reenroll" ? _t("Nueva vigencia desde") : _t("Próxima fecha");
     const dateValue = formMode === "reenroll" ? formatDateDisplay(renewalForm.startDate) : formatDateDisplay(renewalForm.nextInvoiceDate);
-    const chargeDisplayAmount = getDiscountedDisplayAmount(renewalForm.charge, renewalForm);
+    const chargeDisplayAmount = getDiscountedDisplayAmount(
+        buildChargeFromSnapshot(renewalForm, "charge_now"),
+        renewalForm
+    );
     return `
         <div class="wgs-inline-form-card">
             <div class="wgs-inline-form-header">

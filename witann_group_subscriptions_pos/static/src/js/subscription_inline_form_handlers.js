@@ -1,6 +1,7 @@
 /** @odoo-module **/
 
 import { getAuthorizationOnlyOffer } from "./subscription_discount_render";
+import { buildChargeFromSnapshot, getResolvedPricingMetadata } from "./subscription_pricing_snapshot";
 
 async function ensureEligibleProductForPartner(state, partnerId, productId, {
     flow = "new",
@@ -72,32 +73,6 @@ function getPendingAuthorizationMessage(form, _t) {
     return getAuthorizationOnlyOffer(form)
         ? _t("Debes autorizar esta venta antes de agregarla al ticket.")
         : _t("Debes autorizar el descuento seleccionado antes de agregarla al ticket.");
-}
-
-function getResolvedPricingMetadata(form, fallback = {}) {
-    const snapshot = form && form.pricingSnapshot && typeof form.pricingSnapshot === "object"
-        ? form.pricingSnapshot
-        : {};
-    return {
-        plan_id: Number(snapshot.plan_id || fallback.plan_id || 0) || false,
-        pricing_id: Number(snapshot.pricing_id || fallback.pricing_id || 0) || false,
-        interval_value: Number(snapshot.interval_value || fallback.interval_value || 1) || 1,
-        interval_unit: snapshot.interval_unit || fallback.interval_unit || "month",
-        interval_label: snapshot.interval_label || fallback.interval_label || "",
-        source_subscription_id: Number(
-            snapshot.source_subscription_id || fallback.source_subscription_id || 0
-        ) || false,
-        source_subscription_name: snapshot.source_subscription_name || fallback.source_subscription_name || false,
-        recurring_price: Number(snapshot.recurring_price || 0) || 0,
-        ticket_recurring_price: Number(snapshot.ticket_recurring_price || 0) || 0,
-        display_recurring_price: Number(snapshot.display_recurring_price || 0) || 0,
-        charge_now: Number(snapshot.charge_now || 0) || 0,
-        ticket_charge_now: Number(snapshot.ticket_charge_now || 0) || 0,
-        display_charge_now: Number(snapshot.display_charge_now || 0) || 0,
-        credit_amount: Number(snapshot.credit_amount || 0) || 0,
-        ticket_credit_amount: Number(snapshot.ticket_credit_amount || 0) || 0,
-        display_credit_amount: Number(snapshot.display_credit_amount || 0) || 0,
-    };
 }
 
 async function authorizeDiscountForForm(state, form, { partnerId, productId, flow, sourceSubscriptionId = false }, {
@@ -388,7 +363,16 @@ function buildSubscriptionInlineActionHandlers({
                 renderDetail(state.currentDetail);
                 return;
             }
-            const posCharge = buildChargeBreakdown(null, null, state.newSubscriptionForm.charge || {});
+            if (!state.newSubscriptionForm.pricingSnapshot) {
+                state.formError = _t("No se pudo resolver el pricing de la suscripción. Reintenta seleccionar el plan.");
+                renderDetail(state.currentDetail);
+                return;
+            }
+            const posCharge = buildChargeBreakdown(
+                null,
+                null,
+                buildChargeFromSnapshot(state.newSubscriptionForm, "recurring")
+            );
             if (participantIds.length > Number(state.newSubscriptionForm.maxParticipantsTotal || 1)) {
                 state.formError = _t("Estas excediendo el cupo maximo de participantes para este paquete.");
                 renderDetail(state.currentDetail);
@@ -546,12 +530,17 @@ function buildSubscriptionInlineActionHandlers({
                 renderDetail(state.currentDetail);
                 return;
             }
+            if (!state.pendingChargeForm.pricingSnapshot) {
+                state.formError = _t("No se pudo resolver el pricing del cobro pendiente.");
+                renderDetail(state.currentDetail);
+                return;
+            }
             let targetLine = null;
             try {
                 const lineResult = await addConfiguredProductLineToOrder(order, productRecord, {
                     quantity: 1,
                     merge: false,
-                    charge: state.pendingChargeForm.charge,
+                    charge: buildChargeFromSnapshot(state.pendingChargeForm, "charge_now"),
                     metadata: {
                         flow: "pending_charge",
                         partner_id: holderPartnerId || false,
@@ -736,6 +725,11 @@ function buildSubscriptionInlineActionHandlers({
                 renderDetail(state.currentDetail);
                 return;
             }
+            if (!state.upsaleForm.pricingSnapshot) {
+                state.formError = _t("No se pudo resolver el pricing del upsale.");
+                renderDetail(state.currentDetail);
+                return;
+            }
             const participantIds = [...new Set((state.upsaleForm.participantIds || []).map((value) => Number(value || 0)).filter((value) => value > 0))];
             const holderPartnerId = Number(state.upsaleForm.holderPartnerId || 0) || false;
             if (holderPartnerId && !participantIds.includes(holderPartnerId)) {
@@ -791,7 +785,7 @@ function buildSubscriptionInlineActionHandlers({
                 const lineResult = await addConfiguredProductLineToOrder(order, productRecord, {
                     quantity: 1,
                     merge: false,
-                    charge: state.upsaleForm.charge,
+                    charge: buildChargeFromSnapshot(state.upsaleForm, "charge_now"),
                     metadata: {
                         flow: "upsale",
                         partner_id: holderPartnerId || false,
@@ -836,8 +830,6 @@ function buildSubscriptionInlineActionHandlers({
             state.formError = "";
             state.formNotice = "";
             const resolvedRenewalPricing = getResolvedPricingMetadata(state.renewalForm, {
-                plan_id: state.renewalForm && state.renewalForm.planId,
-                pricing_id: state.renewalForm && state.renewalForm.pricingId,
                 source_subscription_id: state.renewalForm && state.renewalForm.subscriptionId,
                 source_subscription_name: state.renewalForm && state.renewalForm.subscriptionName,
             });
@@ -886,12 +878,17 @@ function buildSubscriptionInlineActionHandlers({
                 renderDetail(state.currentDetail);
                 return;
             }
+            if (!state.renewalForm.pricingSnapshot) {
+                state.formError = _t("No se pudo resolver el pricing de la renovación.");
+                renderDetail(state.currentDetail);
+                return;
+            }
             let targetLine = null;
             try {
                 const lineResult = await addConfiguredProductLineToOrder(order, productRecord, {
                     quantity: 1,
                     merge: false,
-                    charge: state.renewalForm.charge,
+                    charge: buildChargeFromSnapshot(state.renewalForm, "charge_now"),
                     discount: getAuthorizedDiscountPercent(state.renewalForm),
                     metadata: {
                         flow: "renewal",
@@ -938,8 +935,6 @@ function buildSubscriptionInlineActionHandlers({
             state.formError = "";
             state.formNotice = "";
             const resolvedReenrollPricing = getResolvedPricingMetadata(state.renewalForm, {
-                plan_id: state.renewalForm && state.renewalForm.planId,
-                pricing_id: state.renewalForm && state.renewalForm.pricingId,
                 source_subscription_id: state.renewalForm && state.renewalForm.subscriptionId,
                 source_subscription_name: state.renewalForm && state.renewalForm.subscriptionName,
             });
@@ -988,12 +983,17 @@ function buildSubscriptionInlineActionHandlers({
                 renderDetail(state.currentDetail);
                 return;
             }
+            if (!state.renewalForm.pricingSnapshot) {
+                state.formError = _t("No se pudo resolver el pricing de la reinscripción.");
+                renderDetail(state.currentDetail);
+                return;
+            }
             let targetLine = null;
             try {
                 const lineResult = await addConfiguredProductLineToOrder(order, productRecord, {
                     quantity: 1,
                     merge: false,
-                    charge: state.renewalForm.charge,
+                    charge: buildChargeFromSnapshot(state.renewalForm, "charge_now"),
                     discount: getAuthorizedDiscountPercent(state.renewalForm),
                     metadata: {
                         flow: "reenroll",

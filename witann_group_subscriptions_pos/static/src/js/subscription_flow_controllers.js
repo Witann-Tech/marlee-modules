@@ -1,5 +1,10 @@
 /** @odoo-module **/
 
+import {
+    buildPricingSnapshotFromCharge,
+    getPlanChoiceFromSnapshot,
+} from "./subscription_pricing_snapshot";
+
 function clampParticipantIds(participantIds, ownerId, maxTotal) {
     const numericOwnerId = Number(ownerId || 0) || false;
     const limit = Math.max(1, Number(maxTotal || 1));
@@ -110,14 +115,11 @@ async function openRenewalForm(state, item, {
         holderPartnerName: item.holder_partner_name || "",
         productId: Number(item.renewal_product_id || 0) || false,
         productName: item.renewal_product_name || "",
-        planId: Number(item.renewal_plan_id || 0) || false,
-        pricingId: Number(item.renewal_pricing_id || 0) || false,
         participantIds: Array.isArray(item.participant_ids) ? [...item.participant_ids] : [],
         title: title || (mode === "reenroll" ? _t("Reinscribir suscripción") : _t("Renovar suscripción")),
         submitLabel: submitLabel || (mode === "reenroll" ? _t("Agregar reinscripción al ticket") : _t("Agregar al ticket")),
         isReenroll: mode === "reenroll",
         startDate: mode === "reenroll" ? new Date().toISOString().slice(0, 10) : false,
-        charge: buildChargeBreakdown(null, null, { baseAmount: 0, displayAmount: 0 }),
         pricingSnapshot: null,
         discountOffers: [],
         selectedDiscountCode: "",
@@ -136,34 +138,19 @@ async function openRenewalForm(state, item, {
             state.renewalForm.subscriptionId,
             false,
             0,
-            state.renewalForm.planId,
-            state.renewalForm.pricingId
+            Number(item.renewal_plan_id || 0) || false,
+            Number(item.renewal_pricing_id || 0) || false
         );
         state.renewalForm = {
             ...state.renewalForm,
             loading: false,
             pricingSnapshot: buildPricingSnapshotFromCharge(charge, {
                 flow,
-                fallbackPlanId: state.renewalForm.planId,
-                fallbackPricingId: state.renewalForm.pricingId,
+                fallbackPlanId: Number(item.renewal_plan_id || 0) || false,
+                fallbackPricingId: Number(item.renewal_pricing_id || 0) || false,
                 sourceSubscriptionId: state.renewalForm.subscriptionId,
                 sourceSubscriptionName: state.renewalForm.subscriptionName,
             }),
-            charge: buildChargeBreakdown(null, null, {
-                baseAmount: Number(charge && charge.charge_now ? charge.charge_now : 0),
-                ticketUnitPrice: Number(
-                    charge && charge.ticket_charge_now !== undefined
-                        ? charge.ticket_charge_now
-                        : (charge && charge.charge_now ? charge.charge_now : 0)
-                ),
-                displayAmount: Number(
-                    charge && charge.display_charge_now !== undefined
-                        ? charge.display_charge_now
-                        : (charge && charge.charge_now ? charge.charge_now : 0)
-                ),
-            }),
-            planId: Number(charge && charge.plan_id ? charge.plan_id : state.renewalForm.planId) || false,
-            pricingId: Number(charge && charge.pricing_id ? charge.pricing_id : state.renewalForm.pricingId) || false,
         };
         if (fetchSubscriptionDiscountOffers) {
             state.renewalForm.discountOffers = await fetchSubscriptionDiscountOffers(
@@ -234,11 +221,6 @@ async function openPendingChargeForm(state, item, {
         invoiceDate: firstPending.invoice_date || false,
         invoiceDateDue: firstPending.invoice_date_due || false,
         pricingSnapshot: null,
-        charge: buildChargeBreakdown(null, null, { baseAmount: 0, displayAmount: 0 }),
-        totalCharge: buildChargeBreakdown(null, null, {
-            baseAmount: Number(firstPending.amount_total || 0),
-            displayAmount: Number(firstPending.amount_total || 0),
-        }),
         loading: true,
     };
     renderDetail(state.currentDetail);
@@ -265,32 +247,6 @@ async function openPendingChargeForm(state, item, {
             pendingMoveName: charge && charge.pending_move_name ? charge.pending_move_name : state.pendingChargeForm.pendingMoveName,
             invoiceDate: charge && charge.invoice_date ? charge.invoice_date : state.pendingChargeForm.invoiceDate,
             invoiceDateDue: charge && charge.invoice_date_due ? charge.invoice_date_due : state.pendingChargeForm.invoiceDateDue,
-            charge: buildChargeBreakdown(null, null, {
-                baseAmount: Number(charge && charge.charge_now ? charge.charge_now : 0),
-                ticketUnitPrice: Number(
-                    charge && charge.ticket_charge_now !== undefined
-                        ? charge.ticket_charge_now
-                        : (charge && charge.charge_now ? charge.charge_now : 0)
-                ),
-                displayAmount: Number(
-                    charge && charge.display_charge_now !== undefined
-                        ? charge.display_charge_now
-                        : (charge && charge.charge_now ? charge.charge_now : 0)
-                ),
-            }),
-            totalCharge: buildChargeBreakdown(null, null, {
-                baseAmount: Number(charge && charge.amount_total ? charge.amount_total : getChargeDisplayAmount(state.pendingChargeForm.totalCharge) || 0),
-                ticketUnitPrice: Number(
-                    charge && charge.ticket_amount_total !== undefined
-                        ? charge.ticket_amount_total
-                        : (charge && charge.amount_total ? charge.amount_total : getChargeDisplayAmount(state.pendingChargeForm.totalCharge) || 0)
-                ),
-                displayAmount: Number(
-                    charge && charge.display_amount_total !== undefined
-                        ? charge.display_amount_total
-                        : (charge && charge.amount_total ? charge.amount_total : getChargeDisplayAmount(state.pendingChargeForm.totalCharge) || 0)
-                ),
-            }),
         };
     } catch (error) {
         console.error("Error al consultar cobro pendiente POS", error);
@@ -363,86 +319,6 @@ async function openParticipantEditForm(state, item, {
     state.pendingChargeForm = null;
     state.participantEditForm = createDefaultParticipantEditForm(item);
     renderDetail(state.currentDetail);
-}
-
-function buildPricingSnapshotFromCharge(charge, {
-    flow = "new",
-    fallbackPlanId = false,
-    fallbackPricingId = false,
-    fallbackIntervalValue = 1,
-    fallbackIntervalUnit = "month",
-    fallbackIntervalLabel = "",
-    sourceSubscriptionId = false,
-    sourceSubscriptionName = false,
-} = {}) {
-    const resolvedPlanId = Number(
-        charge && charge.plan_id !== undefined
-            ? charge.plan_id
-            : fallbackPlanId
-    ) || false;
-    const resolvedPricingId = Number(
-        charge && charge.pricing_id !== undefined
-            ? charge.pricing_id
-            : fallbackPricingId
-    ) || false;
-    return {
-        flow,
-        plan_id: resolvedPlanId,
-        plan_name: charge && charge.plan_name ? charge.plan_name : "",
-        pricing_id: resolvedPricingId,
-        interval_value: Number(
-            charge && charge.interval_value !== undefined
-                ? charge.interval_value
-                : fallbackIntervalValue
-        ) || 1,
-        interval_unit: charge && charge.interval_unit
-            ? charge.interval_unit
-            : (fallbackIntervalUnit || "month"),
-        interval_label: charge && charge.interval_label !== undefined
-            ? charge.interval_label
-            : (fallbackIntervalLabel || ""),
-        recurring_price: Number(charge && charge.recurring_price ? charge.recurring_price : 0) || 0,
-        ticket_recurring_price: Number(
-            charge && charge.ticket_recurring_price !== undefined
-                ? charge.ticket_recurring_price
-                : (charge && charge.recurring_price ? charge.recurring_price : 0)
-        ) || 0,
-        display_recurring_price: Number(
-            charge && charge.display_recurring_price !== undefined
-                ? charge.display_recurring_price
-                : (charge && charge.recurring_price ? charge.recurring_price : 0)
-        ) || 0,
-        charge_now: Number(charge && charge.charge_now ? charge.charge_now : 0) || 0,
-        ticket_charge_now: Number(
-            charge && charge.ticket_charge_now !== undefined
-                ? charge.ticket_charge_now
-                : (charge && charge.charge_now ? charge.charge_now : 0)
-        ) || 0,
-        display_charge_now: Number(
-            charge && charge.display_charge_now !== undefined
-                ? charge.display_charge_now
-                : (charge && charge.charge_now ? charge.charge_now : 0)
-        ) || 0,
-        credit_amount: Number(charge && charge.credit_amount ? charge.credit_amount : 0) || 0,
-        ticket_credit_amount: Number(
-            charge && charge.ticket_credit_amount !== undefined
-                ? charge.ticket_credit_amount
-                : (charge && charge.credit_amount ? charge.credit_amount : 0)
-        ) || 0,
-        display_credit_amount: Number(
-            charge && charge.display_credit_amount !== undefined
-                ? charge.display_credit_amount
-                : (charge && charge.credit_amount ? charge.credit_amount : 0)
-        ) || 0,
-        source_subscription_id: Number(
-            charge && charge.source_subscription_id !== undefined
-                ? charge.source_subscription_id
-                : sourceSubscriptionId
-        ) || false,
-        source_subscription_name: charge && charge.source_subscription_name
-            ? charge.source_subscription_name
-            : (sourceSubscriptionName || false),
-    };
 }
 
 function mergeResolvedPlanChoice(plans, snapshot, fallbackPlan, fallbackLabel) {
@@ -541,14 +417,7 @@ function applyPricingPayloadToNewSubscriptionForm(state, payload, preferredPlan,
         _t("Plan recurrente")
     );
     state.newSubscriptionForm.pricingSnapshot = snapshot;
-    state.newSubscriptionForm.charge = buildChargeBreakdown(null, null, {
-        baseAmount: Number(snapshot.recurring_price || 0),
-        ticketUnitPrice: Number(snapshot.ticket_recurring_price || 0),
-        displayAmount: Number(snapshot.display_recurring_price || 0),
-    });
-    if (snapshot.plan_id || snapshot.pricing_id) {
-        state.newSubscriptionForm.planChoice = `${Number(snapshot.plan_id || 0)}:${Number(snapshot.pricing_id || 0)}`;
-    }
+    state.newSubscriptionForm.planChoice = getPlanChoiceFromSnapshot(snapshot);
 }
 
 function applyPricingPayloadToUpsaleForm(state, payload, preferredPlan, {
@@ -573,22 +442,7 @@ function applyPricingPayloadToUpsaleForm(state, payload, preferredPlan, {
         _t("Plan recurrente")
     );
     state.upsaleForm.pricingSnapshot = snapshot;
-    state.upsaleForm.recurringCharge = buildChargeBreakdown(null, null, {
-        baseAmount: Number(snapshot.recurring_price || 0),
-        ticketUnitPrice: Number(snapshot.ticket_recurring_price || 0),
-        displayAmount: Number(snapshot.display_recurring_price || 0),
-    });
-    state.upsaleForm.creditCharge = buildChargeBreakdown(null, null, {
-        baseAmount: Number(snapshot.credit_amount || 0),
-        ticketUnitPrice: Number(snapshot.ticket_credit_amount || 0),
-        displayAmount: Number(snapshot.display_credit_amount || 0),
-    });
-    state.upsaleForm.charge = buildChargeBreakdown(null, null, {
-        baseAmount: Number(snapshot.charge_now || 0),
-        ticketUnitPrice: Number(snapshot.ticket_charge_now || 0),
-        displayAmount: Number(snapshot.display_charge_now || 0),
-    });
-    state.upsaleForm.planChoice = `${Number(snapshot.plan_id || 0)}:${Number(snapshot.pricing_id || 0)}`;
+    state.upsaleForm.planChoice = getPlanChoiceFromSnapshot(snapshot);
 }
 
 async function recalculateNewSubscriptionCharge(state, product, preferredPlan, {
@@ -641,11 +495,6 @@ async function applySelectedProduct(state, productId, {
     state.newSubscriptionForm.plans = [];
     state.newSubscriptionForm.pricingSnapshot = null;
     state.newSubscriptionForm.planChoice = "";
-    state.newSubscriptionForm.charge = {
-        baseAmount: 0,
-        displayAmount: 0,
-        ticketUnitPrice: 0,
-    };
     state.newSubscriptionForm.discountOffers = [];
     state.newSubscriptionForm.selectedDiscountCode = "";
     state.newSubscriptionForm.supervisorPin = "";
@@ -726,9 +575,6 @@ async function applySelectedUpsaleProduct(state, productId, {
     state.upsaleForm.plans = [];
     state.upsaleForm.pricingSnapshot = null;
     state.upsaleForm.planChoice = "";
-    state.upsaleForm.recurringCharge = buildChargeBreakdown(null, null, { baseAmount: 0, displayAmount: 0 });
-    state.upsaleForm.creditCharge = buildChargeBreakdown(null, null, { baseAmount: 0, displayAmount: 0 });
-    state.upsaleForm.charge = buildChargeBreakdown(null, null, { baseAmount: 0, displayAmount: 0 });
     state.upsaleForm.participantIds = clampParticipantIds(
         state.upsaleForm.participantIds,
         state.upsaleForm.holderPartnerId,
@@ -765,9 +611,6 @@ async function applySelectedUpsaleProduct(state, productId, {
         state.upsaleForm = {
             ...state.upsaleForm,
             loading: false,
-            recurringCharge: buildChargeBreakdown(null, null, { baseAmount: 0, displayAmount: 0 }),
-            creditCharge: buildChargeBreakdown(null, null, { baseAmount: 0, displayAmount: 0 }),
-            charge: buildChargeBreakdown(null, null, { baseAmount: 0, displayAmount: 0 }),
         };
     }
     renderDetail(state.currentDetail);

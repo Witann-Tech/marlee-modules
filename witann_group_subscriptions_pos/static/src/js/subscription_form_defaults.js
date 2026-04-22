@@ -1,9 +1,5 @@
 /** @odoo-module **/
 
-function getEmptyCharge(buildChargeBreakdown) {
-    return buildChargeBreakdown(null, null, { baseAmount: 0, displayAmount: 0 });
-}
-
 function getNormalizedParticipantIds(item, holderPartnerId = false) {
     const participantIds = Array.isArray(item && item.participant_ids)
         ? [...new Set(item.participant_ids.map((value) => Number(value || 0)).filter((value) => value > 0))]
@@ -14,7 +10,7 @@ function getNormalizedParticipantIds(item, holderPartnerId = false) {
     return participantIds;
 }
 
-export function getDefaultNewSubscriptionForm(partnerId, { buildChargeBreakdown, formatTodayISO }) {
+export function getDefaultNewSubscriptionForm(partnerId, { formatTodayISO }) {
     const participantIds = [];
     if (partnerId) {
         participantIds.push(Number(partnerId));
@@ -28,7 +24,6 @@ export function getDefaultNewSubscriptionForm(partnerId, { buildChargeBreakdown,
         pricingSnapshot: null,
         planChoice: "",
         plans: [],
-        charge: getEmptyCharge(buildChargeBreakdown),
         discountOffers: [],
         selectedDiscountCode: "",
         supervisorPin: "",
@@ -67,7 +62,7 @@ export function getDefaultExistingPartnerForm(detail = null) {
     };
 }
 
-export function getDefaultUpsaleForm(item = null, { buildChargeBreakdown }) {
+export function getDefaultUpsaleForm(item = null) {
     const subscriptionId = Number(item && item.subscription_id ? item.subscription_id : 0) || false;
     const holderPartnerId = Number(item && item.holder_partner_id ? item.holder_partner_id : 0) || false;
     return {
@@ -83,9 +78,6 @@ export function getDefaultUpsaleForm(item = null, { buildChargeBreakdown }) {
         pricingSnapshot: null,
         planChoice: "",
         plans: [],
-        recurringCharge: getEmptyCharge(buildChargeBreakdown),
-        creditCharge: getEmptyCharge(buildChargeBreakdown),
-        charge: getEmptyCharge(buildChargeBreakdown),
         maxParticipantsTotal: 1,
         participantIds: getNormalizedParticipantIds(item, holderPartnerId),
         participantSearch: "",

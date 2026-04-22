@@ -1,5 +1,7 @@
 /** @odoo-module **/
 
+import { buildChargeFromSnapshot } from "./subscription_pricing_snapshot";
+
 function renderPendingChargeForm({
     item,
     formMode,
@@ -19,6 +21,8 @@ function renderPendingChargeForm({
     ) {
         return "";
     }
+    const totalCharge = buildChargeFromSnapshot(pendingChargeForm, "amount_total");
+    const pendingCharge = buildChargeFromSnapshot(pendingChargeForm, "charge_now");
     return `
         <div class="wgs-inline-form-card">
             <div class="wgs-inline-form-header">
@@ -34,8 +38,8 @@ function renderPendingChargeForm({
                 <div><span>${escapeHtml(_t("Documento"))}</span><strong>${escapeHtml(pendingChargeForm.pendingMoveName || "-")}</strong></div>
                 <div><span>${escapeHtml(_t("Fecha factura"))}</span><strong>${escapeHtml(formatDateDisplay(pendingChargeForm.invoiceDate) || "-")}</strong></div>
                 <div><span>${escapeHtml(_t("Vencimiento"))}</span><strong>${escapeHtml(formatDateDisplay(pendingChargeForm.invoiceDateDue) || "-")}</strong></div>
-                <div><span>${escapeHtml(_t("Total documento"))}</span><strong>${escapeHtml(formatMoney(getChargeDisplayAmount(pendingChargeForm.totalCharge)))}</strong></div>
-                <div><span>${escapeHtml(_t("Saldo pendiente"))}</span><strong>${escapeHtml(formatMoney(getChargeDisplayAmount(pendingChargeForm.charge)))}</strong></div>
+                <div><span>${escapeHtml(_t("Total documento"))}</span><strong>${escapeHtml(formatMoney(getChargeDisplayAmount(totalCharge)))}</strong></div>
+                <div><span>${escapeHtml(_t("Saldo pendiente"))}</span><strong>${escapeHtml(formatMoney(getChargeDisplayAmount(pendingCharge)))}</strong></div>
             </div>
             <div class="wgs-inline-actions">
                 <button type="button" class="wgs-primary-action-btn" data-action="save-pending" ${pendingChargeForm.loading ? "disabled" : ""}>${escapeHtml(_t("Agregar al ticket"))}</button>

@@ -1,5 +1,7 @@
 /** @odoo-module **/
 
+import { buildChargeFromSnapshot } from "./subscription_pricing_snapshot";
+
 function renderUpsaleForm({
     item,
     formMode,
@@ -46,6 +48,9 @@ function renderUpsaleForm({
                 `;
             }).join("")
         : "";
+    const recurringCharge = buildChargeFromSnapshot(upsaleForm, "recurring");
+    const creditCharge = buildChargeFromSnapshot(upsaleForm, "credit");
+    const chargeNow = buildChargeFromSnapshot(upsaleForm, "charge_now");
     return `
         <div class="wgs-inline-form-card">
             <div class="wgs-inline-form-header">
@@ -77,9 +82,9 @@ function renderUpsaleForm({
                 <div><span>${escapeHtml(_t("Titular"))}</span><strong>${escapeHtml(upsaleForm.holderPartnerName || "-")}</strong></div>
                 <div><span>${escapeHtml(_t("Paquete actual"))}</span><strong>${escapeHtml((item.package_names || []).join(", ") || "-")}</strong></div>
                 <div><span>${escapeHtml(_t("Plan actual"))}</span><strong>${escapeHtml(upsaleForm.sourcePlanName || item.plan_name || "-")}</strong></div>
-                <div><span>${escapeHtml(_t("Nuevo recurrente"))}</span><strong>${escapeHtml(formatMoney(getChargeDisplayAmount(upsaleForm.recurringCharge)))}</strong></div>
-                <div><span>${escapeHtml(_t("Bonificación"))}</span><strong>${escapeHtml(formatMoney(getChargeDisplayAmount(upsaleForm.creditCharge)))}</strong></div>
-                <div><span>${escapeHtml(_t("Cobro ahora"))}</span><strong>${escapeHtml(formatMoney(getChargeDisplayAmount(upsaleForm.charge)))}</strong></div>
+                <div><span>${escapeHtml(_t("Nuevo recurrente"))}</span><strong>${escapeHtml(formatMoney(getChargeDisplayAmount(recurringCharge)))}</strong></div>
+                <div><span>${escapeHtml(_t("Bonificación"))}</span><strong>${escapeHtml(formatMoney(getChargeDisplayAmount(creditCharge)))}</strong></div>
+                <div><span>${escapeHtml(_t("Cobro ahora"))}</span><strong>${escapeHtml(formatMoney(getChargeDisplayAmount(chargeNow)))}</strong></div>
                 <div><span>${escapeHtml(_t("Cupo destino"))}</span><strong>${escapeHtml(String(upsaleForm.maxParticipantsTotal || 1))}</strong></div>
             </div>
             ${Number(upsaleForm.maxParticipantsTotal || 1) > 1 ? `
