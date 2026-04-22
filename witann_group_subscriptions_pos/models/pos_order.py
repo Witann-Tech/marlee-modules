@@ -627,20 +627,19 @@ class PosOrder(models.Model):
         if not product:
             raise UserError(_('El producto seleccionado no existe o no está disponible.'))
 
-        pricing_resolution = self._wgs_resolve_recurring_pricing(
-            product,
+        snapshot = self._wgs_resolve_subscription_pricing_snapshot(
+            flow='new',
+            product=product,
             fallback=fallback,
             preferred_plan_id=preferred_plan_id,
             preferred_pricing_id=preferred_pricing_id,
         )
-        choice = pricing_resolution['choice']
-        display_price = self._wgs_get_price_with_taxes_for_pos(product, choice.get('price') or 0.0)
         return {
-            'price': float(choice.get('price') or 0.0),
-            'display_price': float(display_price),
-            'ticket_price': float(choice.get('price') or 0.0),
-            'plan_id': choice.get('plan_id') or False,
-            'pricing_id': choice.get('pricing_id') or False,
+            'price': float(snapshot.get('price_unit') or 0.0),
+            'display_price': float(snapshot.get('display_price_unit') or 0.0),
+            'ticket_price': float(snapshot.get('ticket_price_unit') or 0.0),
+            'plan_id': snapshot.get('plan_id') or False,
+            'pricing_id': snapshot.get('pricing_id') or False,
         }
 
     def _wgs_log_recurring_resolution_snapshot(
@@ -700,11 +699,17 @@ class PosOrder(models.Model):
         if not product:
             raise UserError(_('El producto seleccionado no existe o no está disponible.'))
 
-        pricing_resolution = self._wgs_resolve_recurring_pricing(
-            product,
+        partner = self._wgs_browse_partner_for_pos(partner_id)
+        source_order = self._wgs_find_active_subscription_for_partner(partner) if partner else False
+        snapshot = self._wgs_resolve_subscription_pricing_snapshot(
+            flow='new',
+            product=product,
+            partner=partner,
+            source_order=source_order,
             fallback=fallback,
             preferred_plan_id=preferred_plan_id,
             preferred_pricing_id=preferred_pricing_id,
+            include_credit=bool(source_order),
         )
         self._wgs_log_recurring_resolution_snapshot(
             'charge',
@@ -712,37 +717,23 @@ class PosOrder(models.Model):
             fallback=fallback,
             preferred_plan_id=preferred_plan_id,
             preferred_pricing_id=preferred_pricing_id,
-            pricing_resolution=pricing_resolution,
+            pricing_resolution={
+                'candidates': snapshot.get('candidates') or [],
+                'choice': snapshot.get('choice') or {},
+            },
         )
-        choice = pricing_resolution['choice']
-        recurring_price = float(choice.get('price') or 0.0)
-        plan_id = choice.get('plan_id') or False
-        pricing_id = choice.get('pricing_id') or False
-
-        partner = self._wgs_browse_partner_for_pos(partner_id)
-        source_order = False
-        credit_amount = 0.0
-        if partner:
-            source_order = self._wgs_find_active_subscription_for_partner(partner)
-            if source_order:
-                credit_amount = self._wgs_compute_upgrade_credit_amount(source_order)
-
-        charge_now = max(recurring_price - credit_amount, 0.0)
-        display_recurring_price = self._wgs_get_price_with_taxes_for_pos(product, recurring_price, partner=partner)
-        display_credit_amount = self._wgs_compute_upgrade_credit_amount(source_order, tax_included=True) if source_order else 0.0
-        display_charge_now = max(display_recurring_price - display_credit_amount, 0.0)
         return {
-            'charge_now': float(charge_now),
-            'credit_amount': float(credit_amount),
-            'recurring_price': float(recurring_price),
-            'ticket_charge_now': float(charge_now),
-            'ticket_credit_amount': float(credit_amount),
-            'ticket_recurring_price': float(recurring_price),
-            'display_charge_now': float(display_charge_now),
-            'display_credit_amount': float(display_credit_amount),
-            'display_recurring_price': float(display_recurring_price),
-            'plan_id': plan_id,
-            'pricing_id': pricing_id,
+            'charge_now': float(snapshot.get('charge_now') or 0.0),
+            'credit_amount': float(snapshot.get('credit_amount') or 0.0),
+            'recurring_price': float(snapshot.get('price_unit') or 0.0),
+            'ticket_charge_now': float(snapshot.get('ticket_charge_now') or 0.0),
+            'ticket_credit_amount': float(snapshot.get('ticket_credit_amount') or 0.0),
+            'ticket_recurring_price': float(snapshot.get('ticket_price_unit') or 0.0),
+            'display_charge_now': float(snapshot.get('display_charge_now') or 0.0),
+            'display_credit_amount': float(snapshot.get('display_credit_amount') or 0.0),
+            'display_recurring_price': float(snapshot.get('display_price_unit') or 0.0),
+            'plan_id': snapshot.get('plan_id') or False,
+            'pricing_id': snapshot.get('pricing_id') or False,
             'is_upgrade': bool(source_order),
             'source_subscription_id': source_order.id if source_order else False,
             'source_subscription_name': source_order.name if source_order else False,
@@ -832,38 +823,31 @@ class PosOrder(models.Model):
         if not product:
             raise UserError(_('El producto seleccionado no existe o no está disponible.'))
 
-        pricing_resolution = self._wgs_resolve_recurring_pricing(
-            product,
-            fallback=fallback,
-            preferred_plan_id=preferred_plan_id,
-            preferred_pricing_id=preferred_pricing_id,
-        )
-        choice = pricing_resolution['choice']
-        recurring_price = float(choice.get('price') or 0.0)
-        credit_amount = self._wgs_compute_upgrade_credit_amount(source_order)
-        charge_now = max(recurring_price - credit_amount, 0.0)
-        display_recurring_price = self._wgs_get_price_with_taxes_for_pos(
-            product,
-            recurring_price,
+        snapshot = self._wgs_resolve_subscription_pricing_snapshot(
+            flow='upsale',
+            product=product,
             partner=source_order.partner_id if 'partner_id' in source_order._fields else False,
             company=source_order.company_id if 'company_id' in source_order._fields else False,
             fiscal_position=source_order.fiscal_position_id if 'fiscal_position_id' in source_order._fields else False,
+            source_order=source_order,
+            fallback=fallback,
+            preferred_plan_id=preferred_plan_id,
+            preferred_pricing_id=preferred_pricing_id,
+            include_credit=True,
         )
-        display_credit_amount = self._wgs_compute_upgrade_credit_amount(source_order, tax_included=True)
-        display_charge_now = max(display_recurring_price - display_credit_amount, 0.0)
 
         return {
-            'charge_now': float(charge_now),
-            'credit_amount': float(credit_amount),
-            'recurring_price': float(recurring_price),
-            'ticket_charge_now': float(charge_now),
-            'ticket_credit_amount': float(credit_amount),
-            'ticket_recurring_price': float(recurring_price),
-            'display_charge_now': float(display_charge_now),
-            'display_credit_amount': float(display_credit_amount),
-            'display_recurring_price': float(display_recurring_price),
-            'plan_id': choice.get('plan_id') or False,
-            'pricing_id': choice.get('pricing_id') or False,
+            'charge_now': float(snapshot.get('charge_now') or 0.0),
+            'credit_amount': float(snapshot.get('credit_amount') or 0.0),
+            'recurring_price': float(snapshot.get('price_unit') or 0.0),
+            'ticket_charge_now': float(snapshot.get('ticket_charge_now') or 0.0),
+            'ticket_credit_amount': float(snapshot.get('ticket_credit_amount') or 0.0),
+            'ticket_recurring_price': float(snapshot.get('ticket_price_unit') or 0.0),
+            'display_charge_now': float(snapshot.get('display_charge_now') or 0.0),
+            'display_credit_amount': float(snapshot.get('display_credit_amount') or 0.0),
+            'display_recurring_price': float(snapshot.get('display_price_unit') or 0.0),
+            'plan_id': snapshot.get('plan_id') or False,
+            'pricing_id': snapshot.get('pricing_id') or False,
             'is_upgrade': True,
             'is_renewal': False,
             'source_subscription_id': source_order.id,
@@ -888,15 +872,18 @@ class PosOrder(models.Model):
         if not pending_invoice:
             raise UserError(_('La suscripción seleccionada no tiene facturas pendientes por cobrar.'))
 
-        amount_residual = round(max(float(getattr(pending_invoice, 'amount_residual', 0.0) or 0.0), 0.0), 2)
-        amount_total = round(max(float(getattr(pending_invoice, 'amount_total', 0.0) or 0.0), 0.0), 2)
+        snapshot = self._wgs_resolve_subscription_pricing_snapshot(
+            flow='pending_charge',
+            source_order=source_order,
+            pending_invoice=pending_invoice,
+        )
         return {
-            'charge_now': amount_residual,
-            'display_charge_now': amount_residual,
-            'ticket_charge_now': amount_residual,
-            'amount_total': amount_total,
-            'display_amount_total': amount_total,
-            'ticket_amount_total': amount_total,
+            'charge_now': float(snapshot.get('charge_now') or 0.0),
+            'display_charge_now': float(snapshot.get('display_charge_now') or 0.0),
+            'ticket_charge_now': float(snapshot.get('ticket_charge_now') or 0.0),
+            'amount_total': float(snapshot.get('amount_total') or 0.0),
+            'display_amount_total': float(snapshot.get('display_amount_total') or 0.0),
+            'ticket_amount_total': float(snapshot.get('ticket_amount_total') or 0.0),
             'pending_move_id': pending_invoice.id,
             'pending_move_name': pending_invoice.name or pending_invoice.display_name or False,
             'invoice_date': fields.Date.to_string(pending_invoice.invoice_date) if getattr(pending_invoice, 'invoice_date', False) else False,
@@ -960,21 +947,27 @@ class PosOrder(models.Model):
         if max_total < 1:
             max_total = 1
 
-        pricing_resolution = self._wgs_resolve_recurring_pricing(product, fallback=fallback)
+        snapshot = self._wgs_resolve_subscription_pricing_snapshot(
+            flow='catalog',
+            product=product,
+            fallback=fallback,
+        )
         self._wgs_log_recurring_resolution_snapshot(
             'catalog',
             product,
             fallback=fallback,
-            pricing_resolution=pricing_resolution,
+            pricing_resolution={
+                'candidates': snapshot.get('candidates') or [],
+                'choice': snapshot.get('choice') or {},
+            },
         )
-        candidates = pricing_resolution['candidates']
+        candidates = list(snapshot.get('candidates') or [])
         candidates.sort(key=lambda row: (row['sequence'], row.get('pricing_id') or 0))
         is_subscription = bool(is_subscription_flag or candidates)
 
-        choice = pricing_resolution['choice']
-        default_plan_id = choice.get('plan_id') or False
-        default_pricing_id = choice.get('pricing_id') or False
-        default_display_price = self._wgs_get_price_with_taxes_for_pos(product, choice.get('price') or fallback or 0.0)
+        default_plan_id = snapshot.get('plan_id') or False
+        default_pricing_id = snapshot.get('pricing_id') or False
+        default_display_price = float(snapshot.get('display_price_unit') or 0.0)
         student_age_lock = bool(getattr(product.product_tmpl_id, 'wgs_student_age_lock', False))
         family_authorization = bool(getattr(product.product_tmpl_id, 'wgs_requires_family_authorization', False))
         single_day_access = bool(getattr(product.product_tmpl_id, 'wgs_single_day_access', False))
@@ -995,7 +988,7 @@ class PosOrder(models.Model):
             'free_trial_day': free_trial_day,
             'default_plan_id': default_plan_id,
             'default_pricing_id': default_pricing_id,
-            'default_price': float(choice.get('price') or fallback or 0.0),
+            'default_price': float(snapshot.get('price_unit') or 0.0),
             'default_display_price': float(default_display_price),
             'plans': [
                 {
@@ -2436,84 +2429,41 @@ class PosOrder(models.Model):
         is_reenroll=False,
     ):
         source_order.ensure_one()
-
-        recurring_lines = source_order.order_line.filtered(lambda so_line: self._wgs_is_recurring_so_line(so_line))
-        if not recurring_lines:
-            raise UserError(_('La suscripción origen no tiene líneas recurrentes configuradas.'))
-
-        try:
-            preferred_product_id = int(product_id or 0)
-        except (TypeError, ValueError):
-            preferred_product_id = 0
-        recurring_line = self.env['sale.order.line']
-        if preferred_product_id > 0:
-            recurring_line = recurring_lines.filtered(lambda so_line: so_line.product_id.id == preferred_product_id)[:1]
-        if not recurring_line:
-            recurring_line = recurring_lines.sorted(key=lambda so_line: so_line.id)[:1]
-
-        recurring_price = self._wgs_get_order_recurring_total_amount(source_order)
-        display_recurring_price = self._wgs_get_order_recurring_total_amount(source_order, include_taxes=True)
-        if recurring_line:
-            qty = abs(self._wgs_get_so_line_qty(recurring_line))
-            discount = float(recurring_line.discount or 0.0) if 'discount' in recurring_line._fields else 0.0
-            recurring_price = qty * float(recurring_line.price_unit or 0.0) * (1 - (discount / 100.0))
-            display_recurring_price = self._wgs_get_sale_order_line_total_with_tax(recurring_line, qty_override=qty)
-        recurring_price = round(max(float(recurring_price or 0.0), 0.0), 2)
-        display_recurring_price = round(max(float(display_recurring_price or 0.0), 0.0), 2)
-
-        plan_id = False
-        pricing_id = False
-        if recurring_line:
-            for field_name in ('subscription_plan_id', 'plan_id', 'recurring_plan_id'):
-                if field_name in recurring_line._fields and recurring_line[field_name]:
-                    plan_id = recurring_line[field_name].id
-                    break
-            for field_name in ('subscription_pricing_id', 'pricing_id', 'recurring_pricing_id'):
-                if field_name in recurring_line._fields and recurring_line[field_name]:
-                    pricing_id = recurring_line[field_name].id
-                    break
-
-        try:
-            preferred_plan_id = int(preferred_plan_id or 0)
-        except (TypeError, ValueError):
-            preferred_plan_id = 0
-        try:
-            preferred_pricing_id = int(preferred_pricing_id or 0)
-        except (TypeError, ValueError):
-            preferred_pricing_id = 0
-        resolved_plan_id = preferred_plan_id or plan_id or False
-        resolved_pricing_id = preferred_pricing_id or pricing_id or False
+        snapshot = self._wgs_resolve_subscription_pricing_snapshot(
+            flow='renewal' if is_renewal else 'reenroll' if is_reenroll else 'renewal',
+            source_order=source_order,
+            product=self._wgs_browse_product_for_pos(product_id) if product_id else False,
+            preferred_plan_id=preferred_plan_id,
+            preferred_pricing_id=preferred_pricing_id,
+        )
+        recurring_line = snapshot.get('source_line') or self.env['sale.order.line']
 
         self._wgs_log_recurring_resolution_snapshot(
             'renewal_payload',
             recurring_line.product_id if recurring_line else source_order.order_line[:1].product_id,
-            fallback=recurring_price,
+            fallback=snapshot.get('price_unit') or 0.0,
             preferred_plan_id=preferred_plan_id,
             preferred_pricing_id=preferred_pricing_id,
             pricing_resolution={
-                'candidates': [],
-                'choice': {
-                    'plan_id': resolved_plan_id,
-                    'pricing_id': resolved_pricing_id,
-                    'price': recurring_price,
-                },
+                'candidates': snapshot.get('candidates') or [],
+                'choice': snapshot.get('choice') or {},
             },
             source_order=source_order,
             recurring_line=recurring_line,
         )
 
         return {
-            'charge_now': float(recurring_price),
+            'charge_now': float(snapshot.get('charge_now') or 0.0),
             'credit_amount': 0.0,
-            'recurring_price': float(recurring_price),
-            'ticket_charge_now': float(recurring_price),
+            'recurring_price': float(snapshot.get('price_unit') or 0.0),
+            'ticket_charge_now': float(snapshot.get('ticket_charge_now') or 0.0),
             'ticket_credit_amount': 0.0,
-            'ticket_recurring_price': float(recurring_price),
-            'display_charge_now': float(display_recurring_price),
+            'ticket_recurring_price': float(snapshot.get('ticket_price_unit') or 0.0),
+            'display_charge_now': float(snapshot.get('display_charge_now') or 0.0),
             'display_credit_amount': 0.0,
-            'display_recurring_price': float(display_recurring_price),
-            'plan_id': resolved_plan_id,
-            'pricing_id': resolved_pricing_id,
+            'display_recurring_price': float(snapshot.get('display_price_unit') or 0.0),
+            'plan_id': snapshot.get('plan_id') or False,
+            'pricing_id': snapshot.get('pricing_id') or False,
             'is_upgrade': False,
             'is_renewal': bool(is_renewal),
             'is_reenroll': bool(is_reenroll),
