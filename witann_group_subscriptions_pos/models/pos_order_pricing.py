@@ -373,6 +373,7 @@ class PosOrderPricingMixin(models.Model):
             'product_id': product.id,
             'product_name': product.display_name,
             'plan_id': choice.get('plan_id') or False,
+            'plan_name': choice.get('plan_name') or False,
             'pricing_id': choice.get('pricing_id') or False,
             'price_unit': recurring_price,
             'display_price_unit': float(display_recurring_price),
@@ -462,15 +463,15 @@ class PosOrderPricingMixin(models.Model):
             preferred_pricing_id = 0
         resolved_plan_id = preferred_plan_id or plan_id or False
         resolved_pricing_id = preferred_pricing_id or pricing_id or False
-        interval_value, interval_unit = self._wgs_extract_interval_from_plan(
-            self._wgs_extract_plan_record_from_sale_order(source_order)
-        )
+        resolved_plan_record = self._wgs_find_plan_record_by_id(resolved_plan_id) if resolved_plan_id else self._wgs_extract_plan_record_from_sale_order(source_order)
+        interval_value, interval_unit = self._wgs_extract_interval_from_plan(resolved_plan_record)
         return {
             'mode': 'subscription',
             'flow': flow,
             'product_id': recurring_line.product_id.id,
             'product_name': recurring_line.product_id.display_name,
             'plan_id': resolved_plan_id,
+            'plan_name': resolved_plan_record.display_name if resolved_plan_record else False,
             'pricing_id': resolved_pricing_id,
             'price_unit': float(recurring_price),
             'display_price_unit': float(display_recurring_price),
@@ -515,6 +516,7 @@ class PosOrderPricingMixin(models.Model):
             'product_id': False,
             'product_name': False,
             'plan_id': False,
+            'plan_name': False,
             'pricing_id': False,
             'price_unit': float(amount_residual),
             'display_price_unit': float(amount_residual),

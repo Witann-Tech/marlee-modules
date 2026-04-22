@@ -367,19 +367,51 @@ async function recalculateNewSubscriptionCharge(state, product, preferredPlan, {
         );
         const resolvedPlanId = Number(charge && charge.plan_id ? charge.plan_id : (preferredPlan && preferredPlan.plan_id) || 0);
         const resolvedPricingId = Number(charge && charge.pricing_id ? charge.pricing_id : (preferredPlan && preferredPlan.pricing_id) || 0);
-        state.newSubscriptionForm.plans = (state.newSubscriptionForm.plans || []).map((item) => {
+        let resolvedPlanFound = false;
+        const currentPlans = Array.isArray(state.newSubscriptionForm.plans) ? state.newSubscriptionForm.plans : [];
+        const updatedPlans = currentPlans.map((item) => {
             const samePlan = Number(item.plan_id || 0) === resolvedPlanId;
             const samePricing = Number(item.pricing_id || 0) === resolvedPricingId;
             const match = resolvedPricingId ? samePricing : samePlan;
             if (!match) {
                 return item;
             }
+            resolvedPlanFound = true;
             return {
                 ...item,
+                plan_name: charge && charge.plan_name ? charge.plan_name : (item.plan_name || item.name || ""),
                 price: Number(charge && charge.recurring_price ? charge.recurring_price : item.price || 0),
                 display_price: displayRecurringPrice,
+                interval_label: charge && charge.interval_label !== undefined ? charge.interval_label : (item.interval_label || ""),
+                interval_value: Number(
+                    charge && charge.interval_value !== undefined
+                        ? charge.interval_value
+                        : (item.interval_value || 1)
+                ),
+                interval_unit: charge && charge.interval_unit ? charge.interval_unit : (item.interval_unit || "month"),
             };
         });
+        if (!resolvedPlanFound && (resolvedPlanId || resolvedPricingId)) {
+            updatedPlans.push({
+                plan_id: resolvedPlanId || false,
+                plan_name: charge && charge.plan_name ? charge.plan_name : (preferredPlan && preferredPlan.plan_name) || _t("Plan recurrente"),
+                pricing_id: resolvedPricingId || false,
+                price: Number(charge && charge.recurring_price ? charge.recurring_price : 0),
+                display_price: displayRecurringPrice,
+                interval_label: charge && charge.interval_label !== undefined
+                    ? charge.interval_label
+                    : ((preferredPlan && preferredPlan.interval_label) || ""),
+                interval_value: Number(
+                    charge && charge.interval_value !== undefined
+                        ? charge.interval_value
+                        : ((preferredPlan && preferredPlan.interval_value) || 1)
+                ),
+                interval_unit: charge && charge.interval_unit
+                    ? charge.interval_unit
+                    : ((preferredPlan && preferredPlan.interval_unit) || "month"),
+            });
+        }
+        state.newSubscriptionForm.plans = updatedPlans;
         state.newSubscriptionForm.charge = buildChargeBreakdown(null, null, {
             baseAmount: Number(charge && charge.recurring_price ? charge.recurring_price : 0),
             ticketUnitPrice: Number(
@@ -424,9 +456,9 @@ async function applySelectedProduct(state, productId, {
     } else {
         state.newSubscriptionForm.planChoice = "";
         state.newSubscriptionForm.charge = {
-            baseAmount: Number(product ? (product.default_price || 0) : 0),
-            displayAmount: Number(product ? (product.default_display_price !== undefined ? product.default_display_price : (product.default_price || 0)) : 0),
-            ticketUnitPrice: Number(product ? (product.default_price || 0) : 0),
+            baseAmount: 0,
+            displayAmount: 0,
+            ticketUnitPrice: 0,
         };
     }
     state.newSubscriptionForm.discountOffers = [];
@@ -471,13 +503,6 @@ async function updateSelectedPlan(state, planChoice, {
     state.newSubscriptionForm.planChoice = String(planChoice || "");
     const plan = getSelectedPlan();
     const product = state.productCatalog.find((item) => Number(item.id) === Number(state.newSubscriptionForm.productId || 0)) || null;
-    if (plan) {
-        state.newSubscriptionForm.charge = {
-            baseAmount: Number(plan.price || 0),
-            displayAmount: Number(plan.display_price !== undefined ? plan.display_price : (plan.price || 0)),
-            ticketUnitPrice: Number(plan.price || 0),
-        };
-    }
     if (product && plan) {
         await recalculateNewSubscriptionCharge(product, plan);
         return;
