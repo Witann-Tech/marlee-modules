@@ -2,7 +2,6 @@
 
 import {
     buildPricingSnapshotFromCharge,
-    getPlanChoiceFromSnapshot,
 } from "./subscription_pricing_snapshot";
 
 function applyDiscountOffersToForm(form, offers = []) {
@@ -415,7 +414,6 @@ function applyPricingPayloadToNewSubscriptionForm(state, payload, preferredPlan,
         _t("Plan recurrente")
     );
     state.newSubscriptionForm.pricingSnapshot = snapshot;
-    state.newSubscriptionForm.planChoice = getPlanChoiceFromSnapshot(snapshot);
 }
 
 function applyPricingPayloadToUpsaleForm(state, payload, preferredPlan, {
@@ -439,7 +437,6 @@ function applyPricingPayloadToUpsaleForm(state, payload, preferredPlan, {
         _t("Plan recurrente")
     );
     state.upsaleForm.pricingSnapshot = snapshot;
-    state.upsaleForm.planChoice = getPlanChoiceFromSnapshot(snapshot);
 }
 
 async function recalculateNewSubscriptionCharge(state, product, preferredPlan, {
@@ -489,7 +486,6 @@ async function applySelectedProduct(state, productId, {
     state.newSubscriptionForm.maxParticipantsTotal = product ? Number(product.max_participants_total || 1) : 1;
     state.newSubscriptionForm.plans = [];
     state.newSubscriptionForm.pricingSnapshot = null;
-    state.newSubscriptionForm.planChoice = "";
     applyDiscountOffersToForm(state.newSubscriptionForm, []);
     state.newSubscriptionForm.participantIds = clampParticipantIds(
         state.newSubscriptionForm.participantIds,
@@ -528,12 +524,13 @@ async function applySelectedProduct(state, productId, {
 }
 
 async function updateSelectedPlan(state, planChoice, {
-    getSelectedPlan,
     renderDetail,
     recalculateNewSubscriptionCharge,
 }) {
-    state.newSubscriptionForm.planChoice = String(planChoice || "");
-    const plan = getSelectedPlan();
+    const selectedChoice = String(planChoice || "");
+    const plan = (state.newSubscriptionForm.plans || []).find((item) => {
+        return `${Number(item.plan_id || 0)}:${Number(item.pricing_id || 0)}` === selectedChoice;
+    }) || null;
     const product = state.productCatalog.find((item) => Number(item.id) === Number(state.newSubscriptionForm.productId || 0)) || null;
     if (product && plan) {
         await recalculateNewSubscriptionCharge(product, plan);
@@ -571,7 +568,6 @@ async function applySelectedUpsaleProduct(state, productId, {
     state.upsaleForm.maxParticipantsTotal = product ? Number(product.max_participants_total || 1) : 1;
     state.upsaleForm.plans = [];
     state.upsaleForm.pricingSnapshot = null;
-    state.upsaleForm.planChoice = "";
     state.upsaleForm.participantIds = clampParticipantIds(
         state.upsaleForm.participantIds,
         state.upsaleForm.holderPartnerId,
@@ -614,7 +610,6 @@ async function applySelectedUpsaleProduct(state, productId, {
 }
 
 async function updateSelectedUpsalePlan(state, planChoice, {
-    getSelectedUpsalePlan,
     renderDetail,
     fetchSubscriptionQuote,
     _t,
@@ -622,8 +617,10 @@ async function updateSelectedUpsalePlan(state, planChoice, {
     if (!state.upsaleForm) {
         return;
     }
-    state.upsaleForm.planChoice = String(planChoice || "");
-    const selectedPlan = getSelectedUpsalePlan();
+    const selectedChoice = String(planChoice || "");
+    const selectedPlan = (state.upsaleForm.plans || []).find((item) => {
+        return `${Number(item.plan_id || 0)}:${Number(item.pricing_id || 0)}` === selectedChoice;
+    }) || null;
     if (!selectedPlan || !state.upsaleForm.productId || !state.upsaleForm.subscriptionId) {
         renderDetail(state.currentDetail);
         return;

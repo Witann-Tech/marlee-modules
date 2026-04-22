@@ -730,28 +730,31 @@ class PosOrderPricingMixin(models.Model):
             'choice': choice,
         }
 
-    def _wgs_collect_related_pricing_records(self, source, field_names, model_name='sale.subscription.pricing'):
-        source.ensure_one()
+    def _wgs_get_direct_subscription_pricing_records(self, product):
+        product.ensure_one()
+        model_name = 'sale.subscription.pricing'
         if model_name not in self.env.registry:
-            return []
+            return self.env['ir.model'].browse()
+
         records = self.env[model_name].browse()
-        relation_field_names = self._wgs_get_relation_field_names(
-            source._name,
-            model_name,
-            relation_types=('many2one', 'one2many', 'many2many'),
-            preferred_field_names=field_names,
-        )
-        for field_name in relation_field_names:
-            field = source._fields.get(field_name)
-            if not field:
-                continue
-            value = source[field_name]
-            if not value:
-                continue
-            records |= value if field.type in ('one2many', 'many2many') else value.exists()
+        for source in (product, product.product_tmpl_id):
+            relation_field_names = self._wgs_get_relation_field_names(
+                source._name,
+                model_name,
+                relation_types=('many2one', 'one2many', 'many2many'),
+                preferred_field_names=self._WGS_PRODUCT_PRICING_RELATION_FIELD_NAMES,
+            )
+            for field_name in relation_field_names:
+                field = source._fields.get(field_name)
+                if not field:
+                    continue
+                value = source[field_name]
+                if not value:
+                    continue
+                records |= value if field.type in ('one2many', 'many2many') else value.exists()
         return records
 
-    def _wgs_search_model_records_by_aliases(
+    def _wgs_search_related_records(
         self,
         model_name,
         *,
@@ -798,18 +801,16 @@ class PosOrderPricingMixin(models.Model):
         candidates = []
         seen_pricing_ids = set()
 
-        for source in (product, product.product_tmpl_id):
-            direct_records = self._wgs_collect_related_pricing_records(
-                source,
-                self._WGS_PRODUCT_PRICING_RELATION_FIELD_NAMES,
-            )
-            for pricing in direct_records:
-                if pricing.id in seen_pricing_ids:
-                    continue
-                candidate = self._wgs_build_pricing_candidate(pricing)
-                if candidate:
-                    seen_pricing_ids.add(pricing.id)
-                    candidates.append(candidate)
+        # Resolve candidates in an explicit strategy order so the path stays
+        # predictable and cheaper to reason about.
+        for pricing in self._wgs_get_direct_subscription_pricing_records(product):
+            if pricing.id in seen_pricing_ids:
+                continue
+            candidate = self._wgs_build_pricing_candidate(pricing)
+            if not candidate:
+                continue
+            seen_pricing_ids.add(pricing.id)
+            candidates.append(candidate)
 
         for candidate in self._wgs_search_subscription_pricing_records(product):
             pricing_id = int(candidate.get('pricing_id') or 0)
@@ -874,7 +875,7 @@ class PosOrderPricingMixin(models.Model):
         if model_name not in self.env.registry:
             return []
 
-        records = self._wgs_search_model_records_by_aliases(
+        records = self._wgs_search_related_records(
             model_name,
             product=product,
             template=product.product_tmpl_id,
@@ -932,7 +933,7 @@ class PosOrderPricingMixin(models.Model):
         if pricing_model_name not in self.env.registry:
             return []
 
-        records = self._wgs_search_model_records_by_aliases(
+        records = self._wgs_search_related_records(
             pricing_model_name,
             product=product,
             template=product.product_tmpl_id,

@@ -806,54 +806,6 @@ class PosOrder(models.Model):
             'pending_invoice': pending_invoice if pending_invoice else False,
         }
 
-    def _wgs_dispatch_subscription_pricing_payload_for_pos(
-        self,
-        request_data,
-        *,
-        fallback=0.0,
-        preferred_plan_id=False,
-        preferred_pricing_id=False,
-    ):
-        normalized_flow = request_data['flow']
-        partner = request_data['partner']
-        product = request_data['product']
-        source_order = request_data['source_order']
-        pending_invoice = request_data['pending_invoice']
-
-        if normalized_flow in ('new', 'upsale'):
-            payload = self._wgs_build_product_pricing_payload_for_pos(
-                product=product,
-                flow='upsale' if normalized_flow == 'upsale' else 'new',
-                partner=partner if partner else False,
-                source_order=source_order if source_order else False,
-                fallback=fallback,
-                preferred_plan_id=preferred_plan_id,
-                preferred_pricing_id=preferred_pricing_id,
-            )
-            payload['flow'] = normalized_flow
-            payload['is_upgrade'] = bool(source_order) if normalized_flow == 'upsale' else False
-            payload['is_renewal'] = False
-            return payload
-
-        if normalized_flow in ('renewal', 'reenroll'):
-            payload = self._wgs_build_subscription_recurring_charge_payload(
-                source_order,
-                product_id=product.id if product else False,
-                preferred_plan_id=preferred_plan_id,
-                preferred_pricing_id=preferred_pricing_id,
-                is_renewal=normalized_flow == 'renewal',
-                is_reenroll=normalized_flow == 'reenroll',
-            )
-            payload['flow'] = normalized_flow
-            return payload
-
-        if normalized_flow == 'pending_charge':
-            payload = self._wgs_build_pending_charge_payload_for_pos(source_order, pending_invoice)
-            payload['flow'] = normalized_flow
-            return payload
-
-        raise UserError(_('No se pudo resolver el flujo de pricing solicitado.'))
-
     def _wgs_build_subscription_quote_payload_for_pos(
         self,
         *,
@@ -874,19 +826,43 @@ class PosOrder(models.Model):
             source_subscription_id=source_subscription_id,
             pending_move_id=pending_move_id,
         )
-        pricing = self._wgs_dispatch_subscription_pricing_payload_for_pos(
-            request_data,
-            fallback=fallback,
-            preferred_plan_id=preferred_plan_id,
-            preferred_pricing_id=preferred_pricing_id,
-        )
-
-        offers = []
         normalized_flow = request_data['flow']
+        partner = request_data['partner']
+        product = request_data['product']
+        source_order = request_data['source_order']
+        pending_invoice = request_data['pending_invoice']
+        offers = []
+
+        if normalized_flow in ('new', 'upsale'):
+            pricing = self._wgs_build_product_pricing_payload_for_pos(
+                product=product,
+                flow=normalized_flow,
+                partner=partner if partner else False,
+                source_order=source_order if source_order else False,
+                fallback=fallback,
+                preferred_plan_id=preferred_plan_id,
+                preferred_pricing_id=preferred_pricing_id,
+            )
+            pricing['flow'] = normalized_flow
+            pricing['is_upgrade'] = bool(source_order) if normalized_flow == 'upsale' else False
+            pricing['is_renewal'] = False
+        elif normalized_flow in ('renewal', 'reenroll'):
+            pricing = self._wgs_build_subscription_recurring_charge_payload(
+                source_order,
+                product_id=product.id if product else False,
+                preferred_plan_id=preferred_plan_id,
+                preferred_pricing_id=preferred_pricing_id,
+                is_renewal=normalized_flow == 'renewal',
+                is_reenroll=normalized_flow == 'reenroll',
+            )
+            pricing['flow'] = normalized_flow
+        elif normalized_flow == 'pending_charge':
+            pricing = self._wgs_build_pending_charge_payload_for_pos(source_order, pending_invoice)
+            pricing['flow'] = normalized_flow
+        else:
+            raise UserError(_('No se pudo resolver el flujo de pricing solicitado.'))
+
         if include_offers:
-            partner = request_data['partner']
-            product = request_data['product']
-            source_order = request_data['source_order']
             if (
                 normalized_flow in ('new', 'upsale', 'renewal', 'reenroll')
                 and partner

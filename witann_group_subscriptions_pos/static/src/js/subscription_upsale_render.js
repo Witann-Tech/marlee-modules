@@ -1,6 +1,6 @@
 /** @odoo-module **/
 
-import { buildChargeFromSnapshot } from "./subscription_pricing_snapshot";
+import { buildChargeFromSnapshot, getCurrentPlanChoice } from "./subscription_pricing_snapshot";
 
 function renderUpsaleForm({
     item,
@@ -30,7 +30,7 @@ function renderUpsaleForm({
     }).join("");
     const planOptions = (upsaleForm.plans || []).map((itemPlan) => {
         const value = `${Number(itemPlan.plan_id || 0)}:${Number(itemPlan.pricing_id || 0)}`;
-        const selected = value === String(upsaleForm.planChoice || "") ? "selected" : "";
+        const selected = value === String(getCurrentPlanChoice(upsaleForm) || "") ? "selected" : "";
         const label = `${itemPlan.plan_name || _t("Plan recurrente")} | ${formatMoney(itemPlan.display_price !== undefined ? itemPlan.display_price : (itemPlan.price || 0))}${itemPlan.interval_label ? ` | ${itemPlan.interval_label}` : ""}`;
         return `<option value="${escapeHtml(value)}" ${selected}>${escapeHtml(label)}</option>`;
     }).join("");

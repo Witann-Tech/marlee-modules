@@ -165,9 +165,14 @@ function getPlanChoiceFromSnapshot(snapshot) {
     return `${planId}:${pricingId}`;
 }
 
+function getCurrentPlanChoice(form) {
+    return getPlanChoiceFromSnapshot(getPricingSnapshot(form));
+}
+
 export {
     buildChargeFromSnapshot,
     buildPricingSnapshotFromCharge,
+    getCurrentPlanChoice,
     getPlanChoiceFromSnapshot,
     getPricingSnapshot,
     getResolvedPricingMetadata,

@@ -19,7 +19,7 @@ import {
     waitForNextTick,
 } from "./subscription_ticket";
 import { createSubscriptionPosApi } from "./subscription_pos_api";
-import { buildChargeFromSnapshot } from "./subscription_pricing_snapshot";
+import { buildChargeFromSnapshot, getCurrentPlanChoice } from "./subscription_pricing_snapshot";
 import {
     getDefaultExistingPartnerForm,
     getDefaultNewPartnerForm,
@@ -785,14 +785,14 @@ patch(ControlButtons.prototype, {
         };
 
         const getSelectedPlan = () => {
-            const planKey = String(newSubscriptionForm.planChoice || "");
+            const planKey = String(getCurrentPlanChoice(newSubscriptionForm) || "");
             return (newSubscriptionForm.plans || []).find((item) => {
                 return `${Number(item.plan_id || 0)}:${Number(item.pricing_id || 0)}` === planKey;
             }) || null;
         };
 
         const getSelectedUpsalePlan = () => {
-            const planKey = String(upsaleForm && upsaleForm.planChoice ? upsaleForm.planChoice : "");
+            const planKey = String(getCurrentPlanChoice(upsaleForm) || "");
             return (upsaleForm && Array.isArray(upsaleForm.plans) ? upsaleForm.plans : []).find((item) => {
                 return `${Number(item.plan_id || 0)}:${Number(item.pricing_id || 0)}` === planKey;
             }) || null;
@@ -941,7 +941,6 @@ patch(ControlButtons.prototype, {
 
         const updateSelectedUpsalePlan = async (planChoice) => {
             await updateSelectedUpsalePlanFlow(modalState, planChoice, {
-                getSelectedUpsalePlan,
                 renderDetail,
                 fetchSubscriptionQuote: (partnerId, productIdArg, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId) =>
                     this._fetchSubscriptionQuote(partnerId, productIdArg, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId),
@@ -986,7 +985,6 @@ patch(ControlButtons.prototype, {
 
         const updateSelectedPlanHandler = async (planChoice) => {
             await updateSelectedPlanFlow(modalState, planChoice, {
-                getSelectedPlan,
                 renderDetail,
                 recalculateNewSubscriptionCharge,
             });
@@ -1042,7 +1040,7 @@ patch(ControlButtons.prototype, {
             }).join("");
             const planOptions = (newSubscriptionForm.plans || []).map((item) => {
                 const value = `${Number(item.plan_id || 0)}:${Number(item.pricing_id || 0)}`;
-                const selected = value === String(newSubscriptionForm.planChoice || "") ? "selected" : "";
+                const selected = value === String(getCurrentPlanChoice(newSubscriptionForm) || "") ? "selected" : "";
                 const planDisplayPrice = Number(
                     item.display_price !== undefined
                         ? item.display_price
