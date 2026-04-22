@@ -1,7 +1,7 @@
 /** @odoo-module **/
 
 import { getAuthorizationOnlyOffer } from "./subscription_discount_render";
-import { buildChargeFromSnapshot, getResolvedPricingMetadata } from "./subscription_pricing_snapshot";
+import { buildChargeFromSnapshot, getPricingSnapshot } from "./subscription_pricing_snapshot";
 
 async function ensureEligibleProductForPartner(state, partnerId, productId, {
     flow = "new",
@@ -320,7 +320,7 @@ function buildSubscriptionInlineActionHandlers({
             state.formError = "";
             state.formNotice = "";
             const selectedPlan = getSelectedPlan();
-            const resolvedPricing = getResolvedPricingMetadata(state.newSubscriptionForm);
+            const pricingSnapshot = getPricingSnapshot(state.newSubscriptionForm);
             if (!state.selectedPartnerId) {
                 state.formError = _t("Selecciona un cliente para agregar la suscripcion al ticket.");
                 renderDetail(state.currentDetail);
@@ -374,8 +374,8 @@ function buildSubscriptionInlineActionHandlers({
             }
             const automaticEndDate = getPlanPeriodEndDate(
                 state.newSubscriptionForm.startDate,
-                resolvedPricing.interval_value,
-                resolvedPricing.interval_unit
+                Number(pricingSnapshot.interval_value || 1) || 1,
+                pricingSnapshot.interval_unit || "month"
             );
             if (!automaticEndDate) {
                 state.formError = _t("No se pudo calcular la fecha de fin automática para el plan seleccionado.");
@@ -458,8 +458,8 @@ function buildSubscriptionInlineActionHandlers({
                         flow: "new",
                         partner_id: state.selectedPartnerId,
                         participant_ids: participantIds,
-                        plan_id: resolvedPricing.plan_id,
-                        pricing_id: resolvedPricing.pricing_id,
+                        plan_id: Number(pricingSnapshot.plan_id || 0) || false,
+                        pricing_id: Number(pricingSnapshot.pricing_id || 0) || false,
                         start_date: state.newSubscriptionForm.startDate,
                         end_date: automaticEndDate || false,
                         product_id: Number(state.newSubscriptionForm.productId || 0) || false,
@@ -705,7 +705,7 @@ function buildSubscriptionInlineActionHandlers({
                 return;
             }
             const selectedUpsalePlan = getSelectedUpsalePlan();
-            const resolvedUpsalePricing = getResolvedPricingMetadata(state.upsaleForm);
+            const pricingSnapshot = getPricingSnapshot(state.upsaleForm);
             if (!selectedUpsalePlan) {
                 state.formError = _t("Selecciona el plan destino para el upsale.");
                 renderDetail(state.currentDetail);
@@ -776,13 +776,13 @@ function buildSubscriptionInlineActionHandlers({
                         flow: "upsale",
                         partner_id: holderPartnerId || false,
                         participant_ids: participantIds,
-                        plan_id: resolvedUpsalePricing.plan_id,
-                        pricing_id: resolvedUpsalePricing.pricing_id,
+                        plan_id: Number(pricingSnapshot.plan_id || 0) || false,
+                        pricing_id: Number(pricingSnapshot.pricing_id || 0) || false,
                         start_date: formatTodayISO(),
                         end_date: false,
                         product_id: Number(state.upsaleForm.productId || 0) || false,
                         product_name: state.upsaleForm.productName || false,
-                        source_subscription_id: resolvedUpsalePricing.source_subscription_id || Number(state.upsaleForm.subscriptionId || 0) || false,
+                        source_subscription_id: Number(pricingSnapshot.source_subscription_id || 0) || Number(state.upsaleForm.subscriptionId || 0) || false,
                         pricing_snapshot: state.upsaleForm.pricingSnapshot || false,
                     },
                 });
@@ -815,7 +815,7 @@ function buildSubscriptionInlineActionHandlers({
         "save-renewal": async () => {
             state.formError = "";
             state.formNotice = "";
-            const resolvedRenewalPricing = getResolvedPricingMetadata(state.renewalForm);
+            const pricingSnapshot = getPricingSnapshot(state.renewalForm);
             if (!state.renewalForm || !state.renewalForm.subscriptionId || !state.renewalForm.productId) {
                 state.formError = _t("La renovación seleccionada no tiene datos suficientes para agregarse al ticket.");
                 renderDetail(state.currentDetail);
@@ -877,13 +877,13 @@ function buildSubscriptionInlineActionHandlers({
                         flow: "renewal",
                         partner_id: holderPartnerId || false,
                         participant_ids: [],
-                        plan_id: resolvedRenewalPricing.plan_id,
-                        pricing_id: resolvedRenewalPricing.pricing_id,
+                        plan_id: Number(pricingSnapshot.plan_id || 0) || false,
+                        pricing_id: Number(pricingSnapshot.pricing_id || 0) || false,
                         start_date: false,
                         end_date: false,
                         product_id: Number(state.renewalForm.productId || 0) || false,
                         product_name: state.renewalForm.productName || false,
-                        source_subscription_id: resolvedRenewalPricing.source_subscription_id || Number(state.renewalForm.subscriptionId || 0) || false,
+                        source_subscription_id: Number(pricingSnapshot.source_subscription_id || 0) || Number(state.renewalForm.subscriptionId || 0) || false,
                         pricing_snapshot: state.renewalForm.pricingSnapshot || false,
                         ...buildAuthorizedDiscountMetadata(state.renewalForm),
                     },
@@ -917,7 +917,7 @@ function buildSubscriptionInlineActionHandlers({
         "save-reenroll": async () => {
             state.formError = "";
             state.formNotice = "";
-            const resolvedReenrollPricing = getResolvedPricingMetadata(state.renewalForm);
+            const pricingSnapshot = getPricingSnapshot(state.renewalForm);
             if (!state.renewalForm || !state.renewalForm.subscriptionId || !state.renewalForm.productId) {
                 state.formError = _t("La reinscripción seleccionada no tiene datos suficientes para agregarse al ticket.");
                 renderDetail(state.currentDetail);
@@ -979,13 +979,13 @@ function buildSubscriptionInlineActionHandlers({
                         flow: "reenroll",
                         partner_id: holderPartnerId || false,
                         participant_ids: Array.isArray(state.renewalForm.participantIds) ? state.renewalForm.participantIds : [],
-                        plan_id: resolvedReenrollPricing.plan_id,
-                        pricing_id: resolvedReenrollPricing.pricing_id,
+                        plan_id: Number(pricingSnapshot.plan_id || 0) || false,
+                        pricing_id: Number(pricingSnapshot.pricing_id || 0) || false,
                         start_date: formatTodayISO(),
                         end_date: false,
                         product_id: Number(state.renewalForm.productId || 0) || false,
                         product_name: state.renewalForm.productName || false,
-                        source_subscription_id: resolvedReenrollPricing.source_subscription_id || Number(state.renewalForm.subscriptionId || 0) || false,
+                        source_subscription_id: Number(pricingSnapshot.source_subscription_id || 0) || Number(state.renewalForm.subscriptionId || 0) || false,
                         pricing_snapshot: state.renewalForm.pricingSnapshot || false,
                         ...buildAuthorizedDiscountMetadata(state.renewalForm),
                     },

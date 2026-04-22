@@ -131,31 +131,6 @@ function buildChargeFromSnapshot(formOrSnapshot, chargeType = "recurring") {
     };
 }
 
-function getResolvedPricingMetadata(form) {
-    const snapshot = getPricingSnapshot(form);
-    return {
-        plan_id: Number(snapshot.plan_id || 0) || false,
-        pricing_id: Number(snapshot.pricing_id || 0) || false,
-        interval_value: Number(snapshot.interval_value || 1) || 1,
-        interval_unit: snapshot.interval_unit || "month",
-        interval_label: snapshot.interval_label || "",
-        source_subscription_id: Number(snapshot.source_subscription_id || 0) || false,
-        source_subscription_name: snapshot.source_subscription_name || false,
-        recurring_price: Number(snapshot.recurring_price || 0) || 0,
-        ticket_recurring_price: Number(snapshot.ticket_recurring_price || 0) || 0,
-        display_recurring_price: Number(snapshot.display_recurring_price || 0) || 0,
-        charge_now: Number(snapshot.charge_now || 0) || 0,
-        ticket_charge_now: Number(snapshot.ticket_charge_now || 0) || 0,
-        display_charge_now: Number(snapshot.display_charge_now || 0) || 0,
-        credit_amount: Number(snapshot.credit_amount || 0) || 0,
-        ticket_credit_amount: Number(snapshot.ticket_credit_amount || 0) || 0,
-        display_credit_amount: Number(snapshot.display_credit_amount || 0) || 0,
-        amount_total: Number(snapshot.amount_total || 0) || 0,
-        ticket_amount_total: Number(snapshot.ticket_amount_total || 0) || 0,
-        display_amount_total: Number(snapshot.display_amount_total || 0) || 0,
-    };
-}
-
 function getPlanChoiceFromSnapshot(snapshot) {
     const planId = Number(snapshot && snapshot.plan_id ? snapshot.plan_id : 0);
     const pricingId = Number(snapshot && snapshot.pricing_id ? snapshot.pricing_id : 0);
@@ -173,7 +148,5 @@ export {
     buildChargeFromSnapshot,
     buildPricingSnapshotFromCharge,
     getCurrentPlanChoice,
-    getPlanChoiceFromSnapshot,
     getPricingSnapshot,
-    getResolvedPricingMetadata,
 };
