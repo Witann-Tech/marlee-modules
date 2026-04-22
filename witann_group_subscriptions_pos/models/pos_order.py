@@ -732,78 +732,15 @@ class PosOrder(models.Model):
             'source_subscription_name': source_order.name,
         }
 
-    def _wgs_build_subscription_pricing_payload_for_pos(
+    def _wgs_prepare_subscription_pricing_request_for_pos(
         self,
         *,
-        flow='new',
-        partner=False,
-        product=False,
-        source_order=False,
-        pending_invoice=False,
-        fallback=0.0,
-        preferred_plan_id=False,
-        preferred_pricing_id=False,
-    ):
-        normalized_flow = str(flow or 'new').strip().lower()
-        if normalized_flow not in ('new', 'upsale', 'renewal', 'reenroll', 'pending_charge'):
-            normalized_flow = 'new'
-
-        if normalized_flow in ('new', 'upsale'):
-            if not product:
-                raise UserError(_('El producto seleccionado no existe o no está disponible.'))
-            payload = self._wgs_build_product_pricing_payload_for_pos(
-                product=product,
-                flow='upsale' if normalized_flow == 'upsale' else 'new',
-                partner=partner if partner else False,
-                source_order=source_order if source_order else False,
-                fallback=fallback,
-                preferred_plan_id=preferred_plan_id,
-                preferred_pricing_id=preferred_pricing_id,
-            )
-            payload['flow'] = normalized_flow
-            payload['is_upgrade'] = bool(source_order) if normalized_flow == 'upsale' else False
-            payload['is_renewal'] = False
-            return payload
-
-        if normalized_flow in ('renewal', 'reenroll'):
-            if not source_order:
-                raise UserError(_('La suscripción origen no existe.'))
-            payload = self._wgs_build_subscription_recurring_charge_payload(
-                source_order,
-                product_id=product.id if product else False,
-                preferred_plan_id=preferred_plan_id,
-                preferred_pricing_id=preferred_pricing_id,
-                is_renewal=normalized_flow == 'renewal',
-                is_reenroll=normalized_flow == 'reenroll',
-            )
-            payload['flow'] = normalized_flow
-            return payload
-
-        if normalized_flow == 'pending_charge':
-            if not source_order:
-                raise UserError(_('La suscripción origen no existe.'))
-            if not pending_invoice:
-                raise UserError(_('La suscripción seleccionada no tiene facturas pendientes por cobrar.'))
-            payload = self._wgs_build_pending_charge_payload_for_pos(source_order, pending_invoice)
-            payload['flow'] = normalized_flow
-            return payload
-
-        raise UserError(_('No se pudo resolver el flujo de pricing solicitado.'))
-
-    @api.model
-    def wgs_get_subscription_pricing_for_pos(
-        self,
         partner_id=False,
         product_id=False,
         flow='new',
         source_subscription_id=False,
         pending_move_id=False,
-        fallback=0.0,
-        preferred_plan_id=False,
-        preferred_pricing_id=False,
     ):
-        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar pricing de suscripción desde Punto de Venta.'))
-
         normalized_flow = str(flow or 'new').strip().lower()
         if normalized_flow not in ('new', 'upsale', 'renewal', 'reenroll', 'pending_charge'):
             normalized_flow = 'new'
@@ -860,16 +797,74 @@ class PosOrder(models.Model):
             if not pending_invoice:
                 raise UserError(_('La suscripción seleccionada no tiene facturas pendientes por cobrar.'))
 
-        return self._wgs_build_subscription_pricing_payload_for_pos(
-            flow=normalized_flow,
-            partner=partner if partner else False,
-            product=product if product else False,
-            source_order=source_order if source_order else False,
-            pending_invoice=pending_invoice if pending_invoice else False,
-            fallback=fallback,
-            preferred_plan_id=preferred_plan_id,
-            preferred_pricing_id=preferred_pricing_id,
+        return {
+            'flow': normalized_flow,
+            'partner': partner if partner else False,
+            'product': product if product else False,
+            'source_order': source_order if source_order else False,
+            'pending_invoice': pending_invoice if pending_invoice else False,
+        }
+
+    @api.model
+    def wgs_get_subscription_pricing_for_pos(
+        self,
+        partner_id=False,
+        product_id=False,
+        flow='new',
+        source_subscription_id=False,
+        pending_move_id=False,
+        fallback=0.0,
+        preferred_plan_id=False,
+        preferred_pricing_id=False,
+    ):
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar pricing de suscripción desde Punto de Venta.'))
+
+        request_data = self._wgs_prepare_subscription_pricing_request_for_pos(
+            partner_id=partner_id,
+            product_id=product_id,
+            flow=flow,
+            source_subscription_id=source_subscription_id,
+            pending_move_id=pending_move_id,
         )
+        normalized_flow = request_data['flow']
+        partner = request_data['partner']
+        product = request_data['product']
+        source_order = request_data['source_order']
+        pending_invoice = request_data['pending_invoice']
+
+        if normalized_flow in ('new', 'upsale'):
+            payload = self._wgs_build_product_pricing_payload_for_pos(
+                product=product,
+                flow='upsale' if normalized_flow == 'upsale' else 'new',
+                partner=partner if partner else False,
+                source_order=source_order if source_order else False,
+                fallback=fallback,
+                preferred_plan_id=preferred_plan_id,
+                preferred_pricing_id=preferred_pricing_id,
+            )
+            payload['flow'] = normalized_flow
+            payload['is_upgrade'] = bool(source_order) if normalized_flow == 'upsale' else False
+            payload['is_renewal'] = False
+            return payload
+
+        if normalized_flow in ('renewal', 'reenroll'):
+            payload = self._wgs_build_subscription_recurring_charge_payload(
+                source_order,
+                product_id=product.id if product else False,
+                preferred_plan_id=preferred_plan_id,
+                preferred_pricing_id=preferred_pricing_id,
+                is_renewal=normalized_flow == 'renewal',
+                is_reenroll=normalized_flow == 'reenroll',
+            )
+            payload['flow'] = normalized_flow
+            return payload
+
+        if normalized_flow == 'pending_charge':
+            payload = self._wgs_build_pending_charge_payload_for_pos(source_order, pending_invoice)
+            payload['flow'] = normalized_flow
+            return payload
+
+        raise UserError(_('No se pudo resolver el flujo de pricing solicitado.'))
 
     @api.model
     def wgs_get_subscription_cancellation_refund_for_pos(self, subscription_id):
@@ -935,28 +930,12 @@ class PosOrder(models.Model):
         products = product_model.search(domain, order='name asc, id asc', limit=limit)
         output = []
         for product in products:
-            student_age_lock = bool(getattr(product.product_tmpl_id, 'wgs_student_age_lock', False))
-            family_authorization = bool(getattr(product.product_tmpl_id, 'wgs_requires_family_authorization', False))
-            single_day_access = bool(getattr(product.product_tmpl_id, 'wgs_single_day_access', False))
-            free_trial_day = bool(getattr(product.product_tmpl_id, 'wgs_free_trial_day', False))
-            requires_curp = bool(
-                getattr(product.product_tmpl_id, 'wgs_requires_curp', False)
-                or student_age_lock
-                or free_trial_day
-            )
-            max_total = int(product.max_participants_total or 1)
-            if max_total < 1:
-                max_total = 1
+            flags = self._wgs_get_subscription_product_flags_for_pos(product)
             output.append({
                 'id': product.id,
                 'name': product.display_name,
                 'default_code': product.default_code or False,
-                'max_participants_total': max_total,
-                'requires_curp': requires_curp,
-                'student_age_lock': student_age_lock,
-                'family_authorization': family_authorization,
-                'single_day_access': single_day_access,
-                'free_trial_day': free_trial_day,
+                **flags,
                 'default_plan_id': False,
                 'default_pricing_id': False,
                 'default_price': 0.0,

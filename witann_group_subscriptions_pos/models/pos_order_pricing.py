@@ -12,6 +12,16 @@ class PosOrderPricingMixin(models.Model):
     _inherit = 'pos.order'
     _WGS_PLAN_FIELD_NAMES = ('subscription_plan_id', 'plan_id', 'recurring_plan_id')
     _WGS_PRICING_FIELD_NAMES = ('subscription_pricing_id', 'pricing_id', 'recurring_pricing_id')
+    _WGS_PRODUCT_PRICING_RELATION_FIELD_NAMES = (
+        'subscription_pricing_ids',
+        'recurring_pricing_ids',
+        'subscription_pricing_id',
+        'recurring_pricing_id',
+    )
+    _WGS_SUBSCRIPTION_PRICING_PRODUCT_FIELD_NAMES = ('product_id', 'product_variant_id')
+    _WGS_SUBSCRIPTION_PRICING_TEMPLATE_FIELD_NAMES = ('product_tmpl_id', 'product_template_id')
+    _WGS_PRICELIST_ITEM_PRODUCT_FIELD_NAMES = ('product_id', 'product_variant_id')
+    _WGS_PRICELIST_ITEM_TEMPLATE_FIELD_NAMES = ('product_tmpl_id', 'product_template_id')
 
     def _wgs_compute_upgrade_credit_amount(self, source_order, today=False, tax_included=False):
         source_order.ensure_one()
@@ -693,15 +703,50 @@ class PosOrderPricingMixin(models.Model):
             'choice': choice,
         }
 
-    def _wgs_get_recurring_pricing_choice(self, product, fallback=0.0, preferred_plan_id=False, preferred_pricing_id=False):
-        product.ensure_one()
-        resolved = self._wgs_resolve_recurring_pricing(
-            product,
-            fallback=fallback,
-            preferred_plan_id=preferred_plan_id,
-            preferred_pricing_id=preferred_pricing_id,
-        )
-        return resolved['choice']
+    def _wgs_collect_related_pricing_records(self, source, field_names, model_name='sale.subscription.pricing'):
+        source.ensure_one()
+        records = self.env[model_name].browse()
+        for field_name in field_names:
+            field = source._fields.get(field_name)
+            if not field:
+                continue
+            if getattr(field, 'comodel_name', False) != model_name:
+                continue
+            if field.type not in ('many2one', 'one2many', 'many2many'):
+                continue
+            value = source[field_name]
+            if not value:
+                continue
+            records |= value if field.type in ('one2many', 'many2many') else value.exists()
+        return records
+
+    def _wgs_search_model_records_by_aliases(
+        self,
+        model_name,
+        *,
+        product=False,
+        template=False,
+        product_field_names=(),
+        template_field_names=(),
+    ):
+        if model_name not in self.env.registry:
+            return False
+
+        model = self.env[model_name]
+        records = model.browse()
+        if product:
+            for field_name in product_field_names:
+                field = model._fields.get(field_name)
+                if not field or field.type != 'many2one' or getattr(field, 'comodel_name', False) != 'product.product':
+                    continue
+                records |= model.search([(field_name, '=', product.id)])
+        if template:
+            for field_name in template_field_names:
+                field = model._fields.get(field_name)
+                if not field or field.type != 'many2one' or getattr(field, 'comodel_name', False) != 'product.template':
+                    continue
+                records |= model.search([(field_name, '=', template.id)])
+        return records
 
     def _wgs_get_recurring_pricing_candidates(self, product):
         product.ensure_one()
@@ -709,32 +754,17 @@ class PosOrderPricingMixin(models.Model):
         seen_pricing_ids = set()
 
         for source in (product, product.product_tmpl_id):
-            for field_name in ('subscription_pricing_ids', 'recurring_pricing_ids'):
-                if field_name not in source._fields:
+            direct_records = self._wgs_collect_related_pricing_records(
+                source,
+                self._WGS_PRODUCT_PRICING_RELATION_FIELD_NAMES,
+            )
+            for pricing in direct_records:
+                if pricing.id in seen_pricing_ids:
                     continue
-                for pricing in source[field_name]:
-                    if pricing.id in seen_pricing_ids:
-                        continue
-                    candidate = self._wgs_build_pricing_candidate(pricing)
-                    if candidate:
-                        seen_pricing_ids.add(pricing.id)
-                        candidates.append(candidate)
-
-            for field_name, field in source._fields.items():
-                if field_name in ('subscription_pricing_ids', 'recurring_pricing_ids'):
-                    continue
-                if getattr(field, 'comodel_name', False) != 'sale.subscription.pricing':
-                    continue
-                if field.type not in ('many2one', 'one2many', 'many2many'):
-                    continue
-                records = source[field_name]
-                for pricing in records:
-                    if pricing.id in seen_pricing_ids:
-                        continue
-                    candidate = self._wgs_build_pricing_candidate(pricing)
-                    if candidate:
-                        seen_pricing_ids.add(pricing.id)
-                        candidates.append(candidate)
+                candidate = self._wgs_build_pricing_candidate(pricing)
+                if candidate:
+                    seen_pricing_ids.add(pricing.id)
+                    candidates.append(candidate)
 
         for candidate in self._wgs_search_subscription_pricing_records(product):
             pricing_id = int(candidate.get('pricing_id') or 0)
@@ -797,18 +827,13 @@ class PosOrderPricingMixin(models.Model):
         if model_name not in self.env.registry:
             return []
 
-        pricelist_item_model = self.env[model_name]
-        fields_map = pricelist_item_model._fields
-        records = pricelist_item_model.browse()
-
-        for field_name, field in fields_map.items():
-            if field.type != 'many2one':
-                continue
-            comodel_name = getattr(field, 'comodel_name', False)
-            if comodel_name == 'product.product':
-                records |= pricelist_item_model.search([(field_name, '=', product.id)])
-            elif comodel_name == 'product.template':
-                records |= pricelist_item_model.search([(field_name, '=', product.product_tmpl_id.id)])
+        records = self._wgs_search_model_records_by_aliases(
+            model_name,
+            product=product,
+            template=product.product_tmpl_id,
+            product_field_names=self._WGS_PRICELIST_ITEM_PRODUCT_FIELD_NAMES,
+            template_field_names=self._WGS_PRICELIST_ITEM_TEMPLATE_FIELD_NAMES,
+        )
 
         output = []
         seen = set()
@@ -860,26 +885,13 @@ class PosOrderPricingMixin(models.Model):
         if pricing_model_name not in self.env.registry:
             return []
 
-        pricing_model = self.env[pricing_model_name]
-        fields_map = pricing_model._fields
-        records = pricing_model.browse()
-
-        for field_name in ('product_id', 'product_variant_id'):
-            if field_name in fields_map:
-                records |= pricing_model.search([(field_name, '=', product.id)])
-
-        for field_name in ('product_template_id', 'product_tmpl_id'):
-            if field_name in fields_map:
-                records |= pricing_model.search([(field_name, '=', product.product_tmpl_id.id)])
-
-        for field_name, field in fields_map.items():
-            if field.type != 'many2one':
-                continue
-            comodel_name = getattr(field, 'comodel_name', False)
-            if comodel_name == 'product.product':
-                records |= pricing_model.search([(field_name, '=', product.id)])
-            elif comodel_name == 'product.template':
-                records |= pricing_model.search([(field_name, '=', product.product_tmpl_id.id)])
+        records = self._wgs_search_model_records_by_aliases(
+            pricing_model_name,
+            product=product,
+            template=product.product_tmpl_id,
+            product_field_names=self._WGS_SUBSCRIPTION_PRICING_PRODUCT_FIELD_NAMES,
+            template_field_names=self._WGS_SUBSCRIPTION_PRICING_TEMPLATE_FIELD_NAMES,
+        )
 
         seen = set()
         output = []

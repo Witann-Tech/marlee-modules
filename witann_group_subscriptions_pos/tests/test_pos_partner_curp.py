@@ -195,6 +195,21 @@ class TestPosPartnerCurp(TransactionCase):
         self.assertTrue(item)
         self.assertTrue(item['requires_curp'])
 
+    def test_product_catalog_reuses_subscription_flags_helper(self):
+        catalog = self.PosOrder.sudo().wgs_get_subscription_product_catalog_for_pos(limit=20)
+        day_pass = next((row for row in catalog if row['id'] == self.day_pass_product.id), None)
+        family = next((row for row in catalog if row['id'] == self.family_product.id), None)
+        trial = next((row for row in catalog if row['id'] == self.trial_product.id), None)
+
+        self.assertTrue(day_pass)
+        self.assertTrue(day_pass['single_day_access'])
+        self.assertFalse(day_pass['free_trial_day'])
+        self.assertTrue(family)
+        self.assertTrue(family['family_authorization'])
+        self.assertTrue(trial)
+        self.assertTrue(trial['free_trial_day'])
+        self.assertTrue(trial['requires_curp'])
+
     def test_student_product_pricing_requires_curp(self):
         payload = self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
             partner_id=self.partner.id,
