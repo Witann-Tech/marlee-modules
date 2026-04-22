@@ -23,6 +23,44 @@ class PosOrderPricingMixin(models.Model):
     _WGS_PRICELIST_ITEM_PRODUCT_FIELD_NAMES = ('product_id', 'product_variant_id')
     _WGS_PRICELIST_ITEM_TEMPLATE_FIELD_NAMES = ('product_tmpl_id', 'product_template_id')
 
+    def _wgs_get_relation_field_names(
+        self,
+        model_name,
+        comodel_name,
+        *,
+        relation_types=('many2one',),
+        preferred_field_names=(),
+    ):
+        if model_name not in self.env.registry:
+            return ()
+
+        model = self.env[model_name]
+        supported = []
+        seen = set()
+        for field_name in preferred_field_names:
+            field = model._fields.get(field_name)
+            if not field:
+                continue
+            if field.type not in relation_types:
+                continue
+            if getattr(field, 'comodel_name', False) != comodel_name:
+                continue
+            supported.append(field_name)
+            seen.add(field_name)
+
+        discovered = []
+        for field_name, field in model._fields.items():
+            if field_name in seen:
+                continue
+            if field.type not in relation_types:
+                continue
+            if getattr(field, 'comodel_name', False) != comodel_name:
+                continue
+            discovered.append(field_name)
+
+        discovered.sort()
+        return tuple(supported + discovered)
+
     def _wgs_compute_upgrade_credit_amount(self, source_order, today=False, tax_included=False):
         source_order.ensure_one()
 
@@ -706,13 +744,15 @@ class PosOrderPricingMixin(models.Model):
     def _wgs_collect_related_pricing_records(self, source, field_names, model_name='sale.subscription.pricing'):
         source.ensure_one()
         records = self.env[model_name].browse()
-        for field_name in field_names:
+        relation_field_names = self._wgs_get_relation_field_names(
+            source._name,
+            model_name,
+            relation_types=('many2one', 'one2many', 'many2many'),
+            preferred_field_names=field_names,
+        )
+        for field_name in relation_field_names:
             field = source._fields.get(field_name)
             if not field:
-                continue
-            if getattr(field, 'comodel_name', False) != model_name:
-                continue
-            if field.type not in ('many2one', 'one2many', 'many2many'):
                 continue
             value = source[field_name]
             if not value:
@@ -734,17 +774,23 @@ class PosOrderPricingMixin(models.Model):
 
         model = self.env[model_name]
         records = model.browse()
+        product_field_names = self._wgs_get_relation_field_names(
+            model_name,
+            'product.product',
+            relation_types=('many2one',),
+            preferred_field_names=product_field_names,
+        )
+        template_field_names = self._wgs_get_relation_field_names(
+            model_name,
+            'product.template',
+            relation_types=('many2one',),
+            preferred_field_names=template_field_names,
+        )
         if product:
             for field_name in product_field_names:
-                field = model._fields.get(field_name)
-                if not field or field.type != 'many2one' or getattr(field, 'comodel_name', False) != 'product.product':
-                    continue
                 records |= model.search([(field_name, '=', product.id)])
         if template:
             for field_name in template_field_names:
-                field = model._fields.get(field_name)
-                if not field or field.type != 'many2one' or getattr(field, 'comodel_name', False) != 'product.template':
-                    continue
                 records |= model.search([(field_name, '=', template.id)])
         return records
 
