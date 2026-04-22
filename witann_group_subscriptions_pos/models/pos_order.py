@@ -1929,6 +1929,51 @@ class PosOrder(models.Model):
             raise UserError(_('La suscripción origen no está activa para upsale.'))
         return source_order
 
+    def _wgs_get_persisted_subscription_pricing_from_pos_line(self, line):
+        self.ensure_one()
+        line.ensure_one()
+
+        product = line.product_id
+        recurring_price_unit = round(max(abs(float(line.price_unit or 0.0)), 0.0), 2)
+        recurring_plan_id = self._wgs_to_int(line.wgs_subscription_plan_id) or False
+        recurring_pricing_id = self._wgs_to_int(line.wgs_subscription_pricing_id) or False
+        source_order = self.env['sale.order']
+        credit_amount = 0.0
+
+        if line.wgs_subscription_flow == 'upsale':
+            source_order = self._wgs_resolve_upsell_source_order_for_line(line)
+            credit_amount = round(max(float(self._wgs_compute_upgrade_credit_amount(source_order) or 0.0), 0.0), 2)
+            recurring_price_unit = round(max(recurring_price_unit + credit_amount, 0.0), 2)
+
+        if recurring_pricing_id and not recurring_plan_id:
+            pricing_record = self.env['sale.subscription.pricing'].browse(int(recurring_pricing_id)).exists()
+            if pricing_record:
+                recurring_plan_id = self._wgs_extract_plan_id_from_pricing(pricing_record)
+        if not recurring_plan_id:
+            recurring_plan_id = self._wgs_extract_plan_id_from_product(product)
+        if not recurring_plan_id:
+            _logger.warning(
+                'WGS POS: No persisted recurring plan resolved for product %s (id=%s). flow=%s pricing_id=%s',
+                product.display_name,
+                product.id,
+                line.wgs_subscription_flow,
+                recurring_pricing_id,
+            )
+
+        plan_record = self._wgs_resolve_plan_record(
+            product=product,
+            plan_id=recurring_plan_id,
+            pricing_id=recurring_pricing_id,
+        )
+        return {
+            'price_unit': recurring_price_unit,
+            'plan_id': recurring_plan_id,
+            'pricing_id': recurring_pricing_id,
+            'plan_record': plan_record,
+            'source_order': source_order,
+            'credit_amount': credit_amount,
+        }
+
     def _wgs_create_subscription_sale_order_from_line(self, line):
         self.ensure_one()
 
@@ -1955,36 +2000,11 @@ class PosOrder(models.Model):
                 }
             )
 
-        pricing_resolution = self._wgs_resolve_recurring_pricing(
-            product,
-            fallback=line.price_unit,
-            preferred_plan_id=line.wgs_subscription_plan_id,
-            preferred_pricing_id=line.wgs_subscription_pricing_id,
-        )
-        pricing_choice = pricing_resolution['choice']
-        recurring_price_unit = pricing_choice['price']
-        recurring_plan_id = pricing_choice.get('plan_id')
-        recurring_pricing_id = pricing_choice.get('pricing_id')
-
-        if recurring_pricing_id and not recurring_plan_id:
-            pricing_record = self.env['sale.subscription.pricing'].browse(int(recurring_pricing_id)).exists()
-            if pricing_record:
-                recurring_plan_id = self._wgs_extract_plan_id_from_pricing(pricing_record)
-        if not recurring_plan_id:
-            recurring_plan_id = self._wgs_extract_plan_id_from_product(product)
-        if not recurring_plan_id:
-            _logger.warning(
-                'WGS POS: No recurring plan resolved for product %s (id=%s). pricing_id=%s choice=%s',
-                product.display_name,
-                product.id,
-                recurring_pricing_id,
-                pricing_choice,
-            )
-        plan_record = self._wgs_resolve_plan_record(
-            product=product,
-            plan_id=recurring_plan_id,
-            pricing_id=recurring_pricing_id,
-        )
+        pricing_state = self._wgs_get_persisted_subscription_pricing_from_pos_line(line)
+        recurring_price_unit = pricing_state['price_unit']
+        recurring_plan_id = pricing_state['plan_id']
+        recurring_pricing_id = pricing_state['pricing_id']
+        plan_record = pricing_state['plan_record']
         today = fields.Date.context_today(self)
         subscription_start_date = line.wgs_get_subscription_start_date() or today
         subscription_end_date = line.wgs_get_subscription_end_date()
@@ -2049,7 +2069,7 @@ class PosOrder(models.Model):
         contract_date = fields.Date.context_today(self)
         upsell_source_order = self.env['sale.order']
         if line.wgs_subscription_flow == 'upsale':
-            upsell_source_order = self._wgs_resolve_upsell_source_order_for_line(line)
+            upsell_source_order = pricing_state['source_order'] or self._wgs_resolve_upsell_source_order_for_line(line)
         else:
             upsell_source_order = self._wgs_find_partner_active_subscription_for_upsell()
         if upsell_source_order:
