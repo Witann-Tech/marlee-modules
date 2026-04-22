@@ -805,27 +805,14 @@ class PosOrder(models.Model):
             'pending_invoice': pending_invoice if pending_invoice else False,
         }
 
-    @api.model
-    def wgs_get_subscription_pricing_for_pos(
+    def _wgs_dispatch_subscription_pricing_payload_for_pos(
         self,
-        partner_id=False,
-        product_id=False,
-        flow='new',
-        source_subscription_id=False,
-        pending_move_id=False,
+        request_data,
+        *,
         fallback=0.0,
         preferred_plan_id=False,
         preferred_pricing_id=False,
     ):
-        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar pricing de suscripción desde Punto de Venta.'))
-
-        request_data = self._wgs_prepare_subscription_pricing_request_for_pos(
-            partner_id=partner_id,
-            product_id=product_id,
-            flow=flow,
-            source_subscription_id=source_subscription_id,
-            pending_move_id=pending_move_id,
-        )
         normalized_flow = request_data['flow']
         partner = request_data['partner']
         product = request_data['product']
@@ -865,6 +852,85 @@ class PosOrder(models.Model):
             return payload
 
         raise UserError(_('No se pudo resolver el flujo de pricing solicitado.'))
+
+    @api.model
+    def wgs_get_subscription_pricing_for_pos(
+        self,
+        partner_id=False,
+        product_id=False,
+        flow='new',
+        source_subscription_id=False,
+        pending_move_id=False,
+        fallback=0.0,
+        preferred_plan_id=False,
+        preferred_pricing_id=False,
+    ):
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar pricing de suscripción desde Punto de Venta.'))
+
+        request_data = self._wgs_prepare_subscription_pricing_request_for_pos(
+            partner_id=partner_id,
+            product_id=product_id,
+            flow=flow,
+            source_subscription_id=source_subscription_id,
+            pending_move_id=pending_move_id,
+        )
+        return self._wgs_dispatch_subscription_pricing_payload_for_pos(
+            request_data,
+            fallback=fallback,
+            preferred_plan_id=preferred_plan_id,
+            preferred_pricing_id=preferred_pricing_id,
+        )
+
+    @api.model
+    def wgs_get_subscription_quote_for_pos(
+        self,
+        partner_id=False,
+        product_id=False,
+        flow='new',
+        source_subscription_id=False,
+        pending_move_id=False,
+        fallback=0.0,
+        preferred_plan_id=False,
+        preferred_pricing_id=False,
+    ):
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar cotizaciones de suscripción desde Punto de Venta.'))
+
+        request_data = self._wgs_prepare_subscription_pricing_request_for_pos(
+            partner_id=partner_id,
+            product_id=product_id,
+            flow=flow,
+            source_subscription_id=source_subscription_id,
+            pending_move_id=pending_move_id,
+        )
+        pricing = self._wgs_dispatch_subscription_pricing_payload_for_pos(
+            request_data,
+            fallback=fallback,
+            preferred_plan_id=preferred_plan_id,
+            preferred_pricing_id=preferred_pricing_id,
+        )
+
+        normalized_flow = request_data['flow']
+        partner = request_data['partner']
+        product = request_data['product']
+        source_order = request_data['source_order']
+        offers = []
+        if (
+            normalized_flow in ('new', 'upsale', 'renewal', 'reenroll')
+            and partner
+            and product
+        ):
+            offers = self._wgs_build_subscription_discount_offers_for_pos(
+                partner=partner,
+                product=product,
+                flow=normalized_flow,
+                source_subscription=source_order if source_order else False,
+            )
+
+        return {
+            'flow': normalized_flow,
+            'pricing': pricing,
+            'offers': offers,
+        }
 
     @api.model
     def wgs_get_subscription_cancellation_refund_for_pos(self, subscription_id):

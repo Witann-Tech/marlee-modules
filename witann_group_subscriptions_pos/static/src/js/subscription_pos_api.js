@@ -24,13 +24,6 @@ export function createSubscriptionPosApi(orm) {
                 [partnerId, productId, flow || "new", sourceSubscriptionId || false]
             );
         },
-        async fetchSubscriptionDiscountOffers(partnerId, productId, flow = "new", sourceSubscriptionId = false) {
-            return orm.call(
-                "pos.order",
-                "wgs_get_subscription_discount_offers_for_pos",
-                [partnerId, productId, flow || "new", sourceSubscriptionId || false]
-            );
-        },
         async authorizeSubscriptionDiscount(partnerId, productId, flow = "new", discountCode = false, supervisorPin = false, sourceSubscriptionId = false) {
             return orm.call(
                 "pos.order",
@@ -48,6 +41,13 @@ export function createSubscriptionPosApi(orm) {
             return orm.call(
                 "pos.order",
                 "wgs_get_subscription_pricing_for_pos",
+                [partnerId || false, productId || false, flow || "new", sourceSubscriptionId || false, pendingMoveId || false, fallback || 0, planId || false, pricingId || false]
+            );
+        },
+        async fetchSubscriptionQuote(partnerId = false, productId = false, flow = "new", sourceSubscriptionId = false, pendingMoveId = false, fallback = 0, planId = false, pricingId = false) {
+            return orm.call(
+                "pos.order",
+                "wgs_get_subscription_quote_for_pos",
                 [partnerId || false, productId || false, flow || "new", sourceSubscriptionId || false, pendingMoveId || false, fallback || 0, planId || false, pricingId || false]
             );
         },

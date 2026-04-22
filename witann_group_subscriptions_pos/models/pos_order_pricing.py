@@ -4,6 +4,7 @@ from datetime import timedelta, date, datetime
 from dateutil.relativedelta import relativedelta
 
 from odoo import fields, models
+from odoo.osv import expression
 
 _logger = logging.getLogger(__name__)
 
@@ -47,19 +48,7 @@ class PosOrderPricingMixin(models.Model):
                 continue
             supported.append(field_name)
             seen.add(field_name)
-
-        discovered = []
-        for field_name, field in model._fields.items():
-            if field_name in seen:
-                continue
-            if field.type not in relation_types:
-                continue
-            if getattr(field, 'comodel_name', False) != comodel_name:
-                continue
-            discovered.append(field_name)
-
-        discovered.sort()
-        return tuple(supported + discovered)
+        return tuple(supported)
 
     def _wgs_compute_upgrade_credit_amount(self, source_order, today=False, tax_included=False):
         source_order.ensure_one()
@@ -775,7 +764,6 @@ class PosOrderPricingMixin(models.Model):
             return []
 
         model = self.env[model_name]
-        records = model.browse()
         product_field_names = self._wgs_get_relation_field_names(
             model_name,
             'product.product',
@@ -788,13 +776,14 @@ class PosOrderPricingMixin(models.Model):
             relation_types=('many2one',),
             preferred_field_names=template_field_names,
         )
+        domain_parts = []
         if product:
-            for field_name in product_field_names:
-                records |= model.search([(field_name, '=', product.id)])
+            domain_parts.extend([[(field_name, '=', product.id)] for field_name in product_field_names])
         if template:
-            for field_name in template_field_names:
-                records |= model.search([(field_name, '=', template.id)])
-        return records
+            domain_parts.extend([[(field_name, '=', template.id)] for field_name in template_field_names])
+        if not domain_parts:
+            return model.browse()
+        return model.search(expression.OR(domain_parts))
 
     def _wgs_get_recurring_pricing_candidates(self, product):
         product.ensure_one()

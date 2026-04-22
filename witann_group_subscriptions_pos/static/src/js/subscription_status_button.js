@@ -347,15 +347,6 @@ patch(ControlButtons.prototype, {
         return this.subscriptionPosApi.validateSubscriptionProductEligibility(partnerId, productId);
     },
 
-    async _fetchSubscriptionDiscountOffersForPos(partnerId, productId, flow = "new", sourceSubscriptionId = false) {
-        return this.subscriptionPosApi.fetchSubscriptionDiscountOffers(
-            partnerId,
-            productId,
-            flow || "new",
-            sourceSubscriptionId || false
-        );
-    },
-
     async _authorizeSubscriptionDiscountForPos(partnerId, productId, flow = "new", discountCode = false, supervisorPin = false, sourceSubscriptionId = false) {
         return this.subscriptionPosApi.authorizeSubscriptionDiscount(
             partnerId,
@@ -386,6 +377,19 @@ patch(ControlButtons.prototype, {
 
     async _fetchSubscriptionPricing(partnerId = false, productId = false, flow = "new", sourceSubscriptionId = false, pendingMoveId = false, fallback = 0, planId = false, pricingId = false) {
         return this.subscriptionPosApi.fetchSubscriptionPricing(
+            partnerId || false,
+            productId || false,
+            flow || "new",
+            sourceSubscriptionId || false,
+            pendingMoveId || false,
+            fallback || 0,
+            planId || false,
+            pricingId || false
+        );
+    },
+
+    async _fetchSubscriptionQuote(partnerId = false, productId = false, flow = "new", sourceSubscriptionId = false, pendingMoveId = false, fallback = 0, planId = false, pricingId = false) {
+        return this.subscriptionPosApi.fetchSubscriptionQuote(
             partnerId || false,
             productId || false,
             flow || "new",
@@ -801,8 +805,6 @@ patch(ControlButtons.prototype, {
                 renderDetail,
                 loadDetail,
                 fetchSubscriptionProductCatalog: (searchTerm) => this._fetchSubscriptionProductCatalog(searchTerm),
-                fetchSubscriptionDiscountOffers: (partnerId, productId, flow, sourceSubscriptionId) =>
-                    this._fetchSubscriptionDiscountOffersForPos(partnerId, productId, flow, sourceSubscriptionId),
                 _t,
             });
         };
@@ -834,11 +836,8 @@ patch(ControlButtons.prototype, {
             await openRenewalFlow(modalState, item, {
                 stopPartnerCamera,
                 renderDetail,
-                buildChargeBreakdown: (source, product, values) => buildChargeBreakdown(source, product, values),
-                fetchSubscriptionPricing: (partnerId, productId, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId) =>
-                    this._fetchSubscriptionPricing(partnerId, productId, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId),
-                fetchSubscriptionDiscountOffers: (partnerId, productId, flow, sourceSubscriptionId) =>
-                    this._fetchSubscriptionDiscountOffersForPos(partnerId, productId, flow, sourceSubscriptionId),
+                fetchSubscriptionQuote: (partnerId, productId, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId) =>
+                    this._fetchSubscriptionQuote(partnerId, productId, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId),
                 _t,
             });
         };
@@ -847,11 +846,8 @@ patch(ControlButtons.prototype, {
             await openReenrollFlow(modalState, item, {
                 stopPartnerCamera,
                 renderDetail,
-                buildChargeBreakdown: (source, product, values) => buildChargeBreakdown(source, product, values),
-                fetchSubscriptionPricing: (partnerId, productId, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId) =>
-                    this._fetchSubscriptionPricing(partnerId, productId, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId),
-                fetchSubscriptionDiscountOffers: (partnerId, productId, flow, sourceSubscriptionId) =>
-                    this._fetchSubscriptionDiscountOffersForPos(partnerId, productId, flow, sourceSubscriptionId),
+                fetchSubscriptionQuote: (partnerId, productId, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId) =>
+                    this._fetchSubscriptionQuote(partnerId, productId, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId),
                 _t,
             });
         };
@@ -985,9 +981,9 @@ patch(ControlButtons.prototype, {
         const applySelectedProduct = async (productId) => {
             await applySelectedProductFlow(modalState, productId, {
                 renderDetail,
-                recalculateNewSubscriptionCharge,
-                fetchSubscriptionDiscountOffers: (partnerId, productIdValue, flow, sourceSubscriptionId) =>
-                    this._fetchSubscriptionDiscountOffersForPos(partnerId, productIdValue, flow, sourceSubscriptionId),
+                fetchSubscriptionQuote: (partnerId, productIdValue, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId) =>
+                    this._fetchSubscriptionQuote(partnerId, productIdValue, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId),
+                _t,
             });
         };
 
