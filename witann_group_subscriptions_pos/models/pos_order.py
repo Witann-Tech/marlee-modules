@@ -627,12 +627,13 @@ class PosOrder(models.Model):
         if not product:
             raise UserError(_('El producto seleccionado no existe o no está disponible.'))
 
-        choice = self._wgs_get_recurring_pricing_choice(
+        pricing_resolution = self._wgs_resolve_recurring_pricing(
             product,
             fallback=fallback,
             preferred_plan_id=preferred_plan_id,
             preferred_pricing_id=preferred_pricing_id,
         )
+        choice = pricing_resolution['choice']
         display_price = self._wgs_get_price_with_taxes_for_pos(product, choice.get('price') or 0.0)
         return {
             'price': float(choice.get('price') or 0.0),
@@ -657,12 +658,13 @@ class PosOrder(models.Model):
         if not product:
             raise UserError(_('El producto seleccionado no existe o no está disponible.'))
 
-        choice = self._wgs_get_recurring_pricing_choice(
+        pricing_resolution = self._wgs_resolve_recurring_pricing(
             product,
             fallback=fallback,
             preferred_plan_id=preferred_plan_id,
             preferred_pricing_id=preferred_pricing_id,
         )
+        choice = pricing_resolution['choice']
         recurring_price = float(choice.get('price') or 0.0)
         plan_id = choice.get('plan_id') or False
         pricing_id = choice.get('pricing_id') or False
@@ -780,12 +782,13 @@ class PosOrder(models.Model):
         if not product:
             raise UserError(_('El producto seleccionado no existe o no está disponible.'))
 
-        choice = self._wgs_get_recurring_pricing_choice(
+        pricing_resolution = self._wgs_resolve_recurring_pricing(
             product,
             fallback=fallback,
             preferred_plan_id=preferred_plan_id,
             preferred_pricing_id=preferred_pricing_id,
         )
+        choice = pricing_resolution['choice']
         recurring_price = float(choice.get('price') or 0.0)
         credit_amount = self._wgs_compute_upgrade_credit_amount(source_order)
         charge_now = max(recurring_price - credit_amount, 0.0)
@@ -907,11 +910,12 @@ class PosOrder(models.Model):
         if max_total < 1:
             max_total = 1
 
-        candidates = self._wgs_get_recurring_pricing_candidates(product)
+        pricing_resolution = self._wgs_resolve_recurring_pricing(product, fallback=fallback)
+        candidates = pricing_resolution['candidates']
         candidates.sort(key=lambda row: (row['sequence'], row.get('pricing_id') or 0))
         is_subscription = bool(is_subscription_flag or candidates)
 
-        choice = self._wgs_get_recurring_pricing_choice(product, fallback=fallback)
+        choice = pricing_resolution['choice']
         default_plan_id = choice.get('plan_id') or False
         default_pricing_id = choice.get('pricing_id') or False
         default_display_price = self._wgs_get_price_with_taxes_for_pos(product, choice.get('price') or fallback or 0.0)
@@ -1890,12 +1894,13 @@ class PosOrder(models.Model):
                 }
             )
 
-        pricing_choice = self._wgs_get_recurring_pricing_choice(
+        pricing_resolution = self._wgs_resolve_recurring_pricing(
             product,
             fallback=line.price_unit,
             preferred_plan_id=line.wgs_subscription_plan_id,
             preferred_pricing_id=line.wgs_subscription_pricing_id,
         )
+        pricing_choice = pricing_resolution['choice']
         recurring_price_unit = pricing_choice['price']
         recurring_plan_id = pricing_choice.get('plan_id')
         recurring_pricing_id = pricing_choice.get('pricing_id')

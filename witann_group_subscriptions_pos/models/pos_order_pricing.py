@@ -364,19 +364,22 @@ class PosOrderPricingMixin(models.Model):
                 return value[:1]
         return False
 
-    def _wgs_get_recurring_pricing_choice(self, product, fallback=0.0, preferred_plan_id=False, preferred_pricing_id=False):
-        product.ensure_one()
+    def _wgs_select_recurring_pricing_choice(
+        self,
+        candidates,
+        *,
+        fallback=0.0,
+        preferred_plan_id=False,
+        preferred_pricing_id=False,
+    ):
         fallback_price = float(fallback or 0.0)
-
-        candidates = self._wgs_get_recurring_pricing_candidates(product)
-
+        candidates = list(candidates or [])
         if not candidates:
             return {
                 'price': fallback_price,
                 'plan_id': False,
                 'pricing_id': False,
             }
-
         preferred_plan_id = int(preferred_plan_id or 0)
         preferred_pricing_id = int(preferred_pricing_id or 0)
         if preferred_pricing_id:
@@ -391,6 +394,37 @@ class PosOrderPricingMixin(models.Model):
 
         candidates.sort(key=lambda row: (row['sequence'], row.get('pricing_id') or 0))
         return candidates[0]
+
+    def _wgs_resolve_recurring_pricing(
+        self,
+        product,
+        *,
+        fallback=0.0,
+        preferred_plan_id=False,
+        preferred_pricing_id=False,
+    ):
+        product.ensure_one()
+        candidates = self._wgs_get_recurring_pricing_candidates(product)
+        choice = self._wgs_select_recurring_pricing_choice(
+            candidates,
+            fallback=fallback,
+            preferred_plan_id=preferred_plan_id,
+            preferred_pricing_id=preferred_pricing_id,
+        )
+        return {
+            'candidates': candidates,
+            'choice': choice,
+        }
+
+    def _wgs_get_recurring_pricing_choice(self, product, fallback=0.0, preferred_plan_id=False, preferred_pricing_id=False):
+        product.ensure_one()
+        resolved = self._wgs_resolve_recurring_pricing(
+            product,
+            fallback=fallback,
+            preferred_plan_id=preferred_plan_id,
+            preferred_pricing_id=preferred_pricing_id,
+        )
+        return resolved['choice']
 
     def _wgs_get_recurring_pricing_candidates(self, product):
         product.ensure_one()
