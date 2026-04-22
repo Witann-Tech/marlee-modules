@@ -131,18 +131,16 @@ function buildChargeFromSnapshot(formOrSnapshot, chargeType = "recurring") {
     };
 }
 
-function getResolvedPricingMetadata(form, fallback = {}) {
+function getResolvedPricingMetadata(form) {
     const snapshot = getPricingSnapshot(form);
     return {
-        plan_id: Number(snapshot.plan_id || fallback.plan_id || 0) || false,
-        pricing_id: Number(snapshot.pricing_id || fallback.pricing_id || 0) || false,
-        interval_value: Number(snapshot.interval_value || fallback.interval_value || 1) || 1,
-        interval_unit: snapshot.interval_unit || fallback.interval_unit || "month",
-        interval_label: snapshot.interval_label || fallback.interval_label || "",
-        source_subscription_id: Number(
-            snapshot.source_subscription_id || fallback.source_subscription_id || 0
-        ) || false,
-        source_subscription_name: snapshot.source_subscription_name || fallback.source_subscription_name || false,
+        plan_id: Number(snapshot.plan_id || 0) || false,
+        pricing_id: Number(snapshot.pricing_id || 0) || false,
+        interval_value: Number(snapshot.interval_value || 1) || 1,
+        interval_unit: snapshot.interval_unit || "month",
+        interval_label: snapshot.interval_label || "",
+        source_subscription_id: Number(snapshot.source_subscription_id || 0) || false,
+        source_subscription_name: snapshot.source_subscription_name || false,
         recurring_price: Number(snapshot.recurring_price || 0) || 0,
         ticket_recurring_price: Number(snapshot.ticket_recurring_price || 0) || 0,
         display_recurring_price: Number(snapshot.display_recurring_price || 0) || 0,

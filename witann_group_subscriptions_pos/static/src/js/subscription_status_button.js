@@ -926,7 +926,6 @@ patch(ControlButtons.prototype, {
                 renderDetail,
                 fetchSubscriptionPricing: (partnerId, productId, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId) =>
                     this._fetchSubscriptionPricing(partnerId, productId, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId),
-                buildChargeBreakdown: (source, productArg, values) => buildChargeBreakdown(source, productArg, values),
                 _t,
             });
         };
@@ -934,9 +933,8 @@ patch(ControlButtons.prototype, {
         const applySelectedUpsaleProduct = async (productId) => {
             await applySelectedUpsaleProductFlow(modalState, productId, {
                 renderDetail,
-                fetchSubscriptionPricing: (partnerId, productIdArg, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId) =>
-                    this._fetchSubscriptionPricing(partnerId, productIdArg, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId),
-                buildChargeBreakdown: (source, productArg, values) => buildChargeBreakdown(source, productArg, values),
+                fetchSubscriptionQuote: (partnerId, productIdArg, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId) =>
+                    this._fetchSubscriptionQuote(partnerId, productIdArg, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId),
                 _t,
             });
         };
@@ -945,9 +943,8 @@ patch(ControlButtons.prototype, {
             await updateSelectedUpsalePlanFlow(modalState, planChoice, {
                 getSelectedUpsalePlan,
                 renderDetail,
-                fetchSubscriptionPricing: (partnerId, productIdArg, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId) =>
-                    this._fetchSubscriptionPricing(partnerId, productIdArg, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId),
-                buildChargeBreakdown: (source, productArg, values) => buildChargeBreakdown(source, productArg, values),
+                fetchSubscriptionQuote: (partnerId, productIdArg, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId) =>
+                    this._fetchSubscriptionQuote(partnerId, productIdArg, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId),
                 _t,
             });
         };
@@ -1006,7 +1003,6 @@ patch(ControlButtons.prototype, {
                 return "";
             }
             const plan = getSelectedPlan();
-            const localProductRecord = findProductInPos(this, newSubscriptionForm.productId);
             const automaticEndDate = plan
                 ? getPlanPeriodEndDate(newSubscriptionForm.startDate, plan.interval_value, plan.interval_unit)
                 : "";
@@ -1014,11 +1010,7 @@ patch(ControlButtons.prototype, {
             const requiresCurp = Boolean(newSubscriptionForm.requiresCurp);
             const needsCurpCapture = requiresCurp && !partnerCurp;
             const snapshotCharge = buildChargeFromSnapshot(newSubscriptionForm, "recurring");
-            const localDisplayAmount = convertTaxExcludedPriceToDisplay(
-                this,
-                localProductRecord,
-                Number(snapshotCharge.ticketUnitPrice || snapshotCharge.baseAmount || 0)
-            );
+            const resolvedDisplayAmount = getChargeDisplayAmount(snapshotCharge);
             const discountPercent = Number(
                 newSubscriptionForm
                 && newSubscriptionForm.authorizedDiscount
@@ -1027,8 +1019,8 @@ patch(ControlButtons.prototype, {
                     : 0
             ) || 0;
             const discountedChargeDisplay = discountPercent
-                ? localDisplayAmount * (1 - (discountPercent / 100))
-                : localDisplayAmount;
+                ? resolvedDisplayAmount * (1 - (discountPercent / 100))
+                : resolvedDisplayAmount;
             const filteredParticipants = filterParticipantRowsByTerm(newSubscriptionForm.participantSearch);
             const participantOptions = Number(newSubscriptionForm.maxParticipantsTotal || 1) > 1
                 ? filteredParticipants
@@ -1051,11 +1043,11 @@ patch(ControlButtons.prototype, {
             const planOptions = (newSubscriptionForm.plans || []).map((item) => {
                 const value = `${Number(item.plan_id || 0)}:${Number(item.pricing_id || 0)}`;
                 const selected = value === String(newSubscriptionForm.planChoice || "") ? "selected" : "";
-                const planDisplayPrice = convertTaxExcludedPriceToDisplay(
-                    this,
-                    localProductRecord,
-                    Number(item.price || 0)
-                );
+                const planDisplayPrice = Number(
+                    item.display_price !== undefined
+                        ? item.display_price
+                        : (item.price || 0)
+                ) || 0;
                 const label = `${item.plan_name || _t("Plan recurrente")} | ${this._formatMoney(planDisplayPrice)}${item.interval_label ? ` | ${item.interval_label}` : ""}`;
                 return `<option value="${this._escapeHtml(value)}" ${selected}>${this._escapeHtml(label)}</option>`;
             }).join("");

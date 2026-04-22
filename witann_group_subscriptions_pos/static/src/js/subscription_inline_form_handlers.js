@@ -320,13 +320,7 @@ function buildSubscriptionInlineActionHandlers({
             state.formError = "";
             state.formNotice = "";
             const selectedPlan = getSelectedPlan();
-            const resolvedPricing = getResolvedPricingMetadata(state.newSubscriptionForm, {
-                plan_id: selectedPlan && selectedPlan.plan_id,
-                pricing_id: selectedPlan && selectedPlan.pricing_id,
-                interval_value: selectedPlan && selectedPlan.interval_value,
-                interval_unit: selectedPlan && selectedPlan.interval_unit,
-                interval_label: selectedPlan && selectedPlan.interval_label,
-            });
+            const resolvedPricing = getResolvedPricingMetadata(state.newSubscriptionForm);
             if (!state.selectedPartnerId) {
                 state.formError = _t("Selecciona un cliente para agregar la suscripcion al ticket.");
                 renderDetail(state.currentDetail);
@@ -711,15 +705,7 @@ function buildSubscriptionInlineActionHandlers({
                 return;
             }
             const selectedUpsalePlan = getSelectedUpsalePlan();
-            const resolvedUpsalePricing = getResolvedPricingMetadata(state.upsaleForm, {
-                plan_id: selectedUpsalePlan && selectedUpsalePlan.plan_id,
-                pricing_id: selectedUpsalePlan && selectedUpsalePlan.pricing_id,
-                interval_value: selectedUpsalePlan && selectedUpsalePlan.interval_value,
-                interval_unit: selectedUpsalePlan && selectedUpsalePlan.interval_unit,
-                interval_label: selectedUpsalePlan && selectedUpsalePlan.interval_label,
-                source_subscription_id: state.upsaleForm && state.upsaleForm.subscriptionId,
-                source_subscription_name: state.upsaleForm && state.upsaleForm.subscriptionName,
-            });
+            const resolvedUpsalePricing = getResolvedPricingMetadata(state.upsaleForm);
             if (!selectedUpsalePlan) {
                 state.formError = _t("Selecciona el plan destino para el upsale.");
                 renderDetail(state.currentDetail);
@@ -829,10 +815,7 @@ function buildSubscriptionInlineActionHandlers({
         "save-renewal": async () => {
             state.formError = "";
             state.formNotice = "";
-            const resolvedRenewalPricing = getResolvedPricingMetadata(state.renewalForm, {
-                source_subscription_id: state.renewalForm && state.renewalForm.subscriptionId,
-                source_subscription_name: state.renewalForm && state.renewalForm.subscriptionName,
-            });
+            const resolvedRenewalPricing = getResolvedPricingMetadata(state.renewalForm);
             if (!state.renewalForm || !state.renewalForm.subscriptionId || !state.renewalForm.productId) {
                 state.formError = _t("La renovación seleccionada no tiene datos suficientes para agregarse al ticket.");
                 renderDetail(state.currentDetail);
@@ -934,10 +917,7 @@ function buildSubscriptionInlineActionHandlers({
         "save-reenroll": async () => {
             state.formError = "";
             state.formNotice = "";
-            const resolvedReenrollPricing = getResolvedPricingMetadata(state.renewalForm, {
-                source_subscription_id: state.renewalForm && state.renewalForm.subscriptionId,
-                source_subscription_name: state.renewalForm && state.renewalForm.subscriptionName,
-            });
+            const resolvedReenrollPricing = getResolvedPricingMetadata(state.renewalForm);
             if (!state.renewalForm || !state.renewalForm.subscriptionId || !state.renewalForm.productId) {
                 state.formError = _t("La reinscripción seleccionada no tiene datos suficientes para agregarse al ticket.");
                 renderDetail(state.currentDetail);

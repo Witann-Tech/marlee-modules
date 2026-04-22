@@ -787,6 +787,14 @@ class PosOrderPricingMixin(models.Model):
 
     def _wgs_get_recurring_pricing_candidates(self, product):
         product.ensure_one()
+        cache = getattr(self.env, '_wgs_recurring_pricing_candidates_cache', None)
+        if cache is None:
+            cache = {}
+            setattr(self.env, '_wgs_recurring_pricing_candidates_cache', cache)
+        cache_key = (product._name, product.id, product.product_tmpl_id.id)
+        if cache_key in cache:
+            return [dict(candidate) for candidate in cache[cache_key]]
+
         candidates = []
         seen_pricing_ids = set()
 
@@ -822,7 +830,9 @@ class PosOrderPricingMixin(models.Model):
                 bool(getattr(product.product_tmpl_id, 'recurring_invoice', False)),
             )
 
-        return self._wgs_normalize_recurring_pricing_candidates(candidates)
+        normalized_candidates = self._wgs_normalize_recurring_pricing_candidates(candidates)
+        cache[cache_key] = [dict(candidate) for candidate in normalized_candidates]
+        return [dict(candidate) for candidate in normalized_candidates]
 
     def _wgs_normalize_recurring_pricing_candidates(self, candidates):
         if not candidates:

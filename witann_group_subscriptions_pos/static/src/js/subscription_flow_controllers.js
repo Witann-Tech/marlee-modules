@@ -419,7 +419,6 @@ function applyPricingPayloadToNewSubscriptionForm(state, payload, preferredPlan,
 }
 
 function applyPricingPayloadToUpsaleForm(state, payload, preferredPlan, {
-    buildChargeBreakdown,
     _t,
 }) {
     const snapshot = buildPricingSnapshotFromCharge(payload, {
@@ -446,7 +445,6 @@ function applyPricingPayloadToUpsaleForm(state, payload, preferredPlan, {
 async function recalculateNewSubscriptionCharge(state, product, preferredPlan, {
     renderDetail,
     fetchSubscriptionPricing,
-    buildChargeBreakdown,
     _t,
 }) {
     if (!state.newSubscriptionForm || !product || !state.selectedPartnerId) {
@@ -466,7 +464,6 @@ async function recalculateNewSubscriptionCharge(state, product, preferredPlan, {
             preferredPlan ? Number(preferredPlan.pricing_id || 0) || false : false
         );
         applyPricingPayloadToNewSubscriptionForm(state, payload, preferredPlan, {
-            buildChargeBreakdown,
             _t,
         });
     } catch (error) {
@@ -561,8 +558,7 @@ function toggleParticipant(state, partnerId, checked) {
 
 async function applySelectedUpsaleProduct(state, productId, {
     renderDetail,
-    fetchSubscriptionPricing,
-    buildChargeBreakdown,
+    fetchSubscriptionQuote,
     _t,
 }) {
     if (!state.upsaleForm) {
@@ -588,7 +584,7 @@ async function applySelectedUpsaleProduct(state, productId, {
     state.upsaleForm.loading = true;
     renderDetail(state.currentDetail);
     try {
-        const payload = await fetchSubscriptionPricing(
+        const quote = await fetchSubscriptionQuote(
             state.upsaleForm.holderPartnerId || false,
             state.upsaleForm.productId,
             "upsale",
@@ -598,12 +594,12 @@ async function applySelectedUpsaleProduct(state, productId, {
             false,
             false
         );
+        const payload = quote && quote.pricing ? quote.pricing : {};
         state.upsaleForm = {
             ...state.upsaleForm,
             loading: false,
         };
         applyPricingPayloadToUpsaleForm(state, payload, null, {
-            buildChargeBreakdown,
             _t,
         });
     } catch (error) {
@@ -620,8 +616,7 @@ async function applySelectedUpsaleProduct(state, productId, {
 async function updateSelectedUpsalePlan(state, planChoice, {
     getSelectedUpsalePlan,
     renderDetail,
-    fetchSubscriptionPricing,
-    buildChargeBreakdown,
+    fetchSubscriptionQuote,
     _t,
 }) {
     if (!state.upsaleForm) {
@@ -636,7 +631,7 @@ async function updateSelectedUpsalePlan(state, planChoice, {
     state.upsaleForm.loading = true;
     renderDetail(state.currentDetail);
     try {
-        const payload = await fetchSubscriptionPricing(
+        const quote = await fetchSubscriptionQuote(
             state.upsaleForm.holderPartnerId || false,
             state.upsaleForm.productId,
             "upsale",
@@ -646,12 +641,12 @@ async function updateSelectedUpsalePlan(state, planChoice, {
             Number(selectedPlan.plan_id || 0) || false,
             Number(selectedPlan.pricing_id || 0) || false
         );
+        const payload = quote && quote.pricing ? quote.pricing : {};
         state.upsaleForm = {
             ...state.upsaleForm,
             loading: false,
         };
         applyPricingPayloadToUpsaleForm(state, payload, selectedPlan, {
-            buildChargeBreakdown,
             _t,
         });
     } catch (error) {

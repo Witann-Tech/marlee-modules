@@ -32,6 +32,7 @@ class PosOrderLine(models.Model):
     _inherit = 'pos.order.line'
 
     wgs_participant_ids_json = fields.Text(string='Participantes de suscripción (POS)', copy=False)
+    wgs_pricing_snapshot_json = fields.Text(string='Snapshot pricing suscripción (POS)', copy=False)
     wgs_sale_order_id = fields.Many2one('sale.order', string='Suscripción generada', copy=False)
     wgs_subscription_plan_id = fields.Integer(string='Plan de suscripción (POS)', copy=False)
     wgs_subscription_pricing_id = fields.Integer(string='Tarifa de suscripción (POS)', copy=False)
@@ -853,9 +854,9 @@ class PosOrder(models.Model):
 
         raise UserError(_('No se pudo resolver el flujo de pricing solicitado.'))
 
-    @api.model
-    def wgs_get_subscription_pricing_for_pos(
+    def _wgs_build_subscription_quote_payload_for_pos(
         self,
+        *,
         partner_id=False,
         product_id=False,
         flow='new',
@@ -864,37 +865,8 @@ class PosOrder(models.Model):
         fallback=0.0,
         preferred_plan_id=False,
         preferred_pricing_id=False,
+        include_offers=False,
     ):
-        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar pricing de suscripción desde Punto de Venta.'))
-
-        request_data = self._wgs_prepare_subscription_pricing_request_for_pos(
-            partner_id=partner_id,
-            product_id=product_id,
-            flow=flow,
-            source_subscription_id=source_subscription_id,
-            pending_move_id=pending_move_id,
-        )
-        return self._wgs_dispatch_subscription_pricing_payload_for_pos(
-            request_data,
-            fallback=fallback,
-            preferred_plan_id=preferred_plan_id,
-            preferred_pricing_id=preferred_pricing_id,
-        )
-
-    @api.model
-    def wgs_get_subscription_quote_for_pos(
-        self,
-        partner_id=False,
-        product_id=False,
-        flow='new',
-        source_subscription_id=False,
-        pending_move_id=False,
-        fallback=0.0,
-        preferred_plan_id=False,
-        preferred_pricing_id=False,
-    ):
-        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar cotizaciones de suscripción desde Punto de Venta.'))
-
         request_data = self._wgs_prepare_subscription_pricing_request_for_pos(
             partner_id=partner_id,
             product_id=product_id,
@@ -909,28 +881,79 @@ class PosOrder(models.Model):
             preferred_pricing_id=preferred_pricing_id,
         )
 
-        normalized_flow = request_data['flow']
-        partner = request_data['partner']
-        product = request_data['product']
-        source_order = request_data['source_order']
         offers = []
-        if (
-            normalized_flow in ('new', 'upsale', 'renewal', 'reenroll')
-            and partner
-            and product
-        ):
-            offers = self._wgs_build_subscription_discount_offers_for_pos(
-                partner=partner,
-                product=product,
-                flow=normalized_flow,
-                source_subscription=source_order if source_order else False,
-            )
+        normalized_flow = request_data['flow']
+        if include_offers:
+            partner = request_data['partner']
+            product = request_data['product']
+            source_order = request_data['source_order']
+            if (
+                normalized_flow in ('new', 'upsale', 'renewal', 'reenroll')
+                and partner
+                and product
+            ):
+                offers = self._wgs_build_subscription_discount_offers_for_pos(
+                    partner=partner,
+                    product=product,
+                    flow=normalized_flow,
+                    source_subscription=source_order if source_order else False,
+                )
 
         return {
             'flow': normalized_flow,
             'pricing': pricing,
             'offers': offers,
         }
+
+    @api.model
+    def wgs_get_subscription_pricing_for_pos(
+        self,
+        partner_id=False,
+        product_id=False,
+        flow='new',
+        source_subscription_id=False,
+        pending_move_id=False,
+        fallback=0.0,
+        preferred_plan_id=False,
+        preferred_pricing_id=False,
+    ):
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar pricing de suscripción desde Punto de Venta.'))
+        return self._wgs_build_subscription_quote_payload_for_pos(
+            partner_id=partner_id,
+            product_id=product_id,
+            flow=flow,
+            source_subscription_id=source_subscription_id,
+            pending_move_id=pending_move_id,
+            fallback=fallback,
+            preferred_plan_id=preferred_plan_id,
+            preferred_pricing_id=preferred_pricing_id,
+            include_offers=False,
+        )['pricing']
+
+    @api.model
+    def wgs_get_subscription_quote_for_pos(
+        self,
+        partner_id=False,
+        product_id=False,
+        flow='new',
+        source_subscription_id=False,
+        pending_move_id=False,
+        fallback=0.0,
+        preferred_plan_id=False,
+        preferred_pricing_id=False,
+    ):
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar cotizaciones de suscripción desde Punto de Venta.'))
+        return self._wgs_build_subscription_quote_payload_for_pos(
+            partner_id=partner_id,
+            product_id=product_id,
+            flow=flow,
+            source_subscription_id=source_subscription_id,
+            pending_move_id=pending_move_id,
+            fallback=fallback,
+            preferred_plan_id=preferred_plan_id,
+            preferred_pricing_id=preferred_pricing_id,
+            include_offers=True,
+        )
 
     @api.model
     def wgs_get_subscription_cancellation_refund_for_pos(self, subscription_id):
@@ -1028,6 +1051,10 @@ class PosOrder(models.Model):
                     cleaned.append(participant_id)
             values['wgs_participant_ids_json'] = json.dumps(list(dict.fromkeys(cleaned)))
 
+        pricing_snapshot = config_payload.get('pricing_snapshot')
+        if isinstance(pricing_snapshot, dict):
+            values['wgs_pricing_snapshot_json'] = json.dumps(pricing_snapshot)
+
         for field_name in ('wgs_subscription_plan_id', 'wgs_subscription_pricing_id'):
             if field_name == 'wgs_subscription_plan_id':
                 value = config_payload.get('plan_id')
@@ -1113,6 +1140,7 @@ class PosOrder(models.Model):
     def _wgs_extract_subscription_config_payload(self, ui_line):
         data = {
             'participant_ids': [],
+            'pricing_snapshot': False,
             'plan_id': False,
             'pricing_id': False,
             'start_date': False,
@@ -1133,7 +1161,7 @@ class PosOrder(models.Model):
         if not isinstance(ui_line, dict):
             return data
 
-        raw_config = ui_line.get('wgs_subscription_config')
+        raw_config = ui_line.get('wgs_subscription_config') or ui_line.get('wgsSubscriptionConfig')
         if isinstance(raw_config, str):
             try:
                 raw_config = json.loads(raw_config)
@@ -1141,6 +1169,15 @@ class PosOrder(models.Model):
                 raw_config = {}
         if not isinstance(raw_config, dict):
             raw_config = {}
+
+        pricing_snapshot = raw_config.get('pricing_snapshot') or raw_config.get('pricingSnapshot') or False
+        if isinstance(pricing_snapshot, str):
+            try:
+                pricing_snapshot = json.loads(pricing_snapshot)
+            except (TypeError, ValueError):
+                pricing_snapshot = False
+        if isinstance(pricing_snapshot, dict):
+            data['pricing_snapshot'] = pricing_snapshot
 
         participant_raw = (
             ui_line.get('wgs_participant_ids')
@@ -1381,6 +1418,10 @@ class PosOrder(models.Model):
                         cleaned.append(participant_id)
                 if cleaned:
                     write_values['wgs_participant_ids_json'] = json.dumps(list(dict.fromkeys(cleaned)))
+
+            pricing_snapshot = config.get('pricing_snapshot')
+            if isinstance(pricing_snapshot, dict):
+                write_values['wgs_pricing_snapshot_json'] = json.dumps(pricing_snapshot)
 
             for field_name, key_name in (
                 ('wgs_subscription_plan_id', 'plan_id'),
@@ -1879,18 +1920,48 @@ class PosOrder(models.Model):
         line.ensure_one()
 
         product = line.product_id
-        recurring_price_unit = round(max(abs(float(line.price_unit or 0.0)), 0.0), 2)
-        recurring_plan_id = self._wgs_to_int(line.wgs_subscription_plan_id) or False
-        recurring_pricing_id = self._wgs_to_int(line.wgs_subscription_pricing_id) or False
+        snapshot = {}
+        raw_snapshot = line.wgs_pricing_snapshot_json or False
+        if raw_snapshot:
+            try:
+                snapshot = json.loads(raw_snapshot)
+            except (TypeError, ValueError):
+                snapshot = {}
+        if not isinstance(snapshot, dict):
+            snapshot = {}
+
+        recurring_price_unit = round(
+            max(
+                abs(
+                    float(
+                        snapshot.get('recurring_price')
+                        or line.price_unit
+                        or 0.0
+                    )
+                ),
+                0.0,
+            ),
+            2,
+        )
+        recurring_plan_id = self._wgs_to_int(line.wgs_subscription_plan_id or snapshot.get('plan_id')) or False
+        recurring_pricing_id = self._wgs_to_int(line.wgs_subscription_pricing_id or snapshot.get('pricing_id')) or False
         source_order = self.env['sale.order']
-        credit_amount = 0.0
+        source_subscription_id = self._wgs_to_int(snapshot.get('source_subscription_id'))
+        if line.wgs_subscription_source_id:
+            source_order = line.wgs_subscription_source_id
+        elif source_subscription_id > 0:
+            source_order = self.env['sale.order'].browse(source_subscription_id).exists()
+        credit_amount = round(max(float(snapshot.get('credit_amount') or 0.0), 0.0), 2)
 
         if line.wgs_subscription_flow == 'upsale':
-            source_order = self._wgs_resolve_upsell_source_order_for_line(line)
-            credit_amount = round(max(float(self._wgs_compute_upgrade_credit_amount(source_order) or 0.0), 0.0), 2)
-            recurring_price_unit = round(max(recurring_price_unit + credit_amount, 0.0), 2)
+            if not source_order:
+                source_order = self._wgs_resolve_upsell_source_order_for_line(line)
+            if not credit_amount:
+                credit_amount = round(max(float(self._wgs_compute_upgrade_credit_amount(source_order) or 0.0), 0.0), 2)
+            if not snapshot.get('recurring_price'):
+                recurring_price_unit = round(max(recurring_price_unit + credit_amount, 0.0), 2)
 
-        if recurring_pricing_id and not recurring_plan_id:
+        if recurring_pricing_id and not recurring_plan_id and 'sale.subscription.pricing' in self.env.registry:
             pricing_record = self.env['sale.subscription.pricing'].browse(int(recurring_pricing_id)).exists()
             if pricing_record:
                 recurring_plan_id = self._wgs_extract_plan_id_from_pricing(pricing_record)
