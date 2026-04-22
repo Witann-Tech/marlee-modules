@@ -643,6 +643,48 @@ class PosOrder(models.Model):
             'pricing_id': choice.get('pricing_id') or False,
         }
 
+    def _wgs_log_recurring_resolution_snapshot(
+        self,
+        source,
+        product,
+        *,
+        fallback=0.0,
+        preferred_plan_id=False,
+        preferred_pricing_id=False,
+        pricing_resolution=False,
+        source_order=False,
+        recurring_line=False,
+    ):
+        product.ensure_one()
+        choice = dict((pricing_resolution or {}).get('choice') or {})
+        candidates = list((pricing_resolution or {}).get('candidates') or [])
+        if candidates:
+            return
+
+        recurring_flag = bool(
+            (('recurring_invoice' in product._fields) and product.recurring_invoice)
+            or (('recurring_invoice' in product.product_tmpl_id._fields) and product.product_tmpl_id.recurring_invoice)
+        )
+        if not recurring_flag:
+            return
+
+        _logger.info(
+            'WGS POS recurring resolution [%s] product=%s product_id=%s fallback=%s preferred_plan_id=%s preferred_pricing_id=%s '
+            'choice_plan_id=%s choice_pricing_id=%s choice_price=%s source_order_id=%s source_order_name=%s recurring_line_id=%s',
+            source,
+            product.display_name,
+            product.id,
+            float(fallback or 0.0),
+            int(preferred_plan_id or 0),
+            int(preferred_pricing_id or 0),
+            int(choice.get('plan_id') or 0),
+            int(choice.get('pricing_id') or 0),
+            float(choice.get('price') or 0.0),
+            source_order.id if source_order else False,
+            source_order.name if source_order else False,
+            recurring_line.id if recurring_line else False,
+        )
+
     @api.model
     def wgs_get_subscription_charge_for_pos(
         self,
@@ -663,6 +705,14 @@ class PosOrder(models.Model):
             fallback=fallback,
             preferred_plan_id=preferred_plan_id,
             preferred_pricing_id=preferred_pricing_id,
+        )
+        self._wgs_log_recurring_resolution_snapshot(
+            'charge',
+            product,
+            fallback=fallback,
+            preferred_plan_id=preferred_plan_id,
+            preferred_pricing_id=preferred_pricing_id,
+            pricing_resolution=pricing_resolution,
         )
         choice = pricing_resolution['choice']
         recurring_price = float(choice.get('price') or 0.0)
@@ -911,6 +961,12 @@ class PosOrder(models.Model):
             max_total = 1
 
         pricing_resolution = self._wgs_resolve_recurring_pricing(product, fallback=fallback)
+        self._wgs_log_recurring_resolution_snapshot(
+            'catalog',
+            product,
+            fallback=fallback,
+            pricing_resolution=pricing_resolution,
+        )
         candidates = pricing_resolution['candidates']
         candidates.sort(key=lambda row: (row['sequence'], row.get('pricing_id') or 0))
         is_subscription = bool(is_subscription_flag or candidates)
@@ -2427,6 +2483,24 @@ class PosOrder(models.Model):
             preferred_pricing_id = 0
         resolved_plan_id = preferred_plan_id or plan_id or False
         resolved_pricing_id = preferred_pricing_id or pricing_id or False
+
+        self._wgs_log_recurring_resolution_snapshot(
+            'renewal_payload',
+            recurring_line.product_id if recurring_line else source_order.order_line[:1].product_id,
+            fallback=recurring_price,
+            preferred_plan_id=preferred_plan_id,
+            preferred_pricing_id=preferred_pricing_id,
+            pricing_resolution={
+                'candidates': [],
+                'choice': {
+                    'plan_id': resolved_plan_id,
+                    'pricing_id': resolved_pricing_id,
+                    'price': recurring_price,
+                },
+            },
+            source_order=source_order,
+            recurring_line=recurring_line,
+        )
 
         return {
             'charge_now': float(recurring_price),
