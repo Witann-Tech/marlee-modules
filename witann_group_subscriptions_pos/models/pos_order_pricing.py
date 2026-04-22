@@ -364,9 +364,18 @@ class PosOrderPricingMixin(models.Model):
         display_credit_amount = 0.0
         if include_credit and source_order:
             credit_amount = self._wgs_compute_upgrade_credit_amount(source_order)
-            display_credit_amount = self._wgs_compute_upgrade_credit_amount(source_order, tax_included=True)
         charge_now = round(max(recurring_price - credit_amount, 0.0), 2)
-        display_charge_now = round(max(display_recurring_price - display_credit_amount, 0.0), 2)
+        display_charge_now = self._wgs_get_price_with_taxes_for_pos(
+            product,
+            charge_now,
+            partner=partner or False,
+            company=company or False,
+            fiscal_position=fiscal_position or False,
+        )
+        if include_credit and source_order:
+            display_credit_amount = round(max(display_recurring_price - display_charge_now, 0.0), 2)
+        else:
+            display_credit_amount = 0.0
         return {
             'mode': 'product',
             'flow': flow,
