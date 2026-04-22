@@ -743,6 +743,8 @@ class PosOrderPricingMixin(models.Model):
 
     def _wgs_collect_related_pricing_records(self, source, field_names, model_name='sale.subscription.pricing'):
         source.ensure_one()
+        if model_name not in self.env.registry:
+            return []
         records = self.env[model_name].browse()
         relation_field_names = self._wgs_get_relation_field_names(
             source._name,
@@ -770,7 +772,7 @@ class PosOrderPricingMixin(models.Model):
         template_field_names=(),
     ):
         if model_name not in self.env.registry:
-            return False
+            return []
 
         model = self.env[model_name]
         records = model.browse()
