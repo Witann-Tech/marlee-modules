@@ -646,87 +646,59 @@ class PosOrder(models.Model):
             'interval_unit': snapshot.get('interval_unit') or 'month',
         }
 
-    def _wgs_log_recurring_resolution_snapshot(
+    def _wgs_get_subscription_product_flags_for_pos(self, product):
+        product.ensure_one()
+        student_age_lock = bool(getattr(product.product_tmpl_id, 'wgs_student_age_lock', False))
+        family_authorization = bool(getattr(product.product_tmpl_id, 'wgs_requires_family_authorization', False))
+        single_day_access = bool(getattr(product.product_tmpl_id, 'wgs_single_day_access', False))
+        free_trial_day = bool(getattr(product.product_tmpl_id, 'wgs_free_trial_day', False))
+        requires_curp = bool(
+            getattr(product.product_tmpl_id, 'wgs_requires_curp', False)
+            or student_age_lock
+            or free_trial_day
+        )
+        max_total = int(product.max_participants_total or 1)
+        if max_total < 1:
+            max_total = 1
+        return {
+            'max_participants_total': max_total,
+            'requires_curp': requires_curp,
+            'student_age_lock': student_age_lock,
+            'family_authorization': family_authorization,
+            'single_day_access': single_day_access,
+            'free_trial_day': free_trial_day,
+        }
+
+    def _wgs_build_product_pricing_payload_for_pos(
         self,
-        source,
         product,
         *,
+        flow='new',
+        partner=False,
+        source_order=False,
         fallback=0.0,
         preferred_plan_id=False,
         preferred_pricing_id=False,
-        pricing_resolution=False,
-        source_order=False,
-        recurring_line=False,
     ):
         product.ensure_one()
-        choice = dict((pricing_resolution or {}).get('choice') or {})
-        candidates = list((pricing_resolution or {}).get('candidates') or [])
-        if candidates:
-            return
-
-        recurring_flag = bool(
-            (('recurring_invoice' in product._fields) and product.recurring_invoice)
-            or (('recurring_invoice' in product.product_tmpl_id._fields) and product.product_tmpl_id.recurring_invoice)
-        )
-        if not recurring_flag:
-            return
-
-        _logger.info(
-            'WGS POS recurring resolution [%s] product=%s product_id=%s fallback=%s preferred_plan_id=%s preferred_pricing_id=%s '
-            'choice_plan_id=%s choice_pricing_id=%s choice_price=%s source_order_id=%s source_order_name=%s recurring_line_id=%s',
-            source,
-            product.display_name,
-            product.id,
-            float(fallback or 0.0),
-            int(preferred_plan_id or 0),
-            int(preferred_pricing_id or 0),
-            int(choice.get('plan_id') or 0),
-            int(choice.get('pricing_id') or 0),
-            float(choice.get('price') or 0.0),
-            source_order.id if source_order else False,
-            source_order.name if source_order else False,
-            recurring_line.id if recurring_line else False,
-        )
-
-    @api.model
-    def wgs_get_subscription_charge_for_pos(
-        self,
-        partner_id,
-        product_id,
-        fallback=0.0,
-        preferred_plan_id=False,
-        preferred_pricing_id=False,
-    ):
-        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar cobro de suscripción desde Punto de Venta.'))
-
-        product = self._wgs_browse_product_for_pos(product_id)
-        if not product:
-            raise UserError(_('El producto seleccionado no existe o no está disponible.'))
-
-        partner = self._wgs_browse_partner_for_pos(partner_id)
-        source_order = self._wgs_find_active_subscription_for_partner(partner) if partner else False
+        source_order = source_order.exists() if source_order else self.env['sale.order']
         snapshot = self._wgs_resolve_subscription_pricing_snapshot(
-            flow='new',
+            flow=flow,
             product=product,
             partner=partner,
             source_order=source_order,
+            company=source_order.company_id if source_order and 'company_id' in source_order._fields else False,
+            fiscal_position=source_order.fiscal_position_id if source_order and 'fiscal_position_id' in source_order._fields else False,
             fallback=fallback,
             preferred_plan_id=preferred_plan_id,
             preferred_pricing_id=preferred_pricing_id,
             include_credit=bool(source_order),
         )
-        self._wgs_log_recurring_resolution_snapshot(
-            'charge',
-            product,
-            fallback=fallback,
-            preferred_plan_id=preferred_plan_id,
-            preferred_pricing_id=preferred_pricing_id,
-            pricing_resolution={
-                'candidates': snapshot.get('candidates') or [],
-                'choice': snapshot.get('choice') or {},
-            },
-        )
+        candidates = list(snapshot.get('candidates') or [])
+        candidates.sort(key=lambda row: (row['sequence'], row.get('pricing_id') or 0))
+        flags = self._wgs_get_subscription_product_flags_for_pos(product)
         return {
+            **flags,
             'charge_now': float(snapshot.get('charge_now') or 0.0),
             'credit_amount': float(snapshot.get('credit_amount') or 0.0),
             'recurring_price': float(snapshot.get('price_unit') or 0.0),
@@ -736,154 +708,37 @@ class PosOrder(models.Model):
             'display_charge_now': float(snapshot.get('display_charge_now') or 0.0),
             'display_credit_amount': float(snapshot.get('display_credit_amount') or 0.0),
             'display_recurring_price': float(snapshot.get('display_price_unit') or 0.0),
+            'default_plan_id': snapshot.get('plan_id') or False,
             'plan_id': snapshot.get('plan_id') or False,
             'plan_name': snapshot.get('plan_name') or False,
+            'default_pricing_id': snapshot.get('pricing_id') or False,
             'pricing_id': snapshot.get('pricing_id') or False,
+            'default_price': float(snapshot.get('price_unit') or 0.0),
+            'default_display_price': float(snapshot.get('display_price_unit') or 0.0),
             'interval_label': snapshot.get('interval_label') or '',
             'interval_value': int(snapshot.get('interval_value') or 1),
             'interval_unit': snapshot.get('interval_unit') or 'month',
             'is_upgrade': bool(source_order),
             'source_subscription_id': source_order.id if source_order else False,
             'source_subscription_name': source_order.name if source_order else False,
+            'plans': [
+                {
+                    'plan_id': row.get('plan_id') or False,
+                    'plan_name': row.get('plan_name') or _('Plan recurrente'),
+                    'pricing_id': row.get('pricing_id') or False,
+                    'price': float(row.get('price') or 0.0),
+                    'display_price': float(self._wgs_get_price_with_taxes_for_pos(product, row.get('price') or 0.0)),
+                    'interval_label': row.get('interval_label') or '',
+                    'interval_value': int(row.get('interval_value') or 1),
+                    'interval_unit': row.get('interval_unit') or 'month',
+                }
+                for row in candidates
+            ],
         }
 
-    @api.model
-    def wgs_get_subscription_renewal_charge_for_pos(
-        self,
-        subscription_id,
-        product_id=False,
-        preferred_plan_id=False,
-        preferred_pricing_id=False,
-    ):
-        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar cobro recurrente desde Punto de Venta.'))
-
-        try:
-            subscription_id = int(subscription_id or 0)
-        except (TypeError, ValueError):
-            subscription_id = 0
-        source_order = self._wgs_browse_source_subscription_for_pos(subscription_id)
-        if not source_order:
-            raise UserError(_('La suscripción origen no existe.'))
-        if not self._wgs_order_has_subscription_signal(source_order):
-            raise UserError(_('La orden origen no corresponde a una suscripción válida.'))
-        if not self._wgs_is_subscription_order_active_for_upsell(source_order):
-            raise UserError(_('La suscripción origen no está activa para renovación.'))
-
-        return self._wgs_build_subscription_recurring_charge_payload(
-            source_order,
-            product_id=product_id,
-            preferred_plan_id=preferred_plan_id,
-            preferred_pricing_id=preferred_pricing_id,
-            is_renewal=True,
-        )
-
-    @api.model
-    def wgs_get_subscription_reenroll_charge_for_pos(
-        self,
-        subscription_id,
-        product_id=False,
-        preferred_plan_id=False,
-        preferred_pricing_id=False,
-    ):
-        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar reinscripción desde Punto de Venta.'))
-
-        try:
-            subscription_id = int(subscription_id or 0)
-        except (TypeError, ValueError):
-            subscription_id = 0
-        source_order = self._wgs_browse_source_subscription_for_pos(subscription_id)
-        if not source_order:
-            raise UserError(_('La suscripción origen no existe.'))
-        if not self._wgs_order_has_subscription_signal(source_order):
-            raise UserError(_('La orden origen no corresponde a una suscripción válida.'))
-        if not self._wgs_is_subscription_order_closed_for_reenroll(source_order):
-            raise UserError(_('La suscripción origen no está cerrada ni cancelada para reinscripción.'))
-
-        return self._wgs_build_subscription_recurring_charge_payload(
-            source_order,
-            product_id=product_id,
-            preferred_plan_id=preferred_plan_id,
-            preferred_pricing_id=preferred_pricing_id,
-            is_renewal=False,
-            is_reenroll=True,
-        )
-
-    @api.model
-    def wgs_get_subscription_upsale_charge_for_pos(
-        self,
-        subscription_id,
-        product_id,
-        fallback=0.0,
-        preferred_plan_id=False,
-        preferred_pricing_id=False,
-    ):
-        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar cobro de upsale desde Punto de Venta.'))
-
-        source_order = self._wgs_browse_source_subscription_for_pos(subscription_id)
-        if not source_order:
-            raise UserError(_('La suscripción origen no existe.'))
-        if not self._wgs_order_has_subscription_signal(source_order):
-            raise UserError(_('La orden origen no corresponde a una suscripción válida.'))
-        if not self._wgs_is_subscription_order_active_for_upsell(source_order):
-            raise UserError(_('La suscripción origen no está activa para upsale.'))
-
-        product = self._wgs_browse_product_for_pos(product_id)
-        if not product:
-            raise UserError(_('El producto seleccionado no existe o no está disponible.'))
-
-        snapshot = self._wgs_resolve_subscription_pricing_snapshot(
-            flow='upsale',
-            product=product,
-            partner=source_order.partner_id if 'partner_id' in source_order._fields else False,
-            company=source_order.company_id if 'company_id' in source_order._fields else False,
-            fiscal_position=source_order.fiscal_position_id if 'fiscal_position_id' in source_order._fields else False,
-            source_order=source_order,
-            fallback=fallback,
-            preferred_plan_id=preferred_plan_id,
-            preferred_pricing_id=preferred_pricing_id,
-            include_credit=True,
-        )
-
-        return {
-            'charge_now': float(snapshot.get('charge_now') or 0.0),
-            'credit_amount': float(snapshot.get('credit_amount') or 0.0),
-            'recurring_price': float(snapshot.get('price_unit') or 0.0),
-            'ticket_charge_now': float(snapshot.get('ticket_charge_now') or 0.0),
-            'ticket_credit_amount': float(snapshot.get('ticket_credit_amount') or 0.0),
-            'ticket_recurring_price': float(snapshot.get('ticket_price_unit') or 0.0),
-            'display_charge_now': float(snapshot.get('display_charge_now') or 0.0),
-            'display_credit_amount': float(snapshot.get('display_credit_amount') or 0.0),
-            'display_recurring_price': float(snapshot.get('display_price_unit') or 0.0),
-            'plan_id': snapshot.get('plan_id') or False,
-            'plan_name': snapshot.get('plan_name') or False,
-            'pricing_id': snapshot.get('pricing_id') or False,
-            'interval_label': snapshot.get('interval_label') or '',
-            'interval_value': int(snapshot.get('interval_value') or 1),
-            'interval_unit': snapshot.get('interval_unit') or 'month',
-            'is_upgrade': True,
-            'is_renewal': False,
-            'source_subscription_id': source_order.id,
-            'source_subscription_name': source_order.name,
-        }
-
-    @api.model
-    def wgs_get_subscription_pending_charge_for_pos(self, subscription_id, pending_move_id=False):
-        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar cobro pendiente desde Punto de Venta.'))
-
-        try:
-            subscription_id = int(subscription_id or 0)
-        except (TypeError, ValueError):
-            subscription_id = 0
-        source_order = self._wgs_browse_source_subscription_for_pos(subscription_id)
-        if not source_order:
-            raise UserError(_('La suscripción origen no existe.'))
-        if not self._wgs_order_has_subscription_signal(source_order):
-            raise UserError(_('La orden origen no corresponde a una suscripción válida.'))
-
-        pending_invoice = self._wgs_get_pending_invoice_from_subscription(source_order, pending_move_id=pending_move_id)
-        if not pending_invoice:
-            raise UserError(_('La suscripción seleccionada no tiene facturas pendientes por cobrar.'))
-
+    def _wgs_build_pending_charge_payload_for_pos(self, source_order, pending_invoice):
+        source_order.ensure_one()
+        pending_invoice.ensure_one()
         snapshot = self._wgs_resolve_subscription_pricing_snapshot(
             flow='pending_charge',
             source_order=source_order,
@@ -903,6 +758,256 @@ class PosOrder(models.Model):
             'source_subscription_id': source_order.id,
             'source_subscription_name': source_order.name,
         }
+
+    def _wgs_build_subscription_pricing_payload_for_pos(
+        self,
+        *,
+        flow='new',
+        partner=False,
+        product=False,
+        source_order=False,
+        pending_invoice=False,
+        fallback=0.0,
+        preferred_plan_id=False,
+        preferred_pricing_id=False,
+    ):
+        normalized_flow = str(flow or 'new').strip().lower()
+        if normalized_flow not in ('new', 'upsale', 'renewal', 'reenroll', 'pending_charge'):
+            normalized_flow = 'new'
+
+        if normalized_flow in ('new', 'upsale'):
+            if not product:
+                raise UserError(_('El producto seleccionado no existe o no está disponible.'))
+            payload = self._wgs_build_product_pricing_payload_for_pos(
+                product=product,
+                flow='upsale' if normalized_flow == 'upsale' else 'new',
+                partner=partner if partner else False,
+                source_order=source_order if source_order else False,
+                fallback=fallback,
+                preferred_plan_id=preferred_plan_id,
+                preferred_pricing_id=preferred_pricing_id,
+            )
+            payload['flow'] = normalized_flow
+            payload['is_upgrade'] = bool(source_order) if normalized_flow == 'upsale' else False
+            payload['is_renewal'] = False
+            return payload
+
+        if normalized_flow in ('renewal', 'reenroll'):
+            if not source_order:
+                raise UserError(_('La suscripción origen no existe.'))
+            payload = self._wgs_build_subscription_recurring_charge_payload(
+                source_order,
+                product_id=product.id if product else False,
+                preferred_plan_id=preferred_plan_id,
+                preferred_pricing_id=preferred_pricing_id,
+                is_renewal=normalized_flow == 'renewal',
+                is_reenroll=normalized_flow == 'reenroll',
+            )
+            payload['flow'] = normalized_flow
+            return payload
+
+        if normalized_flow == 'pending_charge':
+            if not source_order:
+                raise UserError(_('La suscripción origen no existe.'))
+            if not pending_invoice:
+                raise UserError(_('La suscripción seleccionada no tiene facturas pendientes por cobrar.'))
+            payload = self._wgs_build_pending_charge_payload_for_pos(source_order, pending_invoice)
+            payload['flow'] = normalized_flow
+            return payload
+
+        raise UserError(_('No se pudo resolver el flujo de pricing solicitado.'))
+
+    @api.model
+    def wgs_get_subscription_pricing_for_pos(
+        self,
+        partner_id=False,
+        product_id=False,
+        flow='new',
+        source_subscription_id=False,
+        pending_move_id=False,
+        fallback=0.0,
+        preferred_plan_id=False,
+        preferred_pricing_id=False,
+    ):
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar pricing de suscripción desde Punto de Venta.'))
+
+        normalized_flow = str(flow or 'new').strip().lower()
+        if normalized_flow not in ('new', 'upsale', 'renewal', 'reenroll', 'pending_charge'):
+            normalized_flow = 'new'
+
+        partner = self._wgs_browse_partner_for_pos(partner_id) if partner_id else self.env['res.partner']
+        product = self._wgs_browse_product_for_pos(product_id) if product_id else self.env['product.product']
+        source_order = self.env['sale.order']
+        pending_invoice = self.env['account.move']
+
+        if normalized_flow == 'new':
+            if not product:
+                raise UserError(_('El producto seleccionado no existe o no está disponible.'))
+            if partner:
+                source_order = self._wgs_find_active_subscription_for_partner(partner)
+
+        elif normalized_flow == 'upsale':
+            source_order = self._wgs_browse_source_subscription_for_pos(source_subscription_id)
+            if not source_order:
+                raise UserError(_('La suscripción origen no existe.'))
+            if not self._wgs_order_has_subscription_signal(source_order):
+                raise UserError(_('La orden origen no corresponde a una suscripción válida.'))
+            if not self._wgs_is_subscription_order_active_for_upsell(source_order):
+                raise UserError(_('La suscripción origen no está activa para upsale.'))
+            if not product:
+                raise UserError(_('El producto seleccionado no existe o no está disponible.'))
+            if not partner and 'partner_id' in source_order._fields:
+                partner = source_order.partner_id
+
+        elif normalized_flow == 'renewal':
+            source_order = self._wgs_browse_source_subscription_for_pos(source_subscription_id)
+            if not source_order:
+                raise UserError(_('La suscripción origen no existe.'))
+            if not self._wgs_order_has_subscription_signal(source_order):
+                raise UserError(_('La orden origen no corresponde a una suscripción válida.'))
+            if not self._wgs_is_subscription_order_active_for_upsell(source_order):
+                raise UserError(_('La suscripción origen no está activa para renovación.'))
+
+        elif normalized_flow == 'reenroll':
+            source_order = self._wgs_browse_source_subscription_for_pos(source_subscription_id)
+            if not source_order:
+                raise UserError(_('La suscripción origen no existe.'))
+            if not self._wgs_order_has_subscription_signal(source_order):
+                raise UserError(_('La orden origen no corresponde a una suscripción válida.'))
+            if not self._wgs_is_subscription_order_closed_for_reenroll(source_order):
+                raise UserError(_('La suscripción origen no está cerrada ni cancelada para reinscripción.'))
+
+        elif normalized_flow == 'pending_charge':
+            source_order = self._wgs_browse_source_subscription_for_pos(source_subscription_id)
+            if not source_order:
+                raise UserError(_('La suscripción origen no existe.'))
+            if not self._wgs_order_has_subscription_signal(source_order):
+                raise UserError(_('La orden origen no corresponde a una suscripción válida.'))
+            pending_invoice = self._wgs_get_pending_invoice_from_subscription(source_order, pending_move_id=pending_move_id)
+            if not pending_invoice:
+                raise UserError(_('La suscripción seleccionada no tiene facturas pendientes por cobrar.'))
+
+        return self._wgs_build_subscription_pricing_payload_for_pos(
+            flow=normalized_flow,
+            partner=partner if partner else False,
+            product=product if product else False,
+            source_order=source_order if source_order else False,
+            pending_invoice=pending_invoice if pending_invoice else False,
+            fallback=fallback,
+            preferred_plan_id=preferred_plan_id,
+            preferred_pricing_id=preferred_pricing_id,
+        )
+
+    @api.model
+    def wgs_get_subscription_charge_for_pos(
+        self,
+        partner_id,
+        product_id,
+        fallback=0.0,
+        preferred_plan_id=False,
+        preferred_pricing_id=False,
+    ):
+        return self.wgs_get_subscription_pricing_for_pos(
+            partner_id=partner_id,
+            product_id=product_id,
+            flow='new',
+            fallback=fallback,
+            preferred_plan_id=preferred_plan_id,
+            preferred_pricing_id=preferred_pricing_id,
+        )
+
+    @api.model
+    def wgs_get_subscription_renewal_charge_for_pos(
+        self,
+        subscription_id,
+        product_id=False,
+        preferred_plan_id=False,
+        preferred_pricing_id=False,
+    ):
+        return self.wgs_get_subscription_pricing_for_pos(
+            partner_id=False,
+            product_id=product_id or False,
+            flow='renewal',
+            source_subscription_id=subscription_id,
+            pending_move_id=False,
+            fallback=0.0,
+            preferred_plan_id=preferred_plan_id,
+            preferred_pricing_id=preferred_pricing_id,
+        )
+
+    @api.model
+    def wgs_get_subscription_reenroll_charge_for_pos(
+        self,
+        subscription_id,
+        product_id=False,
+        preferred_plan_id=False,
+        preferred_pricing_id=False,
+    ):
+        return self.wgs_get_subscription_pricing_for_pos(
+            partner_id=False,
+            product_id=product_id or False,
+            flow='reenroll',
+            source_subscription_id=subscription_id,
+            pending_move_id=False,
+            fallback=0.0,
+            preferred_plan_id=preferred_plan_id,
+            preferred_pricing_id=preferred_pricing_id,
+        )
+
+    @api.model
+    def wgs_get_subscription_upsale_charge_for_pos(
+        self,
+        subscription_id,
+        product_id,
+        fallback=0.0,
+        preferred_plan_id=False,
+        preferred_pricing_id=False,
+    ):
+        return self.wgs_get_subscription_pricing_for_pos(
+            partner_id=False,
+            product_id=product_id,
+            flow='upsale',
+            source_subscription_id=subscription_id,
+            pending_move_id=False,
+            fallback=fallback,
+            preferred_plan_id=preferred_plan_id,
+            preferred_pricing_id=preferred_pricing_id,
+        )
+
+    @api.model
+    def wgs_get_subscription_product_pricing_for_pos(
+        self,
+        partner_id,
+        product_id,
+        flow='new',
+        source_subscription_id=False,
+        fallback=0.0,
+        preferred_plan_id=False,
+        preferred_pricing_id=False,
+    ):
+        return self.wgs_get_subscription_pricing_for_pos(
+            partner_id=partner_id,
+            product_id=product_id,
+            flow=flow,
+            source_subscription_id=source_subscription_id,
+            pending_move_id=False,
+            fallback=fallback,
+            preferred_plan_id=preferred_plan_id,
+            preferred_pricing_id=preferred_pricing_id,
+        )
+
+    @api.model
+    def wgs_get_subscription_pending_charge_for_pos(self, subscription_id, pending_move_id=False):
+        return self.wgs_get_subscription_pricing_for_pos(
+            partner_id=False,
+            product_id=False,
+            flow='pending_charge',
+            source_subscription_id=subscription_id,
+            pending_move_id=pending_move_id,
+            fallback=0.0,
+            preferred_plan_id=False,
+            preferred_pricing_id=False,
+        )
 
     @api.model
     def wgs_get_subscription_cancellation_refund_for_pos(self, subscription_id):
@@ -949,72 +1054,15 @@ class PosOrder(models.Model):
         if not product:
             raise UserError(_('El producto seleccionado no existe o no está disponible.'))
 
-        is_subscription_flag = bool(
-            (('recurring_invoice' in product._fields) and product.recurring_invoice)
-            or (('recurring_invoice' in product.product_tmpl_id._fields) and product.product_tmpl_id.recurring_invoice)
-            or (('is_subscription' in product._fields) and product.is_subscription)
-            or (('is_subscription' in product.product_tmpl_id._fields) and product.product_tmpl_id.is_subscription)
-        )
-        max_total = int(product.max_participants_total or 1)
-        if max_total < 1:
-            max_total = 1
-
-        snapshot = self._wgs_resolve_subscription_pricing_snapshot(
-            flow='catalog',
-            product=product,
-            fallback=fallback,
-        )
-        self._wgs_log_recurring_resolution_snapshot(
-            'catalog',
-            product,
-            fallback=fallback,
-            pricing_resolution={
-                'candidates': snapshot.get('candidates') or [],
-                'choice': snapshot.get('choice') or {},
-            },
-        )
-        candidates = list(snapshot.get('candidates') or [])
-        candidates.sort(key=lambda row: (row['sequence'], row.get('pricing_id') or 0))
-        is_subscription = bool(is_subscription_flag or candidates)
-
-        default_plan_id = snapshot.get('plan_id') or False
-        default_pricing_id = snapshot.get('pricing_id') or False
-        default_display_price = float(snapshot.get('display_price_unit') or 0.0)
-        student_age_lock = bool(getattr(product.product_tmpl_id, 'wgs_student_age_lock', False))
-        family_authorization = bool(getattr(product.product_tmpl_id, 'wgs_requires_family_authorization', False))
-        single_day_access = bool(getattr(product.product_tmpl_id, 'wgs_single_day_access', False))
-        free_trial_day = bool(getattr(product.product_tmpl_id, 'wgs_free_trial_day', False))
-        requires_curp = bool(
-            getattr(product.product_tmpl_id, 'wgs_requires_curp', False)
-            or student_age_lock
-            or free_trial_day
-        )
-
+        flags = self._wgs_get_subscription_product_flags_for_pos(product)
         return {
-            'is_subscription': is_subscription,
-            'max_participants_total': max_total,
-            'requires_curp': requires_curp,
-            'student_age_lock': student_age_lock,
-            'family_authorization': family_authorization,
-            'single_day_access': single_day_access,
-            'free_trial_day': free_trial_day,
-            'default_plan_id': default_plan_id,
-            'default_pricing_id': default_pricing_id,
-            'default_price': float(snapshot.get('price_unit') or 0.0),
-            'default_display_price': float(default_display_price),
-            'plans': [
-                {
-                    'plan_id': row.get('plan_id') or False,
-                    'plan_name': row.get('plan_name') or _('Plan recurrente'),
-                    'pricing_id': row.get('pricing_id') or False,
-                    'price': float(row.get('price') or 0.0),
-                    'display_price': float(self._wgs_get_price_with_taxes_for_pos(product, row.get('price') or 0.0)),
-                    'interval_label': row.get('interval_label') or '',
-                    'interval_value': int(row.get('interval_value') or 1),
-                    'interval_unit': row.get('interval_unit') or 'month',
-                }
-                for row in candidates
-            ],
+            'is_subscription': True,
+            **flags,
+            'default_plan_id': False,
+            'default_pricing_id': False,
+            'default_price': float(fallback or 0.0),
+            'default_display_price': float(self._wgs_get_price_with_taxes_for_pos(product, fallback or 0.0)),
+            'plans': [],
         }
 
     @api.model
@@ -1044,24 +1092,33 @@ class PosOrder(models.Model):
         products = product_model.search(domain, order='name asc, id asc', limit=limit)
         output = []
         for product in products:
-            context = self.wgs_get_subscription_product_context_for_pos(product.id, fallback=product.lst_price)
-            if not context.get('is_subscription'):
-                continue
+            student_age_lock = bool(getattr(product.product_tmpl_id, 'wgs_student_age_lock', False))
+            family_authorization = bool(getattr(product.product_tmpl_id, 'wgs_requires_family_authorization', False))
+            single_day_access = bool(getattr(product.product_tmpl_id, 'wgs_single_day_access', False))
+            free_trial_day = bool(getattr(product.product_tmpl_id, 'wgs_free_trial_day', False))
+            requires_curp = bool(
+                getattr(product.product_tmpl_id, 'wgs_requires_curp', False)
+                or student_age_lock
+                or free_trial_day
+            )
+            max_total = int(product.max_participants_total or 1)
+            if max_total < 1:
+                max_total = 1
             output.append({
                 'id': product.id,
                 'name': product.display_name,
                 'default_code': product.default_code or False,
-                'max_participants_total': int(context.get('max_participants_total') or 1),
-                'requires_curp': bool(context.get('requires_curp')),
-                'student_age_lock': bool(context.get('student_age_lock')),
-                'family_authorization': bool(context.get('family_authorization')),
-                'single_day_access': bool(context.get('single_day_access')),
-                'free_trial_day': bool(context.get('free_trial_day')),
-                'default_plan_id': context.get('default_plan_id') or False,
-                'default_pricing_id': context.get('default_pricing_id') or False,
-                'default_price': float(context.get('default_price') or 0.0),
-                'default_display_price': float(context.get('default_display_price') or 0.0),
-                'plans': context.get('plans') or [],
+                'max_participants_total': max_total,
+                'requires_curp': requires_curp,
+                'student_age_lock': student_age_lock,
+                'family_authorization': family_authorization,
+                'single_day_access': single_day_access,
+                'free_trial_day': free_trial_day,
+                'default_plan_id': False,
+                'default_pricing_id': False,
+                'default_price': 0.0,
+                'default_display_price': 0.0,
+                'plans': [],
             })
         return output
 
@@ -2467,21 +2524,6 @@ class PosOrder(models.Model):
             product=self._wgs_browse_product_for_pos(product_id) if product_id else False,
             preferred_plan_id=preferred_plan_id,
             preferred_pricing_id=preferred_pricing_id,
-        )
-        recurring_line = snapshot.get('source_line') or self.env['sale.order.line']
-
-        self._wgs_log_recurring_resolution_snapshot(
-            'renewal_payload',
-            recurring_line.product_id if recurring_line else source_order.order_line[:1].product_id,
-            fallback=snapshot.get('price_unit') or 0.0,
-            preferred_plan_id=preferred_plan_id,
-            preferred_pricing_id=preferred_pricing_id,
-            pricing_resolution={
-                'candidates': snapshot.get('candidates') or [],
-                'choice': snapshot.get('choice') or {},
-            },
-            source_order=source_order,
-            recurring_line=recurring_line,
         )
 
         return {

@@ -85,7 +85,7 @@ async function openRenewalForm(state, item, {
     stopPartnerCamera,
     renderDetail,
     buildChargeBreakdown,
-    fetchSubscriptionRenewalCharge,
+    fetchSubscriptionPricing,
     fetchSubscriptionDiscountOffers,
     mode = "renewal",
     title = false,
@@ -128,9 +128,14 @@ async function openRenewalForm(state, item, {
     };
     renderDetail(state.currentDetail);
     try {
-        const charge = await fetchSubscriptionRenewalCharge(
+        const flow = mode === "reenroll" ? "reenroll" : "renewal";
+        const charge = await fetchSubscriptionPricing(
+            state.renewalForm.holderPartnerId || false,
+            state.renewalForm.productId || false,
+            flow,
             state.renewalForm.subscriptionId,
-            state.renewalForm.productId,
+            false,
+            0,
             state.renewalForm.planId,
             state.renewalForm.pricingId
         );
@@ -138,7 +143,7 @@ async function openRenewalForm(state, item, {
             ...state.renewalForm,
             loading: false,
             pricingSnapshot: buildPricingSnapshotFromCharge(charge, {
-                flow: mode === "reenroll" ? "reenroll" : "renewal",
+                flow,
                 fallbackPlanId: state.renewalForm.planId,
                 fallbackPricingId: state.renewalForm.pricingId,
                 sourceSubscriptionId: state.renewalForm.subscriptionId,
@@ -189,7 +194,6 @@ async function openReenrollForm(state, item, deps) {
     await openRenewalForm(state, item, {
         ...deps,
         mode: "reenroll",
-        fetchSubscriptionRenewalCharge: deps.fetchSubscriptionReenrollCharge,
     });
 }
 
@@ -198,7 +202,7 @@ async function openPendingChargeForm(state, item, {
     renderDetail,
     buildChargeBreakdown,
     getChargeDisplayAmount,
-    fetchSubscriptionPendingCharge,
+    fetchSubscriptionPricing,
     _t,
 }) {
     if (!item || !item.subscription_id) {
@@ -239,9 +243,15 @@ async function openPendingChargeForm(state, item, {
     };
     renderDetail(state.currentDetail);
     try {
-        const charge = await fetchSubscriptionPendingCharge(
+        const charge = await fetchSubscriptionPricing(
+            state.pendingChargeForm.holderPartnerId || false,
+            state.pendingChargeForm.productId || false,
+            "pending_charge",
             state.pendingChargeForm.subscriptionId,
-            state.pendingChargeForm.pendingMoveId
+            state.pendingChargeForm.pendingMoveId,
+            0,
+            false,
+            false
         );
         state.pendingChargeForm = {
             ...state.pendingChargeForm,
@@ -507,9 +517,83 @@ function mergeResolvedPlanChoice(plans, snapshot, fallbackPlan, fallbackLabel) {
     ];
 }
 
+function applyPricingPayloadToNewSubscriptionForm(state, payload, preferredPlan, {
+    buildChargeBreakdown,
+    _t,
+}) {
+    const snapshot = buildPricingSnapshotFromCharge(payload, {
+        flow: "new",
+        fallbackPlanId: preferredPlan ? preferredPlan.plan_id : false,
+        fallbackPricingId: preferredPlan ? preferredPlan.pricing_id : false,
+        fallbackIntervalValue: preferredPlan ? preferredPlan.interval_value : 1,
+        fallbackIntervalUnit: preferredPlan ? preferredPlan.interval_unit : "month",
+        fallbackIntervalLabel: preferredPlan ? preferredPlan.interval_label : "",
+        sourceSubscriptionId: payload && payload.source_subscription_id ? payload.source_subscription_id : false,
+        sourceSubscriptionName: payload && payload.source_subscription_name ? payload.source_subscription_name : false,
+    });
+    state.newSubscriptionForm.requiresCurp = Boolean(payload && (payload.requires_curp || payload.student_age_lock));
+    state.newSubscriptionForm.studentAgeLock = Boolean(payload && payload.student_age_lock);
+    state.newSubscriptionForm.maxParticipantsTotal = Number(payload && payload.max_participants_total ? payload.max_participants_total : 1) || 1;
+    state.newSubscriptionForm.plans = mergeResolvedPlanChoice(
+        payload && Array.isArray(payload.plans) ? payload.plans : [],
+        snapshot,
+        preferredPlan,
+        _t("Plan recurrente")
+    );
+    state.newSubscriptionForm.pricingSnapshot = snapshot;
+    state.newSubscriptionForm.charge = buildChargeBreakdown(null, null, {
+        baseAmount: Number(snapshot.recurring_price || 0),
+        ticketUnitPrice: Number(snapshot.ticket_recurring_price || 0),
+        displayAmount: Number(snapshot.display_recurring_price || 0),
+    });
+    if (snapshot.plan_id || snapshot.pricing_id) {
+        state.newSubscriptionForm.planChoice = `${Number(snapshot.plan_id || 0)}:${Number(snapshot.pricing_id || 0)}`;
+    }
+}
+
+function applyPricingPayloadToUpsaleForm(state, payload, preferredPlan, {
+    buildChargeBreakdown,
+    _t,
+}) {
+    const snapshot = buildPricingSnapshotFromCharge(payload, {
+        flow: "upsale",
+        fallbackPlanId: preferredPlan ? preferredPlan.plan_id : false,
+        fallbackPricingId: preferredPlan ? preferredPlan.pricing_id : false,
+        fallbackIntervalValue: preferredPlan ? preferredPlan.interval_value : 1,
+        fallbackIntervalUnit: preferredPlan ? preferredPlan.interval_unit : "month",
+        fallbackIntervalLabel: preferredPlan ? preferredPlan.interval_label : "",
+        sourceSubscriptionId: state.upsaleForm.subscriptionId,
+        sourceSubscriptionName: state.upsaleForm.subscriptionName,
+    });
+    state.upsaleForm.maxParticipantsTotal = Number(payload && payload.max_participants_total ? payload.max_participants_total : 1) || 1;
+    state.upsaleForm.plans = mergeResolvedPlanChoice(
+        payload && Array.isArray(payload.plans) ? payload.plans : [],
+        snapshot,
+        preferredPlan,
+        _t("Plan recurrente")
+    );
+    state.upsaleForm.pricingSnapshot = snapshot;
+    state.upsaleForm.recurringCharge = buildChargeBreakdown(null, null, {
+        baseAmount: Number(snapshot.recurring_price || 0),
+        ticketUnitPrice: Number(snapshot.ticket_recurring_price || 0),
+        displayAmount: Number(snapshot.display_recurring_price || 0),
+    });
+    state.upsaleForm.creditCharge = buildChargeBreakdown(null, null, {
+        baseAmount: Number(snapshot.credit_amount || 0),
+        ticketUnitPrice: Number(snapshot.ticket_credit_amount || 0),
+        displayAmount: Number(snapshot.display_credit_amount || 0),
+    });
+    state.upsaleForm.charge = buildChargeBreakdown(null, null, {
+        baseAmount: Number(snapshot.charge_now || 0),
+        ticketUnitPrice: Number(snapshot.ticket_charge_now || 0),
+        displayAmount: Number(snapshot.display_charge_now || 0),
+    });
+    state.upsaleForm.planChoice = `${Number(snapshot.plan_id || 0)}:${Number(snapshot.pricing_id || 0)}`;
+}
+
 async function recalculateNewSubscriptionCharge(state, product, preferredPlan, {
     renderDetail,
-    fetchSubscriptionCharge,
+    fetchSubscriptionPricing,
     buildChargeBreakdown,
     _t,
 }) {
@@ -519,38 +603,20 @@ async function recalculateNewSubscriptionCharge(state, product, preferredPlan, {
     state.newSubscriptionForm.loading = true;
     renderDetail(state.currentDetail);
     try {
-        const charge = await fetchSubscriptionCharge(
+        const payload = await fetchSubscriptionPricing(
             state.selectedPartnerId,
             Number(product.id || 0),
+            "new",
+            false,
+            false,
             Number(preferredPlan && preferredPlan.price ? preferredPlan.price : product.default_price || 0),
             preferredPlan ? Number(preferredPlan.plan_id || 0) || false : false,
             preferredPlan ? Number(preferredPlan.pricing_id || 0) || false : false
         );
-        const snapshot = buildPricingSnapshotFromCharge(charge, {
-            flow: "new",
-            fallbackPlanId: preferredPlan ? preferredPlan.plan_id : false,
-            fallbackPricingId: preferredPlan ? preferredPlan.pricing_id : false,
-            fallbackIntervalValue: preferredPlan ? preferredPlan.interval_value : 1,
-            fallbackIntervalUnit: preferredPlan ? preferredPlan.interval_unit : "month",
-            fallbackIntervalLabel: preferredPlan ? preferredPlan.interval_label : "",
-            sourceSubscriptionId: charge && charge.source_subscription_id ? charge.source_subscription_id : false,
-            sourceSubscriptionName: charge && charge.source_subscription_name ? charge.source_subscription_name : false,
+        applyPricingPayloadToNewSubscriptionForm(state, payload, preferredPlan, {
+            buildChargeBreakdown,
+            _t,
         });
-        state.newSubscriptionForm.plans = mergeResolvedPlanChoice(
-            state.newSubscriptionForm.plans,
-            snapshot,
-            preferredPlan,
-            _t("Plan recurrente")
-        );
-        state.newSubscriptionForm.pricingSnapshot = snapshot;
-        state.newSubscriptionForm.charge = buildChargeBreakdown(null, null, {
-            baseAmount: Number(snapshot.recurring_price || 0),
-            ticketUnitPrice: Number(snapshot.ticket_recurring_price || 0),
-            displayAmount: Number(snapshot.display_recurring_price || 0),
-        });
-        if (snapshot.plan_id || snapshot.pricing_id) {
-            state.newSubscriptionForm.planChoice = `${Number(snapshot.plan_id || 0)}:${Number(snapshot.pricing_id || 0)}`;
-        }
     } catch (error) {
         console.error("Error al recalcular cobro de suscripción POS", error);
         state.formError = _t("No se pudo recalcular el precio de la suscripción.");
@@ -572,24 +638,14 @@ async function applySelectedProduct(state, productId, {
     state.newSubscriptionForm.requiresCurp = Boolean(product && (product.requires_curp || product.student_age_lock));
     state.newSubscriptionForm.studentAgeLock = Boolean(product && product.student_age_lock);
     state.newSubscriptionForm.maxParticipantsTotal = product ? Number(product.max_participants_total || 1) : 1;
-    state.newSubscriptionForm.plans = product ? [...(product.plans || [])] : [];
+    state.newSubscriptionForm.plans = [];
     state.newSubscriptionForm.pricingSnapshot = null;
-    const defaultPlanId = product ? Number(product.default_plan_id || 0) : 0;
-    const defaultPricingId = product ? Number(product.default_pricing_id || 0) : 0;
-    const defaultChoice = state.newSubscriptionForm.plans.find((item) => {
-        return Number(item.plan_id || 0) === defaultPlanId && Number(item.pricing_id || 0) === defaultPricingId;
-    }) || state.newSubscriptionForm.plans[0] || null;
-    if (defaultChoice) {
-        state.newSubscriptionForm.planChoice = `${Number(defaultChoice.plan_id || 0)}:${Number(defaultChoice.pricing_id || 0)}`;
-    } else {
-        state.newSubscriptionForm.planChoice = "";
-        state.newSubscriptionForm.pricingSnapshot = null;
-        state.newSubscriptionForm.charge = {
-            baseAmount: 0,
-            displayAmount: 0,
-            ticketUnitPrice: 0,
-        };
-    }
+    state.newSubscriptionForm.planChoice = "";
+    state.newSubscriptionForm.charge = {
+        baseAmount: 0,
+        displayAmount: 0,
+        ticketUnitPrice: 0,
+    };
     state.newSubscriptionForm.discountOffers = [];
     state.newSubscriptionForm.selectedDiscountCode = "";
     state.newSubscriptionForm.supervisorPin = "";
@@ -618,7 +674,7 @@ async function applySelectedProduct(state, productId, {
         state.newSubscriptionForm.maxParticipantsTotal
     );
     if (product) {
-        await recalculateNewSubscriptionCharge(product, defaultChoice);
+        await recalculateNewSubscriptionCharge(product, null);
         return;
     }
     renderDetail(state.currentDetail);
@@ -655,8 +711,7 @@ function toggleParticipant(state, partnerId, checked) {
 
 async function applySelectedUpsaleProduct(state, productId, {
     renderDetail,
-    getSelectedUpsalePlan,
-    fetchSubscriptionUpsaleCharge,
+    fetchSubscriptionPricing,
     buildChargeBreakdown,
     _t,
 }) {
@@ -668,7 +723,7 @@ async function applySelectedUpsaleProduct(state, productId, {
     state.upsaleForm.productId = numericProductId;
     state.upsaleForm.productName = product ? product.name || "" : "";
     state.upsaleForm.maxParticipantsTotal = product ? Number(product.max_participants_total || 1) : 1;
-    state.upsaleForm.plans = product ? [...(product.plans || [])] : [];
+    state.upsaleForm.plans = [];
     state.upsaleForm.pricingSnapshot = null;
     state.upsaleForm.planChoice = "";
     state.upsaleForm.recurringCharge = buildChargeBreakdown(null, null, { baseAmount: 0, displayAmount: 0 });
@@ -679,67 +734,31 @@ async function applySelectedUpsaleProduct(state, productId, {
         state.upsaleForm.holderPartnerId,
         state.upsaleForm.maxParticipantsTotal
     );
-    if (!product || !state.upsaleForm.plans.length) {
+    if (!product) {
         renderDetail(state.currentDetail);
         return;
-    }
-    const defaultPlanId = Number(product.default_plan_id || 0);
-    const defaultPricingId = Number(product.default_pricing_id || 0);
-    const defaultChoice = state.upsaleForm.plans.find((item) => {
-        return Number(item.plan_id || 0) === defaultPlanId && Number(item.pricing_id || 0) === defaultPricingId;
-    }) || state.upsaleForm.plans[0] || null;
-    if (defaultChoice) {
-        state.upsaleForm.planChoice = `${Number(defaultChoice.plan_id || 0)}:${Number(defaultChoice.pricing_id || 0)}`;
     }
     state.upsaleForm.loading = true;
     renderDetail(state.currentDetail);
     try {
-        const selectedPlan = getSelectedUpsalePlan();
-        const charge = await fetchSubscriptionUpsaleCharge(
-            state.upsaleForm.subscriptionId,
+        const payload = await fetchSubscriptionPricing(
+            state.upsaleForm.holderPartnerId || false,
             state.upsaleForm.productId,
-            Number(defaultChoice && defaultChoice.price ? defaultChoice.price : 0),
-            selectedPlan ? Number(selectedPlan.plan_id || 0) || false : false,
-            selectedPlan ? Number(selectedPlan.pricing_id || 0) || false : false
-        );
-        const snapshot = buildPricingSnapshotFromCharge(charge, {
-            flow: "upsale",
-            fallbackPlanId: selectedPlan ? selectedPlan.plan_id : false,
-            fallbackPricingId: selectedPlan ? selectedPlan.pricing_id : false,
-            fallbackIntervalValue: selectedPlan ? selectedPlan.interval_value : 1,
-            fallbackIntervalUnit: selectedPlan ? selectedPlan.interval_unit : "month",
-            fallbackIntervalLabel: selectedPlan ? selectedPlan.interval_label : "",
-            sourceSubscriptionId: state.upsaleForm.subscriptionId,
-            sourceSubscriptionName: state.upsaleForm.subscriptionName,
-        });
-        const updatedPlans = mergeResolvedPlanChoice(
-            state.upsaleForm.plans,
-            snapshot,
-            selectedPlan,
-            _t("Plan recurrente")
+            "upsale",
+            state.upsaleForm.subscriptionId,
+            false,
+            Number(product.default_price || 0),
+            false,
+            false
         );
         state.upsaleForm = {
             ...state.upsaleForm,
             loading: false,
-            plans: updatedPlans,
-            pricingSnapshot: snapshot,
-            recurringCharge: buildChargeBreakdown(null, null, {
-                baseAmount: Number(snapshot.recurring_price || 0),
-                ticketUnitPrice: Number(snapshot.ticket_recurring_price || 0),
-                displayAmount: Number(snapshot.display_recurring_price || 0),
-            }),
-            creditCharge: buildChargeBreakdown(null, null, {
-                baseAmount: Number(snapshot.credit_amount || 0),
-                ticketUnitPrice: Number(snapshot.ticket_credit_amount || 0),
-                displayAmount: Number(snapshot.display_credit_amount || 0),
-            }),
-            charge: buildChargeBreakdown(null, null, {
-                baseAmount: Number(snapshot.charge_now || 0),
-                ticketUnitPrice: Number(snapshot.ticket_charge_now || 0),
-                displayAmount: Number(snapshot.display_charge_now || 0),
-            }),
-            planChoice: `${Number(snapshot.plan_id || 0)}:${Number(snapshot.pricing_id || 0)}`,
         };
+        applyPricingPayloadToUpsaleForm(state, payload, null, {
+            buildChargeBreakdown,
+            _t,
+        });
     } catch (error) {
         console.error("Error al consultar cobro de upsale POS", error);
         state.formError = _t("No se pudo calcular el cobro del upsale para esta suscripción.");
@@ -757,7 +776,7 @@ async function applySelectedUpsaleProduct(state, productId, {
 async function updateSelectedUpsalePlan(state, planChoice, {
     getSelectedUpsalePlan,
     renderDetail,
-    fetchSubscriptionUpsaleCharge,
+    fetchSubscriptionPricing,
     buildChargeBreakdown,
     _t,
 }) {
@@ -773,51 +792,24 @@ async function updateSelectedUpsalePlan(state, planChoice, {
     state.upsaleForm.loading = true;
     renderDetail(state.currentDetail);
     try {
-        const charge = await fetchSubscriptionUpsaleCharge(
-            state.upsaleForm.subscriptionId,
+        const payload = await fetchSubscriptionPricing(
+            state.upsaleForm.holderPartnerId || false,
             state.upsaleForm.productId,
+            "upsale",
+            state.upsaleForm.subscriptionId,
+            false,
             Number(selectedPlan.price || 0),
             Number(selectedPlan.plan_id || 0) || false,
             Number(selectedPlan.pricing_id || 0) || false
         );
-        const snapshot = buildPricingSnapshotFromCharge(charge, {
-            flow: "upsale",
-            fallbackPlanId: selectedPlan.plan_id,
-            fallbackPricingId: selectedPlan.pricing_id,
-            fallbackIntervalValue: selectedPlan.interval_value,
-            fallbackIntervalUnit: selectedPlan.interval_unit,
-            fallbackIntervalLabel: selectedPlan.interval_label,
-            sourceSubscriptionId: state.upsaleForm.subscriptionId,
-            sourceSubscriptionName: state.upsaleForm.subscriptionName,
-        });
-        const updatedPlans = mergeResolvedPlanChoice(
-            state.upsaleForm.plans,
-            snapshot,
-            selectedPlan,
-            _t("Plan recurrente")
-        );
         state.upsaleForm = {
             ...state.upsaleForm,
             loading: false,
-            plans: updatedPlans,
-            pricingSnapshot: snapshot,
-            recurringCharge: buildChargeBreakdown(null, null, {
-                baseAmount: Number(snapshot.recurring_price || 0),
-                ticketUnitPrice: Number(snapshot.ticket_recurring_price || 0),
-                displayAmount: Number(snapshot.display_recurring_price || 0),
-            }),
-            creditCharge: buildChargeBreakdown(null, null, {
-                baseAmount: Number(snapshot.credit_amount || 0),
-                ticketUnitPrice: Number(snapshot.ticket_credit_amount || 0),
-                displayAmount: Number(snapshot.display_credit_amount || 0),
-            }),
-            charge: buildChargeBreakdown(null, null, {
-                baseAmount: Number(snapshot.charge_now || 0),
-                ticketUnitPrice: Number(snapshot.ticket_charge_now || 0),
-                displayAmount: Number(snapshot.display_charge_now || 0),
-            }),
-            planChoice: `${Number(snapshot.plan_id || 0)}:${Number(snapshot.pricing_id || 0)}`,
         };
+        applyPricingPayloadToUpsaleForm(state, payload, selectedPlan, {
+            buildChargeBreakdown,
+            _t,
+        });
     } catch (error) {
         console.error("Error al actualizar cobro de upsale POS", error);
         state.formError = _t("No se pudo recalcular el cobro del upsale.");
