@@ -619,33 +619,6 @@ class PosOrder(models.Model):
             return {'ok': False, 'reason': 'buffer_error'}
         return {'ok': True}
 
-    @api.model
-    def wgs_get_recurring_price_for_pos(self, product_id, fallback=0.0, preferred_plan_id=False, preferred_pricing_id=False):
-        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar precios de suscripción desde Punto de Venta.'))
-
-        product = self._wgs_browse_product_for_pos(product_id)
-        if not product:
-            raise UserError(_('El producto seleccionado no existe o no está disponible.'))
-
-        snapshot = self._wgs_resolve_subscription_pricing_snapshot(
-            flow='new',
-            product=product,
-            fallback=fallback,
-            preferred_plan_id=preferred_plan_id,
-            preferred_pricing_id=preferred_pricing_id,
-        )
-        return {
-            'price': float(snapshot.get('price_unit') or 0.0),
-            'display_price': float(snapshot.get('display_price_unit') or 0.0),
-            'ticket_price': float(snapshot.get('ticket_price_unit') or 0.0),
-            'plan_id': snapshot.get('plan_id') or False,
-            'plan_name': snapshot.get('plan_name') or False,
-            'pricing_id': snapshot.get('pricing_id') or False,
-            'interval_label': snapshot.get('interval_label') or '',
-            'interval_value': int(snapshot.get('interval_value') or 1),
-            'interval_unit': snapshot.get('interval_unit') or 'month',
-        }
-
     def _wgs_get_subscription_product_flags_for_pos(self, product):
         product.ensure_one()
         student_age_lock = bool(getattr(product.product_tmpl_id, 'wgs_student_age_lock', False))
@@ -899,117 +872,6 @@ class PosOrder(models.Model):
         )
 
     @api.model
-    def wgs_get_subscription_charge_for_pos(
-        self,
-        partner_id,
-        product_id,
-        fallback=0.0,
-        preferred_plan_id=False,
-        preferred_pricing_id=False,
-    ):
-        return self.wgs_get_subscription_pricing_for_pos(
-            partner_id=partner_id,
-            product_id=product_id,
-            flow='new',
-            fallback=fallback,
-            preferred_plan_id=preferred_plan_id,
-            preferred_pricing_id=preferred_pricing_id,
-        )
-
-    @api.model
-    def wgs_get_subscription_renewal_charge_for_pos(
-        self,
-        subscription_id,
-        product_id=False,
-        preferred_plan_id=False,
-        preferred_pricing_id=False,
-    ):
-        return self.wgs_get_subscription_pricing_for_pos(
-            partner_id=False,
-            product_id=product_id or False,
-            flow='renewal',
-            source_subscription_id=subscription_id,
-            pending_move_id=False,
-            fallback=0.0,
-            preferred_plan_id=preferred_plan_id,
-            preferred_pricing_id=preferred_pricing_id,
-        )
-
-    @api.model
-    def wgs_get_subscription_reenroll_charge_for_pos(
-        self,
-        subscription_id,
-        product_id=False,
-        preferred_plan_id=False,
-        preferred_pricing_id=False,
-    ):
-        return self.wgs_get_subscription_pricing_for_pos(
-            partner_id=False,
-            product_id=product_id or False,
-            flow='reenroll',
-            source_subscription_id=subscription_id,
-            pending_move_id=False,
-            fallback=0.0,
-            preferred_plan_id=preferred_plan_id,
-            preferred_pricing_id=preferred_pricing_id,
-        )
-
-    @api.model
-    def wgs_get_subscription_upsale_charge_for_pos(
-        self,
-        subscription_id,
-        product_id,
-        fallback=0.0,
-        preferred_plan_id=False,
-        preferred_pricing_id=False,
-    ):
-        return self.wgs_get_subscription_pricing_for_pos(
-            partner_id=False,
-            product_id=product_id,
-            flow='upsale',
-            source_subscription_id=subscription_id,
-            pending_move_id=False,
-            fallback=fallback,
-            preferred_plan_id=preferred_plan_id,
-            preferred_pricing_id=preferred_pricing_id,
-        )
-
-    @api.model
-    def wgs_get_subscription_product_pricing_for_pos(
-        self,
-        partner_id,
-        product_id,
-        flow='new',
-        source_subscription_id=False,
-        fallback=0.0,
-        preferred_plan_id=False,
-        preferred_pricing_id=False,
-    ):
-        return self.wgs_get_subscription_pricing_for_pos(
-            partner_id=partner_id,
-            product_id=product_id,
-            flow=flow,
-            source_subscription_id=source_subscription_id,
-            pending_move_id=False,
-            fallback=fallback,
-            preferred_plan_id=preferred_plan_id,
-            preferred_pricing_id=preferred_pricing_id,
-        )
-
-    @api.model
-    def wgs_get_subscription_pending_charge_for_pos(self, subscription_id, pending_move_id=False):
-        return self.wgs_get_subscription_pricing_for_pos(
-            partner_id=False,
-            product_id=False,
-            flow='pending_charge',
-            source_subscription_id=subscription_id,
-            pending_move_id=pending_move_id,
-            fallback=0.0,
-            preferred_plan_id=False,
-            preferred_pricing_id=False,
-        )
-
-    @api.model
     def wgs_get_subscription_cancellation_refund_for_pos(self, subscription_id):
         self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar cancelación de suscripción desde Punto de Venta.'))
 
@@ -1044,25 +906,6 @@ class PosOrder(models.Model):
             'price_unit': abs(float(origin_line.price_unit or 0.0)),
             'discount': float(origin_line.discount or 0.0) if 'discount' in origin_line._fields else 0.0,
             'amount_total': round(max(refund_total, 0.0), 2),
-        }
-
-    @api.model
-    def wgs_get_subscription_product_context_for_pos(self, product_id, fallback=0.0):
-        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar contexto de suscripción desde Punto de Venta.'))
-
-        product = self._wgs_browse_product_for_pos(product_id)
-        if not product:
-            raise UserError(_('El producto seleccionado no existe o no está disponible.'))
-
-        flags = self._wgs_get_subscription_product_flags_for_pos(product)
-        return {
-            'is_subscription': True,
-            **flags,
-            'default_plan_id': False,
-            'default_pricing_id': False,
-            'default_price': float(fallback or 0.0),
-            'default_display_price': float(self._wgs_get_price_with_taxes_for_pos(product, fallback or 0.0)),
-            'plans': [],
         }
 
     @api.model

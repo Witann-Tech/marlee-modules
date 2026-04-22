@@ -195,14 +195,20 @@ class TestPosPartnerCurp(TransactionCase):
         self.assertTrue(item)
         self.assertTrue(item['requires_curp'])
 
-    def test_student_product_context_requires_curp(self):
-        context = self.PosOrder.sudo().wgs_get_subscription_product_context_for_pos(
-            self.student_product.id,
+    def test_student_product_pricing_requires_curp(self):
+        payload = self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
+            partner_id=self.partner.id,
+            product_id=self.student_product.id,
+            flow='new',
+            source_subscription_id=False,
+            pending_move_id=False,
             fallback=120.0,
+            preferred_plan_id=False,
+            preferred_pricing_id=False,
         )
 
-        self.assertTrue(context['student_age_lock'])
-        self.assertTrue(context['requires_curp'])
+        self.assertTrue(payload['student_age_lock'])
+        self.assertTrue(payload['requires_curp'])
 
     def test_validate_subscription_product_eligibility_rejects_age_25_or_more(self):
         partner = self.Partner.create(
@@ -255,19 +261,31 @@ class TestPosPartnerCurp(TransactionCase):
 
         self.assertTrue(result['ok'])
 
-    def test_product_context_exposes_single_day_and_trial_flags(self):
-        context = self.PosOrder.sudo().wgs_get_subscription_product_context_for_pos(
-            self.day_pass_product.id,
+    def test_pricing_payload_exposes_single_day_and_trial_flags(self):
+        payload = self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
+            partner_id=self.partner.id,
+            product_id=self.day_pass_product.id,
+            flow='new',
+            source_subscription_id=False,
+            pending_move_id=False,
             fallback=80.0,
+            preferred_plan_id=False,
+            preferred_pricing_id=False,
         )
-        self.assertTrue(context['single_day_access'])
+        self.assertTrue(payload['single_day_access'])
 
-        trial_context = self.PosOrder.sudo().wgs_get_subscription_product_context_for_pos(
-            self.trial_product.id,
+        trial_payload = self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
+            partner_id=self.partner.id,
+            product_id=self.trial_product.id,
+            flow='new',
+            source_subscription_id=False,
+            pending_move_id=False,
             fallback=0.0,
+            preferred_plan_id=False,
+            preferred_pricing_id=False,
         )
-        self.assertTrue(trial_context['free_trial_day'])
-        self.assertTrue(trial_context['requires_curp'])
+        self.assertTrue(trial_payload['free_trial_day'])
+        self.assertTrue(trial_payload['requires_curp'])
 
     def test_validate_subscription_product_eligibility_blocks_reused_free_trial(self):
         partner = self.Partner.create(

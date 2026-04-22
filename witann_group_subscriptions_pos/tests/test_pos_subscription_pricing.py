@@ -85,10 +85,13 @@ class TestPosSubscriptionPricing(TransactionCase):
         total = self.PosOrder._wgs_get_price_with_taxes_for_pos(self.product, 100.0, partner=self.partner)
         self.assertEqual(total, 116.0)
 
-    def test_subscription_charge_for_pos_returns_tax_included_display_price(self):
-        charge = self.PosOrder.sudo().wgs_get_subscription_charge_for_pos(
-            self.partner.id,
-            self.product.id,
+    def test_subscription_pricing_for_pos_returns_tax_included_display_price(self):
+        charge = self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
+            partner_id=self.partner.id,
+            product_id=self.product.id,
+            flow='new',
+            source_subscription_id=False,
+            pending_move_id=False,
             fallback=100.0,
             preferred_plan_id=False,
             preferred_pricing_id=False,
@@ -96,13 +99,27 @@ class TestPosSubscriptionPricing(TransactionCase):
         self.assertEqual(charge['recurring_price'], 100.0)
         self.assertEqual(charge['display_recurring_price'], 116.0)
 
-    def test_product_context_plans_expose_display_price_with_taxes(self):
-        context = self.PosOrder.sudo().wgs_get_subscription_product_context_for_pos(
-            self.product.id,
+    def test_subscription_catalog_is_structural_only(self):
+        catalog = self.PosOrder.sudo().wgs_get_subscription_product_catalog_for_pos(limit=20)
+        item = next((row for row in catalog if row['id'] == self.product.id), None)
+        self.assertTrue(item)
+        self.assertEqual(item['default_price'], 0.0)
+        self.assertEqual(item['default_display_price'], 0.0)
+        self.assertEqual(item['plans'], [])
+
+    def test_subscription_pricing_payload_exposes_display_price_with_taxes(self):
+        payload = self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
+            partner_id=self.partner.id,
+            product_id=self.product.id,
+            flow='new',
+            source_subscription_id=False,
+            pending_move_id=False,
             fallback=100.0,
+            preferred_plan_id=False,
+            preferred_pricing_id=False,
         )
-        self.assertEqual(context['default_price'], 100.0)
-        self.assertEqual(context['default_display_price'], 116.0)
+        self.assertEqual(payload['default_price'], 100.0)
+        self.assertEqual(payload['default_display_price'], 116.0)
 
     def test_plan_period_end_date_is_inclusive(self):
         start_date = fields.Date.to_date('2026-03-26')
@@ -166,9 +183,12 @@ class TestPosSubscriptionPricing(TransactionCase):
         except Exception:
             self.skipTest('No se pudo crear sale.subscription.pricing en este runtime.')
 
-        charge = self.PosOrder.sudo().wgs_get_subscription_charge_for_pos(
-            self.partner.id,
-            self.product.id,
+        charge = self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
+            partner_id=self.partner.id,
+            product_id=self.product.id,
+            flow='new',
+            source_subscription_id=False,
+            pending_move_id=False,
             fallback=90.0,
             preferred_plan_id=self.plan.id,
             preferred_pricing_id=False,
@@ -176,7 +196,7 @@ class TestPosSubscriptionPricing(TransactionCase):
 
         self.assertEqual(charge['recurring_price'], 50.0)
 
-    def test_product_context_plan_list_prefers_subscription_pricing_over_generic_candidate(self):
+    def test_pricing_payload_plan_list_prefers_subscription_pricing_over_generic_candidate(self):
         pricing_model_name = 'sale.subscription.pricing'
         if pricing_model_name not in self.env.registry:
             self.skipTest('sale.subscription.pricing no existe en este runtime.')
@@ -215,14 +235,20 @@ class TestPosSubscriptionPricing(TransactionCase):
         except Exception:
             self.skipTest('No se pudo crear sale.subscription.pricing en este runtime.')
 
-        context = self.PosOrder.sudo().wgs_get_subscription_product_context_for_pos(
-            self.product.id,
+        payload = self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
+            partner_id=self.partner.id,
+            product_id=self.product.id,
+            flow='new',
+            source_subscription_id=False,
+            pending_move_id=False,
             fallback=90.0,
+            preferred_plan_id=False,
+            preferred_pricing_id=False,
         )
 
-        self.assertEqual(context['default_price'], 50.0)
-        self.assertEqual(len(context['plans']), 1)
-        self.assertEqual(context['plans'][0]['price'], 50.0)
+        self.assertEqual(payload['default_price'], 50.0)
+        self.assertEqual(len(payload['plans']), 1)
+        self.assertEqual(payload['plans'][0]['price'], 50.0)
 
     def test_close_source_subscription_after_upgrade_sets_previous_day_end(self):
         order = self._create_subscription_like_order()
@@ -262,9 +288,13 @@ class TestPosSubscriptionPricing(TransactionCase):
         if 'subscription_state' in order._fields:
             order.write({'subscription_state': 'closed'})
 
-        charge = self.PosOrder.sudo().wgs_get_subscription_reenroll_charge_for_pos(
-            order.id,
-            self.product.id,
+        charge = self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
+            partner_id=False,
+            product_id=self.product.id,
+            flow='reenroll',
+            source_subscription_id=order.id,
+            pending_move_id=False,
+            fallback=0.0,
             preferred_plan_id=False,
             preferred_pricing_id=False,
         )
