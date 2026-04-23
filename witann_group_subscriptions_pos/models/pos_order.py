@@ -656,13 +656,15 @@ class PosOrder(models.Model):
     ):
         product.ensure_one()
         source_order = source_order.exists() if source_order else self.env['sale.order']
+        pricing_company = source_order.company_id if source_order and 'company_id' in source_order._fields else False
+        pricing_fiscal_position = source_order.fiscal_position_id if source_order and 'fiscal_position_id' in source_order._fields else False
         snapshot = self._wgs_resolve_subscription_pricing_snapshot(
             flow=flow,
             product=product,
             partner=partner,
             source_order=source_order,
-            company=source_order.company_id if source_order and 'company_id' in source_order._fields else False,
-            fiscal_position=source_order.fiscal_position_id if source_order and 'fiscal_position_id' in source_order._fields else False,
+            company=pricing_company,
+            fiscal_position=pricing_fiscal_position,
             fallback=fallback,
             preferred_plan_id=preferred_plan_id,
             preferred_pricing_id=preferred_pricing_id,
@@ -701,7 +703,15 @@ class PosOrder(models.Model):
                     'plan_name': row.get('plan_name') or _('Plan recurrente'),
                     'pricing_id': row.get('pricing_id') or False,
                     'price': float(row.get('price') or 0.0),
-                    'display_price': float(self._wgs_get_price_with_taxes_for_pos(product, row.get('price') or 0.0)),
+                    'display_price': float(
+                        self._wgs_get_price_with_taxes_for_pos(
+                            product,
+                            row.get('price') or 0.0,
+                            partner=partner or False,
+                            company=pricing_company or False,
+                            fiscal_position=pricing_fiscal_position or False,
+                        )
+                    ),
                     'interval_label': row.get('interval_label') or '',
                     'interval_value': int(row.get('interval_value') or 1),
                     'interval_unit': row.get('interval_unit') or 'month',

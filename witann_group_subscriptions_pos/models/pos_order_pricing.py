@@ -753,7 +753,7 @@ class PosOrderPricingMixin(models.Model):
         product.ensure_one()
         model_name = 'sale.subscription.pricing'
         if model_name not in self.env.registry:
-            return self.env['ir.model'].browse()
+            return ()
 
         cache = self._wgs_get_env_cache('_wgs_direct_subscription_pricing_records_cache')
         cache_key = (product._name, product.id, product.product_tmpl_id.id)
@@ -776,8 +776,9 @@ class PosOrderPricingMixin(models.Model):
                 if not value:
                     continue
                 records |= value if field.type in ('one2many', 'many2many') else value.exists()
-        cache[cache_key] = records
-        return records
+        result = tuple(records)
+        cache[cache_key] = result
+        return result
 
     def _wgs_search_related_records(
         self,
@@ -789,7 +790,7 @@ class PosOrderPricingMixin(models.Model):
         template_field_names=(),
     ):
         if model_name not in self.env.registry:
-            return []
+            return ()
 
         cache = self._wgs_get_env_cache('_wgs_search_related_records_cache')
         cache_key = (
@@ -821,11 +822,11 @@ class PosOrderPricingMixin(models.Model):
         if template:
             domain_parts.extend([[(field_name, '=', template.id)] for field_name in template_field_names])
         if not domain_parts:
-            records = model.browse()
+            result = ()
         else:
-            records = model.search(expression.OR(domain_parts))
-        cache[cache_key] = records
-        return records
+            result = tuple(model.search(expression.OR(domain_parts)))
+        cache[cache_key] = result
+        return result
 
     def _wgs_get_recurring_pricing_candidates(self, product):
         product.ensure_one()

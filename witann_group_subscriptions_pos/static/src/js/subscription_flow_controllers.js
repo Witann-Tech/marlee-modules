@@ -157,8 +157,6 @@ async function openRenewalForm(state, item, {
             loading: false,
             pricingSnapshot: buildPricingSnapshotFromCharge(pricing, {
                 flow,
-                fallbackPlanId: Number(item.renewal_plan_id || 0) || false,
-                fallbackPricingId: Number(item.renewal_pricing_id || 0) || false,
                 sourceSubscriptionId: state.renewalForm.subscriptionId,
                 sourceSubscriptionName: state.renewalForm.subscriptionName,
             }),
@@ -396,11 +394,6 @@ function applyPricingPayloadToNewSubscriptionForm(state, payload, preferredPlan,
 }) {
     const snapshot = buildPricingSnapshotFromCharge(payload, {
         flow: "new",
-        fallbackPlanId: preferredPlan ? preferredPlan.plan_id : false,
-        fallbackPricingId: preferredPlan ? preferredPlan.pricing_id : false,
-        fallbackIntervalValue: preferredPlan ? preferredPlan.interval_value : 1,
-        fallbackIntervalUnit: preferredPlan ? preferredPlan.interval_unit : "month",
-        fallbackIntervalLabel: preferredPlan ? preferredPlan.interval_label : "",
         sourceSubscriptionId: payload && payload.source_subscription_id ? payload.source_subscription_id : false,
         sourceSubscriptionName: payload && payload.source_subscription_name ? payload.source_subscription_name : false,
     });
@@ -421,11 +414,6 @@ function applyPricingPayloadToUpsaleForm(state, payload, preferredPlan, {
 }) {
     const snapshot = buildPricingSnapshotFromCharge(payload, {
         flow: "upsale",
-        fallbackPlanId: preferredPlan ? preferredPlan.plan_id : false,
-        fallbackPricingId: preferredPlan ? preferredPlan.pricing_id : false,
-        fallbackIntervalValue: preferredPlan ? preferredPlan.interval_value : 1,
-        fallbackIntervalUnit: preferredPlan ? preferredPlan.interval_unit : "month",
-        fallbackIntervalLabel: preferredPlan ? preferredPlan.interval_label : "",
         sourceSubscriptionId: state.upsaleForm.subscriptionId,
         sourceSubscriptionName: state.upsaleForm.subscriptionName,
     });

@@ -2,40 +2,25 @@
 
 function buildPricingSnapshotFromCharge(charge, {
     flow = "new",
-    fallbackPlanId = false,
-    fallbackPricingId = false,
-    fallbackIntervalValue = 1,
-    fallbackIntervalUnit = "month",
-    fallbackIntervalLabel = "",
     sourceSubscriptionId = false,
     sourceSubscriptionName = false,
 } = {}) {
-    const resolvedPlanId = Number(
-        charge && charge.plan_id !== undefined
-            ? charge.plan_id
-            : fallbackPlanId
-    ) || false;
-    const resolvedPricingId = Number(
-        charge && charge.pricing_id !== undefined
-            ? charge.pricing_id
-            : fallbackPricingId
-    ) || false;
     return {
         flow,
-        plan_id: resolvedPlanId,
+        plan_id: Number(charge && charge.plan_id !== undefined ? charge.plan_id : 0) || false,
         plan_name: charge && charge.plan_name ? charge.plan_name : "",
-        pricing_id: resolvedPricingId,
+        pricing_id: Number(charge && charge.pricing_id !== undefined ? charge.pricing_id : 0) || false,
         interval_value: Number(
             charge && charge.interval_value !== undefined
                 ? charge.interval_value
-                : fallbackIntervalValue
+                : 1
         ) || 1,
         interval_unit: charge && charge.interval_unit
             ? charge.interval_unit
-            : (fallbackIntervalUnit || "month"),
+            : "month",
         interval_label: charge && charge.interval_label !== undefined
             ? charge.interval_label
-            : (fallbackIntervalLabel || ""),
+            : "",
         recurring_price: Number(charge && charge.recurring_price ? charge.recurring_price : 0) || 0,
         ticket_recurring_price: Number(
             charge && charge.ticket_recurring_price !== undefined

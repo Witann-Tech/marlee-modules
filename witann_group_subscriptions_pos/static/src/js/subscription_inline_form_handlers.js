@@ -319,7 +319,6 @@ function buildSubscriptionInlineActionHandlers({
         "save-new": async () => {
             state.formError = "";
             state.formNotice = "";
-            const selectedPlan = getSelectedPlan();
             const pricingSnapshot = getPricingSnapshot(state.newSubscriptionForm);
             if (!state.selectedPartnerId) {
                 state.formError = _t("Selecciona un cliente para agregar la suscripcion al ticket.");
@@ -328,11 +327,6 @@ function buildSubscriptionInlineActionHandlers({
             }
             if (!state.newSubscriptionForm.productId) {
                 state.formError = _t("Selecciona un producto de suscripcion.");
-                renderDetail(state.currentDetail);
-                return;
-            }
-            if (!selectedPlan) {
-                state.formError = _t("Selecciona un plan recurrente.");
                 renderDetail(state.currentDetail);
                 return;
             }
@@ -359,6 +353,11 @@ function buildSubscriptionInlineActionHandlers({
             }
             if (!state.newSubscriptionForm.pricingSnapshot) {
                 state.formError = _t("No se pudo resolver el pricing de la suscripción. Reintenta seleccionar el plan.");
+                renderDetail(state.currentDetail);
+                return;
+            }
+            if (!Number(pricingSnapshot.plan_id || 0) && !Number(pricingSnapshot.pricing_id || 0)) {
+                state.formError = _t("No se pudo resolver el plan recurrente de la suscripción.");
                 renderDetail(state.currentDetail);
                 return;
             }
@@ -704,15 +703,14 @@ function buildSubscriptionInlineActionHandlers({
                 renderDetail(state.currentDetail);
                 return;
             }
-            const selectedUpsalePlan = getSelectedUpsalePlan();
             const pricingSnapshot = getPricingSnapshot(state.upsaleForm);
-            if (!selectedUpsalePlan) {
-                state.formError = _t("Selecciona el plan destino para el upsale.");
+            if (!state.upsaleForm.pricingSnapshot) {
+                state.formError = _t("No se pudo resolver el pricing del upsale.");
                 renderDetail(state.currentDetail);
                 return;
             }
-            if (!state.upsaleForm.pricingSnapshot) {
-                state.formError = _t("No se pudo resolver el pricing del upsale.");
+            if (!Number(pricingSnapshot.plan_id || 0) && !Number(pricingSnapshot.pricing_id || 0)) {
+                state.formError = _t("No se pudo resolver el plan destino del upsale.");
                 renderDetail(state.currentDetail);
                 return;
             }
