@@ -1,6 +1,6 @@
 {
     'name': 'Witann POS Loyalty Install Fix',
-    'version': '19.0.1.0.3',
+    'version': '19.0.1.0.4',
     'summary': 'Evita error de instalacion de pos_loyalty al cargar gift cards',
     'category': 'Point of Sale',
     'author': 'Witann Technologies',

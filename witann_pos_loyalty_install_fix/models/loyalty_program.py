@@ -4,11 +4,8 @@ from odoo import models
 class LoyaltyProgram(models.Model):
     _inherit = 'loyalty.program'
 
-    def _witann_resolve_pos_loyalty_mail_template(self):
-        self.ensure_one()
-        if self.mail_template_id:
-            return self.mail_template_id
-
+    def _inverse_pos_report_print_id(self):
+        loyalty_mail_model = self.env['loyalty.mail']
         xmlids_by_program_type = {
             'gift_card': (
                 'loyalty.mail_template_gift_card',
@@ -18,21 +15,19 @@ class LoyaltyProgram(models.Model):
                 'loyalty.mail_template_loyalty_card',
             ),
         }
-        for xmlid in xmlids_by_program_type.get(self.program_type, ()):
-            template = self.env.ref(xmlid, raise_if_not_found=False)
-            if template:
-                return template
-        return self.env['mail.template']
-
-    def _inverse_pos_report_print_id(self):
-        loyalty_mail_model = self.env['loyalty.mail']
         for program in self:
             if program.program_type not in ('gift_card', 'ewallet'):
                 continue
             if not program.pos_report_print_id:
                 continue
 
-            mail_template = program._witann_resolve_pos_loyalty_mail_template()
+            mail_template = program.mail_template_id
+            if not mail_template:
+                for xmlid in xmlids_by_program_type.get(program.program_type, ()):
+                    mail_template = program.env.ref(xmlid, raise_if_not_found=False)
+                    if mail_template:
+                        break
+
             values = {
                 'trigger': 'create',
                 'pos_report_print_id': program.pos_report_print_id.id,
