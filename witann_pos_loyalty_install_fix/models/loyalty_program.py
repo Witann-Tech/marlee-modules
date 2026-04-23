@@ -5,9 +5,6 @@ class LoyaltyProgram(models.Model):
     _inherit = 'loyalty.program'
 
     def _inverse_pos_report_print_id(self):
-        if not (self.env.context.get('install_mode') or self.env.context.get('load_data')):
-            return super()._inverse_pos_report_print_id()
-
         loyalty_mail_model = self.env['loyalty.mail']
         for program in self:
             if program.program_type not in ('gift_card', 'ewallet'):
