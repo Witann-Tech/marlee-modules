@@ -31,3 +31,6 @@ def _wgs_inverse_pos_report_print_id(self):
 
 if pos_loyalty_program is not None:
     pos_loyalty_program.LoyaltyProgram._inverse_pos_report_print_id = _wgs_inverse_pos_report_print_id
+    pos_report_field = pos_loyalty_program.LoyaltyProgram._fields.get('pos_report_print_id')
+    if pos_report_field:
+        pos_report_field.inverse = _wgs_inverse_pos_report_print_id
