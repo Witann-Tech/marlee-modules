@@ -147,6 +147,44 @@ async function authorizeDiscountForForm(state, form, { partnerId, productId, flo
     }
 }
 
+async function ensurePartnerAssignedToOrder(order, targetPartnerId, {
+    partnerName = "",
+    state,
+    renderDetail,
+    getPartnerIdFromOrder,
+    ensurePartnerLoadedInPos,
+    setPartnerOnCurrentOrder,
+    _t,
+}) {
+    const numericPartnerId = Number(targetPartnerId || 0) || false;
+    if (!numericPartnerId) {
+        return false;
+    }
+    const currentPartnerId = getPartnerIdFromOrder(order);
+    if (currentPartnerId === numericPartnerId) {
+        return true;
+    }
+    if (currentPartnerId) {
+        state.formError = _t("La orden actual ya tiene otro cliente y no se pudo reemplazar desde esta sesión. Usa un solo cliente por ticket.");
+        renderDetail(state.currentDetail);
+        return false;
+    }
+    let partnerRecord = null;
+    try {
+        partnerRecord = await ensurePartnerLoadedInPos(numericPartnerId);
+    } catch (error) {
+        console.error("Error al cargar cliente POS para asociarlo al ticket", error);
+    }
+    if (!partnerRecord || !setPartnerOnCurrentOrder(partnerRecord)) {
+        state.formError = partnerName
+            ? _t("No se pudo cargar el cliente %(name)s en la sesión local del POS para asociarlo al ticket.").replace("%(name)s", partnerName)
+            : _t("No se pudo cargar el cliente en la sesión local del POS para asociarlo al ticket.");
+        renderDetail(state.currentDetail);
+        return false;
+    }
+    return true;
+}
+
 function buildSubscriptionInlineActionHandlers({
     state,
     clearFeedback,
@@ -169,8 +207,8 @@ function buildSubscriptionInlineActionHandlers({
     addConfiguredProductLineToOrder,
     getCurrentOrder,
     getPartnerIdFromOrder,
+    ensurePartnerLoadedInPos,
     updatePartnerCurp,
-    findPartnerInPos,
     setPartnerOnCurrentOrder,
     findProductInPos,
     getSubscriptionPartnerIdsFromOrder,
@@ -386,18 +424,16 @@ function buildSubscriptionInlineActionHandlers({
                 renderDetail(state.currentDetail);
                 return;
             }
-            const partnerOnOrderId = getPartnerIdFromOrder(order);
-            if (partnerOnOrderId !== state.selectedPartnerId) {
-                const partnerRecord = findPartnerInPos(state.selectedPartnerId);
-                if (partnerRecord && setPartnerOnCurrentOrder(partnerRecord)) {
-                    // Partner aligned locally in POS.
-                } else if (partnerOnOrderId) {
-                    state.formError = _t("La orden actual ya tiene otro cliente y no se pudo reemplazar desde esta sesion. Usa un solo cliente por ticket.");
-                    renderDetail(state.currentDetail);
-                    return;
-                } else {
-                    state.formNotice = _t("El cliente no esta cargado en la sesion local del POS. La suscripcion se vinculara al titular al confirmar el pago.");
-                }
+            if (!(await ensurePartnerAssignedToOrder(order, state.selectedPartnerId, {
+                partnerName: String(state.currentDetail && state.currentDetail.partner_name ? state.currentDetail.partner_name : "").trim(),
+                state,
+                renderDetail,
+                getPartnerIdFromOrder,
+                ensurePartnerLoadedInPos,
+                setPartnerOnCurrentOrder,
+                _t,
+            }))) {
+                return;
             }
             const productRecord = findProductInPos(state.newSubscriptionForm.productId);
             if (!productRecord) {
@@ -504,18 +540,16 @@ function buildSubscriptionInlineActionHandlers({
                 return;
             }
             const holderPartnerId = Number(state.pendingChargeForm.holderPartnerId || 0) || false;
-            const partnerOnOrderId = getPartnerIdFromOrder(order);
-            if (partnerOnOrderId !== holderPartnerId) {
-                const partnerRecord = findPartnerInPos(holderPartnerId);
-                if (partnerRecord && setPartnerOnCurrentOrder(partnerRecord)) {
-                    // Partner aligned locally in POS.
-                } else if (partnerOnOrderId) {
-                    state.formError = _t("La orden actual ya tiene otro cliente y no se pudo reemplazar desde esta sesión. Usa un solo cliente por ticket.");
-                    renderDetail(state.currentDetail);
-                    return;
-                } else {
-                    state.formNotice = _t("El titular no está cargado en la sesión local del POS. El cobro pendiente se vinculará al confirmar el pago.");
-                }
+            if (!(await ensurePartnerAssignedToOrder(order, holderPartnerId, {
+                partnerName: String(state.pendingChargeForm.holderPartnerName || "").trim(),
+                state,
+                renderDetail,
+                getPartnerIdFromOrder,
+                ensurePartnerLoadedInPos,
+                setPartnerOnCurrentOrder,
+                _t,
+            }))) {
+                return;
             }
             const productRecord = findProductInPos(state.pendingChargeForm.productId);
             if (!productRecord) {
@@ -589,18 +623,16 @@ function buildSubscriptionInlineActionHandlers({
                 return;
             }
             const holderPartnerId = Number(state.cancellationRefundForm.holderPartnerId || 0) || false;
-            const partnerOnOrderId = getPartnerIdFromOrder(order);
-            if (partnerOnOrderId !== holderPartnerId) {
-                const partnerRecord = findPartnerInPos(holderPartnerId);
-                if (partnerRecord && setPartnerOnCurrentOrder(partnerRecord)) {
-                    // Partner aligned locally in POS.
-                } else if (partnerOnOrderId) {
-                    state.formError = _t("La orden actual ya tiene otro cliente y no se pudo reemplazar desde esta sesión. Usa un solo cliente por ticket.");
-                    renderDetail(state.currentDetail);
-                    return;
-                } else {
-                    state.formNotice = _t("El titular no está cargado en la sesión local del POS. La devolución se vinculará al confirmar el pago.");
-                }
+            if (!(await ensurePartnerAssignedToOrder(order, holderPartnerId, {
+                partnerName: String(state.cancellationRefundForm.holderPartnerName || "").trim(),
+                state,
+                renderDetail,
+                getPartnerIdFromOrder,
+                ensurePartnerLoadedInPos,
+                setPartnerOnCurrentOrder,
+                _t,
+            }))) {
+                return;
             }
             const productRecord = findProductInPos(state.cancellationRefundForm.productId);
             if (!productRecord) {
@@ -736,18 +768,16 @@ function buildSubscriptionInlineActionHandlers({
                 renderDetail(state.currentDetail);
                 return;
             }
-            const partnerOnOrderId = getPartnerIdFromOrder(order);
-            if (partnerOnOrderId !== holderPartnerId) {
-                const partnerRecord = findPartnerInPos(holderPartnerId);
-                if (partnerRecord && setPartnerOnCurrentOrder(partnerRecord)) {
-                    // Partner aligned locally in POS.
-                } else if (partnerOnOrderId) {
-                    state.formError = _t("La orden actual ya tiene otro cliente y no se pudo reemplazar desde esta sesión. Usa un solo cliente por ticket.");
-                    renderDetail(state.currentDetail);
-                    return;
-                } else {
-                    state.formNotice = _t("El titular no está cargado en la sesión local del POS. El upsale se vinculará al confirmar el pago.");
-                }
+            if (!(await ensurePartnerAssignedToOrder(order, holderPartnerId, {
+                partnerName: String(state.upsaleForm.holderPartnerName || "").trim(),
+                state,
+                renderDetail,
+                getPartnerIdFromOrder,
+                ensurePartnerLoadedInPos,
+                setPartnerOnCurrentOrder,
+                _t,
+            }))) {
+                return;
             }
             const productRecord = findProductInPos(state.upsaleForm.productId);
             if (!productRecord) {
@@ -826,18 +856,16 @@ function buildSubscriptionInlineActionHandlers({
                 return;
             }
             const holderPartnerId = Number(state.renewalForm.holderPartnerId || 0) || false;
-            const partnerOnOrderId = getPartnerIdFromOrder(order);
-            if (partnerOnOrderId !== holderPartnerId) {
-                const partnerRecord = findPartnerInPos(holderPartnerId);
-                if (partnerRecord && setPartnerOnCurrentOrder(partnerRecord)) {
-                    // Partner aligned locally in POS.
-                } else if (partnerOnOrderId) {
-                    state.formError = _t("La orden actual ya tiene otro cliente y no se pudo reemplazar desde esta sesión. Usa un solo cliente por ticket.");
-                    renderDetail(state.currentDetail);
-                    return;
-                } else {
-                    state.formNotice = _t("El titular no está cargado en la sesión local del POS. La renovación se vinculará al confirmar el pago.");
-                }
+            if (!(await ensurePartnerAssignedToOrder(order, holderPartnerId, {
+                partnerName: String(state.renewalForm.holderPartnerName || "").trim(),
+                state,
+                renderDetail,
+                getPartnerIdFromOrder,
+                ensurePartnerLoadedInPos,
+                setPartnerOnCurrentOrder,
+                _t,
+            }))) {
+                return;
             }
             const productRecord = findProductInPos(state.renewalForm.productId);
             if (!productRecord) {
@@ -928,18 +956,16 @@ function buildSubscriptionInlineActionHandlers({
                 return;
             }
             const holderPartnerId = Number(state.renewalForm.holderPartnerId || 0) || false;
-            const partnerOnOrderId = getPartnerIdFromOrder(order);
-            if (partnerOnOrderId !== holderPartnerId) {
-                const partnerRecord = findPartnerInPos(holderPartnerId);
-                if (partnerRecord && setPartnerOnCurrentOrder(partnerRecord)) {
-                    // Partner aligned locally in POS.
-                } else if (partnerOnOrderId) {
-                    state.formError = _t("La orden actual ya tiene otro cliente y no se pudo reemplazar desde esta sesión. Usa un solo cliente por ticket.");
-                    renderDetail(state.currentDetail);
-                    return;
-                } else {
-                    state.formNotice = _t("El titular no está cargado en la sesión local del POS. La reinscripción se vinculará al confirmar el pago.");
-                }
+            if (!(await ensurePartnerAssignedToOrder(order, holderPartnerId, {
+                partnerName: String(state.renewalForm.holderPartnerName || "").trim(),
+                state,
+                renderDetail,
+                getPartnerIdFromOrder,
+                ensurePartnerLoadedInPos,
+                setPartnerOnCurrentOrder,
+                _t,
+            }))) {
+                return;
             }
             const productRecord = findProductInPos(state.renewalForm.productId);
             if (!productRecord) {

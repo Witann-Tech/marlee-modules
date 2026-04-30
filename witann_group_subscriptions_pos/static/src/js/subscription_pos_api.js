@@ -8,6 +8,9 @@ export function createSubscriptionPosApi(orm) {
         async fetchPartnerSubscriptionDetail(partnerId) {
             return orm.call("pos.order", "wgs_get_partner_subscription_detail_for_pos", [partnerId]);
         },
+        async fetchPartnerRecord(partnerId) {
+            return orm.call("pos.order", "wgs_get_partner_record_for_pos", [partnerId || false]);
+        },
         async createPartner(values) {
             return orm.call("pos.order", "wgs_create_partner_for_pos", [values || {}]);
         },

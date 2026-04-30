@@ -212,6 +212,46 @@ class PosOrder(models.Model):
         return self.env['sale.order'].wgs_update_partner_for_pos(partner_id, vals)
 
     @api.model
+    def wgs_get_partner_record_for_pos(self, partner_id):
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar clientes desde Punto de Venta.'))
+        partner = self._wgs_browse_partner_for_pos(partner_id)
+        if not partner:
+            return {}
+
+        field_names = []
+        for field_name in (
+            'name',
+            'display_name',
+            'email',
+            'phone',
+            'mobile',
+            'barcode',
+            'vat',
+            'street',
+            'street2',
+            'zip',
+            'city',
+            'lang',
+            'type',
+            'is_company',
+            'company_name',
+            'parent_id',
+            'country_id',
+            'state_id',
+            'write_date',
+        ):
+            if field_name in partner._fields:
+                field_names.append(field_name)
+
+        values = partner.read(field_names, load=False)[0] if field_names else {}
+        values['id'] = partner.id
+        if 'display_name' not in values:
+            values['display_name'] = partner.display_name
+        if 'name' not in values:
+            values['name'] = partner.name
+        return values
+
+    @api.model
     def wgs_validate_subscription_product_eligibility_for_pos(
         self,
         partner_id,

@@ -144,6 +144,29 @@ export function setPartnerOnCurrentOrder(source, partner) {
     return setOrderPartner(order, partner);
 }
 
+export async function ensurePartnerLoadedInPos(source, partnerId, fetchPartnerRecord) {
+    const numericId = Number(partnerId || 0);
+    if (numericId <= 0) {
+        return null;
+    }
+    const localPartner = findPartnerInPos(source, numericId);
+    if (localPartner) {
+        return localPartner;
+    }
+    if (typeof fetchPartnerRecord !== "function") {
+        return null;
+    }
+    const partnerData = await fetchPartnerRecord(numericId);
+    if (!partnerData || Number(partnerData.id || 0) !== numericId) {
+        return null;
+    }
+    const pos = getPos(source);
+    if (pos && pos.db && typeof pos.db.add_partners === "function") {
+        pos.db.add_partners([partnerData]);
+    }
+    return findPartnerInPos(source, numericId) || partnerData;
+}
+
 export function getProductIdFromLine(line) {
     if (!line) {
         return 0;
