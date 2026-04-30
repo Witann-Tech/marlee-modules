@@ -69,27 +69,13 @@ class PosOrderPricingMixin(models.Model):
         cache[cache_key] = result
         return result
 
-    def _wgs_compute_upgrade_credit_amount(self, source_order, today=False, tax_included=False):
+    def _wgs_get_upsale_source_recurring_amount(self, source_order, tax_included=False):
         source_order.ensure_one()
-
-        recurring_total = self._wgs_get_order_recurring_total_amount(source_order, include_taxes=tax_included)
-        if recurring_total <= 0:
-            return 0.0
-
-        today = fields.Date.to_date(today) or fields.Date.context_today(self)
-        period_start, period_end = self._wgs_get_current_subscription_period_bounds(source_order, today=today)
-        if not period_start or not period_end:
-            return 0.0
-        if period_end <= period_start:
-            return 0.0
-        if today >= period_end:
-            return 0.0
-
-        effective_start = today if today > period_start else period_start
-        total_days = max((period_end - period_start).days, 1)
-        remaining_days = max((period_end - effective_start).days, 0)
-        credit_amount = recurring_total * (remaining_days / total_days)
-        return round(max(credit_amount, 0.0), 2)
+        recurring_total = self._wgs_get_order_recurring_total_amount(
+            source_order,
+            include_taxes=tax_included,
+        )
+        return round(max(float(recurring_total or 0.0), 0.0), 2)
 
     def _wgs_get_order_recurring_total_amount(self, sale_order, include_taxes=False):
         sale_order.ensure_one()
@@ -418,20 +404,30 @@ class PosOrderPricingMixin(models.Model):
         source_order = source_order.exists() if source_order else self.env['sale.order']
         credit_amount = 0.0
         display_credit_amount = 0.0
+        subscription_start_date = False
+        subscription_end_date = False
+        next_billing_date = False
         if include_credit and source_order:
-            credit_amount = self._wgs_compute_upgrade_credit_amount(source_order)
+            credit_amount = self._wgs_get_upsale_source_recurring_amount(source_order)
+            display_credit_amount = self._wgs_get_upsale_source_recurring_amount(
+                source_order,
+                tax_included=True,
+            )
+            upsale_schedule = self._wgs_get_upsale_schedule_from_source(source_order)
+            subscription_start_date = upsale_schedule.get('subscription_start_date') or False
+            subscription_end_date = upsale_schedule.get('subscription_end_date') or False
+            next_billing_date = upsale_schedule.get('next_billing_date') or False
         charge_now = round(max(recurring_price - credit_amount, 0.0), 2)
-        display_charge_now = self._wgs_get_price_with_taxes_for_pos(
-            product,
-            charge_now,
-            partner=partner or False,
-            company=company or False,
-            fiscal_position=fiscal_position or False,
-        )
         if include_credit and source_order:
-            display_credit_amount = round(max(display_recurring_price - display_charge_now, 0.0), 2)
+            display_charge_now = round(max(display_recurring_price - display_credit_amount, 0.0), 2)
         else:
-            display_credit_amount = 0.0
+            display_charge_now = self._wgs_get_price_with_taxes_for_pos(
+                product,
+                charge_now,
+                partner=partner or False,
+                company=company or False,
+                fiscal_position=fiscal_position or False,
+            )
         return {
             'mode': 'product',
             'flow': flow,
@@ -449,6 +445,11 @@ class PosOrderPricingMixin(models.Model):
             'charge_now': float(charge_now),
             'display_charge_now': float(display_charge_now),
             'ticket_charge_now': float(charge_now),
+            'subscription_start_date': fields.Date.to_string(subscription_start_date) if subscription_start_date else False,
+            'subscription_end_date': fields.Date.to_string(subscription_end_date) if subscription_end_date else False,
+            'next_billing_date': fields.Date.to_string(next_billing_date) if next_billing_date else False,
+            'source_recurring_price': float(credit_amount),
+            'source_display_recurring_price': float(display_credit_amount),
             'interval_value': int(choice.get('interval_value') or 1),
             'interval_unit': choice.get('interval_unit') or 'month',
             'interval_label': choice.get('interval_label') or '',

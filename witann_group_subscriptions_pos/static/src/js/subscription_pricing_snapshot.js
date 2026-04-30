@@ -73,6 +73,21 @@ function buildPricingSnapshotFromCharge(charge, {
         source_subscription_name: charge && charge.source_subscription_name
             ? charge.source_subscription_name
             : (sourceSubscriptionName || false),
+        subscription_start_date: charge && charge.subscription_start_date
+            ? charge.subscription_start_date
+            : false,
+        subscription_end_date: charge && charge.subscription_end_date
+            ? charge.subscription_end_date
+            : false,
+        next_billing_date: charge && charge.next_billing_date
+            ? charge.next_billing_date
+            : false,
+        source_recurring_price: Number(charge && charge.source_recurring_price ? charge.source_recurring_price : 0) || 0,
+        source_display_recurring_price: Number(
+            charge && charge.source_display_recurring_price !== undefined
+                ? charge.source_display_recurring_price
+                : (charge && charge.source_recurring_price ? charge.source_recurring_price : 0)
+        ) || 0,
     };
 }
 
