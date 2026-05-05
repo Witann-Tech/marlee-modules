@@ -809,8 +809,6 @@ class PosOrder(models.Model):
         if normalized_flow == 'new':
             if not product:
                 raise UserError(_('El producto seleccionado no existe o no está disponible.'))
-            if partner:
-                source_order = self._wgs_find_active_subscription_for_partner(partner)
 
         elif normalized_flow == 'upsale':
             source_order = self._wgs_browse_source_subscription_for_pos(source_subscription_id)
@@ -2155,8 +2153,6 @@ class PosOrder(models.Model):
         upsell_source_order = self.env['sale.order']
         if line.wgs_subscription_flow == 'upsale':
             upsell_source_order = pricing_state['source_order'] or self._wgs_resolve_upsell_source_order_for_line(line)
-        else:
-            upsell_source_order = self._wgs_find_partner_active_subscription_for_upsell()
         if upsell_source_order:
             upsale_schedule = self._wgs_get_upsale_schedule_from_source(
                 upsell_source_order,

@@ -1053,6 +1053,11 @@ class SaleOrder(models.Model):
         if native_state_key in ('closed', 'cancel'):
             return True
 
+        # Renewable/re-enrollable subscriptions must stay visible in the
+        # detail pane even if their current period already expired.
+        if item.get('can_renew') or item.get('can_reenroll'):
+            return True
+
         access_state = item.get('access_state') or False
         if access_state in ('enabled', 'suspended'):
             return True
