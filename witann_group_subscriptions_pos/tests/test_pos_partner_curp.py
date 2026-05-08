@@ -225,7 +225,7 @@ class TestPosPartnerCurp(TransactionCase):
         self.assertTrue(payload['student_age_lock'])
         self.assertTrue(payload['requires_curp'])
 
-    def test_validate_subscription_product_eligibility_rejects_age_25_or_more(self):
+    def test_validate_subscription_product_eligibility_rejects_age_26_or_more(self):
         partner = self.Partner.create(
             {
                 'name': 'Cliente estudiante excedido',
@@ -241,7 +241,7 @@ class TestPosPartnerCurp(TransactionCase):
         self.assertFalse(result['ok'])
         self.assertEqual(result['error_code'], 'student_age_limit')
 
-    def test_validate_subscription_product_eligibility_accepts_under_25(self):
+    def test_validate_subscription_product_eligibility_accepts_under_26(self):
         partner = self.Partner.create(
             {
                 'name': 'Cliente estudiante vigente',

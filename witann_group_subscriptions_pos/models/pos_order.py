@@ -324,12 +324,12 @@ class PosOrder(models.Model):
                 }
 
             age = self._wgs_get_age_for_pos(birthdate)
-            if age >= 25:
+            if age >= 26:
                 return {
                     'ok': False,
                     'error_code': 'student_age_limit',
                     'error_message': _(
-                        'El paquete %(product)s solo permite titulares menores de 25 años. '
+                        'El paquete %(product)s solo permite titulares menores de 26 años. '
                         '%(partner)s tiene %(age)s años según su CURP.'
                     ) % {
                         'product': product.display_name,
