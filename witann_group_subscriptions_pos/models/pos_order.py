@@ -2706,7 +2706,7 @@ class PosOrder(models.Model):
         state_value = (sale_order.subscription_state or '').strip().lower()
         if not state_value:
             return False
-        return any(token in state_value for token in ('cancel', 'close'))
+        return any(token in state_value for token in ('cancel', 'canceled', 'cancelled', 'close', 'closed', 'churn', 'churned'))
 
     def _wgs_build_subscription_recurring_charge_payload(
         self,

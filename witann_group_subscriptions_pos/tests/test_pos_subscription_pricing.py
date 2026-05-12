@@ -317,3 +317,23 @@ class TestPosSubscriptionPricing(TransactionCase):
         self.assertEqual(charge['recurring_price'], 100.0)
         self.assertEqual(charge['display_recurring_price'], 116.0)
         self.assertTrue(charge['is_reenroll'])
+
+    def test_reenroll_charge_allows_churned_subscription(self):
+        order = self._create_subscription_like_order()
+        if 'subscription_state' in order._fields:
+            order.write({'subscription_state': 'churned'})
+
+        charge = self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
+            partner_id=False,
+            product_id=self.product.id,
+            flow='reenroll',
+            source_subscription_id=order.id,
+            pending_move_id=False,
+            fallback=0.0,
+            preferred_plan_id=False,
+            preferred_pricing_id=False,
+        )
+
+        self.assertEqual(charge['recurring_price'], 100.0)
+        self.assertEqual(charge['display_recurring_price'], 116.0)
+        self.assertTrue(charge['is_reenroll'])

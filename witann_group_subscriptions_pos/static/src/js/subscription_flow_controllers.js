@@ -172,7 +172,9 @@ async function openRenewalForm(state, item, {
         applyDiscountOffersToForm(state.renewalForm, quote && Array.isArray(quote.offers) ? quote.offers : []);
     } catch (error) {
         console.error("Error al consultar cobro de renovación POS", error);
-        state.formError = _t("No se pudo consultar el cobro de renovación para esta suscripción.");
+        state.formError = mode === "reenroll"
+            ? _t("No se pudo consultar el cobro de reinscripción para esta suscripción.")
+            : _t("No se pudo consultar el cobro de renovación para esta suscripción.");
         state.renewalForm = {
             ...state.renewalForm,
             loading: false,
