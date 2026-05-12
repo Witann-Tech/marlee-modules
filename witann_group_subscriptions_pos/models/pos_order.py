@@ -25,7 +25,8 @@ class PosSession(models.Model):
         return []
 
     def _loader_params_product_product(self):
-        params = super()._loader_params_product_product()
+        parent_loader = getattr(super(), '_loader_params_product_product', None)
+        params = parent_loader() if parent_loader else {'search_params': {}}
         search_params = params.setdefault('search_params', {})
         field_list = search_params.setdefault('fields', [])
         domain = search_params.get('domain') or []
@@ -172,6 +173,38 @@ class PosOrder(models.Model):
         return self.env['product.product'].sudo()
 
     @api.model
+    def _wgs_get_pos_product_field_names(self, product):
+        field_names = []
+        for field_name in (
+            'name',
+            'display_name',
+            'default_code',
+            'lst_price',
+            'list_price',
+            'sale_ok',
+            'available_in_pos',
+            'recurring_invoice',
+            'is_subscription',
+            'subscription_ok',
+            'max_participants_total',
+            'product_tmpl_id',
+            'taxes_id',
+            'uom_id',
+            'pos_categ_ids',
+            'categ_id',
+            'company_id',
+            'barcode',
+            'description',
+            'description_sale',
+            'to_weight',
+            'tracking',
+            'write_date',
+        ):
+            if field_name in product._fields:
+                field_names.append(field_name)
+        return field_names
+
+    @api.model
     def _wgs_get_product_company_domain_for_pos(self, product_model=None, company=False):
         product_model = product_model or self.env['product.product']
         company = company or self.env.company
@@ -299,32 +332,7 @@ class PosOrder(models.Model):
             if product_company and product_company.id != company.id:
                 return {}
 
-        session_model = self.env['pos.session'].sudo()
-        loader_params = session_model._loader_params_product_product()
-        search_params = loader_params.get('search_params', {}) if isinstance(loader_params, dict) else {}
-        field_names = list(search_params.get('fields') or [])
-        for field_name in (
-            'display_name',
-            'default_code',
-            'lst_price',
-            'list_price',
-            'sale_ok',
-            'available_in_pos',
-            'recurring_invoice',
-            'is_subscription',
-            'subscription_ok',
-            'max_participants_total',
-            'product_tmpl_id',
-            'taxes_id',
-            'uom_id',
-            'pos_categ_ids',
-            'categ_id',
-            'company_id',
-            'write_date',
-        ):
-            if field_name in product._fields and field_name not in field_names:
-                field_names.append(field_name)
-
+        field_names = self._wgs_get_pos_product_field_names(product)
         values = product.read(field_names, load=False)[0] if field_names else {}
         values['id'] = product.id
         if 'display_name' not in values:
