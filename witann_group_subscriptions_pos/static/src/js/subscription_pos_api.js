@@ -37,8 +37,8 @@ export function createSubscriptionPosApi(orm) {
         async updatePartnerPhoto(partnerId, imageBase64) {
             return orm.call("pos.order", "wgs_update_partner_photo_for_pos", [partnerId, imageBase64 || false]);
         },
-        async fetchSubscriptionProductCatalog(searchTerm = "", limit = 200) {
-            return orm.call("pos.order", "wgs_get_subscription_product_catalog_for_pos", [searchTerm, limit]);
+        async fetchSubscriptionProductCatalog(searchTerm = "", limit = 200, companyId = false) {
+            return orm.call("pos.order", "wgs_get_subscription_product_catalog_for_pos", [searchTerm, limit, companyId || false]);
         },
         async fetchSubscriptionPricing(partnerId = false, productId = false, flow = "new", sourceSubscriptionId = false, pendingMoveId = false, fallback = 0, planId = false, pricingId = false) {
             return orm.call(

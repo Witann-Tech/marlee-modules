@@ -12,6 +12,18 @@ _logger = logging.getLogger(__name__)
 class PosSession(models.Model):
     _inherit = 'pos.session'
 
+    def _wgs_get_product_company_domain_for_pos(self, product_model=None):
+        product_model = product_model or self.env['product.product']
+        company = self.company_id
+        if not company:
+            return []
+        if 'company_id' in product_model._fields:
+            return ['|', ('company_id', '=', False), ('company_id', '=', company.id)]
+        template_model = self.env['product.template']
+        if 'company_id' in template_model._fields:
+            return ['|', ('product_tmpl_id.company_id', '=', False), ('product_tmpl_id.company_id', '=', company.id)]
+        return []
+
     def _loader_params_product_product(self):
         params = super()._loader_params_product_product()
         search_params = params.setdefault('search_params', {})
@@ -30,7 +42,11 @@ class PosSession(models.Model):
         recurring_domain = [('recurring_invoice', '=', True)]
         if 'recurring_invoice' not in self.env['product.product']._fields:
             recurring_domain = [('product_tmpl_id.recurring_invoice', '=', True)]
-        search_params['domain'] = fields.Domain.OR([domain, recurring_domain])
+        combined_domain = fields.Domain.OR([domain, recurring_domain])
+        company_domain = self._wgs_get_product_company_domain_for_pos(self.env['product.product'])
+        if company_domain:
+            combined_domain = fields.Domain.AND([combined_domain, company_domain])
+        search_params['domain'] = combined_domain
         return params
 
 
@@ -154,6 +170,19 @@ class PosOrder(models.Model):
     @api.model
     def _wgs_product_model_for_pos(self):
         return self.env['product.product'].sudo()
+
+    @api.model
+    def _wgs_get_product_company_domain_for_pos(self, product_model=None, company=False):
+        product_model = product_model or self.env['product.product']
+        company = company or self.env.company
+        if not company:
+            return []
+        if 'company_id' in product_model._fields:
+            return ['|', ('company_id', '=', False), ('company_id', '=', company.id)]
+        template_model = self.env['product.template']
+        if 'company_id' in template_model._fields:
+            return ['|', ('product_tmpl_id.company_id', '=', False), ('product_tmpl_id.company_id', '=', company.id)]
+        return []
 
     @api.model
     def _wgs_partner_model_for_pos(self):
@@ -1049,15 +1078,17 @@ class PosOrder(models.Model):
         }
 
     @api.model
-    def wgs_get_subscription_product_catalog_for_pos(self, search_term=False, limit=80):
+    def wgs_get_subscription_product_catalog_for_pos(self, search_term=False, limit=80, company_id=False):
         self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar productos de suscripción desde Punto de Venta.'))
 
         product_model = self._wgs_product_model_for_pos()
+        company = self.env['res.company'].sudo().browse(int(company_id or 0)).exists() if company_id else self.env.company
         domain = [('sale_ok', '=', True)]
         if 'active' in product_model._fields:
             domain.append(('active', '=', True))
         recurring_domain = ['|', ('recurring_invoice', '=', True), ('product_tmpl_id.recurring_invoice', '=', True)]
         domain = domain + recurring_domain
+        domain += self._wgs_get_product_company_domain_for_pos(product_model, company=company)
 
         search_term = (search_term or '').strip()
         if search_term:

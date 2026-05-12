@@ -7,6 +7,7 @@ import {
     ensurePartnerLoadedInPos,
     findProductInPos,
     getCurrentOrder,
+    getCurrentCompanyId,
     getLineQty,
     getOrderLines,
     getOrderUid,
@@ -367,7 +368,11 @@ patch(ControlButtons.prototype, {
     },
 
     async _fetchSubscriptionProductCatalog(searchTerm = "") {
-        const backendCatalog = await this.subscriptionPosApi.fetchSubscriptionProductCatalog(searchTerm, 200);
+        const backendCatalog = await this.subscriptionPosApi.fetchSubscriptionProductCatalog(
+            searchTerm,
+            200,
+            getCurrentCompanyId(this) || false
+        );
         return Array.isArray(backendCatalog) ? backendCatalog : [];
     },
 

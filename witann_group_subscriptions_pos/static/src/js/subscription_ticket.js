@@ -27,7 +27,7 @@ export function getCurrentOrder(source) {
     return pos.selectedOrder || pos.order || null;
 }
 
-function getCurrentCompanyId(source) {
+export function getCurrentCompanyId(source) {
     const pos = getPos(source);
     if (!pos) {
         return 0;
