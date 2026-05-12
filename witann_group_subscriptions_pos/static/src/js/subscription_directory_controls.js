@@ -7,6 +7,9 @@ function getDirectoryControls({ toolbar, table }) {
         birthdaySelect: toolbar.querySelector(".wgs-filter-birthday"),
         sortSelect: toolbar.querySelector(".wgs-sort"),
         exportButton: toolbar.querySelector(".wgs-btn-export"),
+        prevPageButton: toolbar.querySelector(".wgs-btn-page-prev"),
+        nextPageButton: toolbar.querySelector(".wgs-btn-page-next"),
+        pageLabel: toolbar.querySelector(".wgs-directory-page-label"),
         tbody: table.querySelector("tbody"),
     };
 }
@@ -17,17 +20,23 @@ function bindDirectoryToolbarEvents({
     birthdaySelect,
     sortSelect,
     exportButton,
+    prevPageButton,
+    nextPageButton,
     onSearchInput,
     onStateChange,
     onBirthdayChange,
     onSortChange,
     onExport,
+    onPrevPage,
+    onNextPage,
 }) {
     searchInput.addEventListener("input", onSearchInput);
     stateSelect.addEventListener("change", onStateChange);
     birthdaySelect.addEventListener("change", onBirthdayChange);
     sortSelect.addEventListener("change", onSortChange);
     exportButton.addEventListener("click", onExport);
+    prevPageButton.addEventListener("click", onPrevPage);
+    nextPageButton.addEventListener("click", onNextPage);
 }
 
 function bindDirectoryRowSelection(tbody, onSelectPartner) {

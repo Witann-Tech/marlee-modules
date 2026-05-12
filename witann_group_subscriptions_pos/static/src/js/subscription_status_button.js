@@ -470,6 +470,9 @@ patch(ControlButtons.prototype, {
                 <option value="birthday_asc">${_t("Orden: Cumpleanos proximo")}</option>
                 <option value="last_access_desc">${_t("Orden: Ultimo acceso reciente")}</option>
             </select>
+            <button type="button" class="wgs-status-close-btn wgs-btn-page-prev">${this._escapeHtml(_t("Anterior"))}</button>
+            <span class="wgs-directory-page-label"></span>
+            <button type="button" class="wgs-status-close-btn wgs-btn-page-next">${this._escapeHtml(_t("Siguiente"))}</button>
             <button type="button" class="wgs-status-close-btn wgs-btn-export">${this._escapeHtml(_t("Descargar XLS"))}</button>
         `;
 
@@ -634,6 +637,9 @@ patch(ControlButtons.prototype, {
             birthdaySelect,
             sortSelect,
             exportButton,
+            prevPageButton,
+            nextPageButton,
+            pageLabel,
             tbody,
         } = getDirectoryControls({ toolbar, table });
 
@@ -646,6 +652,9 @@ patch(ControlButtons.prototype, {
         let directoryLoadError = "";
         let directorySummary = null;
         let directoryLoadToken = 0;
+        let directoryPageOffset = 0;
+        let directoryPageSize = 50;
+        let directoryHasNextPage = false;
         let formMode = null;
         let formError = "";
         let formNotice = "";
@@ -683,6 +692,12 @@ patch(ControlButtons.prototype, {
             set directorySummary(value) { directorySummary = value && typeof value === "object" ? value : null; },
             get directoryLoadToken() { return directoryLoadToken; },
             set directoryLoadToken(value) { directoryLoadToken = Number(value || 0); },
+            get directoryPageOffset() { return directoryPageOffset; },
+            set directoryPageOffset(value) { directoryPageOffset = Math.max(0, Number(value || 0)); },
+            get directoryPageSize() { return directoryPageSize; },
+            set directoryPageSize(value) { directoryPageSize = Math.max(1, Number(value || 50)); },
+            get directoryHasNextPage() { return directoryHasNextPage; },
+            set directoryHasNextPage(value) { directoryHasNextPage = Boolean(value); },
             get formMode() { return formMode; },
             set formMode(value) { formMode = value; },
             get formError() { return formError; },
@@ -768,7 +783,8 @@ patch(ControlButtons.prototype, {
             stateFilter = false,
             searchTerm = false,
             preserveFocus = false,
-            batchSize = 80,
+            batchSize = directoryPageSize,
+            pageOffset = directoryPageOffset,
         } = {}) => {
             const criteria = {
                 ...getDirectoryCriteria(),
@@ -785,6 +801,7 @@ patch(ControlButtons.prototype, {
                 stateFilter: criteria.stateFilter,
                 searchTerm: criteria.searchTerm,
                 batchSize,
+                pageOffset,
                 _t,
             });
         };
@@ -798,7 +815,8 @@ patch(ControlButtons.prototype, {
                     this.subscriptionPosApi.fetchPartnerDirectoryBatch(offset, limit, criteria),
                 stateFilter: criteria.stateFilter,
                 searchTerm: criteria.searchTerm,
-                batchSize: 80,
+                batchSize: directoryPageSize,
+                pageOffset: directoryPageOffset,
                 _t,
             }, preferredPartnerId);
         };
@@ -1430,6 +1448,13 @@ patch(ControlButtons.prototype, {
                 _t,
                 escapeHtml: (value) => this._escapeHtml(value),
             });
+            const pageStart = rows.length ? directoryPageOffset + 1 : 0;
+            const pageEnd = directoryPageOffset + rows.length;
+            pageLabel.textContent = rows.length
+                ? _t("Socios %s-%s").replace("%s", String(pageStart)).replace("%s", String(pageEnd))
+                : _t("Sin socios");
+            prevPageButton.disabled = directoryLoading || directoryPageOffset <= 0;
+            nextPageButton.disabled = directoryLoading || !directoryHasNextPage;
 
             if (!filtered.length) {
                 const emptyMessage = directoryLoading && !rows.length
@@ -1650,10 +1675,22 @@ patch(ControlButtons.prototype, {
 
         let directorySearchTimer = null;
         const refreshDirectoryRowsForControls = () => {
+            directoryPageOffset = 0;
             loadDirectoryRowsInBackground({
                 reset: true,
                 preferredPartnerId: selectedPartnerId,
                 preserveFocus: true,
+                pageOffset: directoryPageOffset,
+            });
+        };
+
+        const loadDirectoryPage = (nextOffset) => {
+            directoryPageOffset = Math.max(0, Number(nextOffset || 0));
+            loadDirectoryRowsInBackground({
+                reset: true,
+                preferredPartnerId: false,
+                preserveFocus: true,
+                pageOffset: directoryPageOffset,
             });
         };
 
@@ -1663,6 +1700,8 @@ patch(ControlButtons.prototype, {
             birthdaySelect,
             sortSelect,
             exportButton,
+            prevPageButton,
+            nextPageButton,
             onSearchInput: () => {
                 renderPreservingFocus();
                 if (directorySearchTimer) {
@@ -1676,6 +1715,12 @@ patch(ControlButtons.prototype, {
             onExport: () => {
                 this._downloadDirectoryAsXls(filteredSnapshot);
             },
+            onPrevPage: () => {
+                loadDirectoryPage(directoryPageOffset - directoryPageSize);
+            },
+            onNextPage: () => {
+                loadDirectoryPage(directoryPageOffset + directoryPageSize);
+            },
         });
 
         render();
@@ -1685,6 +1730,8 @@ patch(ControlButtons.prototype, {
             stateFilter: "actionable",
             searchTerm: "",
             preserveFocus: true,
+            pageOffset: 0,
+            batchSize: directoryPageSize,
         }).then(() => {
             if (overlay.isConnected) {
                 window.setTimeout(() => {
