@@ -470,9 +470,6 @@ patch(ControlButtons.prototype, {
                 <option value="birthday_asc">${_t("Orden: Cumpleanos proximo")}</option>
                 <option value="last_access_desc">${_t("Orden: Ultimo acceso reciente")}</option>
             </select>
-            <button type="button" class="wgs-status-close-btn wgs-btn-page-prev">${this._escapeHtml(_t("Anterior"))}</button>
-            <span class="wgs-directory-page-label"></span>
-            <button type="button" class="wgs-status-close-btn wgs-btn-page-next">${this._escapeHtml(_t("Siguiente"))}</button>
             <button type="button" class="wgs-status-close-btn wgs-btn-export">${this._escapeHtml(_t("Descargar XLS"))}</button>
         `;
 
@@ -494,6 +491,15 @@ patch(ControlButtons.prototype, {
         `;
         const listFormContainer = document.createElement("div");
         listFormContainer.className = "wgs-list-form-container";
+        const listPager = document.createElement("div");
+        listPager.className = "wgs-directory-pagination";
+        listPager.innerHTML = `
+            <span class="wgs-directory-page-label"></span>
+            <div class="wgs-directory-page-actions">
+                <button type="button" class="wgs-directory-page-btn wgs-btn-page-prev">${this._escapeHtml(_t("Anterior"))}</button>
+                <button type="button" class="wgs-directory-page-btn wgs-btn-page-next">${this._escapeHtml(_t("Siguiente"))}</button>
+            </div>
+        `;
         const table = document.createElement("table");
         table.className = "wgs-status-table wgs-subscription-table";
         table.innerHTML = `
@@ -512,6 +518,7 @@ patch(ControlButtons.prototype, {
         `;
         listPane.appendChild(listActions);
         listPane.appendChild(listFormContainer);
+        listPane.appendChild(listPager);
         listPane.appendChild(table);
 
         const detailPane = document.createElement("div");
@@ -641,7 +648,7 @@ patch(ControlButtons.prototype, {
             nextPageButton,
             pageLabel,
             tbody,
-        } = getDirectoryControls({ toolbar, table });
+        } = getDirectoryControls({ toolbar, table, pager: listPager });
 
         let filteredSnapshot = [...rows];
         let selectedPartnerId = rows[0] ? rows[0].id : false;
@@ -1973,6 +1980,40 @@ patch(ControlButtons.prototype, {
             }
             .wgs-list-form-container {
                 padding-top: 0.7rem;
+            }
+            .wgs-directory-pagination {
+                padding: 0.65rem 1rem;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 0.75rem;
+                border-top: 1px solid #eef2f7;
+                border-bottom: 1px solid #e5e7eb;
+                background: #ffffff;
+            }
+            .wgs-directory-page-label {
+                color: #475569;
+                font-size: 0.82rem;
+                font-weight: 700;
+            }
+            .wgs-directory-page-actions {
+                display: flex;
+                gap: 0.45rem;
+                align-items: center;
+            }
+            .wgs-directory-page-btn {
+                border: 1px solid #cbd5e1;
+                border-radius: 0.55rem;
+                background: #ffffff;
+                color: #334155;
+                padding: 0.45rem 0.75rem;
+                font-size: 0.8rem;
+                font-weight: 700;
+                cursor: pointer;
+            }
+            .wgs-directory-page-btn:disabled {
+                opacity: 0.55;
+                cursor: not-allowed;
             }
             .wgs-subscription-detail-pane {
                 overflow: auto;

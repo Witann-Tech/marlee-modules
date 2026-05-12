@@ -676,6 +676,88 @@ class SaleOrder(models.Model):
         return result
 
     @api.model
+    def _get_partner_subscription_directory_status_map_for_pos(self, partners, include_profile_fields=True):
+        if not partners:
+            return {}
+
+        today = fields.Date.context_today(self)
+        subscriptions_by_partner = self._get_pos_subscription_orders_by_partners(partners)
+
+        result = {}
+        for partner in partners:
+            subscriptions = subscriptions_by_partner.get(partner.id, self.browse())
+            items = []
+            for subscription in subscriptions:
+                try:
+                    item = subscription._build_pos_subscription_directory_status_item(today)
+                except Exception as error:
+                    self._wgs_raise_pos_data_error(
+                        _('No se pudo construir la fila del directorio de suscripciones.'),
+                        error=error,
+                        subscription_id=subscription.id,
+                        partner_id=partner.id,
+                    )
+                if item:
+                    items.append(item)
+
+            summary = self._summarize_partner_subscription_items_for_pos(items)
+            values = {
+                'state': summary.get('state') or 'none',
+                'state_label': summary.get('state_label') or _('Sin suscripción'),
+                'short_label': summary.get('short_label') or False,
+                'valid_until': summary.get('valid_until') or False,
+                'start_date': summary.get('start_date') or False,
+                'subscription_id': summary.get('subscription_id') or False,
+                'package_label': summary.get('package_label') or False,
+                'package_names': summary.get('package_names') or [],
+                'plan_name': summary.get('plan_name') or False,
+                'reason': summary.get('reason') or False,
+                'subscription_name': summary.get('subscription_name') or False,
+                'partner_name': partner.display_name,
+            }
+
+            if include_profile_fields:
+                phone_value = self._get_partner_field_value_for_pos(partner, ('phone', 'mobile'))
+                email_value = self._get_partner_field_value_for_pos(partner, ('email',))
+                try:
+                    birthday_value = self._get_partner_field_value_for_pos(
+                        partner,
+                        self._PARTNER_BIRTHDAY_FIELD_CANDIDATES,
+                    )
+                except Exception as error:
+                    _logger.warning('WGS POS: birthday fallback for partner %s (%s)', partner.id, error)
+                    birthday_value = False
+                try:
+                    gender_value = self._get_partner_field_value_for_pos(
+                        partner,
+                        self._PARTNER_GENDER_FIELD_CANDIDATES,
+                    )
+                except Exception as error:
+                    _logger.warning('WGS POS: gender fallback for partner %s (%s)', partner.id, error)
+                    gender_value = False
+                try:
+                    last_access_value = self._get_partner_field_value_for_pos(
+                        partner,
+                        self._PARTNER_LAST_ACCESS_FIELD_CANDIDATES,
+                    )
+                except Exception as error:
+                    _logger.warning('WGS POS: partner last access fallback for partner %s (%s)', partner.id, error)
+                    last_access_value = False
+
+                values.update({
+                    'phone': phone_value or False,
+                    'email': email_value or False,
+                    'gender': gender_value or False,
+                    'birthday': birthday_value or False,
+                    'last_access': last_access_value or False,
+                    'image_url': '/web/image/res.partner/%s/image_128' % partner.id,
+                })
+
+            result[partner.id] = values
+
+        return result
+
+    @api.model
     def get_partner_directory_summary_for_pos(self):
         self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar vigencia desde Punto de Venta.'))
 
@@ -691,7 +773,7 @@ class SaleOrder(models.Model):
 
         for subscription in subscriptions:
             try:
-                item = subscription._build_pos_subscription_status_item(today)
+                item = subscription._build_pos_subscription_directory_status_item(today)
             except Exception as error:
                 self._wgs_raise_pos_data_error(
                     _('No se pudo construir el resumen del directorio de suscripciones.'),
@@ -758,7 +840,7 @@ class SaleOrder(models.Model):
             return []
 
         try:
-            status_map = self.get_partner_subscription_status_map_for_pos(partners.ids)
+            status_map = self._get_partner_subscription_directory_status_map_for_pos(partners)
         except Exception as error:
             self._wgs_raise_pos_data_error(
                 _('No se pudo construir el directorio de suscripciones en este momento.'),
@@ -959,7 +1041,10 @@ class SaleOrder(models.Model):
             if not partners:
                 break
 
-            status_map = self.get_partner_subscription_status_map_for_pos(partners.ids)
+            status_map = self._get_partner_subscription_directory_status_map_for_pos(
+                partners,
+                include_profile_fields=False,
+            )
             for partner in partners:
                 state = status_map.get(partner.id, {}).get('state') or 'none'
                 if not self._directory_state_matches_filter_for_pos(state, state_filter):
@@ -1093,6 +1178,73 @@ class SaleOrder(models.Model):
         if 'is_subscription' in self._fields:
             return True
         return False
+
+    def _build_pos_subscription_directory_status_item(self, today):
+        self.ensure_one()
+
+        recurring_lines = self._get_recurring_lines()
+        if not recurring_lines:
+            return False
+
+        primary_recurring_line = recurring_lines.sorted(key=lambda line: line.id)[:1]
+        plan_name = self._get_subscription_plan_name_for_pos(recurring_lines)
+        access_state = self._classify_subscription_access_state_for_pos()
+        native_state_key, native_state_label = self._get_native_subscription_state_info_for_pos()
+
+        start_date = self._get_first_available_date(
+            ('wgs_effective_start_date', 'start_date', 'date_start', 'subscription_start_date', 'date_order')
+        )
+        next_invoice_date = self._get_first_available_date(('recurring_next_date', 'next_invoice_date'))
+        hard_end_date = self._get_first_available_date(('date_end', 'end_date'))
+        recurrence_delta = self._get_recurrence_delta()
+
+        if start_date and (not next_invoice_date or next_invoice_date <= start_date):
+            next_invoice_date = start_date + recurrence_delta
+
+        period_start = False
+        valid_until = False
+        if next_invoice_date:
+            period_start = next_invoice_date - recurrence_delta
+            valid_until = next_invoice_date - relativedelta(days=1)
+        if hard_end_date and (not valid_until or hard_end_date < valid_until):
+            valid_until = hard_end_date
+
+        reason = _('La suscripción no está vigente para control de acceso.')
+        if start_date and start_date > today:
+            access_state = False
+            reason = _('La suscripción todavía no inicia.')
+        elif native_state_key in ('cancel', 'closed'):
+            access_state = False
+            reason = _('La suscripción está cancelada o cerrada y puede reinscribirse.')
+        elif next_invoice_date and next_invoice_date <= today:
+            native_state_key = 'renew'
+            native_state_label = _('Por renovar')
+            reason = _('La suscripción sigue activa, pero ya venció su siguiente fecha de cobro y debe renovarse.')
+        elif access_state == 'enabled':
+            reason = _('Suscripción en progreso o en renovación.')
+        elif access_state == 'suspended':
+            reason = _('La suscripción está pausada o suspendida.')
+
+        return {
+            'subscription_id': self.id,
+            'subscription_name': self.name,
+            'state': self.subscription_state if 'subscription_state' in self._fields else False,
+            'access_state': access_state or False,
+            'native_state_key': native_state_key,
+            'native_state_label': native_state_label,
+            'holder_partner_id': self.partner_id.id or False,
+            'holder_partner_name': self.partner_id.display_name or False,
+            'package_names': sorted(set(recurring_lines.mapped('product_id.display_name'))),
+            'plan_name': plan_name,
+            'renewal_product_id': primary_recurring_line.product_id.id if primary_recurring_line else False,
+            'start_date': start_date.isoformat() if start_date else False,
+            'period_start': period_start.isoformat() if period_start else False,
+            'valid_until': valid_until.isoformat() if valid_until else False,
+            'next_invoice_date': next_invoice_date.isoformat() if next_invoice_date else False,
+            'is_valid': access_state == 'enabled',
+            'status_label': _('Vigente') if access_state == 'enabled' else _('Sin vigencia'),
+            'reason': reason,
+        }
 
     def _build_pos_subscription_status_item(self, today):
         self.ensure_one()

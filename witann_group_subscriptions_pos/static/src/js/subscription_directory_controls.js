@@ -1,15 +1,15 @@
 /** @odoo-module **/
 
-function getDirectoryControls({ toolbar, table }) {
+function getDirectoryControls({ toolbar, table, pager }) {
     return {
         searchInput: toolbar.querySelector(".wgs-filter-search"),
         stateSelect: toolbar.querySelector(".wgs-filter-state"),
         birthdaySelect: toolbar.querySelector(".wgs-filter-birthday"),
         sortSelect: toolbar.querySelector(".wgs-sort"),
         exportButton: toolbar.querySelector(".wgs-btn-export"),
-        prevPageButton: toolbar.querySelector(".wgs-btn-page-prev"),
-        nextPageButton: toolbar.querySelector(".wgs-btn-page-next"),
-        pageLabel: toolbar.querySelector(".wgs-directory-page-label"),
+        prevPageButton: pager.querySelector(".wgs-btn-page-prev"),
+        nextPageButton: pager.querySelector(".wgs-btn-page-next"),
+        pageLabel: pager.querySelector(".wgs-directory-page-label"),
         tbody: table.querySelector("tbody"),
     };
 }

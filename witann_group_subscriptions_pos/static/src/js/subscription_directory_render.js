@@ -34,7 +34,7 @@ function renderDirectoryRows({
         const stateClass = getStateClass(row.state);
         return `
             <tr class="${rowClass}" data-partner-id="${escapeHtml(String(row.id))}">
-                <td><img class="wgs-partner-avatar" src="${escapeHtml(row.image_url || "")}" alt="${escapeHtml(row.name || "")}" loading="lazy" /></td>
+                <td><img class="wgs-partner-avatar" src="${escapeHtml(row.image_url || "")}" alt="${escapeHtml(row.name || "")}" loading="lazy" decoding="async" /></td>
                 <td class="wgs-cell-name">${escapeHtml(row.name || "-")}</td>
                 <td><span class="wgs-state-badge ${stateClass}">${escapeHtml(row.state_label || _t("Sin suscripcion"))}</span></td>
                 <td>${escapeHtml(row.package_label || "-")}</td>
