@@ -92,7 +92,14 @@ class TestPosPartnerCurp(TransactionCase):
             }
         )
 
-    def _create_subscription_like_order(self, partner, *, end_date='2026-03-01'):
+    def _create_subscription_like_order(
+        self,
+        partner,
+        *,
+        end_date='2026-03-01',
+        subscription_state='closed',
+        next_invoice_date=False,
+    ):
         order = self.env['sale.order'].create(
             {
                 'partner_id': partner.id,
@@ -118,7 +125,12 @@ class TestPosPartnerCurp(TransactionCase):
             line.write(line_updates)
         order_updates = {}
         if 'subscription_state' in order._fields:
-            order_updates['subscription_state'] = 'closed'
+            order_updates['subscription_state'] = subscription_state
+        if next_invoice_date:
+            for field_name in ('recurring_next_date', 'next_invoice_date'):
+                if field_name in order._fields:
+                    order_updates[field_name] = next_invoice_date
+                    break
         for field_name in ('end_date', 'date_end', 'subscription_end_date', 'recurring_end_date'):
             if field_name in order._fields:
                 order_updates[field_name] = end_date
@@ -126,6 +138,46 @@ class TestPosPartnerCurp(TransactionCase):
         if order_updates:
             order.write(order_updates)
         return order
+
+    def test_validate_subscription_product_eligibility_blocks_new_when_partner_has_active_subscription(self):
+        partner = self.Partner.create({'name': 'Cliente activo bloqueado'})
+        self._create_subscription_like_order(
+            partner,
+            subscription_state='progress',
+            end_date='2026-12-31',
+            next_invoice_date='2026-06-01',
+        )
+
+        result = self.PosOrder.sudo().wgs_validate_subscription_product_eligibility_for_pos(
+            partner.id,
+            self.product.id,
+            'new',
+            False,
+        )
+
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['error_code'], 'active_subscription_exists')
+
+    def test_pricing_for_new_blocks_when_partner_has_active_subscription(self):
+        partner = self.Partner.create({'name': 'Cliente activo quote bloqueado'})
+        self._create_subscription_like_order(
+            partner,
+            subscription_state='renew',
+            end_date='2026-12-31',
+            next_invoice_date='2026-05-01',
+        )
+
+        with self.assertRaisesRegex(Exception, 'upsale o una renovación'):
+            self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
+                partner_id=partner.id,
+                product_id=self.product.id,
+                flow='new',
+                source_subscription_id=False,
+                pending_move_id=False,
+                fallback=100.0,
+                preferred_plan_id=False,
+                preferred_pricing_id=False,
+            )
 
     def test_create_partner_for_pos_accepts_curp(self):
         result = self.PosOrder.sudo().wgs_create_partner_for_pos(

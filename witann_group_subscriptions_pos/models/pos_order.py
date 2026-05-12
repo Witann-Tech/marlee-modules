@@ -281,6 +281,18 @@ class PosOrder(models.Model):
         if normalized_flow not in ('new', 'renewal', 'reenroll', 'upsale'):
             normalized_flow = 'new'
 
+        if normalized_flow == 'new':
+            blocking_subscription = self._wgs_get_blocking_subscription_for_new_flow(
+                partner,
+                company=self.env.company,
+            )
+            if blocking_subscription:
+                return {
+                    'ok': False,
+                    'error_code': 'active_subscription_exists',
+                    'error_message': self._wgs_get_blocking_subscription_for_new_flow_message(blocking_subscription),
+                }
+
         sale_order_model = self.env['sale.order'].sudo()
         curp = sale_order_model._get_partner_curp_for_pos(partner)
         if (student_age_check_required or free_trial_day) and not curp:
@@ -809,6 +821,15 @@ class PosOrder(models.Model):
         if normalized_flow == 'new':
             if not product:
                 raise UserError(_('El producto seleccionado no existe o no está disponible.'))
+            if partner:
+                blocking_subscription = self._wgs_get_blocking_subscription_for_new_flow(
+                    partner,
+                    company=self.env.company,
+                )
+                if blocking_subscription:
+                    raise UserError(
+                        self._wgs_get_blocking_subscription_for_new_flow_message(blocking_subscription)
+                    )
 
         elif normalized_flow == 'upsale':
             source_order = self._wgs_browse_source_subscription_for_pos(source_subscription_id)
@@ -2054,6 +2075,15 @@ class PosOrder(models.Model):
         self.ensure_one()
 
         product = line.product_id
+        if line.wgs_subscription_flow == 'new':
+            blocking_subscription = self._wgs_get_blocking_subscription_for_new_flow(
+                self.partner_id,
+                company=self.company_id,
+            )
+            if blocking_subscription:
+                raise UserError(
+                    self._wgs_get_blocking_subscription_for_new_flow_message(blocking_subscription)
+                )
         qty = abs(line.qty)
         max_total = int((product.max_participants_total or 1) * qty)
         if max_total < 1:
@@ -2472,6 +2502,28 @@ class PosOrder(models.Model):
 
         direct_owner_candidates = candidates.filtered(lambda order: order.partner_id.id in partner_ids)
         return (direct_owner_candidates or candidates).sorted(key=lambda order: order.id, reverse=True)[:1]
+
+    def _wgs_get_blocking_subscription_for_new_flow(self, partner, company=False):
+        partner.ensure_one()
+        candidate = self._wgs_find_active_subscription_for_partner(partner, company=company)[:1]
+        return candidate.exists() if candidate else self.env['sale.order']
+
+    def _wgs_get_blocking_subscription_for_new_flow_message(self, source_order):
+        source_order.ensure_one()
+        item = {}
+        build_item = getattr(source_order, '_build_pos_subscription_status_item', None)
+        if callable(build_item):
+            try:
+                item = build_item(fields.Date.context_today(self)) or {}
+            except Exception:
+                item = {}
+        package_label = ', '.join(item.get('package_names') or []) or source_order.name or source_order.display_name
+        return _(
+            'El cliente ya tiene una membresía activa o por renovar (%(package)s). '
+            'Por favor realiza un upsale o una renovación.'
+        ) % {
+            'package': package_label,
+        }
 
     def _wgs_find_partner_active_subscription_for_upsell(self):
         self.ensure_one()
