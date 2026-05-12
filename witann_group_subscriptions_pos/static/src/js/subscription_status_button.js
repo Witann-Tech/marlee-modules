@@ -343,8 +343,13 @@ patch(ControlButtons.prototype, {
         return this.subscriptionPosApi.updatePartner(partnerId, values || {});
     },
 
-    async _validateSubscriptionProductEligibilityForPos(partnerId, productId) {
-        return this.subscriptionPosApi.validateSubscriptionProductEligibility(partnerId, productId);
+    async _validateSubscriptionProductEligibilityForPos(partnerId, productId, flow = "new", sourceSubscriptionId = false) {
+        return this.subscriptionPosApi.validateSubscriptionProductEligibility(
+            partnerId,
+            productId,
+            flow || "new",
+            sourceSubscriptionId || false
+        );
     },
 
     async _authorizeSubscriptionDiscountForPos(partnerId, productId, flow = "new", discountCode = false, supervisorPin = false, sourceSubscriptionId = false) {
@@ -1531,8 +1536,8 @@ patch(ControlButtons.prototype, {
                 findProductInPos: (productId) => findProductInPos(this, productId),
                 getSubscriptionPartnerIdsFromOrder,
                 saveSubscriptionParticipants: (subscriptionId, participantIds) => this._saveSubscriptionParticipants(subscriptionId, participantIds),
-                validateSubscriptionProductEligibility: (partnerId, productId) =>
-                    this._validateSubscriptionProductEligibilityForPos(partnerId, productId),
+                validateSubscriptionProductEligibility: (partnerId, productId, flow, sourceSubscriptionId) =>
+                    this._validateSubscriptionProductEligibilityForPos(partnerId, productId, flow, sourceSubscriptionId),
                 authorizeSubscriptionDiscount: (partnerId, productId, flow, discountCode, supervisorPin, sourceSubscriptionId) =>
                     this._authorizeSubscriptionDiscountForPos(partnerId, productId, flow, discountCode, supervisorPin, sourceSubscriptionId),
                 formatTodayISO,
