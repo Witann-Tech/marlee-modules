@@ -107,6 +107,21 @@ class TestPosSubscriptionPricing(TransactionCase):
         self.assertEqual(item['default_display_price'], 0.0)
         self.assertEqual(item['plans'], [])
 
+    def test_subscription_catalog_includes_recurring_products_hidden_from_normal_pos_grid(self):
+        hidden_product = self.env['product.product'].create(
+            {
+                'name': 'Plan oculto en grid POS',
+                'detailed_type': 'service',
+                'list_price': 150.0,
+                'sale_ok': True,
+                'available_in_pos': False,
+                'recurring_invoice': True,
+            }
+        )
+        catalog = self.PosOrder.sudo().wgs_get_subscription_product_catalog_for_pos(limit=50)
+        item = next((row for row in catalog if row['id'] == hidden_product.id), None)
+        self.assertTrue(item)
+
     def test_subscription_pricing_payload_exposes_display_price_with_taxes(self):
         payload = self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
             partner_id=self.partner.id,

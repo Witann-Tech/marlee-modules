@@ -16,6 +16,7 @@ class PosSession(models.Model):
         params = super()._loader_params_product_product()
         search_params = params.setdefault('search_params', {})
         field_list = search_params.setdefault('fields', [])
+        domain = search_params.get('domain') or []
 
         for field_name in (
             'recurring_invoice',
@@ -25,6 +26,11 @@ class PosSession(models.Model):
         ):
             if field_name not in field_list:
                 field_list.append(field_name)
+
+        recurring_domain = [('recurring_invoice', '=', True)]
+        if 'recurring_invoice' not in self.env['product.product']._fields:
+            recurring_domain = [('product_tmpl_id.recurring_invoice', '=', True)]
+        search_params['domain'] = fields.Domain.OR([domain, recurring_domain])
         return params
 
 
@@ -1052,11 +1058,6 @@ class PosOrder(models.Model):
             domain.append(('active', '=', True))
         recurring_domain = ['|', ('recurring_invoice', '=', True), ('product_tmpl_id.recurring_invoice', '=', True)]
         domain = domain + recurring_domain
-
-        if 'available_in_pos' in product_model._fields:
-            domain.append(('available_in_pos', '=', True))
-        elif 'available_in_pos' in self.env['product.template']._fields:
-            domain.append(('product_tmpl_id.available_in_pos', '=', True))
 
         search_term = (search_term or '').strip()
         if search_term:
