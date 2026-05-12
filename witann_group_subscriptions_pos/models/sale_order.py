@@ -1119,6 +1119,10 @@ class SaleOrder(models.Model):
             access_state = False
             is_valid = False
             reason = _('La suscripción todavía no inicia.')
+        elif native_state_key in ('cancel', 'closed'):
+            access_state = False
+            is_valid = False
+            reason = _('La suscripción está cancelada o cerrada y puede reinscribirse.')
         elif should_mark_for_renewal:
             native_state_key = 'renew'
             native_state_label = _('Por renovar')

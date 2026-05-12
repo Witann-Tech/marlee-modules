@@ -365,6 +365,19 @@ class TestPosSubscriptionPricing(TransactionCase):
         self.assertEqual([item['subscription_id'] for item in filtered], [3])
         self.assertFalse(any('_wgs_creation_sort_key' in item for item in filtered))
 
+    def test_churned_subscription_is_not_marked_for_renewal_by_due_date(self):
+        order = self._create_subscription_like_order()
+        if 'subscription_state' not in order._fields:
+            self.skipTest('subscription_state field is not available')
+        order.write({'subscription_state': 'churned'})
+
+        item = order._build_pos_subscription_status_item(fields.Date.to_date('2026-05-12'))
+
+        self.assertEqual(item['native_state_key'], 'closed')
+        self.assertFalse(item['is_valid'])
+        self.assertFalse(item['can_renew'])
+        self.assertTrue(item['can_reenroll'])
+
     def test_subscription_detail_keeps_latest_renew_when_no_active_card(self):
         items = [
             {
