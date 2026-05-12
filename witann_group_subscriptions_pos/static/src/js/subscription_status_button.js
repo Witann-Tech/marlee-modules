@@ -1524,6 +1524,7 @@ patch(ControlButtons.prototype, {
                 addConfiguredProductLineToOrder: (order, product, options) => addConfiguredProductLineToOrder(this, order, product, options),
                 getCurrentOrder: () => getCurrentOrder(this),
                 getPartnerIdFromOrder,
+                getOrderLines,
                 ensurePartnerLoadedInPos: (partnerId) => ensurePartnerLoadedInPos(this, partnerId, (recordId) => this.subscriptionPosApi.fetchPartnerRecord(recordId)),
                 updatePartnerCurp: (partnerId, curp) => this._updatePartnerCurpForPos(partnerId, curp),
                 setPartnerOnCurrentOrder: (partner) => setPartnerOnCurrentOrder(this, partner),

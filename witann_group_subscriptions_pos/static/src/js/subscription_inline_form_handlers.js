@@ -152,6 +152,8 @@ async function ensurePartnerAssignedToOrder(order, targetPartnerId, {
     state,
     renderDetail,
     getPartnerIdFromOrder,
+    getOrderLines,
+    getSubscriptionPartnerIdsFromOrder,
     ensurePartnerLoadedInPos,
     setPartnerOnCurrentOrder,
     _t,
@@ -164,7 +166,23 @@ async function ensurePartnerAssignedToOrder(order, targetPartnerId, {
     if (currentPartnerId === numericPartnerId) {
         return true;
     }
-    if (currentPartnerId) {
+    let blockingPartnerId = currentPartnerId;
+    if (blockingPartnerId) {
+        const orderLines = typeof getOrderLines === "function" ? getOrderLines(order) : [];
+        const hasOrderLines = Array.isArray(orderLines) && orderLines.length > 0;
+        const subscriptionPartnerIds = typeof getSubscriptionPartnerIdsFromOrder === "function"
+            ? getSubscriptionPartnerIdsFromOrder(order)
+            : [];
+        const canReplaceOrderPartner = !hasOrderLines
+            || (
+                subscriptionPartnerIds.length > 0
+                && subscriptionPartnerIds.every((partnerId) => Number(partnerId || 0) === numericPartnerId)
+            );
+        if (canReplaceOrderPartner) {
+            blockingPartnerId = false;
+        }
+    }
+    if (blockingPartnerId) {
         state.formError = _t("La orden actual ya tiene otro cliente y no se pudo reemplazar desde esta sesión. Usa un solo cliente por ticket.");
         renderDetail(state.currentDetail);
         return false;
@@ -207,6 +225,7 @@ function buildSubscriptionInlineActionHandlers({
     addConfiguredProductLineToOrder,
     getCurrentOrder,
     getPartnerIdFromOrder,
+    getOrderLines,
     ensurePartnerLoadedInPos,
     updatePartnerCurp,
     setPartnerOnCurrentOrder,
@@ -429,6 +448,8 @@ function buildSubscriptionInlineActionHandlers({
                 state,
                 renderDetail,
                 getPartnerIdFromOrder,
+                getOrderLines,
+                getSubscriptionPartnerIdsFromOrder,
                 ensurePartnerLoadedInPos,
                 setPartnerOnCurrentOrder,
                 _t,
@@ -545,6 +566,8 @@ function buildSubscriptionInlineActionHandlers({
                 state,
                 renderDetail,
                 getPartnerIdFromOrder,
+                getOrderLines,
+                getSubscriptionPartnerIdsFromOrder,
                 ensurePartnerLoadedInPos,
                 setPartnerOnCurrentOrder,
                 _t,
@@ -628,6 +651,8 @@ function buildSubscriptionInlineActionHandlers({
                 state,
                 renderDetail,
                 getPartnerIdFromOrder,
+                getOrderLines,
+                getSubscriptionPartnerIdsFromOrder,
                 ensurePartnerLoadedInPos,
                 setPartnerOnCurrentOrder,
                 _t,
@@ -773,6 +798,8 @@ function buildSubscriptionInlineActionHandlers({
                 state,
                 renderDetail,
                 getPartnerIdFromOrder,
+                getOrderLines,
+                getSubscriptionPartnerIdsFromOrder,
                 ensurePartnerLoadedInPos,
                 setPartnerOnCurrentOrder,
                 _t,
@@ -861,6 +888,8 @@ function buildSubscriptionInlineActionHandlers({
                 state,
                 renderDetail,
                 getPartnerIdFromOrder,
+                getOrderLines,
+                getSubscriptionPartnerIdsFromOrder,
                 ensurePartnerLoadedInPos,
                 setPartnerOnCurrentOrder,
                 _t,
@@ -961,6 +990,8 @@ function buildSubscriptionInlineActionHandlers({
                 state,
                 renderDetail,
                 getPartnerIdFromOrder,
+                getOrderLines,
+                getSubscriptionPartnerIdsFromOrder,
                 ensurePartnerLoadedInPos,
                 setPartnerOnCurrentOrder,
                 _t,
