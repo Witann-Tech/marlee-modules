@@ -851,26 +851,50 @@ class SaleOrder(models.Model):
         rows = []
         for partner in partners:
             status = status_map.get(partner.id, {})
-            phone_fallback = False
-            if 'phone' in partner._fields:
-                phone_fallback = partner.phone or False
-            rows.append({
-                'id': partner.id,
-                'name': status.get('partner_name') or partner.display_name,
-                'email': status.get('email') or partner.email or False,
-                'phone': status.get('phone') or phone_fallback,
-                'state': status.get('state') or 'none',
-                'state_label': status.get('state_label') or _('Sin suscripción'),
-                'package_label': status.get('package_label') or False,
-                'plan_name': status.get('plan_name') or False,
-                'start_date': status.get('start_date') or False,
-                'valid_until': status.get('valid_until') or False,
-                'birthday': status.get('birthday') or False,
-                'gender': status.get('gender') or False,
-                'last_access': status.get('last_access') or False,
-                'image_url': status.get('image_url') or ('/web/image/res.partner/%s/image_128' % partner.id),
-            })
+            rows.append(self._wgs_build_partner_directory_row_for_pos(partner, status))
         return rows
+
+    @api.model
+    def get_partner_directory_row_for_pos(self, partner_id):
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar vigencia desde Punto de Venta.'))
+
+        partner = self._wgs_browse_partner_for_pos(partner_id)
+        if not partner:
+            return {}
+
+        try:
+            status_map = self._get_partner_subscription_directory_status_map_for_pos(partner)
+        except Exception as error:
+            self._wgs_raise_pos_data_error(
+                _('No se pudo construir la fila del directorio de suscripciones.'),
+                error=error,
+                partner_id=partner.id,
+            )
+        return self._wgs_build_partner_directory_row_for_pos(partner, status_map.get(partner.id, {}))
+
+    @api.model
+    def _wgs_build_partner_directory_row_for_pos(self, partner, status):
+        partner.ensure_one()
+        status = dict(status or {})
+        phone_fallback = False
+        if 'phone' in partner._fields:
+            phone_fallback = partner.phone or False
+        return {
+            'id': partner.id,
+            'name': status.get('partner_name') or partner.display_name,
+            'email': status.get('email') or partner.email or False,
+            'phone': status.get('phone') or phone_fallback,
+            'state': status.get('state') or 'none',
+            'state_label': status.get('state_label') or _('Sin suscripción'),
+            'package_label': status.get('package_label') or False,
+            'plan_name': status.get('plan_name') or False,
+            'start_date': status.get('start_date') or False,
+            'valid_until': status.get('valid_until') or False,
+            'birthday': status.get('birthday') or False,
+            'gender': status.get('gender') or False,
+            'last_access': status.get('last_access') or False,
+            'image_url': status.get('image_url') or ('/web/image/res.partner/%s/image_128' % partner.id),
+        }
 
     @api.model
     def _get_partner_directory_partners_for_pos(self, offset=0, limit=500, state_filter=False, search_term=False):
