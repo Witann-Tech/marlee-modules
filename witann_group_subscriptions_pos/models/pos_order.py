@@ -175,6 +175,17 @@ class PosOrder(models.Model):
     @api.model
     def _wgs_get_pos_product_field_names(self, product):
         field_names = []
+        session_model = self.env['pos.session'].sudo()
+        loader_method = getattr(session_model, '_loader_params_product_product', None)
+        if callable(loader_method):
+            try:
+                loader_params = loader_method()
+            except Exception:
+                loader_params = {}
+            search_params = loader_params.get('search_params', {}) if isinstance(loader_params, dict) else {}
+            for field_name in search_params.get('fields') or []:
+                if field_name in product._fields and field_name not in field_names:
+                    field_names.append(field_name)
         for field_name in (
             'name',
             'display_name',
