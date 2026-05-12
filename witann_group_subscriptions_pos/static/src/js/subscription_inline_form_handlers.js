@@ -227,9 +227,9 @@ function buildSubscriptionInlineActionHandlers({
     getPartnerIdFromOrder,
     getOrderLines,
     ensurePartnerLoadedInPos,
+    ensureProductLoadedInPos,
     updatePartnerCurp,
     setPartnerOnCurrentOrder,
-    findProductInPos,
     getSubscriptionPartnerIdsFromOrder,
     saveSubscriptionParticipants,
     validateSubscriptionProductEligibility,
@@ -456,7 +456,7 @@ function buildSubscriptionInlineActionHandlers({
             }))) {
                 return;
             }
-            const productRecord = findProductInPos(state.newSubscriptionForm.productId);
+            const productRecord = await ensureProductLoadedInPos(state.newSubscriptionForm.productId);
             if (!productRecord) {
                 state.formError = _t("El producto seleccionado no está cargado en la sesión actual del POS.");
                 renderDetail(state.currentDetail);
@@ -574,7 +574,7 @@ function buildSubscriptionInlineActionHandlers({
             }))) {
                 return;
             }
-            const productRecord = findProductInPos(state.pendingChargeForm.productId);
+            const productRecord = await ensureProductLoadedInPos(state.pendingChargeForm.productId);
             if (!productRecord) {
                 state.formError = _t("El producto recurrente de esta suscripción no está cargado en la sesión actual del POS.");
                 renderDetail(state.currentDetail);
@@ -659,7 +659,7 @@ function buildSubscriptionInlineActionHandlers({
             }))) {
                 return;
             }
-            const productRecord = findProductInPos(state.cancellationRefundForm.productId);
+            const productRecord = await ensureProductLoadedInPos(state.cancellationRefundForm.productId);
             if (!productRecord) {
                 state.formError = _t("El producto original de esta suscripción no está cargado en la sesión actual del POS.");
                 renderDetail(state.currentDetail);
@@ -806,7 +806,7 @@ function buildSubscriptionInlineActionHandlers({
             }))) {
                 return;
             }
-            const productRecord = findProductInPos(state.upsaleForm.productId);
+            const productRecord = await ensureProductLoadedInPos(state.upsaleForm.productId);
             if (!productRecord) {
                 state.formError = _t("El producto destino no está cargado en la sesión actual del POS.");
                 renderDetail(state.currentDetail);
@@ -896,7 +896,7 @@ function buildSubscriptionInlineActionHandlers({
             }))) {
                 return;
             }
-            const productRecord = findProductInPos(state.renewalForm.productId);
+            const productRecord = await ensureProductLoadedInPos(state.renewalForm.productId);
             if (!productRecord) {
                 state.formError = _t("El producto recurrente de esta suscripción no está cargado en la sesión actual del POS.");
                 renderDetail(state.currentDetail);
@@ -998,7 +998,7 @@ function buildSubscriptionInlineActionHandlers({
             }))) {
                 return;
             }
-            const productRecord = findProductInPos(state.renewalForm.productId);
+            const productRecord = await ensureProductLoadedInPos(state.renewalForm.productId);
             if (!productRecord) {
                 state.formError = _t("El producto recurrente de esta suscripción no está cargado en la sesión actual del POS.");
                 renderDetail(state.currentDetail);

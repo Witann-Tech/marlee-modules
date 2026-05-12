@@ -167,6 +167,54 @@ export async function ensurePartnerLoadedInPos(source, partnerId, fetchPartnerRe
     return findPartnerInPos(source, numericId) || partnerData;
 }
 
+function addProductToLocalPosCaches(pos, productData) {
+    if (!pos || !productData || !productData.id) {
+        return false;
+    }
+    if (pos.db && typeof pos.db.add_products === "function") {
+        pos.db.add_products([productData]);
+    } else if (pos.db) {
+        if (!pos.db.product_by_id) {
+            pos.db.product_by_id = {};
+        }
+        pos.db.product_by_id[Number(productData.id)] = productData;
+    }
+
+    if (Array.isArray(pos.products) && !pos.products.some((item) => Number(item && item.id) === Number(productData.id))) {
+        pos.products.push(productData);
+    }
+
+    const productCollection = pos.models && pos.models["product.product"];
+    if (productCollection) {
+        if (Array.isArray(productCollection.records) && !productCollection.records.some((item) => Number(item && item.id) === Number(productData.id))) {
+            productCollection.records.push(productData);
+        } else if (Array.isArray(productCollection) && !productCollection.some((item) => Number(item && item.id) === Number(productData.id))) {
+            productCollection.push(productData);
+        }
+    }
+    return true;
+}
+
+export async function ensureProductLoadedInPos(source, productId, fetchProductRecord) {
+    const numericId = Number(productId || 0);
+    if (numericId <= 0) {
+        return null;
+    }
+    const localProduct = findProductInPos(source, numericId);
+    if (localProduct) {
+        return localProduct;
+    }
+    if (typeof fetchProductRecord !== "function") {
+        return null;
+    }
+    const productData = await fetchProductRecord(numericId, getCurrentCompanyId(source) || false);
+    if (!productData || Number(productData.id || 0) !== numericId) {
+        return null;
+    }
+    addProductToLocalPosCaches(getPos(source), productData);
+    return findProductInPos(source, numericId) || productData;
+}
+
 export function getProductIdFromLine(line) {
     if (!line) {
         return 0;

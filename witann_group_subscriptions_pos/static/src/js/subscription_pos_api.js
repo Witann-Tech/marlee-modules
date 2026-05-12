@@ -11,6 +11,9 @@ export function createSubscriptionPosApi(orm) {
         async fetchPartnerRecord(partnerId) {
             return orm.call("pos.order", "wgs_get_partner_record_for_pos", [partnerId || false]);
         },
+        async fetchProductRecord(productId, companyId = false) {
+            return orm.call("pos.order", "wgs_get_product_record_for_pos", [productId || false, companyId || false]);
+        },
         async createPartner(values) {
             return orm.call("pos.order", "wgs_create_partner_for_pos", [values || {}]);
         },

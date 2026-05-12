@@ -287,6 +287,53 @@ class PosOrder(models.Model):
         return values
 
     @api.model
+    def wgs_get_product_record_for_pos(self, product_id, company_id=False):
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar productos desde Punto de Venta.'))
+        product = self._wgs_browse_product_for_pos(product_id)
+        if not product:
+            return {}
+
+        company = self.env['res.company'].sudo().browse(int(company_id or 0)).exists() if company_id else self.env.company
+        if company:
+            product_company = getattr(product, 'company_id', False) or getattr(product.product_tmpl_id, 'company_id', False)
+            if product_company and product_company.id != company.id:
+                return {}
+
+        session_model = self.env['pos.session'].sudo()
+        loader_params = session_model._loader_params_product_product()
+        search_params = loader_params.get('search_params', {}) if isinstance(loader_params, dict) else {}
+        field_names = list(search_params.get('fields') or [])
+        for field_name in (
+            'display_name',
+            'default_code',
+            'lst_price',
+            'list_price',
+            'sale_ok',
+            'available_in_pos',
+            'recurring_invoice',
+            'is_subscription',
+            'subscription_ok',
+            'max_participants_total',
+            'product_tmpl_id',
+            'taxes_id',
+            'uom_id',
+            'pos_categ_ids',
+            'categ_id',
+            'company_id',
+            'write_date',
+        ):
+            if field_name in product._fields and field_name not in field_names:
+                field_names.append(field_name)
+
+        values = product.read(field_names, load=False)[0] if field_names else {}
+        values['id'] = product.id
+        if 'display_name' not in values:
+            values['display_name'] = product.display_name
+        if 'name' not in values:
+            values['name'] = product.name
+        return values
+
+    @api.model
     def wgs_validate_subscription_product_eligibility_for_pos(
         self,
         partner_id,
