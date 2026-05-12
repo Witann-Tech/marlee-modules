@@ -816,12 +816,17 @@ class SaleOrder(models.Model):
                 domain.append(('id', 'not in', related_partner_ids))
             return Partner.search(domain, order='name asc, id asc', offset=offset, limit=limit)
 
-        return self._search_partner_directory_state_page_for_pos(
-            partner_domain=partner_domain,
-            state_filter=state_filter,
-            offset=offset,
-            limit=limit,
-        )
+        candidate_partner_ids = self._get_partner_ids_for_directory_state_fast_path_for_pos(state_filter)
+        if candidate_partner_ids:
+            domain = list(partner_domain) + [('id', 'in', candidate_partner_ids)]
+            return self._search_partner_directory_candidate_state_page_for_pos(
+                partner_domain=domain,
+                state_filter=state_filter,
+                offset=offset,
+                limit=limit,
+            )
+
+        return Partner
 
     @api.model
     def _normalize_partner_directory_state_filter_for_pos(self, state_filter):
@@ -898,12 +903,48 @@ class SaleOrder(models.Model):
         return sorted(partner_ids)
 
     @api.model
-    def _search_partner_directory_state_page_for_pos(self, partner_domain, state_filter, offset=0, limit=500):
+    def _get_partner_ids_for_directory_state_fast_path_for_pos(self, state_filter):
+        subscription_state_domain = self._get_subscription_state_domain_for_directory_filter_for_pos(state_filter)
+        if subscription_state_domain is False:
+            return []
+
+        domain = fields.Domain.AND([
+            self._get_subscription_action_domain_for_pos(),
+            subscription_state_domain,
+        ])
+        subscriptions = self.sudo().search(domain, order='id desc')
+        subscriptions = subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
+        partner_ids = set()
+        for subscription in subscriptions:
+            partner_ids.update(subscription.participant_ids.ids)
+            if subscription.partner_id:
+                partner_ids.add(subscription.partner_id.id)
+        return sorted(partner_ids)
+
+    @api.model
+    def _get_subscription_state_domain_for_directory_filter_for_pos(self, state_filter):
+        if 'subscription_state' not in self._fields:
+            return False
+
+        state_filter = self._normalize_partner_directory_state_filter_for_pos(state_filter)
+        token_map = {
+            'actionable': ('progress', 'renew'),
+            'progress': ('progress',),
+            'renew': ('progress', 'renew'),
+            'cancel': ('cancel', 'canceled', 'cancelled', 'close', 'closed', 'churn', 'churned'),
+        }
+        tokens = token_map.get(state_filter)
+        if not tokens:
+            return False
+        return self._wgs_or_leaves_for_pos([('subscription_state', 'ilike', token) for token in tokens])
+
+    @api.model
+    def _search_partner_directory_candidate_state_page_for_pos(self, partner_domain, state_filter, offset=0, limit=500):
         Partner = self._wgs_partner_model_for_pos()
         partner_domain = list(partner_domain or [])
         offset = max(int(offset or 0), 0)
         limit = max(int(limit or 500), 1)
-        scan_limit = min(max(limit * 3, 250), 1000)
+        scan_limit = min(max(limit * 2, 120), 500)
         selected_ids = []
         skipped_matches = 0
         partner_offset = 0
