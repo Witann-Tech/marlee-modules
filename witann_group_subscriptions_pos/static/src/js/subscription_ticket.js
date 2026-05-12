@@ -195,6 +195,23 @@ function addProductToLocalPosCaches(pos, productData) {
     return true;
 }
 
+async function loadProductWithNativePosApi(source, productId) {
+    const pos = getPos(source);
+    const numericId = Number(productId || 0);
+    if (!pos || numericId <= 0) {
+        return null;
+    }
+    if (typeof pos._addProducts === "function") {
+        await pos._addProducts([numericId]);
+        return findProductInPos(source, numericId);
+    }
+    if (typeof pos.addProducts === "function") {
+        await pos.addProducts([numericId]);
+        return findProductInPos(source, numericId);
+    }
+    return null;
+}
+
 export async function ensureProductLoadedInPos(source, productId, fetchProductRecord) {
     const numericId = Number(productId || 0);
     if (numericId <= 0) {
@@ -203,6 +220,10 @@ export async function ensureProductLoadedInPos(source, productId, fetchProductRe
     const localProduct = findProductInPos(source, numericId);
     if (localProduct) {
         return localProduct;
+    }
+    const nativeProduct = await loadProductWithNativePosApi(source, numericId);
+    if (nativeProduct) {
+        return nativeProduct;
     }
     if (typeof fetchProductRecord !== "function") {
         return null;
