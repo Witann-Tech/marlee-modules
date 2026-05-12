@@ -337,3 +337,30 @@ class TestPosSubscriptionPricing(TransactionCase):
         self.assertEqual(charge['recurring_price'], 100.0)
         self.assertEqual(charge['display_recurring_price'], 116.0)
         self.assertTrue(charge['is_reenroll'])
+
+    def test_subscription_detail_keeps_only_latest_renew_or_churned_card(self):
+        items = [
+            {
+                'subscription_id': 1,
+                'native_state_key': 'renew',
+                'can_renew': True,
+                '_wgs_creation_sort_key': ('2026-01-01 10:00:00', 1),
+            },
+            {
+                'subscription_id': 2,
+                'native_state_key': 'closed',
+                'can_reenroll': True,
+                '_wgs_creation_sort_key': ('2026-02-01 10:00:00', 2),
+            },
+            {
+                'subscription_id': 3,
+                'native_state_key': 'progress',
+                'can_renew': True,
+                '_wgs_creation_sort_key': ('2025-12-01 10:00:00', 3),
+            },
+        ]
+
+        filtered = self.env['sale.order']._filter_partner_subscription_detail_items_for_pos(items)
+
+        self.assertEqual([item['subscription_id'] for item in filtered], [2, 3])
+        self.assertFalse(any('_wgs_creation_sort_key' in item for item in filtered))

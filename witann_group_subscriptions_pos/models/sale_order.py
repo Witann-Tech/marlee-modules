@@ -217,8 +217,10 @@ class SaleOrder(models.Model):
                     getattr(subscription, 'subscription_max_participants_total', 0) or item['participant_count'] or 1
                 )
                 item['access_people_summary'] = subscription._wgs_get_access_people_summary_for_pos()
+                item['_wgs_creation_sort_key'] = self._get_subscription_detail_creation_sort_key_for_pos(subscription)
                 items.append(item)
 
+        items = self._filter_partner_subscription_detail_items_for_pos(items)
         items = sorted(items, key=self._sort_subscription_status_item_key_for_pos)
         status_map = self.get_partner_subscription_status_map_for_pos([partner.id])
         summary = status_map.get(partner.id, {})
@@ -1291,6 +1293,49 @@ class SaleOrder(models.Model):
             return True
 
         return False
+
+    @api.model
+    def _filter_partner_subscription_detail_items_for_pos(self, items):
+        visible_items = list(items or [])
+        latest_only_items = [
+            item
+            for item in visible_items
+            if self._is_latest_only_subscription_detail_item_for_pos(item)
+        ]
+        if len(latest_only_items) <= 1:
+            return [self._strip_subscription_detail_internal_keys_for_pos(item) for item in visible_items]
+
+        latest_item = max(
+            latest_only_items,
+            key=lambda item: item.get('_wgs_creation_sort_key') or ('', 0),
+        )
+        latest_subscription_id = latest_item.get('subscription_id')
+        filtered_items = [
+            item
+            for item in visible_items
+            if (
+                not self._is_latest_only_subscription_detail_item_for_pos(item)
+                or item.get('subscription_id') == latest_subscription_id
+            )
+        ]
+        return [self._strip_subscription_detail_internal_keys_for_pos(item) for item in filtered_items]
+
+    @api.model
+    def _is_latest_only_subscription_detail_item_for_pos(self, item):
+        native_state_key = item.get('native_state_key') or False
+        return native_state_key in ('renew', 'cancel', 'closed') or bool(item.get('can_reenroll'))
+
+    @api.model
+    def _get_subscription_detail_creation_sort_key_for_pos(self, subscription):
+        create_date = getattr(subscription, 'create_date', False)
+        create_date_value = fields.Datetime.to_string(create_date) if create_date else ''
+        return (create_date_value, subscription.id or 0)
+
+    @api.model
+    def _strip_subscription_detail_internal_keys_for_pos(self, item):
+        cleaned = dict(item or {})
+        cleaned.pop('_wgs_creation_sort_key', None)
+        return cleaned
 
     def _wgs_get_pending_invoice_records_for_pos(self):
         self.ensure_one()
