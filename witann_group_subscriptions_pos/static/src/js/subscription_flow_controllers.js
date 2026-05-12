@@ -3,6 +3,7 @@
 import {
     buildPricingSnapshotFromCharge,
 } from "./subscription_pricing_snapshot";
+import { canOpenNewSubscription } from "./subscription_view_utils";
 
 function applyDiscountOffersToForm(form, offers = []) {
     form.discountOffers = Array.isArray(offers) ? offers : [];
@@ -58,6 +59,13 @@ async function openNewSubscriptionForm(state, {
     _t,
 }) {
     if (!state.selectedPartnerId) {
+        return;
+    }
+    if (!canOpenNewSubscription(state.currentDetail)) {
+        state.formMode = null;
+        state.formError = _t("Este cliente ya tiene una membresía activa o por renovar. Por favor usa upsale o renovación.");
+        state.formNotice = "";
+        renderDetail(state.currentDetail);
         return;
     }
     state.formMode = "new";

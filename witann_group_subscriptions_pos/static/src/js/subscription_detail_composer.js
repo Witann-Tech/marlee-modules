@@ -1,5 +1,7 @@
 /** @odoo-module **/
 
+import { canOpenNewSubscription } from "./subscription_view_utils";
+
 function renderSubscriptionCards(detail, {
     renderSubscriptionCard,
     renderPendingDocumentSummary,
@@ -115,6 +117,7 @@ function renderDetailContent(detail, {
         formatMoney,
         _t,
     });
+    const allowNewSubscription = canOpenNewSubscription(detail);
 
     return `
         ${renderDetailHeader({
@@ -132,7 +135,10 @@ function renderDetailContent(detail, {
             _t,
         })}
         <div class="wgs-detail-actions-bar">
-            <button type="button" class="wgs-primary-action-btn" data-action="open-new">${escapeHtml(_t("Nueva suscripcion"))}</button>
+            ${allowNewSubscription
+                ? `<button type="button" class="wgs-primary-action-btn" data-action="open-new">${escapeHtml(_t("Nueva suscripcion"))}</button>`
+                : ""
+            }
         </div>
         ${renderNewSubscriptionForm()}
         <div class="wgs-detail-note">${escapeHtml(_t("Renovación, upsale, cobro pendiente y participantes se operan desde cada tarjeta de suscripción."))}</div>

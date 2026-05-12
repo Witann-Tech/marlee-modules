@@ -102,7 +102,23 @@ function matchesBirthdayFilter(birthdayValue, filterMode) {
     return true;
 }
 
+function canOpenNewSubscription(detail) {
+    if (!detail || typeof detail !== "object") {
+        return true;
+    }
+    const summaryState = String(detail.state || "").trim().toLowerCase();
+    if (summaryState === "progress" || summaryState === "renew") {
+        return false;
+    }
+    const items = Array.isArray(detail.items) ? detail.items : [];
+    return !items.some((item) => {
+        const state = String(item && item.native_state_key ? item.native_state_key : "").trim().toLowerCase();
+        return state === "progress" || state === "renew";
+    });
+}
+
 export {
+    canOpenNewSubscription,
     formatTodayISO,
     getBirthdaySortRank,
     getStateClass,
