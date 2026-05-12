@@ -828,6 +828,33 @@ patch(ControlButtons.prototype, {
             }, preferredPartnerId);
         };
 
+        const focusDirectoryPartner = async (partnerId) => {
+            const numericPartnerId = Number(partnerId || 0);
+            if (!numericPartnerId) {
+                return;
+            }
+            const row = await this.subscriptionPosApi.fetchPartnerDirectoryRow(numericPartnerId);
+            if (!row || !row.id) {
+                await reloadDirectoryRows(numericPartnerId);
+                await loadDetail(numericPartnerId, { force: true });
+                return;
+            }
+            searchInput.value = "";
+            stateSelect.value = row.state === "none" ? "none" : "all";
+            directoryPageOffset = 0;
+            selectedPartnerId = numericPartnerId;
+            rows = [
+                row,
+                ...rows.filter((item) => Number(item && item.id ? item.id : 0) !== numericPartnerId),
+            ];
+            filteredSnapshot = [...rows];
+            detailCache.delete(numericPartnerId);
+            resetForPartnerSelection();
+            formNotice = _t("Cliente creado correctamente.");
+            renderPreservingFocus();
+            await loadDetail(numericPartnerId, { force: true });
+        };
+
         const renderDetailEmpty = (title, message) => {
             detailPane.innerHTML = buildDetailEmptyHtml({
                 title,
@@ -1545,6 +1572,7 @@ patch(ControlButtons.prototype, {
                 createPartner: (values) => this._createPartnerForPos(values),
                 stopPartnerCamera,
                 reloadDirectoryRows,
+                focusDirectoryPartner,
                 loadDetail,
                 createNewSubscriptionForm: (partnerId) => this._getDefaultNewSubscriptionForm(partnerId),
                 openNewPartnerForm,
@@ -1579,6 +1607,7 @@ patch(ControlButtons.prototype, {
                 updatePartnerPhoto: (partnerId, imageBase64) => this._updatePartnerPhotoForPos(partnerId, imageBase64),
                 stopPartnerCamera,
                 reloadDirectoryRows,
+                focusDirectoryPartner,
                 loadDetail,
                 createNewSubscriptionForm: (partnerId) => this._getDefaultNewSubscriptionForm(partnerId),
                 createPartnerEditForm: (detail) => this._getDefaultExistingPartnerForm(detail),

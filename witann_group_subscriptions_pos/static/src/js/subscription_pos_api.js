@@ -17,6 +17,9 @@ export function createSubscriptionPosApi(orm) {
                 ]
             );
         },
+        async fetchPartnerDirectoryRow(partnerId) {
+            return orm.call("pos.order", "wgs_get_partner_directory_row_for_pos", [partnerId || false]);
+        },
         async fetchPartnerSubscriptionDetail(partnerId) {
             return orm.call("pos.order", "wgs_get_partner_subscription_detail_for_pos", [partnerId]);
         },

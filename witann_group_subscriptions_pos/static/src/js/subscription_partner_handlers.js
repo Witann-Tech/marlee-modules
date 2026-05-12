@@ -92,6 +92,7 @@ function buildListPartnerActionHandlers({
     createPartner,
     stopPartnerCamera,
     reloadDirectoryRows,
+    focusDirectoryPartner,
     loadDetail,
     createNewSubscriptionForm,
     openNewPartnerForm,
@@ -145,10 +146,14 @@ function buildListPartnerActionHandlers({
                 state.newPartnerForm = null;
                 state.formError = "";
                 state.formNotice = _t("Cliente creado correctamente.");
-                await reloadDirectoryRows(result && result.partner_id ? result.partner_id : false);
                 if (result && result.partner_id) {
                     state.newSubscriptionForm = createNewSubscriptionForm(result.partner_id);
-                    await loadDetail(result.partner_id, { force: true });
+                    if (focusDirectoryPartner) {
+                        await focusDirectoryPartner(result.partner_id);
+                    } else {
+                        await reloadDirectoryRows(result.partner_id);
+                        await loadDetail(result.partner_id, { force: true });
+                    }
                 }
             } catch (error) {
                 console.error("Error al crear cliente desde POS", error);
@@ -173,6 +178,7 @@ function buildDetailPartnerActionHandlers({
     updatePartnerPhoto,
     stopPartnerCamera,
     reloadDirectoryRows,
+    focusDirectoryPartner,
     loadDetail,
     createNewSubscriptionForm,
     createPartnerEditForm,
@@ -260,10 +266,14 @@ function buildDetailPartnerActionHandlers({
                 state.newPartnerForm = null;
                 state.formError = "";
                 state.formNotice = _t("Cliente creado correctamente.");
-                await reloadDirectoryRows(result && result.partner_id ? result.partner_id : false);
                 if (result && result.partner_id) {
                     state.newSubscriptionForm = createNewSubscriptionForm(result.partner_id);
-                    await loadDetail(result.partner_id, { force: true });
+                    if (focusDirectoryPartner) {
+                        await focusDirectoryPartner(result.partner_id);
+                    } else {
+                        await reloadDirectoryRows(result.partner_id);
+                        await loadDetail(result.partner_id, { force: true });
+                    }
                 }
             } catch (error) {
                 console.error("Error al crear cliente desde POS", error);

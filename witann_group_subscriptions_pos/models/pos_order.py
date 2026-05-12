@@ -280,6 +280,10 @@ class PosOrder(models.Model):
         )
 
     @api.model
+    def wgs_get_partner_directory_row_for_pos(self, partner_id):
+        return self.env['sale.order'].get_partner_directory_row_for_pos(partner_id)
+
+    @api.model
     def wgs_get_partner_subscription_detail_for_pos(self, partner_id):
         return self.env['sale.order'].get_partner_subscription_detail_for_pos(partner_id)
 
