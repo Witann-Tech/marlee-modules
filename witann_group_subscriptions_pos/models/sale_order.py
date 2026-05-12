@@ -814,26 +814,12 @@ class SaleOrder(models.Model):
                 domain.append(('id', 'not in', related_partner_ids))
             return Partner.search(domain, order='name asc, id asc', offset=offset, limit=limit)
 
-        candidate_partner_ids = self._get_partner_ids_for_directory_state_filter_for_pos(state_filter)
-        if not candidate_partner_ids:
-            return Partner
-        domain = list(partner_domain) + [('id', 'in', candidate_partner_ids)]
-        candidates = Partner.search(domain, order='name asc, id asc')
-        if not candidates:
-            return candidates
-
-        status_map = self.get_partner_subscription_status_map_for_pos(candidates.ids)
-        filtered_ids = [
-            partner.id
-            for partner in candidates
-            if self._directory_state_matches_filter_for_pos(
-                status_map.get(partner.id, {}).get('state') or 'none',
-                state_filter,
-            )
-        ]
-        if not filtered_ids:
-            return Partner
-        return Partner.browse(filtered_ids[offset:offset + limit]).exists()
+        return self._search_partner_directory_state_page_for_pos(
+            partner_domain=partner_domain,
+            state_filter=state_filter,
+            offset=offset,
+            limit=limit,
+        )
 
     @api.model
     def _normalize_partner_directory_state_filter_for_pos(self, state_filter):
@@ -910,29 +896,43 @@ class SaleOrder(models.Model):
         return sorted(partner_ids)
 
     @api.model
-    def _get_partner_ids_for_directory_state_filter_for_pos(self, state_filter):
-        state_values = self._WGS_POS_DIRECTORY_STATE_ALIASES.get(state_filter, (state_filter,))
-        subscriptions = self.sudo().search(self._get_subscription_action_domain_for_pos(), order='id desc')
-        subscriptions = subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
-        today = fields.Date.context_today(self)
-        partner_ids = set()
+    def _search_partner_directory_state_page_for_pos(self, partner_domain, state_filter, offset=0, limit=500):
+        Partner = self._wgs_partner_model_for_pos()
+        partner_domain = list(partner_domain or [])
+        offset = max(int(offset or 0), 0)
+        limit = max(int(limit or 500), 1)
+        scan_limit = min(max(limit * 3, 250), 1000)
+        selected_ids = []
+        skipped_matches = 0
+        partner_offset = 0
 
-        for subscription in subscriptions:
-            try:
-                item = subscription._build_pos_subscription_status_item(today)
-            except Exception as error:
-                self._wgs_raise_pos_data_error(
-                    _('No se pudo construir el filtro del directorio de suscripciones.'),
-                    error=error,
-                    subscription_id=subscription.id,
-                    state_filter=state_filter,
-                )
-            if not item or item.get('native_state_key') not in state_values:
-                continue
-            partner_ids.update(subscription.participant_ids.ids)
-            if subscription.partner_id:
-                partner_ids.add(subscription.partner_id.id)
-        return sorted(partner_ids)
+        while len(selected_ids) < limit:
+            partners = Partner.search(
+                partner_domain,
+                order='name asc, id asc',
+                offset=partner_offset,
+                limit=scan_limit,
+            )
+            if not partners:
+                break
+
+            status_map = self.get_partner_subscription_status_map_for_pos(partners.ids)
+            for partner in partners:
+                state = status_map.get(partner.id, {}).get('state') or 'none'
+                if not self._directory_state_matches_filter_for_pos(state, state_filter):
+                    continue
+                if skipped_matches < offset:
+                    skipped_matches += 1
+                    continue
+                selected_ids.append(partner.id)
+                if len(selected_ids) >= limit:
+                    break
+
+            if len(partners) < scan_limit:
+                break
+            partner_offset += len(partners)
+
+        return Partner.browse(selected_ids).exists()
 
     def _summarize_partner_subscription_items_for_pos(self, items):
         if not items:

@@ -1680,13 +1680,16 @@ patch(ControlButtons.prototype, {
         });
 
         render();
-        loadDirectorySummary();
         loadDirectoryRowsInBackground({
             reset: !rows.length,
             preferredPartnerId: selectedPartnerId,
             stateFilter: "actionable",
             searchTerm: "",
             preserveFocus: true,
+        }).then(() => {
+            if (overlay.isConnected) {
+                loadDirectorySummary();
+            }
         });
     },
 
