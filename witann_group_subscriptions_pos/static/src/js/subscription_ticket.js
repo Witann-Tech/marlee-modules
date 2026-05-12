@@ -201,6 +201,19 @@ async function loadProductWithNativePosApi(source, productId) {
     if (!pos || numericId <= 0) {
         return null;
     }
+    if (pos.data && typeof pos.data.searchRead === "function") {
+        const products = await pos.data.searchRead("product.product", [["id", "=", numericId]]);
+        const loadedProducts = Array.isArray(products) ? products : [];
+        if (loadedProducts.length) {
+            if (typeof pos._loadMissingPricelistItems === "function") {
+                await pos._loadMissingPricelistItems(loadedProducts);
+            }
+            if (typeof pos.processProductAttributesByProducts === "function") {
+                await pos.processProductAttributesByProducts(loadedProducts);
+            }
+            return findProductInPos(source, numericId);
+        }
+    }
     if (typeof pos._addProducts === "function") {
         await pos._addProducts([numericId]);
         return findProductInPos(source, numericId);
