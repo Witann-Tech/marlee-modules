@@ -451,11 +451,7 @@ patch(ControlButtons.prototype, {
                 <option value="all">${_t("Estado: Todos")}</option>
                 <option value="progress">${_t("Estado: En progreso")}</option>
                 <option value="renew">${_t("Estado: Por renovar")}</option>
-                <option value="paused">${_t("Estado: Pausada")}</option>
-                <option value="draft">${_t("Estado: Borrador")}</option>
                 <option value="cancel">${_t("Estado: Cancelada / churned")}</option>
-                <option value="closed">${_t("Estado: Cerrada")}</option>
-                <option value="other">${_t("Estado: Otros")}</option>
                 <option value="none">${_t("Estado: Sin suscripcion")}</option>
             </select>
             <select class="wgs-filter-birthday">
