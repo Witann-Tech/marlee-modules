@@ -1399,19 +1399,19 @@ class SaleOrder(models.Model):
         if not haystack:
             return 'other', _('Sin estado')
         if any(token in haystack for token in ('progress', 'in progress', 'in_progress', 'en progreso')):
-            return 'progress', display_label or _('En progreso')
+            return 'progress', _('En progreso')
         if any(token in haystack for token in ('renew', 'to renew', 'por renovar')):
-            return 'renew', display_label or _('Por renovar')
+            return 'renew', _('Por renovar')
         if any(token in haystack for token in self._WGS_ACCESS_SUSPENDED_STATE_TOKENS):
-            return 'paused', display_label or _('Pausada')
+            return 'paused', _('Pausada')
         if any(token in haystack for token in ('draft', 'borrador')):
-            return 'draft', display_label or _('Borrador')
+            return 'draft', _('Borrador')
         if any(token in haystack for token in ('cancel', 'cancelled', 'canceled', 'cancelada')):
-            return 'cancel', display_label or _('Cancelada')
+            return 'cancel', _('Cancelada')
         if any(token in haystack for token in ('close', 'closed', 'cerrada', 'churn', 'churned')):
-            return 'closed', display_label or _('Cerrada')
+            return 'closed', _('Cerrada')
         if 'upsell' in haystack:
-            return 'upsell', display_label or _('Upsell')
+            return 'upsell', _('Upsell')
         return 'other', display_label or (self.subscription_state if 'subscription_state' in self._fields else _('Sin estado'))
 
     def _get_subscription_state_display_for_pos(self):

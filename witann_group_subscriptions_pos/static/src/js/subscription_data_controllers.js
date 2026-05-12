@@ -6,7 +6,8 @@ async function loadDirectoryRowsInBackground(state, {
     fetchPartnerDirectoryBatch,
     preferredPartnerId = false,
     reset = false,
-    batchSize = 250,
+    batchSize = 80,
+    loadAll = false,
     stateFilter = "actionable",
     searchTerm = "",
     _t,
@@ -48,6 +49,10 @@ async function loadDirectoryRowsInBackground(state, {
             }
             offset += batch.length;
             render();
+            if (!loadAll) {
+                state.directoryFullyLoaded = batch.length < batchSize;
+                break;
+            }
             if (batch.length < batchSize) {
                 state.directoryFullyLoaded = true;
                 break;

@@ -772,6 +772,7 @@ patch(ControlButtons.prototype, {
             stateFilter = false,
             searchTerm = false,
             preserveFocus = false,
+            batchSize = 80,
         } = {}) => {
             const criteria = {
                 ...getDirectoryCriteria(),
@@ -787,6 +788,7 @@ patch(ControlButtons.prototype, {
                     this.subscriptionPosApi.fetchPartnerDirectoryBatch(offset, limit, criteria),
                 stateFilter: criteria.stateFilter,
                 searchTerm: criteria.searchTerm,
+                batchSize,
                 _t,
             });
         };
@@ -800,6 +802,7 @@ patch(ControlButtons.prototype, {
                     this.subscriptionPosApi.fetchPartnerDirectoryBatch(offset, limit, criteria),
                 stateFilter: criteria.stateFilter,
                 searchTerm: criteria.searchTerm,
+                batchSize: 80,
                 _t,
             }, preferredPartnerId);
         };
@@ -1688,7 +1691,11 @@ patch(ControlButtons.prototype, {
             preserveFocus: true,
         }).then(() => {
             if (overlay.isConnected) {
-                loadDirectorySummary();
+                window.setTimeout(() => {
+                    if (overlay.isConnected) {
+                        loadDirectorySummary();
+                    }
+                }, 1200);
             }
         });
     },
