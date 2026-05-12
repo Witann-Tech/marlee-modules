@@ -1297,16 +1297,25 @@ class SaleOrder(models.Model):
     @api.model
     def _filter_partner_subscription_detail_items_for_pos(self, items):
         visible_items = list(items or [])
-        latest_only_items = [
+        prioritized_items = [
             item
             for item in visible_items
-            if self._is_latest_only_subscription_detail_item_for_pos(item)
+            if self._get_subscription_detail_business_priority_for_pos(item) is not False
         ]
-        if len(latest_only_items) <= 1:
+        if len(prioritized_items) <= 1:
             return [self._strip_subscription_detail_internal_keys_for_pos(item) for item in visible_items]
 
+        best_priority = min(
+            self._get_subscription_detail_business_priority_for_pos(item)
+            for item in prioritized_items
+        )
+        same_priority_items = [
+            item
+            for item in prioritized_items
+            if self._get_subscription_detail_business_priority_for_pos(item) == best_priority
+        ]
         latest_item = max(
-            latest_only_items,
+            same_priority_items,
             key=lambda item: item.get('_wgs_creation_sort_key') or ('', 0),
         )
         latest_subscription_id = latest_item.get('subscription_id')
@@ -1314,16 +1323,22 @@ class SaleOrder(models.Model):
             item
             for item in visible_items
             if (
-                not self._is_latest_only_subscription_detail_item_for_pos(item)
+                self._get_subscription_detail_business_priority_for_pos(item) is False
                 or item.get('subscription_id') == latest_subscription_id
             )
         ]
         return [self._strip_subscription_detail_internal_keys_for_pos(item) for item in filtered_items]
 
     @api.model
-    def _is_latest_only_subscription_detail_item_for_pos(self, item):
+    def _get_subscription_detail_business_priority_for_pos(self, item):
         native_state_key = item.get('native_state_key') or False
-        return native_state_key in ('renew', 'cancel', 'closed') or bool(item.get('can_reenroll'))
+        if native_state_key == 'progress':
+            return 0
+        if native_state_key == 'renew':
+            return 1
+        if native_state_key in ('cancel', 'closed') or item.get('can_reenroll'):
+            return 2
+        return False
 
     @api.model
     def _get_subscription_detail_creation_sort_key_for_pos(self, subscription):
