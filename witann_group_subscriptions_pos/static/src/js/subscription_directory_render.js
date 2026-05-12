@@ -2,18 +2,20 @@
 
 function renderDirectorySummary({
     counts,
+    activeStateFilter = "actionable",
     directoryLoading,
     directoryLoadError,
     _t,
     escapeHtml,
 }) {
+    const activeClass = (stateFilter) => stateFilter === activeStateFilter ? " wgs-summary-active" : "";
     return `
-        <span class="wgs-summary-pill">${_t("Total")}: ${counts.total || 0}</span>
-        <span class="wgs-summary-pill wgs-summary-positive">${_t("En progreso")}: ${counts.progress || 0}</span>
-        <span class="wgs-summary-pill wgs-summary-warning">${_t("Por renovar")}: ${counts.renew || 0}</span>
+        <button type="button" class="wgs-summary-pill wgs-summary-action${activeClass("all")}" data-state-filter="all">${_t("Total")}: ${counts.total || 0}</button>
+        <button type="button" class="wgs-summary-pill wgs-summary-action wgs-summary-positive${activeClass("progress")}" data-state-filter="progress">${_t("En progreso")}: ${counts.progress || 0}</button>
+        <button type="button" class="wgs-summary-pill wgs-summary-action wgs-summary-warning${activeClass("renew")}" data-state-filter="renew">${_t("Por renovar")}: ${counts.renew || 0}</button>
         ${counts.paused ? `<span class="wgs-summary-pill wgs-summary-warning">${_t("Pausadas")}: ${counts.paused || 0}</span>` : ""}
-        <span class="wgs-summary-pill wgs-summary-negative">${_t("Canceladas")}: ${counts.cancel || 0}</span>
-        <span class="wgs-summary-pill wgs-summary-none">${_t("Sin suscripcion")}: ${counts.none || 0}</span>
+        <button type="button" class="wgs-summary-pill wgs-summary-action wgs-summary-negative${activeClass("cancel")}" data-state-filter="cancel">${_t("Canceladas")}: ${counts.cancel || 0}</button>
+        <button type="button" class="wgs-summary-pill wgs-summary-action wgs-summary-none${activeClass("none")}" data-state-filter="none">${_t("Sin suscripcion")}: ${counts.none || 0}</button>
         <span class="wgs-summary-pill">${_t("Con cumpleanos")}: ${counts.birthday || 0}</span>
         ${directoryLoading ? `<span class="wgs-summary-pill">${_t("Cargando directorio...")}</span>` : ""}
         ${directoryLoadError ? `<span class="wgs-summary-pill wgs-summary-negative">${escapeHtml(directoryLoadError)}</span>` : ""}

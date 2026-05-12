@@ -780,7 +780,7 @@ patch(ControlButtons.prototype, {
         };
 
         const getDirectoryCriteria = () => ({
-            stateFilter: stateSelect.value || "actionable",
+            stateFilter: (searchInput.value || "").trim() ? "all" : (stateSelect.value || "actionable"),
             searchTerm: searchInput.value || "",
         });
 
@@ -1426,7 +1426,7 @@ patch(ControlButtons.prototype, {
             listFormContainer.innerHTML = renderNewPartnerForm();
             syncPartnerCameraPreview();
             const query = searchInput.value || "";
-            const stateFilter = stateSelect.value;
+            const stateFilter = query.trim() ? "all" : stateSelect.value;
             const birthdayFilter = birthdaySelect.value;
             const sortMode = sortSelect.value;
 
@@ -1450,6 +1450,7 @@ patch(ControlButtons.prototype, {
 
             summary.innerHTML = renderDirectorySummary({
                 counts,
+                activeStateFilter: query.trim() ? "all" : stateSelect.value,
                 directoryLoading,
                 directoryLoadError,
                 _t,
@@ -1517,6 +1518,18 @@ patch(ControlButtons.prototype, {
                 resetForPartnerSelection,
                 render,
             });
+        });
+
+        summary.addEventListener("click", (event) => {
+            const target = event.target.closest("[data-state-filter]");
+            if (!target) {
+                return;
+            }
+            const nextFilter = target.dataset.stateFilter || "actionable";
+            if (stateSelect.value !== nextFilter) {
+                stateSelect.value = nextFilter;
+            }
+            refreshDirectoryRowsForControls();
         });
 
         const listPaneActions = {
@@ -1935,6 +1948,17 @@ patch(ControlButtons.prototype, {
                 font-weight: 600;
                 color: #374151;
                 background: #f9fafb;
+            }
+            button.wgs-summary-pill {
+                cursor: pointer;
+                line-height: 1.2;
+            }
+            button.wgs-summary-pill:hover {
+                filter: brightness(0.97);
+                transform: translateY(-1px);
+            }
+            .wgs-summary-active {
+                box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.16);
             }
             .wgs-summary-positive {
                 border-color: #8ad9b5;
