@@ -6,7 +6,6 @@ import {
     convertTaxExcludedPriceToDisplay,
     ensurePartnerLoadedInPos,
     findProductInPos,
-    getAllLocalPosProducts,
     getCurrentOrder,
     getLineQty,
     getOrderLines,
@@ -369,15 +368,7 @@ patch(ControlButtons.prototype, {
 
     async _fetchSubscriptionProductCatalog(searchTerm = "") {
         const backendCatalog = await this.subscriptionPosApi.fetchSubscriptionProductCatalog(searchTerm, 200);
-        const localProducts = getAllLocalPosProducts(this);
-        const localIds = new Set(
-            (localProducts || [])
-                .map((product) => Number(product && product.id ? product.id : 0))
-                .filter((id) => id > 0)
-        );
-        return (Array.isArray(backendCatalog) ? backendCatalog : []).filter((item) => {
-            return localIds.has(Number(item && item.id ? item.id : 0));
-        });
+        return Array.isArray(backendCatalog) ? backendCatalog : [];
     },
 
     async _fetchSubscriptionPricing(partnerId = false, productId = false, flow = "new", sourceSubscriptionId = false, pendingMoveId = false, fallback = 0, planId = false, pricingId = false) {
