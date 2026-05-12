@@ -167,7 +167,7 @@ export async function ensurePartnerLoadedInPos(source, partnerId, fetchPartnerRe
     return findPartnerInPos(source, numericId) || partnerData;
 }
 
-function addProductToLocalPosCaches(pos, productData) {
+function addFallbackProductToLocalPosCaches(pos, productData) {
     if (!pos || !productData || !productData.id) {
         return false;
     }
@@ -245,7 +245,7 @@ export async function ensureProductLoadedInPos(source, productId, fetchProductRe
     if (!productData || Number(productData.id || 0) !== numericId) {
         return null;
     }
-    addProductToLocalPosCaches(getPos(source), productData);
+    addFallbackProductToLocalPosCaches(getPos(source), productData);
     return findProductInPos(source, numericId) || productData;
 }
 

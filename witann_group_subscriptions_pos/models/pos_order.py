@@ -211,7 +211,7 @@ class PosOrder(models.Model):
             'tracking',
             'write_date',
         ):
-            if field_name in product._fields:
+            if field_name in product._fields and field_name not in field_names:
                 field_names.append(field_name)
         return field_names
 
