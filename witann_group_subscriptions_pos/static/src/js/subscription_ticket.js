@@ -333,36 +333,45 @@ async function addProductToOrder(source, order, product, options = {}) {
     if (!order || !product || !pos) {
         return null;
     }
-    const payload = {
-        quantity: 1,
+    const quantity = Number(options.quantity || options.qty || 1) || 1;
+    const price = Number(
+        options.price_unit !== undefined
+            ? options.price_unit
+            : (options.price !== undefined ? options.price : 0)
+    ) || 0;
+    const legacyPayload = {
+        quantity,
         merge: false,
         ...options,
+        price,
     };
+    const lineValues = {
+        product_id: product,
+        qty: quantity,
+        price_unit: price,
+    };
+    const lineOptions = {
+        ...options,
+        quantity,
+    };
+    delete lineOptions.price;
+    delete lineOptions.price_unit;
+
+    if (typeof pos.addLineToCurrentOrder === "function") {
+        const line = await pos.addLineToCurrentOrder(lineValues, lineOptions, false);
+        return line || getSelectedOrderLine(source, order);
+    }
+    if (typeof pos.addLineToOrder === "function") {
+        const line = await pos.addLineToOrder(lineValues, order, lineOptions, false);
+        return line || getSelectedOrderLine(source, order);
+    }
     if (typeof order.add_product === "function") {
-        order.add_product(product, payload);
+        order.add_product(product, legacyPayload);
         return getSelectedOrderLine(source, order);
     }
     if (typeof order.addProduct === "function") {
-        order.addProduct(product, payload);
+        order.addProduct(product, legacyPayload);
         return getSelectedOrderLine(source, order);
-    }
-    if (typeof pos.addLineToCurrentOrder === "function") {
-        try {
-            const line = await pos.addLineToCurrentOrder(product, payload);
-            return line || getSelectedOrderLine(source, order);
-        } catch (_error) {
-            const line = await pos.addLineToCurrentOrder({ product_id: product }, payload);
-            return line || getSelectedOrderLine(source, order);
-        }
-    }
-    if (typeof pos.addLineToOrder === "function") {
-        try {
-            const line = await pos.addLineToOrder(order, product, payload);
-            return line || getSelectedOrderLine(source, order);
-        } catch (_error) {
-            const line = await pos.addLineToOrder(order, { product_id: product }, payload);
-            return line || getSelectedOrderLine(source, order);
-        }
     }
     return null;
 }
