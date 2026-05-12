@@ -113,15 +113,18 @@ class AccessPerson(models.Model):
                 rec.face_image = img
                 rec.face_pic_b64 = img
 
-    _sql_constraints = [
-        ("uniq_global_user_id", "unique(global_user_id)", "El ID global debe ser único."),
-        ("uniq_partner_id", "unique(partner_id)", "Solo puede existir una persona de control de acceso por contacto."),
-        (
-            "check_global_user_id_range",
-            "CHECK(global_user_id IS NULL OR (global_user_id >= 1 AND global_user_id <= 10000))",
-            "El ID global debe estar entre 1 y 10000.",
-        ),
-    ]
+    _global_user_id_uniq = models.Constraint(
+        "unique(global_user_id)",
+        "El ID global debe ser único.",
+    )
+    _partner_id_uniq = models.Constraint(
+        "unique(partner_id)",
+        "Solo puede existir una persona de control de acceso por contacto.",
+    )
+    _global_user_id_range = models.Constraint(
+        "CHECK(global_user_id IS NULL OR (global_user_id >= 1 AND global_user_id <= 10000))",
+        "El ID global debe estar entre 1 y 10000.",
+    )
 
     @api.constrains("active", "global_user_id", "site_ids")
     def _check_active_requirements(self):

@@ -11,7 +11,7 @@ class AccessEvent(models.Model):
 
     site_id = fields.Many2one("access_control.site", index=True, ondelete="set null")
     device_id = fields.Many2one("access_control.device", index=True, ondelete="set null")
-    device_serial = fields.Char(index=True, oldname="device_code")
+    device_serial = fields.Char(index=True)
 
     person_id = fields.Many2one("access_control.person", index=True, ondelete="set null")
     global_user_id = fields.Integer(index=True)
@@ -32,6 +32,7 @@ class AccessEvent(models.Model):
 
     raw_payload = fields.Text()
 
-    _sql_constraints = [
-        ("uniq_access_event_event_id", "unique(event_id)", "El ID del evento debe ser único."),
-    ]
+    _event_id_uniq = models.Constraint(
+        "unique(event_id)",
+        "El ID del evento debe ser único.",
+    )

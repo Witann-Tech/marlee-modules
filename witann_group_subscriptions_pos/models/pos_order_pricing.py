@@ -4,7 +4,6 @@ from datetime import timedelta, date, datetime
 from dateutil.relativedelta import relativedelta
 
 from odoo import fields, models
-from odoo.osv import expression
 
 _logger = logging.getLogger(__name__)
 
@@ -825,7 +824,14 @@ class PosOrderPricingMixin(models.Model):
         if not domain_parts:
             result = ()
         else:
-            result = tuple(model.search(expression.OR(domain_parts)))
+            result = tuple(
+                model.search(
+                    fields.Domain.OR(
+                        fields.Domain(domain_part)
+                        for domain_part in domain_parts
+                    )
+                )
+            )
         cache[cache_key] = result
         return result
 

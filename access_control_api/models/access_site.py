@@ -45,6 +45,7 @@ class AccessControlSite(models.Model):
             site.slots_percent = (used / total * 100.0) if total else 0.0
             site.near_limit = used >= int(total * 0.9)
 
-    _sql_constraints = [
-        ("access_control_site_code_uniq", "unique(code)", "El código del sitio debe ser único."),
-    ]
+    _site_code_uniq = models.Constraint(
+        "unique(code)",
+        "El código del sitio debe ser único.",
+    )

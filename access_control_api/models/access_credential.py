@@ -44,13 +44,10 @@ class AccessCredential(models.Model):
 
     display_name = fields.Char(compute="_compute_display_name", store=True)
 
-    _sql_constraints = [
-        (
-            "uniq_person_credential_type",
-            "unique(person_id, credential_type)",
-            "Only one credential per modality is allowed for each person.",
-        ),
-    ]
+    _person_credential_type_uniq = models.Constraint(
+        "unique(person_id, credential_type)",
+        "Only one credential per modality is allowed for each person.",
+    )
 
     @api.model_create_multi
     def create(self, vals_list):
