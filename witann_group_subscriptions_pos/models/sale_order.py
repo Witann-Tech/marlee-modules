@@ -51,6 +51,10 @@ class SaleOrder(models.Model):
         'draft',
         'upsell',
     )
+    _WGS_POS_DIRECTORY_STATE_ALIASES = {
+        'actionable': ('progress', 'renew'),
+        'cancel': ('cancel', 'closed'),
+    }
     _PARTNER_GENDER_FIELD_CANDIDATES = (
         'gender',
         'x_gender',
@@ -133,6 +137,15 @@ class SaleOrder(models.Model):
         if not right_domain:
             return left_domain
         return ['&', *left_domain, *right_domain]
+
+    @api.model
+    def _wgs_or_leaves_for_pos(self, leaves):
+        leaves = [leaf for leaf in (leaves or []) if leaf]
+        if not leaves:
+            return []
+        if len(leaves) == 1:
+            return [leaves[0]]
+        return ['|'] * (len(leaves) - 1) + leaves
 
     @api.model
     def get_partner_subscription_status_for_pos(self, partner_id):
@@ -661,7 +674,65 @@ class SaleOrder(models.Model):
         return result
 
     @api.model
-    def get_partner_directory_rows_for_pos(self, offset=0, limit=500):
+    def get_partner_directory_summary_for_pos(self):
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar vigencia desde Punto de Venta.'))
+
+        Partner = self._wgs_partner_model_for_pos()
+        total = Partner.search_count([])
+        birthday_field = self._get_partner_directory_birthday_field_for_pos()
+        birthday_count = Partner.search_count([(birthday_field, '!=', False)]) if birthday_field else 0
+
+        subscriptions = self.sudo().search(self._get_subscription_action_domain_for_pos(), order='id desc')
+        subscriptions = subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
+        today = fields.Date.context_today(self)
+        items_by_partner_id = {}
+
+        for subscription in subscriptions:
+            try:
+                item = subscription._build_pos_subscription_status_item(today)
+            except Exception as error:
+                self._wgs_raise_pos_data_error(
+                    _('No se pudo construir el resumen del directorio de suscripciones.'),
+                    error=error,
+                    subscription_id=subscription.id,
+                )
+            if not item:
+                continue
+            partner_ids = set(subscription.participant_ids.ids)
+            if subscription.partner_id:
+                partner_ids.add(subscription.partner_id.id)
+            for partner_id in partner_ids:
+                items_by_partner_id.setdefault(partner_id, []).append(item)
+
+        counts = {
+            'total': total,
+            'birthday': birthday_count,
+            'progress': 0,
+            'renew': 0,
+            'paused': 0,
+            'draft': 0,
+            'cancel': 0,
+            'closed': 0,
+            'upsell': 0,
+            'other': 0,
+            'none': 0,
+        }
+        for items in items_by_partner_id.values():
+            summary = self._summarize_partner_subscription_items_for_pos(items)
+            state = summary.get('state') or 'none'
+            if state == 'closed':
+                counts['closed'] += 1
+                counts['cancel'] += 1
+            elif state in counts:
+                counts[state] += 1
+            else:
+                counts['other'] += 1
+
+        counts['none'] = max(total - len(items_by_partner_id), 0)
+        return counts
+
+    @api.model
+    def get_partner_directory_rows_for_pos(self, offset=0, limit=500, state_filter=False, search_term=False):
         self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar vigencia desde Punto de Venta.'))
 
         try:
@@ -675,11 +746,11 @@ class SaleOrder(models.Model):
         if limit < 1:
             limit = 500
 
-        partners = self._wgs_partner_model_for_pos().search(
-            [],
-            order='name asc, id asc',
+        partners = self._get_partner_directory_partners_for_pos(
             offset=max(offset, 0),
             limit=limit,
+            state_filter=state_filter,
+            search_term=search_term,
         )
         if not partners:
             return []
@@ -716,6 +787,152 @@ class SaleOrder(models.Model):
                 'image_url': status.get('image_url') or ('/web/image/res.partner/%s/image_128' % partner.id),
             })
         return rows
+
+    @api.model
+    def _get_partner_directory_partners_for_pos(self, offset=0, limit=500, state_filter=False, search_term=False):
+        Partner = self._wgs_partner_model_for_pos()
+        state_filter = self._normalize_partner_directory_state_filter_for_pos(state_filter)
+        search_partner_ids = self._get_partner_ids_matching_directory_search_for_pos(search_term)
+        partner_domain = []
+        if search_partner_ids is not False:
+            if not search_partner_ids:
+                return Partner
+            partner_domain = [('id', 'in', search_partner_ids)]
+
+        if state_filter == 'all':
+            return Partner.search(
+                partner_domain,
+                order='name asc, id asc',
+                offset=offset,
+                limit=limit,
+            )
+
+        if state_filter == 'none':
+            related_partner_ids = self._get_partner_ids_with_pos_subscriptions_for_pos()
+            domain = list(partner_domain)
+            if related_partner_ids:
+                domain.append(('id', 'not in', related_partner_ids))
+            return Partner.search(domain, order='name asc, id asc', offset=offset, limit=limit)
+
+        candidate_partner_ids = self._get_partner_ids_for_directory_state_filter_for_pos(state_filter)
+        if not candidate_partner_ids:
+            return Partner
+        domain = list(partner_domain) + [('id', 'in', candidate_partner_ids)]
+        candidates = Partner.search(domain, order='name asc, id asc')
+        if not candidates:
+            return candidates
+
+        status_map = self.get_partner_subscription_status_map_for_pos(candidates.ids)
+        filtered_ids = [
+            partner.id
+            for partner in candidates
+            if self._directory_state_matches_filter_for_pos(
+                status_map.get(partner.id, {}).get('state') or 'none',
+                state_filter,
+            )
+        ]
+        if not filtered_ids:
+            return Partner
+        return Partner.browse(filtered_ids[offset:offset + limit]).exists()
+
+    @api.model
+    def _normalize_partner_directory_state_filter_for_pos(self, state_filter):
+        state_filter = str(state_filter or 'actionable').strip().lower()
+        allowed = set(self._WGS_POS_SUBSCRIPTION_STATE_PRIORITY) | {'all', 'actionable'}
+        return state_filter if state_filter in allowed else 'actionable'
+
+    @api.model
+    def _directory_state_matches_filter_for_pos(self, state, state_filter):
+        state = state or 'none'
+        state_filter = self._normalize_partner_directory_state_filter_for_pos(state_filter)
+        if state_filter == 'all':
+            return True
+        state_values = self._WGS_POS_DIRECTORY_STATE_ALIASES.get(state_filter, (state_filter,))
+        return state in state_values
+
+    @api.model
+    def _get_partner_directory_search_domain_for_pos(self, search_term=False):
+        search_term = (search_term or '').strip()
+        if not search_term:
+            return []
+
+        Partner = self._wgs_partner_model_for_pos()
+        leaves = [('name', 'ilike', search_term)]
+        for field_name in ('phone', 'mobile', 'email'):
+            if field_name in Partner._fields:
+                leaves.append((field_name, 'ilike', search_term))
+        return self._wgs_or_leaves_for_pos(leaves)
+
+    @api.model
+    def _get_partner_ids_matching_directory_search_for_pos(self, search_term=False):
+        search_term = (search_term or '').strip()
+        if not search_term:
+            return False
+
+        Partner = self._wgs_partner_model_for_pos()
+        partner_ids = set(Partner.search(self._get_partner_directory_search_domain_for_pos(search_term)).ids)
+
+        subscriptions = self.sudo().search(self._get_subscription_action_domain_for_pos())
+        subscriptions = subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
+        if subscriptions:
+            recurring_lines = subscriptions.order_line.filtered(
+                lambda line: line.product_id
+                and line.product_id.product_tmpl_id.recurring_invoice
+                and (
+                    search_term.lower() in (line.product_id.display_name or '').lower()
+                    or search_term.lower() in (line.name or '').lower()
+                )
+            )
+            for subscription in recurring_lines.mapped('order_id'):
+                partner_ids.update(subscription.participant_ids.ids)
+                if subscription.partner_id:
+                    partner_ids.add(subscription.partner_id.id)
+
+        return sorted(partner_ids)
+
+    @api.model
+    def _get_partner_directory_birthday_field_for_pos(self):
+        Partner = self._wgs_partner_model_for_pos()
+        for field_name in self._PARTNER_BIRTHDAY_FIELD_CANDIDATES:
+            if field_name in Partner._fields:
+                return field_name
+        return False
+
+    @api.model
+    def _get_partner_ids_with_pos_subscriptions_for_pos(self):
+        subscriptions = self.sudo().search(self._get_subscription_action_domain_for_pos())
+        subscriptions = subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
+        partner_ids = set()
+        for subscription in subscriptions:
+            partner_ids.update(subscription.participant_ids.ids)
+            if subscription.partner_id:
+                partner_ids.add(subscription.partner_id.id)
+        return sorted(partner_ids)
+
+    @api.model
+    def _get_partner_ids_for_directory_state_filter_for_pos(self, state_filter):
+        state_values = self._WGS_POS_DIRECTORY_STATE_ALIASES.get(state_filter, (state_filter,))
+        subscriptions = self.sudo().search(self._get_subscription_action_domain_for_pos(), order='id desc')
+        subscriptions = subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
+        today = fields.Date.context_today(self)
+        partner_ids = set()
+
+        for subscription in subscriptions:
+            try:
+                item = subscription._build_pos_subscription_status_item(today)
+            except Exception as error:
+                self._wgs_raise_pos_data_error(
+                    _('No se pudo construir el filtro del directorio de suscripciones.'),
+                    error=error,
+                    subscription_id=subscription.id,
+                    state_filter=state_filter,
+                )
+            if not item or item.get('native_state_key') not in state_values:
+                continue
+            partner_ids.update(subscription.participant_ids.ids)
+            if subscription.partner_id:
+                partner_ids.add(subscription.partner_id.id)
+        return sorted(partner_ids)
 
     def _summarize_partner_subscription_items_for_pos(self, items):
         if not items:
@@ -1191,7 +1408,7 @@ class SaleOrder(models.Model):
             return 'draft', display_label or _('Borrador')
         if any(token in haystack for token in ('cancel', 'cancelled', 'canceled', 'cancelada')):
             return 'cancel', display_label or _('Cancelada')
-        if any(token in haystack for token in ('close', 'closed', 'cerrada')):
+        if any(token in haystack for token in ('close', 'closed', 'cerrada', 'churn', 'churned')):
             return 'closed', display_label or _('Cerrada')
         if 'upsell' in haystack:
             return 'upsell', display_label or _('Upsell')

@@ -2,7 +2,6 @@
 
 function renderDirectorySummary({
     counts,
-    filteredCount,
     directoryLoading,
     directoryLoadError,
     _t,
@@ -12,11 +11,10 @@ function renderDirectorySummary({
         <span class="wgs-summary-pill">${_t("Total")}: ${counts.total || 0}</span>
         <span class="wgs-summary-pill wgs-summary-positive">${_t("En progreso")}: ${counts.progress || 0}</span>
         <span class="wgs-summary-pill wgs-summary-warning">${_t("Por renovar")}: ${counts.renew || 0}</span>
-        <span class="wgs-summary-pill wgs-summary-warning">${_t("Pausadas")}: ${counts.paused || 0}</span>
+        ${counts.paused ? `<span class="wgs-summary-pill wgs-summary-warning">${_t("Pausadas")}: ${counts.paused || 0}</span>` : ""}
         <span class="wgs-summary-pill wgs-summary-negative">${_t("Canceladas")}: ${counts.cancel || 0}</span>
         <span class="wgs-summary-pill wgs-summary-none">${_t("Sin suscripcion")}: ${counts.none || 0}</span>
         <span class="wgs-summary-pill">${_t("Con cumpleanos")}: ${counts.birthday || 0}</span>
-        <span class="wgs-summary-pill">${_t("Mostrando")}: ${filteredCount}</span>
         ${directoryLoading ? `<span class="wgs-summary-pill">${_t("Cargando directorio...")}</span>` : ""}
         ${directoryLoadError ? `<span class="wgs-summary-pill wgs-summary-negative">${escapeHtml(directoryLoadError)}</span>` : ""}
     `;

@@ -2,8 +2,20 @@
 
 export function createSubscriptionPosApi(orm) {
     return {
-        async fetchPartnerDirectoryBatch(offset = 0, limit = 500) {
-            return orm.call("pos.order", "wgs_get_partner_directory_rows_for_pos", [offset, limit]);
+        async fetchPartnerDirectorySummary() {
+            return orm.call("pos.order", "wgs_get_partner_directory_summary_for_pos", []);
+        },
+        async fetchPartnerDirectoryBatch(offset = 0, limit = 500, options = {}) {
+            return orm.call(
+                "pos.order",
+                "wgs_get_partner_directory_rows_for_pos",
+                [
+                    offset,
+                    limit,
+                    options.stateFilter || "actionable",
+                    options.searchTerm || "",
+                ]
+            );
         },
         async fetchPartnerSubscriptionDetail(partnerId) {
             return orm.call("pos.order", "wgs_get_partner_subscription_detail_for_pos", [partnerId]);

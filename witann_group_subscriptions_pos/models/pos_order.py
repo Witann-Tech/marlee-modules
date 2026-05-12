@@ -267,8 +267,17 @@ class PosOrder(models.Model):
         return self._wgs_sale_order_model_for_pos().browse(subscription_id).exists()
 
     @api.model
-    def wgs_get_partner_directory_rows_for_pos(self, offset=0, limit=500):
-        return self.env['sale.order'].get_partner_directory_rows_for_pos(offset=offset, limit=limit)
+    def wgs_get_partner_directory_summary_for_pos(self):
+        return self.env['sale.order'].get_partner_directory_summary_for_pos()
+
+    @api.model
+    def wgs_get_partner_directory_rows_for_pos(self, offset=0, limit=500, state_filter=False, search_term=False):
+        return self.env['sale.order'].get_partner_directory_rows_for_pos(
+            offset=offset,
+            limit=limit,
+            state_filter=state_filter,
+            search_term=search_term,
+        )
 
     @api.model
     def wgs_get_partner_subscription_detail_for_pos(self, partner_id):

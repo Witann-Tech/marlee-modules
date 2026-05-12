@@ -313,7 +313,10 @@ patch(ControlButtons.prototype, {
         let offset = 0;
 
         while (true) {
-            const batch = await this.subscriptionPosApi.fetchPartnerDirectoryBatch(offset, batchSize);
+            const batch = await this.subscriptionPosApi.fetchPartnerDirectoryBatch(offset, batchSize, {
+                stateFilter: "all",
+                searchTerm: "",
+            });
             if (!Array.isArray(batch) || !batch.length) {
                 break;
             }
@@ -325,6 +328,10 @@ patch(ControlButtons.prototype, {
         }
 
         return rows;
+    },
+
+    async _fetchPartnerDirectorySummary() {
+        return this.subscriptionPosApi.fetchPartnerDirectorySummary();
     },
 
     async _fetchPartnerSubscriptionDetail(partnerId) {
@@ -440,12 +447,13 @@ patch(ControlButtons.prototype, {
         toolbar.innerHTML = `
             <input type="text" class="wgs-filter-search" placeholder="${_t("Buscar por cliente, paquete, telefono o email")}" />
             <select class="wgs-filter-state">
+                <option value="actionable">${_t("Estado: En progreso y por renovar")}</option>
                 <option value="all">${_t("Estado: Todos")}</option>
                 <option value="progress">${_t("Estado: En progreso")}</option>
                 <option value="renew">${_t("Estado: Por renovar")}</option>
                 <option value="paused">${_t("Estado: Pausada")}</option>
                 <option value="draft">${_t("Estado: Borrador")}</option>
-                <option value="cancel">${_t("Estado: Cancelada")}</option>
+                <option value="cancel">${_t("Estado: Cancelada / churned")}</option>
                 <option value="closed">${_t("Estado: Cerrada")}</option>
                 <option value="other">${_t("Estado: Otros")}</option>
                 <option value="none">${_t("Estado: Sin suscripcion")}</option>
@@ -640,6 +648,8 @@ patch(ControlButtons.prototype, {
         let directoryLoading = false;
         let directoryFullyLoaded = false;
         let directoryLoadError = "";
+        let directorySummary = null;
+        let directoryLoadToken = 0;
         let formMode = null;
         let formError = "";
         let formNotice = "";
@@ -673,6 +683,10 @@ patch(ControlButtons.prototype, {
             set directoryFullyLoaded(value) { directoryFullyLoaded = Boolean(value); },
             get directoryLoadError() { return directoryLoadError; },
             set directoryLoadError(value) { directoryLoadError = String(value || ""); },
+            get directorySummary() { return directorySummary; },
+            set directorySummary(value) { directorySummary = value && typeof value === "object" ? value : null; },
+            get directoryLoadToken() { return directoryLoadToken; },
+            set directoryLoadToken(value) { directoryLoadToken = Number(value || 0); },
             get formMode() { return formMode; },
             set formMode(value) { formMode = value; },
             get formError() { return formError; },
@@ -747,24 +761,45 @@ patch(ControlButtons.prototype, {
             });
         };
 
-        const loadDirectoryRowsInBackground = async ({ reset = false, preferredPartnerId = false } = {}) => {
+        const getDirectoryCriteria = () => ({
+            stateFilter: stateSelect.value || "actionable",
+            searchTerm: searchInput.value || "",
+        });
+
+        const loadDirectoryRowsInBackground = async ({
+            reset = false,
+            preferredPartnerId = false,
+            stateFilter = false,
+            searchTerm = false,
+            preserveFocus = false,
+        } = {}) => {
+            const criteria = {
+                ...getDirectoryCriteria(),
+                ...(stateFilter !== false ? { stateFilter } : {}),
+                ...(searchTerm !== false ? { searchTerm } : {}),
+            };
             await loadDirectoryRowsInBackgroundController(modalState, {
                 overlay,
                 reset,
                 preferredPartnerId,
-                render,
+                render: preserveFocus ? renderPreservingFocus : render,
                 fetchPartnerDirectoryBatch: (offset, limit) =>
-                    this.subscriptionPosApi.fetchPartnerDirectoryBatch(offset, limit),
+                    this.subscriptionPosApi.fetchPartnerDirectoryBatch(offset, limit, criteria),
+                stateFilter: criteria.stateFilter,
+                searchTerm: criteria.searchTerm,
                 _t,
             });
         };
 
         const reloadDirectoryRows = async (preferredPartnerId = false) => {
+            const criteria = getDirectoryCriteria();
             await reloadDirectoryRowsController(modalState, {
                 overlay,
-                render,
+                render: renderPreservingFocus,
                 fetchPartnerDirectoryBatch: (offset, limit) =>
-                    this.subscriptionPosApi.fetchPartnerDirectoryBatch(offset, limit),
+                    this.subscriptionPosApi.fetchPartnerDirectoryBatch(offset, limit, criteria),
+                stateFilter: criteria.stateFilter,
+                searchTerm: criteria.searchTerm,
                 _t,
             }, preferredPartnerId);
         };
@@ -1387,11 +1422,10 @@ patch(ControlButtons.prototype, {
 
             filteredSnapshot = filtered;
 
-            const counts = countDirectoryRows(rows);
+            const counts = directorySummary || countDirectoryRows(rows);
 
             summary.innerHTML = renderDirectorySummary({
                 counts,
-                filteredCount: filtered.length,
                 directoryLoading,
                 directoryLoadError,
                 _t,
@@ -1436,6 +1470,15 @@ patch(ControlButtons.prototype, {
             const focusState = captureFocusState(overlay);
             render();
             restoreFocusState(overlay, focusState);
+        };
+
+        const loadDirectorySummary = async () => {
+            try {
+                directorySummary = await this._fetchPartnerDirectorySummary();
+                renderPreservingFocus();
+            } catch (error) {
+                console.error("Error al consultar resumen de suscripciones en POS", error);
+            }
         };
 
         bindDirectoryRowSelection(tbody, (partnerId) => {
@@ -1606,14 +1649,29 @@ patch(ControlButtons.prototype, {
             }
         });
 
+        let directorySearchTimer = null;
+        const refreshDirectoryRowsForControls = () => {
+            loadDirectoryRowsInBackground({
+                reset: true,
+                preferredPartnerId: selectedPartnerId,
+                preserveFocus: true,
+            });
+        };
+
         bindDirectoryToolbarEvents({
             searchInput,
             stateSelect,
             birthdaySelect,
             sortSelect,
             exportButton,
-            onSearchInput: renderPreservingFocus,
-            onStateChange: render,
+            onSearchInput: () => {
+                renderPreservingFocus();
+                if (directorySearchTimer) {
+                    window.clearTimeout(directorySearchTimer);
+                }
+                directorySearchTimer = window.setTimeout(refreshDirectoryRowsForControls, 250);
+            },
+            onStateChange: refreshDirectoryRowsForControls,
             onBirthdayChange: render,
             onSortChange: render,
             onExport: () => {
@@ -1622,7 +1680,14 @@ patch(ControlButtons.prototype, {
         });
 
         render();
-        loadDirectoryRowsInBackground({ reset: !rows.length, preferredPartnerId: selectedPartnerId });
+        loadDirectorySummary();
+        loadDirectoryRowsInBackground({
+            reset: !rows.length,
+            preferredPartnerId: selectedPartnerId,
+            stateFilter: "actionable",
+            searchTerm: "",
+            preserveFocus: true,
+        });
     },
 
     _getDefaultNewSubscriptionForm(partnerId) {

@@ -2,8 +2,21 @@
 
 function filterDirectoryRows(rows, { query, stateFilter, birthdayFilter, matchesBirthdayFilter }) {
     const normalizedQuery = String(query || "").trim().toLowerCase();
+    const stateMatchesFilter = (state) => {
+        const currentState = state || "none";
+        if (stateFilter === "all") {
+            return true;
+        }
+        if (stateFilter === "actionable") {
+            return currentState === "progress" || currentState === "renew";
+        }
+        if (stateFilter === "cancel") {
+            return currentState === "cancel" || currentState === "closed";
+        }
+        return currentState === stateFilter;
+    };
     return (Array.isArray(rows) ? rows : []).filter((row) => {
-        if (stateFilter !== "all" && (row.state || "none") !== stateFilter) {
+        if (!stateMatchesFilter(row.state)) {
             return false;
         }
         if (!matchesBirthdayFilter(row.birthday, birthdayFilter)) {
@@ -90,7 +103,12 @@ function countDirectoryRows(rows) {
         (acc, row) => {
             const state = row.state || "none";
             acc.total += 1;
-            acc[state] = (acc[state] || 0) + 1;
+            if (state === "closed") {
+                acc.closed = (acc.closed || 0) + 1;
+                acc.cancel = (acc.cancel || 0) + 1;
+            } else {
+                acc[state] = (acc[state] || 0) + 1;
+            }
             if (row.birthday) {
                 acc.birthday += 1;
             }

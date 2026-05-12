@@ -7,11 +7,12 @@ async function loadDirectoryRowsInBackground(state, {
     preferredPartnerId = false,
     reset = false,
     batchSize = 250,
+    stateFilter = "actionable",
+    searchTerm = "",
     _t,
 }) {
-    if (state.directoryLoading) {
-        return;
-    }
+    const requestToken = Number(state.directoryLoadToken || 0) + 1;
+    state.directoryLoadToken = requestToken;
     if (reset) {
         state.rows = [];
         state.filteredSnapshot = [];
@@ -26,7 +27,16 @@ async function loadDirectoryRowsInBackground(state, {
     let offset = state.rows.length;
     try {
         while (overlay.isConnected) {
-            const batch = await fetchPartnerDirectoryBatch(offset, batchSize);
+            if (state.directoryLoadToken !== requestToken) {
+                break;
+            }
+            const batch = await fetchPartnerDirectoryBatch(offset, batchSize, {
+                stateFilter,
+                searchTerm,
+            });
+            if (state.directoryLoadToken !== requestToken) {
+                break;
+            }
             if (!Array.isArray(batch) || !batch.length) {
                 state.directoryFullyLoaded = true;
                 break;
@@ -47,8 +57,10 @@ async function loadDirectoryRowsInBackground(state, {
         console.error("Error al consultar suscripciones en POS", error);
         state.directoryLoadError = _t("No se pudo cargar el directorio completo en este momento.");
     } finally {
-        state.directoryLoading = false;
-        render();
+        if (state.directoryLoadToken === requestToken) {
+            state.directoryLoading = false;
+            render();
+        }
     }
 }
 
