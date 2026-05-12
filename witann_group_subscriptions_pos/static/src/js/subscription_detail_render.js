@@ -24,7 +24,6 @@ function renderDetailHeader({
     isEditingPartnerInfo,
     partnerEditForm,
     detailAvatarHtml,
-    summaryStateClass,
     formError,
     formNotice,
     escapeHtml,
@@ -89,7 +88,6 @@ function renderDetailHeader({
             <div class="wgs-detail-header-text">
                 <div class="wgs-detail-title-row">
                     <h4>${escapeHtml(detail.partner_name || "-")}</h4>
-                    <span class="wgs-state-badge ${summaryStateClass}">${escapeHtml(detail.state_label || _t("Sin suscripcion"))}</span>
                 </div>
                 ${detailBodyHtml}
             </div>

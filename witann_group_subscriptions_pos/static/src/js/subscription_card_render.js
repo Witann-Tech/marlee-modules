@@ -27,7 +27,6 @@ function renderSubscriptionCard({
                 <div><span>${escapeHtml(_t("Plan"))}</span><strong>${escapeHtml(item.plan_name || "-")}</strong></div>
                 <div><span>${escapeHtml(_t("Inicio"))}</span><strong>${escapeHtml(formatDateDisplay(item.start_date) || "-")}</strong></div>
                 <div><span>${escapeHtml(_t("Vencimiento"))}</span><strong>${escapeHtml(formatDateDisplay(item.valid_until) || "-")}</strong></div>
-                <div><span>${escapeHtml(_t("Proxima fecha"))}</span><strong>${escapeHtml(formatDateDisplay(item.next_invoice_date) || "-")}</strong></div>
                 <div><span>${escapeHtml(_t("Participantes"))}</span><strong>${escapeHtml(String(item.participant_count || 0))}</strong></div>
             </div>
             <div class="wgs-subscription-participants">

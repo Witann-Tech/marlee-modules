@@ -491,6 +491,15 @@ patch(ControlButtons.prototype, {
         `;
         const listFormContainer = document.createElement("div");
         listFormContainer.className = "wgs-list-form-container";
+        const listPager = document.createElement("div");
+        listPager.className = "wgs-directory-pagination";
+        listPager.innerHTML = `
+            <span class="wgs-directory-page-label"></span>
+            <div class="wgs-directory-page-actions">
+                <button type="button" class="wgs-directory-page-btn wgs-btn-page-prev">${this._escapeHtml(_t("Anterior"))}</button>
+                <button type="button" class="wgs-directory-page-btn wgs-btn-page-next">${this._escapeHtml(_t("Siguiente"))}</button>
+            </div>
+        `;
         const table = document.createElement("table");
         table.className = "wgs-status-table wgs-subscription-table";
         table.innerHTML = `
@@ -509,6 +518,7 @@ patch(ControlButtons.prototype, {
         `;
         listPane.appendChild(listActions);
         listPane.appendChild(listFormContainer);
+        listPane.appendChild(listPager);
         listPane.appendChild(table);
 
         const detailPane = document.createElement("div");
@@ -634,8 +644,11 @@ patch(ControlButtons.prototype, {
             birthdaySelect,
             sortSelect,
             exportButton,
+            prevPageButton,
+            nextPageButton,
+            pageLabel,
             tbody,
-        } = getDirectoryControls({ toolbar, table });
+        } = getDirectoryControls({ toolbar, table, pager: listPager });
 
         let filteredSnapshot = [...rows];
         let selectedPartnerId = rows[0] ? rows[0].id : false;
@@ -646,6 +659,9 @@ patch(ControlButtons.prototype, {
         let directoryLoadError = "";
         let directorySummary = null;
         let directoryLoadToken = 0;
+        let directoryPageOffset = 0;
+        let directoryPageSize = 50;
+        let directoryHasNextPage = false;
         let formMode = null;
         let formError = "";
         let formNotice = "";
@@ -683,6 +699,12 @@ patch(ControlButtons.prototype, {
             set directorySummary(value) { directorySummary = value && typeof value === "object" ? value : null; },
             get directoryLoadToken() { return directoryLoadToken; },
             set directoryLoadToken(value) { directoryLoadToken = Number(value || 0); },
+            get directoryPageOffset() { return directoryPageOffset; },
+            set directoryPageOffset(value) { directoryPageOffset = Math.max(0, Number(value || 0)); },
+            get directoryPageSize() { return directoryPageSize; },
+            set directoryPageSize(value) { directoryPageSize = Math.max(1, Number(value || 50)); },
+            get directoryHasNextPage() { return directoryHasNextPage; },
+            set directoryHasNextPage(value) { directoryHasNextPage = Boolean(value); },
             get formMode() { return formMode; },
             set formMode(value) { formMode = value; },
             get formError() { return formError; },
@@ -758,7 +780,7 @@ patch(ControlButtons.prototype, {
         };
 
         const getDirectoryCriteria = () => ({
-            stateFilter: stateSelect.value || "actionable",
+            stateFilter: (searchInput.value || "").trim() ? "all" : (stateSelect.value || "actionable"),
             searchTerm: searchInput.value || "",
         });
 
@@ -768,7 +790,8 @@ patch(ControlButtons.prototype, {
             stateFilter = false,
             searchTerm = false,
             preserveFocus = false,
-            batchSize = 80,
+            batchSize = directoryPageSize,
+            pageOffset = directoryPageOffset,
         } = {}) => {
             const criteria = {
                 ...getDirectoryCriteria(),
@@ -785,6 +808,7 @@ patch(ControlButtons.prototype, {
                 stateFilter: criteria.stateFilter,
                 searchTerm: criteria.searchTerm,
                 batchSize,
+                pageOffset,
                 _t,
             });
         };
@@ -798,7 +822,8 @@ patch(ControlButtons.prototype, {
                     this.subscriptionPosApi.fetchPartnerDirectoryBatch(offset, limit, criteria),
                 stateFilter: criteria.stateFilter,
                 searchTerm: criteria.searchTerm,
-                batchSize: 80,
+                batchSize: directoryPageSize,
+                pageOffset: directoryPageOffset,
                 _t,
             }, preferredPartnerId);
         };
@@ -1401,7 +1426,7 @@ patch(ControlButtons.prototype, {
             listFormContainer.innerHTML = renderNewPartnerForm();
             syncPartnerCameraPreview();
             const query = searchInput.value || "";
-            const stateFilter = stateSelect.value;
+            const stateFilter = query.trim() ? "all" : stateSelect.value;
             const birthdayFilter = birthdaySelect.value;
             const sortMode = sortSelect.value;
 
@@ -1425,11 +1450,19 @@ patch(ControlButtons.prototype, {
 
             summary.innerHTML = renderDirectorySummary({
                 counts,
+                activeStateFilter: query.trim() ? "all" : stateSelect.value,
                 directoryLoading,
                 directoryLoadError,
                 _t,
                 escapeHtml: (value) => this._escapeHtml(value),
             });
+            const pageStart = rows.length ? directoryPageOffset + 1 : 0;
+            const pageEnd = directoryPageOffset + rows.length;
+            pageLabel.textContent = rows.length
+                ? _t("Socios %s-%s").replace("%s", String(pageStart)).replace("%s", String(pageEnd))
+                : _t("Sin socios");
+            prevPageButton.disabled = directoryLoading || directoryPageOffset <= 0;
+            nextPageButton.disabled = directoryLoading || !directoryHasNextPage;
 
             if (!filtered.length) {
                 const emptyMessage = directoryLoading && !rows.length
@@ -1485,6 +1518,18 @@ patch(ControlButtons.prototype, {
                 resetForPartnerSelection,
                 render,
             });
+        });
+
+        summary.addEventListener("click", (event) => {
+            const target = event.target.closest("[data-state-filter]");
+            if (!target) {
+                return;
+            }
+            const nextFilter = target.dataset.stateFilter || "actionable";
+            if (stateSelect.value !== nextFilter) {
+                stateSelect.value = nextFilter;
+            }
+            refreshDirectoryRowsForControls();
         });
 
         const listPaneActions = {
@@ -1650,10 +1695,22 @@ patch(ControlButtons.prototype, {
 
         let directorySearchTimer = null;
         const refreshDirectoryRowsForControls = () => {
+            directoryPageOffset = 0;
             loadDirectoryRowsInBackground({
                 reset: true,
                 preferredPartnerId: selectedPartnerId,
                 preserveFocus: true,
+                pageOffset: directoryPageOffset,
+            });
+        };
+
+        const loadDirectoryPage = (nextOffset) => {
+            directoryPageOffset = Math.max(0, Number(nextOffset || 0));
+            loadDirectoryRowsInBackground({
+                reset: true,
+                preferredPartnerId: false,
+                preserveFocus: true,
+                pageOffset: directoryPageOffset,
             });
         };
 
@@ -1663,6 +1720,8 @@ patch(ControlButtons.prototype, {
             birthdaySelect,
             sortSelect,
             exportButton,
+            prevPageButton,
+            nextPageButton,
             onSearchInput: () => {
                 renderPreservingFocus();
                 if (directorySearchTimer) {
@@ -1676,6 +1735,12 @@ patch(ControlButtons.prototype, {
             onExport: () => {
                 this._downloadDirectoryAsXls(filteredSnapshot);
             },
+            onPrevPage: () => {
+                loadDirectoryPage(directoryPageOffset - directoryPageSize);
+            },
+            onNextPage: () => {
+                loadDirectoryPage(directoryPageOffset + directoryPageSize);
+            },
         });
 
         render();
@@ -1685,6 +1750,8 @@ patch(ControlButtons.prototype, {
             stateFilter: "actionable",
             searchTerm: "",
             preserveFocus: true,
+            pageOffset: 0,
+            batchSize: directoryPageSize,
         }).then(() => {
             if (overlay.isConnected) {
                 window.setTimeout(() => {
@@ -1882,6 +1949,17 @@ patch(ControlButtons.prototype, {
                 color: #374151;
                 background: #f9fafb;
             }
+            button.wgs-summary-pill {
+                cursor: pointer;
+                line-height: 1.2;
+            }
+            button.wgs-summary-pill:hover {
+                filter: brightness(0.97);
+                transform: translateY(-1px);
+            }
+            .wgs-summary-active {
+                box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.16);
+            }
             .wgs-summary-positive {
                 border-color: #8ad9b5;
                 color: #0f7b4b;
@@ -1926,6 +2004,40 @@ patch(ControlButtons.prototype, {
             }
             .wgs-list-form-container {
                 padding-top: 0.7rem;
+            }
+            .wgs-directory-pagination {
+                padding: 0.65rem 1rem;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 0.75rem;
+                border-top: 1px solid #eef2f7;
+                border-bottom: 1px solid #e5e7eb;
+                background: #ffffff;
+            }
+            .wgs-directory-page-label {
+                color: #475569;
+                font-size: 0.82rem;
+                font-weight: 700;
+            }
+            .wgs-directory-page-actions {
+                display: flex;
+                gap: 0.45rem;
+                align-items: center;
+            }
+            .wgs-directory-page-btn {
+                border: 1px solid #cbd5e1;
+                border-radius: 0.55rem;
+                background: #ffffff;
+                color: #334155;
+                padding: 0.45rem 0.75rem;
+                font-size: 0.8rem;
+                font-weight: 700;
+                cursor: pointer;
+            }
+            .wgs-directory-page-btn:disabled {
+                opacity: 0.55;
+                cursor: not-allowed;
             }
             .wgs-subscription-detail-pane {
                 overflow: auto;

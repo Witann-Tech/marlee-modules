@@ -6,8 +6,9 @@ async function loadDirectoryRowsInBackground(state, {
     fetchPartnerDirectoryBatch,
     preferredPartnerId = false,
     reset = false,
-    batchSize = 80,
+    batchSize = 50,
     loadAll = false,
+    pageOffset = false,
     stateFilter = "actionable",
     searchTerm = "",
     _t,
@@ -25,13 +26,14 @@ async function loadDirectoryRowsInBackground(state, {
     }
     state.directoryLoading = true;
     render();
-    let offset = state.rows.length;
+    let offset = pageOffset !== false ? Math.max(0, Number(pageOffset || 0)) : state.rows.length;
+    const requestLimit = loadAll ? batchSize : batchSize + 1;
     try {
         while (overlay.isConnected) {
             if (state.directoryLoadToken !== requestToken) {
                 break;
             }
-            const batch = await fetchPartnerDirectoryBatch(offset, batchSize, {
+            const batch = await fetchPartnerDirectoryBatch(offset, requestLimit, {
                 stateFilter,
                 searchTerm,
             });
@@ -39,21 +41,25 @@ async function loadDirectoryRowsInBackground(state, {
                 break;
             }
             if (!Array.isArray(batch) || !batch.length) {
+                state.directoryHasNextPage = false;
                 state.directoryFullyLoaded = true;
                 break;
             }
-            state.rows = [...state.rows, ...batch];
+            const visibleBatch = !loadAll && batch.length > batchSize ? batch.slice(0, batchSize) : batch;
+            state.directoryHasNextPage = !loadAll && batch.length > batchSize;
+            state.rows = loadAll ? [...state.rows, ...visibleBatch] : [...visibleBatch];
             state.filteredSnapshot = [...state.rows];
             if (!state.selectedPartnerId && state.rows[0]) {
                 state.selectedPartnerId = Number(preferredPartnerId || state.rows[0].id || 0) || false;
             }
-            offset += batch.length;
+            offset += visibleBatch.length;
             render();
             if (!loadAll) {
-                state.directoryFullyLoaded = batch.length < batchSize;
+                state.directoryFullyLoaded = !state.directoryHasNextPage;
                 break;
             }
-            if (batch.length < batchSize) {
+            if (visibleBatch.length < batchSize) {
+                state.directoryHasNextPage = false;
                 state.directoryFullyLoaded = true;
                 break;
             }

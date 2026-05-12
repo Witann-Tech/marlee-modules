@@ -87,7 +87,6 @@ function renderDetailContent(detail, {
     formatMoney,
     _t,
 }) {
-    const summaryStateClass = getStateClass(detail.state);
     const isEditingPartnerPhoto = formMode === "partner_photo"
         && partnerPhotoForm
         && Number(partnerPhotoForm.partnerId || 0) === Number(detail.partner_id || 0);
@@ -126,7 +125,6 @@ function renderDetailContent(detail, {
             isEditingPartnerInfo,
             partnerEditForm,
             detailAvatarHtml,
-            summaryStateClass,
             formError,
             formNotice,
             escapeHtml,

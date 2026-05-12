@@ -317,3 +317,90 @@ class TestPosSubscriptionPricing(TransactionCase):
         self.assertEqual(charge['recurring_price'], 100.0)
         self.assertEqual(charge['display_recurring_price'], 116.0)
         self.assertTrue(charge['is_reenroll'])
+
+    def test_reenroll_charge_allows_churned_subscription(self):
+        order = self._create_subscription_like_order()
+        if 'subscription_state' in order._fields:
+            order.write({'subscription_state': 'churned'})
+
+        charge = self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
+            partner_id=False,
+            product_id=self.product.id,
+            flow='reenroll',
+            source_subscription_id=order.id,
+            pending_move_id=False,
+            fallback=0.0,
+            preferred_plan_id=False,
+            preferred_pricing_id=False,
+        )
+
+        self.assertEqual(charge['recurring_price'], 100.0)
+        self.assertEqual(charge['display_recurring_price'], 116.0)
+        self.assertTrue(charge['is_reenroll'])
+
+    def test_subscription_detail_prefers_active_card_over_renew_or_churned(self):
+        items = [
+            {
+                'subscription_id': 1,
+                'native_state_key': 'renew',
+                'can_renew': True,
+                '_wgs_creation_sort_key': ('2026-01-01 10:00:00', 1),
+            },
+            {
+                'subscription_id': 2,
+                'native_state_key': 'closed',
+                'can_reenroll': True,
+                '_wgs_creation_sort_key': ('2026-02-01 10:00:00', 2),
+            },
+            {
+                'subscription_id': 3,
+                'native_state_key': 'progress',
+                'can_renew': True,
+                '_wgs_creation_sort_key': ('2025-12-01 10:00:00', 3),
+            },
+        ]
+
+        filtered = self.env['sale.order']._filter_partner_subscription_detail_items_for_pos(items)
+
+        self.assertEqual([item['subscription_id'] for item in filtered], [3])
+        self.assertFalse(any('_wgs_creation_sort_key' in item for item in filtered))
+
+    def test_churned_subscription_is_not_marked_for_renewal_by_due_date(self):
+        order = self._create_subscription_like_order()
+        if 'subscription_state' not in order._fields:
+            self.skipTest('subscription_state field is not available')
+        order.write({'subscription_state': 'churned'})
+
+        item = order._build_pos_subscription_status_item(fields.Date.to_date('2026-05-12'))
+
+        self.assertEqual(item['native_state_key'], 'closed')
+        self.assertFalse(item['is_valid'])
+        self.assertFalse(item['can_renew'])
+        self.assertTrue(item['can_reenroll'])
+
+    def test_subscription_detail_keeps_latest_renew_when_no_active_card(self):
+        items = [
+            {
+                'subscription_id': 1,
+                'native_state_key': 'renew',
+                'can_renew': True,
+                '_wgs_creation_sort_key': ('2026-01-01 10:00:00', 1),
+            },
+            {
+                'subscription_id': 2,
+                'native_state_key': 'closed',
+                'can_reenroll': True,
+                '_wgs_creation_sort_key': ('2026-02-01 10:00:00', 2),
+            },
+            {
+                'subscription_id': 4,
+                'native_state_key': 'renew',
+                'can_renew': True,
+                '_wgs_creation_sort_key': ('2026-03-01 10:00:00', 4),
+            },
+        ]
+
+        filtered = self.env['sale.order']._filter_partner_subscription_detail_items_for_pos(items)
+
+        self.assertEqual([item['subscription_id'] for item in filtered], [4])
+        self.assertFalse(any('_wgs_creation_sort_key' in item for item in filtered))
