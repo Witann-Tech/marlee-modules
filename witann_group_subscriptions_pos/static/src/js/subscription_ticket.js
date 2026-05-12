@@ -317,14 +317,6 @@ async function addProductToOrder(source, order, product, options = {}) {
         merge: false,
         ...options,
     };
-    if (typeof pos.addLineToCurrentOrder === "function") {
-        const line = await pos.addLineToCurrentOrder({ product_id: product }, payload);
-        return line || getSelectedOrderLine(source, order);
-    }
-    if (typeof pos.addLineToOrder === "function") {
-        const line = await pos.addLineToOrder(order, { product_id: product }, payload);
-        return line || getSelectedOrderLine(source, order);
-    }
     if (typeof order.add_product === "function") {
         order.add_product(product, payload);
         return getSelectedOrderLine(source, order);
@@ -332,6 +324,24 @@ async function addProductToOrder(source, order, product, options = {}) {
     if (typeof order.addProduct === "function") {
         order.addProduct(product, payload);
         return getSelectedOrderLine(source, order);
+    }
+    if (typeof pos.addLineToCurrentOrder === "function") {
+        try {
+            const line = await pos.addLineToCurrentOrder(product, payload);
+            return line || getSelectedOrderLine(source, order);
+        } catch (_error) {
+            const line = await pos.addLineToCurrentOrder({ product_id: product }, payload);
+            return line || getSelectedOrderLine(source, order);
+        }
+    }
+    if (typeof pos.addLineToOrder === "function") {
+        try {
+            const line = await pos.addLineToOrder(order, product, payload);
+            return line || getSelectedOrderLine(source, order);
+        } catch (_error) {
+            const line = await pos.addLineToOrder(order, { product_id: product }, payload);
+            return line || getSelectedOrderLine(source, order);
+        }
     }
     return null;
 }
