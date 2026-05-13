@@ -212,8 +212,6 @@ function buildSubscriptionInlineActionHandlers({
     openReenrollForm,
     openUpsaleForm,
     openParticipantEditForm,
-    openPendingChargeForm,
-    openCancellationRefundForm,
     fetchResyncAccess,
     loadDetail,
     detailCache,
@@ -272,12 +270,6 @@ function buildSubscriptionInlineActionHandlers({
                 renderDetail(state.currentDetail);
             }
         },
-        "open-pending": async ({ actionButton }) => {
-            await openPendingChargeForm(getCurrentSubscriptionItem(actionButton));
-        },
-        "open-cancellation-refund": async ({ actionButton }) => {
-            await openCancellationRefundForm(getCurrentSubscriptionItem(actionButton));
-        },
         "cancel-renewal": async () => {
             resetInlineForms();
             renderDetail(state.currentDetail);
@@ -287,14 +279,6 @@ function buildSubscriptionInlineActionHandlers({
             renderDetail(state.currentDetail);
         },
         "cancel-upsale": async () => {
-            resetInlineForms();
-            renderDetail(state.currentDetail);
-        },
-        "cancel-pending": async () => {
-            resetInlineForms();
-            renderDetail(state.currentDetail);
-        },
-        "cancel-cancellation-refund": async () => {
             resetInlineForms();
             renderDetail(state.currentDetail);
         },
@@ -546,173 +530,6 @@ function buildSubscriptionInlineActionHandlers({
             state.formNotice = _t("Suscripcion agregada al ticket. Puedes continuar al cobro normal del POS.");
             renderDetail(state.currentDetail);
         },
-        "save-pending": async () => {
-            state.formError = "";
-            state.formNotice = "";
-            if (!state.pendingChargeForm || !state.pendingChargeForm.subscriptionId || !state.pendingChargeForm.pendingMoveId || !state.pendingChargeForm.productId) {
-                state.formError = _t("El documento pendiente seleccionado no tiene datos suficientes para agregarse al ticket.");
-                renderDetail(state.currentDetail);
-                return;
-            }
-            const order = getCurrentOrder();
-            if (!order) {
-                state.formError = _t("No hay una orden POS activa para agregar el cobro pendiente.");
-                renderDetail(state.currentDetail);
-                return;
-            }
-            const holderPartnerId = Number(state.pendingChargeForm.holderPartnerId || 0) || false;
-            if (!(await ensurePartnerAssignedToOrder(order, holderPartnerId, {
-                partnerName: String(state.pendingChargeForm.holderPartnerName || "").trim(),
-                state,
-                renderDetail,
-                getPartnerIdFromOrder,
-                getOrderLines,
-                getSubscriptionPartnerIdsFromOrder,
-                ensurePartnerLoadedInPos,
-                setPartnerOnCurrentOrder,
-                _t,
-            }))) {
-                return;
-            }
-            const productRecord = await ensureProductLoadedInPos(state.pendingChargeForm.productId);
-            if (!productRecord) {
-                state.formError = _t("El producto recurrente de esta suscripción no está cargado en la sesión actual del POS.");
-                renderDetail(state.currentDetail);
-                return;
-            }
-            if (!state.pendingChargeForm.pricingSnapshot) {
-                state.formError = _t("No se pudo resolver el pricing del cobro pendiente.");
-                renderDetail(state.currentDetail);
-                return;
-            }
-            let targetLine = null;
-            try {
-                const lineResult = await addConfiguredProductLineToOrder(order, productRecord, {
-                    quantity: 1,
-                    merge: false,
-                    charge: buildChargeFromSnapshot(state.pendingChargeForm, "charge_now"),
-                    metadata: {
-                        flow: "pending_charge",
-                        partner_id: holderPartnerId || false,
-                        participant_ids: [],
-                        plan_id: false,
-                        pricing_id: false,
-                        start_date: false,
-                        end_date: false,
-                        product_id: Number(state.pendingChargeForm.productId || 0) || false,
-                        product_name: state.pendingChargeForm.productName || false,
-                        source_subscription_id: Number(state.pendingChargeForm.subscriptionId || 0) || false,
-                        pending_move_id: Number(state.pendingChargeForm.pendingMoveId || 0) || false,
-                    },
-                });
-                targetLine = lineResult && lineResult.line ? lineResult.line : null;
-                if (!targetLine && lineResult && lineResult.reason === "not_added") {
-                    state.formError = _t("No se pudo agregar el cobro pendiente al ticket actual.");
-                    renderDetail(state.currentDetail);
-                    return;
-                }
-            } catch (error) {
-                console.error("Error al agregar cobro pendiente al ticket POS", error);
-                state.formError = _t("No se pudo agregar el cobro pendiente al ticket actual.");
-                renderDetail(state.currentDetail);
-                return;
-            }
-            if (!targetLine) {
-                state.formError = _t("No se pudo identificar la línea de cobro pendiente agregada al ticket.");
-                renderDetail(state.currentDetail);
-                return;
-            }
-            state.formMode = null;
-            state.formError = "";
-            state.formNotice = _t("Cobro pendiente agregado al ticket. Puedes continuar al cobro normal del POS.");
-            state.renewalForm = null;
-            state.upsaleForm = null;
-            state.pendingChargeForm = null;
-            state.participantEditForm = null;
-            renderDetail(state.currentDetail);
-        },
-        "save-cancellation-refund": async () => {
-            state.formError = "";
-            state.formNotice = "";
-            if (!state.cancellationRefundForm || !state.cancellationRefundForm.subscriptionId || !state.cancellationRefundForm.originPosLineId || !state.cancellationRefundForm.productId) {
-                state.formError = _t("No se encontró un cobro POS exacto para devolver esta suscripción.");
-                renderDetail(state.currentDetail);
-                return;
-            }
-            const order = getCurrentOrder();
-            if (!order) {
-                state.formError = _t("No hay una orden POS activa para agregar la devolución.");
-                renderDetail(state.currentDetail);
-                return;
-            }
-            const holderPartnerId = Number(state.cancellationRefundForm.holderPartnerId || 0) || false;
-            if (!(await ensurePartnerAssignedToOrder(order, holderPartnerId, {
-                partnerName: String(state.cancellationRefundForm.holderPartnerName || "").trim(),
-                state,
-                renderDetail,
-                getPartnerIdFromOrder,
-                getOrderLines,
-                getSubscriptionPartnerIdsFromOrder,
-                ensurePartnerLoadedInPos,
-                setPartnerOnCurrentOrder,
-                _t,
-            }))) {
-                return;
-            }
-            const productRecord = await ensureProductLoadedInPos(state.cancellationRefundForm.productId);
-            if (!productRecord) {
-                state.formError = _t("El producto original de esta suscripción no está cargado en la sesión actual del POS.");
-                renderDetail(state.currentDetail);
-                return;
-            }
-            let targetLine = null;
-            try {
-                const lineResult = await addConfiguredProductLineToOrder(order, productRecord, {
-                    quantity: -Math.max(1, Number(state.cancellationRefundForm.qty || 1)),
-                    merge: false,
-                    lineUnitPrice: Number(state.cancellationRefundForm.priceUnit || 0),
-                    discount: Number(state.cancellationRefundForm.discount || 0),
-                    metadata: {
-                        flow: "cancellation_refund",
-                        partner_id: holderPartnerId || false,
-                        participant_ids: [],
-                        plan_id: false,
-                        pricing_id: false,
-                        start_date: false,
-                        end_date: false,
-                        product_id: Number(state.cancellationRefundForm.productId || 0) || false,
-                        product_name: state.cancellationRefundForm.productName || false,
-                        source_subscription_id: Number(state.cancellationRefundForm.subscriptionId || 0) || false,
-                        refund_origin_line_id: Number(state.cancellationRefundForm.originPosLineId || 0) || false,
-                    },
-                });
-                targetLine = lineResult && lineResult.line ? lineResult.line : null;
-                if (!targetLine && lineResult && lineResult.reason === "not_added") {
-                    state.formError = _t("No se pudo agregar la devolución al ticket actual.");
-                    renderDetail(state.currentDetail);
-                    return;
-                }
-            } catch (error) {
-                console.error("Error al agregar devolución por cancelación al ticket POS", error);
-                state.formError = _t("No se pudo agregar la devolución al ticket actual.");
-                renderDetail(state.currentDetail);
-                return;
-            }
-            if (!targetLine) {
-                state.formError = _t("No se pudo identificar la línea de devolución agregada al ticket.");
-                renderDetail(state.currentDetail);
-                return;
-            }
-            state.formMode = null;
-            state.formError = "";
-            state.formNotice = _t("Devolución agregada al ticket. Al cobrarla, la suscripción se cancelará.");
-            state.renewalForm = null;
-            state.upsaleForm = null;
-            state.pendingChargeForm = null;
-            state.cancellationRefundForm = null;
-            state.participantEditForm = null;
-            renderDetail(state.currentDetail);
-        },
         "save-participants": async () => {
             state.formError = "";
             state.formNotice = "";
@@ -737,7 +554,6 @@ function buildSubscriptionInlineActionHandlers({
                 state.participantEditForm = null;
                 state.renewalForm = null;
                 state.upsaleForm = null;
-                state.pendingChargeForm = null;
                 state.formNotice = _t("Participantes actualizados correctamente.");
                 if (state.currentDetail && Array.isArray(state.currentDetail.items)) {
                     detailCache.delete(Number(state.currentDetail.partner_id || 0));
@@ -863,7 +679,6 @@ function buildSubscriptionInlineActionHandlers({
             state.formNotice = _t("Upsale agregado al ticket. Puedes continuar al cobro normal del POS.");
             state.renewalForm = null;
             state.upsaleForm = null;
-            state.pendingChargeForm = null;
             state.participantEditForm = null;
             renderDetail(state.currentDetail);
         },
@@ -965,7 +780,6 @@ function buildSubscriptionInlineActionHandlers({
             state.formNotice = _t("Renovación agregada al ticket. Puedes continuar al cobro normal del POS.");
             state.renewalForm = null;
             state.upsaleForm = null;
-            state.pendingChargeForm = null;
             state.participantEditForm = null;
             renderDetail(state.currentDetail);
         },
@@ -1067,7 +881,6 @@ function buildSubscriptionInlineActionHandlers({
             state.formNotice = _t("Reinscripción agregada al ticket. Puedes continuar al cobro normal del POS.");
             state.renewalForm = null;
             state.upsaleForm = null;
-            state.pendingChargeForm = null;
             state.participantEditForm = null;
             renderDetail(state.currentDetail);
         },

@@ -570,47 +570,6 @@ class PosOrderPricingMixin(models.Model):
             'source_line': recurring_line,
         }
 
-    def _wgs_build_pending_charge_snapshot(self, source_order, pending_invoice):
-        source_order.ensure_one()
-        pending_invoice.ensure_one()
-        amount_residual = round(max(float(getattr(pending_invoice, 'amount_residual', 0.0) or 0.0), 0.0), 2)
-        amount_total = round(max(float(getattr(pending_invoice, 'amount_total', 0.0) or 0.0), 0.0), 2)
-        return {
-            'mode': 'invoice',
-            'flow': 'pending_charge',
-            'product_id': False,
-            'product_name': False,
-            'plan_id': False,
-            'plan_name': False,
-            'pricing_id': False,
-            'price_unit': float(amount_residual),
-            'display_price_unit': float(amount_residual),
-            'ticket_price_unit': float(amount_residual),
-            'credit_amount': 0.0,
-            'display_credit_amount': 0.0,
-            'ticket_credit_amount': 0.0,
-            'charge_now': float(amount_residual),
-            'display_charge_now': float(amount_residual),
-            'ticket_charge_now': float(amount_residual),
-            'amount_total': float(amount_total),
-            'display_amount_total': float(amount_total),
-            'ticket_amount_total': float(amount_total),
-            'candidates': [],
-            'choice': {
-                'plan_id': False,
-                'pricing_id': False,
-                'price': float(amount_residual),
-            },
-            'source': {
-                'type': 'pending_invoice',
-                'id': pending_invoice.id,
-                'name': pending_invoice.name or pending_invoice.display_name or False,
-                'subscription_id': source_order.id,
-                'subscription_name': source_order.name,
-            },
-            'context': {},
-        }
-
     def _wgs_resolve_subscription_pricing_snapshot(
         self,
         *,
@@ -620,18 +579,12 @@ class PosOrderPricingMixin(models.Model):
         company=False,
         fiscal_position=False,
         source_order=False,
-        pending_invoice=False,
         fallback=0.0,
         preferred_plan_id=False,
         preferred_pricing_id=False,
         include_credit=False,
     ):
         source_order = source_order.exists() if source_order else self.env['sale.order']
-        pending_invoice = pending_invoice.exists() if pending_invoice else self.env['account.move']
-        if flow == 'pending_charge':
-            if not source_order or not pending_invoice:
-                raise ValueError('Pending charge snapshot requires source order and pending invoice.')
-            return self._wgs_build_pending_charge_snapshot(source_order, pending_invoice)
         if flow in ('renewal', 'reenroll'):
             if not source_order:
                 raise ValueError('Subscription snapshot requires source order.')

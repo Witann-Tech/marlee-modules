@@ -1358,24 +1358,6 @@ class SaleOrder(models.Model):
         if native_state_key in ('cancel', 'closed') and not force_closed:
             can_reenroll = True
 
-        pending_documents = []
-        for move in self._wgs_get_pending_invoice_records_for_pos():
-            amount_total = float(getattr(move, 'amount_total', 0.0) or 0.0)
-            amount_residual = float(getattr(move, 'amount_residual', 0.0) or 0.0)
-            pending_documents.append({
-                'document_model': move._name,
-                'document_id': move.id,
-                'name': move.name or move.display_name or False,
-                'invoice_date': fields.Date.to_string(move.invoice_date) if getattr(move, 'invoice_date', False) else False,
-                'invoice_date_due': fields.Date.to_string(move.invoice_date_due) if getattr(move, 'invoice_date_due', False) else False,
-                'amount_total': round(max(amount_total, 0.0), 2),
-                'amount_residual': round(max(amount_residual, 0.0), 2),
-                'currency_symbol': move.currency_id.symbol if getattr(move, 'currency_id', False) else False,
-                'payment_state': getattr(move, 'payment_state', False) or False,
-                'state': getattr(move, 'state', False) or False,
-            })
-        first_pending = pending_documents[:1]
-
         return {
             'subscription_id': self.id,
             'subscription_name': self.name,
@@ -1398,11 +1380,6 @@ class SaleOrder(models.Model):
             'is_valid': is_valid,
             'status_label': _('Vigente') if is_valid else _('Sin vigencia'),
             'reason': reason,
-            'pending_documents': pending_documents,
-            'pending_document_count': len(pending_documents),
-            'has_pending_document': bool(pending_documents),
-            'pending_amount_total': first_pending[0]['amount_residual'] if first_pending else 0.0,
-            'pending_document_name': first_pending[0]['name'] if first_pending else False,
             'has_replacement_subscription': bool(has_replacement_subscription),
             'can_renew': bool(can_renew),
             'can_reenroll': bool(can_reenroll),
@@ -1487,7 +1464,7 @@ class SaleOrder(models.Model):
         if item.get('has_replacement_subscription'):
             return False
 
-        if native_state_key in ('draft', 'upsell') and not item.get('has_pending_document'):
+        if native_state_key in ('draft', 'upsell'):
             return False
 
         if native_state_key in ('closed', 'cancel'):
@@ -1508,9 +1485,6 @@ class SaleOrder(models.Model):
 
         valid_until = self._to_date(item.get('valid_until'))
         if valid_until and valid_until >= today:
-            return True
-
-        if item.get('has_pending_document'):
             return True
 
         return False

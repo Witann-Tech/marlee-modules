@@ -74,8 +74,6 @@ async function openNewSubscriptionForm(state, {
     stopPartnerCamera();
     state.renewalForm = null;
     state.upsaleForm = null;
-    state.pendingChargeForm = null;
-    state.cancellationRefundForm = null;
     state.participantEditForm = null;
     state.newPartnerForm = null;
     state.partnerPhotoForm = null;
@@ -123,8 +121,6 @@ async function openRenewalForm(state, item, {
     state.formNotice = "";
     stopPartnerCamera();
     state.newPartnerForm = null;
-    state.pendingChargeForm = null;
-    state.cancellationRefundForm = null;
     state.participantEditForm = null;
     state.renewalForm = {
         subscriptionId: Number(item.subscription_id || 0) || false,
@@ -190,81 +186,6 @@ async function openReenrollForm(state, item, deps) {
     });
 }
 
-async function openPendingChargeForm(state, item, {
-    stopPartnerCamera,
-    renderDetail,
-    buildChargeBreakdown,
-    getChargeDisplayAmount,
-    fetchSubscriptionPricing,
-    _t,
-}) {
-    if (!item || !item.subscription_id) {
-        return;
-    }
-    const pendingDocuments = Array.isArray(item.pending_documents) ? item.pending_documents : [];
-    if (!pendingDocuments.length) {
-        state.formError = _t("Esta suscripción no tiene documentos pendientes por cobrar.");
-        renderDetail(state.currentDetail);
-        return;
-    }
-    const firstPending = pendingDocuments[0];
-    state.formMode = "pending";
-    state.formError = "";
-    state.formNotice = "";
-    stopPartnerCamera();
-    state.newPartnerForm = null;
-    state.renewalForm = null;
-    state.upsaleForm = null;
-    state.pendingChargeForm = {
-        subscriptionId: Number(item.subscription_id || 0) || false,
-        subscriptionName: item.subscription_name || "",
-        holderPartnerId: Number(item.holder_partner_id || 0) || false,
-        holderPartnerName: item.holder_partner_name || "",
-        productId: Number(item.renewal_product_id || 0) || false,
-        productName: item.renewal_product_name || "",
-        pendingMoveId: Number(firstPending.document_id || 0) || false,
-        pendingMoveName: firstPending.name || "",
-        invoiceDate: firstPending.invoice_date || false,
-        invoiceDateDue: firstPending.invoice_date_due || false,
-        pricingSnapshot: null,
-        loading: true,
-    };
-    renderDetail(state.currentDetail);
-    try {
-        const charge = await fetchSubscriptionPricing(
-            state.pendingChargeForm.holderPartnerId || false,
-            state.pendingChargeForm.productId || false,
-            "pending_charge",
-            state.pendingChargeForm.subscriptionId,
-            state.pendingChargeForm.pendingMoveId,
-            0,
-            false,
-            false
-        );
-        state.pendingChargeForm = {
-            ...state.pendingChargeForm,
-            loading: false,
-            pricingSnapshot: buildPricingSnapshotFromCharge(charge, {
-                flow: "pending_charge",
-                sourceSubscriptionId: state.pendingChargeForm.subscriptionId,
-                sourceSubscriptionName: state.pendingChargeForm.subscriptionName,
-            }),
-            pendingMoveId: Number(charge && charge.pending_move_id ? charge.pending_move_id : state.pendingChargeForm.pendingMoveId) || false,
-            pendingMoveName: charge && charge.pending_move_name ? charge.pending_move_name : state.pendingChargeForm.pendingMoveName,
-            invoiceDate: charge && charge.invoice_date ? charge.invoice_date : state.pendingChargeForm.invoiceDate,
-            invoiceDateDue: charge && charge.invoice_date_due ? charge.invoice_date_due : state.pendingChargeForm.invoiceDateDue,
-        };
-    } catch (error) {
-        console.error("Error al consultar cobro pendiente POS", error);
-        state.formError = _t("No se pudo consultar el documento pendiente para esta suscripción.");
-        state.pendingChargeForm = {
-            ...state.pendingChargeForm,
-            loading: false,
-        };
-    }
-    renderDetail(state.currentDetail);
-}
-
 async function openUpsaleForm(state, item, {
     stopPartnerCamera,
     renderDetail,
@@ -282,8 +203,6 @@ async function openUpsaleForm(state, item, {
     state.newPartnerForm = null;
     state.renewalForm = null;
     state.upsaleForm = createDefaultUpsaleForm(item);
-    state.pendingChargeForm = null;
-    state.cancellationRefundForm = null;
     state.participantEditForm = null;
     renderDetail(state.currentDetail);
     if (!state.productCatalog.length && !state.catalogLoading) {
@@ -322,7 +241,6 @@ async function openParticipantEditForm(state, item, {
     state.newPartnerForm = null;
     state.renewalForm = null;
     state.upsaleForm = null;
-    state.pendingChargeForm = null;
     state.participantEditForm = createDefaultParticipantEditForm(item);
     renderDetail(state.currentDetail);
 }
@@ -698,7 +616,6 @@ export {
     filterParticipantRows,
     openNewSubscriptionForm,
     openParticipantEditForm,
-    openPendingChargeForm,
     openReenrollForm,
     openRenewalForm,
     openUpsaleForm,

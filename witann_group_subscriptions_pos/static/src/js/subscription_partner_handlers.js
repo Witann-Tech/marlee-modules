@@ -20,8 +20,6 @@ function openNewPartnerForm(state, {
     stopPartnerCamera();
     state.renewalForm = null;
     state.upsaleForm = null;
-    state.pendingChargeForm = null;
-    state.cancellationRefundForm = null;
     state.participantEditForm = null;
     state.newSubscriptionForm = createNewSubscriptionForm(state.selectedPartnerId);
     state.newPartnerForm = state.getDefaultNewPartnerForm();
@@ -43,8 +41,6 @@ function openPartnerPhotoForm(state, {
     stopPartnerCamera();
     state.renewalForm = null;
     state.upsaleForm = null;
-    state.pendingChargeForm = null;
-    state.cancellationRefundForm = null;
     state.participantEditForm = null;
     state.newPartnerForm = null;
     state.partnerEditForm = null;
@@ -71,8 +67,6 @@ function openPartnerEditForm(state, {
     stopPartnerCamera();
     state.renewalForm = null;
     state.upsaleForm = null;
-    state.pendingChargeForm = null;
-    state.cancellationRefundForm = null;
     state.participantEditForm = null;
     state.newPartnerForm = null;
     state.partnerPhotoForm = null;

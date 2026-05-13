@@ -85,11 +85,9 @@ import {
 } from "./subscription_detail_render";
 import { renderDetailContent } from "./subscription_detail_composer";
 import {
-    renderPendingDocumentSummary,
     renderSubscriptionCard,
 } from "./subscription_card_render";
 import { renderPartnerDetailAvatar } from "./subscription_partner_render";
-import { renderPendingChargeForm as buildPendingChargeFormHtml } from "./subscription_pending_render";
 import { renderParticipantEditForm as buildParticipantEditFormHtml } from "./subscription_participants_render";
 import { renderRenewalForm as buildRenewalFormHtml } from "./subscription_renewal_render";
 import { renderUpsaleForm as buildUpsaleFormHtml } from "./subscription_upsale_render";
@@ -123,7 +121,6 @@ import {
     filterParticipantRows as filterParticipantRowsFlow,
     openNewSubscriptionForm as openNewSubscriptionFlow,
     openParticipantEditForm as openParticipantEditFlow,
-    openPendingChargeForm as openPendingChargeFlow,
     openReenrollForm as openReenrollFlow,
     openRenewalForm as openRenewalFlow,
     openUpsaleForm as openUpsaleFlow,
@@ -409,10 +406,6 @@ patch(ControlButtons.prototype, {
         );
     },
 
-    async _fetchSubscriptionCancellationRefund(subscriptionId) {
-        return this.subscriptionPosApi.fetchSubscriptionCancellationRefund(subscriptionId);
-    },
-
     async _saveSubscriptionParticipants(subscriptionId, participantIds) {
         return this.subscriptionPosApi.saveSubscriptionParticipants(subscriptionId, participantIds || []);
     },
@@ -669,8 +662,6 @@ patch(ControlButtons.prototype, {
         let productCatalog = [];
         let renewalForm = null;
         let upsaleForm = null;
-        let pendingChargeForm = null;
-        let cancellationRefundForm = null;
         let participantEditForm = null;
         let newPartnerForm = null;
         let partnerPhotoForm = null;
@@ -715,10 +706,6 @@ patch(ControlButtons.prototype, {
             set renewalForm(value) { renewalForm = value; },
             get upsaleForm() { return upsaleForm; },
             set upsaleForm(value) { upsaleForm = value; },
-            get pendingChargeForm() { return pendingChargeForm; },
-            set pendingChargeForm(value) { pendingChargeForm = value; },
-            get cancellationRefundForm() { return cancellationRefundForm; },
-            set cancellationRefundForm(value) { cancellationRefundForm = value; },
             get participantEditForm() { return participantEditForm; },
             set participantEditForm(value) { participantEditForm = value; },
             get newPartnerForm() { return newPartnerForm; },
@@ -937,75 +924,6 @@ patch(ControlButtons.prototype, {
                     this._fetchSubscriptionQuote(partnerId, productId, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId),
                 _t,
             });
-        };
-
-        const openPendingChargeForm = async (item) => {
-            await openPendingChargeFlow(modalState, item, {
-                stopPartnerCamera,
-                renderDetail,
-                buildChargeBreakdown: (source, product, values) => buildChargeBreakdown(source, product, values),
-                getChargeDisplayAmount,
-                fetchSubscriptionPricing: (partnerId, productId, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId) =>
-                    this._fetchSubscriptionPricing(partnerId, productId, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId),
-                _t,
-            });
-        };
-
-        const openCancellationRefundForm = async (item) => {
-            if (!item || !item.subscription_id) {
-                return;
-            }
-            formMode = "cancellation_refund";
-            formError = "";
-            formNotice = "";
-            stopPartnerCamera();
-            newPartnerForm = null;
-            renewalForm = null;
-            upsaleForm = null;
-            pendingChargeForm = null;
-            cancellationRefundForm = null;
-            participantEditForm = null;
-            cancellationRefundForm = {
-                subscriptionId: Number(item.subscription_id || 0) || false,
-                subscriptionName: item.subscription_name || "",
-                holderPartnerId: Number(item.holder_partner_id || 0) || false,
-                holderPartnerName: item.holder_partner_name || "",
-                originPosLineId: false,
-                originPosOrderName: "",
-                originDate: false,
-                productId: false,
-                productName: "",
-                qty: 1,
-                priceUnit: 0,
-                discount: 0,
-                amountTotal: 0,
-                loading: true,
-            };
-            renderDetail(currentDetail);
-            try {
-                const refund = await this._fetchSubscriptionCancellationRefund(cancellationRefundForm.subscriptionId);
-                cancellationRefundForm = {
-                    ...cancellationRefundForm,
-                    loading: false,
-                    originPosLineId: Number(refund && refund.origin_pos_line_id ? refund.origin_pos_line_id : 0) || false,
-                    originPosOrderName: refund && refund.origin_pos_order_name ? refund.origin_pos_order_name : "",
-                    originDate: refund && refund.origin_date ? refund.origin_date : false,
-                    productId: Number(refund && refund.product_id ? refund.product_id : 0) || false,
-                    productName: refund && refund.product_name ? refund.product_name : "",
-                    qty: Number(refund && refund.qty ? refund.qty : 1) || 1,
-                    priceUnit: Number(refund && refund.price_unit ? refund.price_unit : 0) || 0,
-                    discount: Number(refund && refund.discount ? refund.discount : 0) || 0,
-                    amountTotal: Number(refund && refund.amount_total ? refund.amount_total : 0) || 0,
-                };
-            } catch (error) {
-                console.error("Error al consultar devolución por cancelación POS", error);
-                formError = _t("No se pudo consultar la devolución exacta de esta suscripción.");
-                cancellationRefundForm = {
-                    ...cancellationRefundForm,
-                    loading: false,
-                };
-            }
-            renderDetail(currentDetail);
         };
 
         const recalculateNewSubscriptionCharge = async (product, preferredPlan = null) => {
@@ -1302,55 +1220,6 @@ patch(ControlButtons.prototype, {
             });
         };
 
-        const renderPendingChargeForm = (item) => {
-            return buildPendingChargeFormHtml({
-                item,
-                formMode,
-                pendingChargeForm,
-                formError,
-                formNotice,
-                escapeHtml: (value) => this._escapeHtml(value),
-                formatDateDisplay: (value) => this._formatDateDisplay(value),
-                formatMoney: (value) => this._formatMoney(value),
-                getChargeDisplayAmount,
-                _t,
-            });
-        };
-
-        const renderCancellationRefundForm = (item) => {
-            if (
-                formMode !== "cancellation_refund"
-                || !cancellationRefundForm
-                || Number(cancellationRefundForm.subscriptionId || 0) !== Number(item.subscription_id || 0)
-            ) {
-                return "";
-            }
-            const canRefund = Boolean(cancellationRefundForm.originPosLineId) && !cancellationRefundForm.loading;
-            return `
-                <div class="wgs-inline-form-card">
-                    <div class="wgs-inline-form-header">
-                        <strong>${this._escapeHtml(_t("Cancelar suscripción"))}</strong>
-                    </div>
-                    ${formError ? `<div class="wgs-inline-error">${this._escapeHtml(formError)}</div>` : ""}
-                    ${formNotice ? `<div class="wgs-inline-notice">${this._escapeHtml(formNotice)}</div>` : ""}
-                    ${cancellationRefundForm.loading ? `<div class="wgs-inline-loading">${this._escapeHtml(_t("Consultando cobro POS exacto de esta suscripción..."))}</div>` : ""}
-                    <div class="wgs-inline-form-meta">
-                        <div><span>${this._escapeHtml(_t("Suscripción"))}</span><strong>${this._escapeHtml(cancellationRefundForm.subscriptionName || "-")}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Titular"))}</span><strong>${this._escapeHtml(cancellationRefundForm.holderPartnerName || "-")}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Ticket origen"))}</span><strong>${this._escapeHtml(cancellationRefundForm.originPosOrderName || "-")}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Fecha cobro"))}</span><strong>${this._escapeHtml(this._formatDateTimeDisplay(cancellationRefundForm.originDate) || "-")}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Producto"))}</span><strong>${this._escapeHtml(cancellationRefundForm.productName || "-")}</strong></div>
-                        <div><span>${this._escapeHtml(_t("Monto a devolver"))}</span><strong>${this._escapeHtml(this._formatMoney(cancellationRefundForm.amountTotal || 0))}</strong></div>
-                    </div>
-                    <div class="wgs-inline-notice">${this._escapeHtml(_t("La devolución solo se generará si corresponde exactamente a esta suscripción."))}</div>
-                    <div class="wgs-inline-actions">
-                        <button type="button" class="wgs-primary-action-btn" data-action="save-cancellation-refund" ${canRefund ? "" : "disabled"}>${this._escapeHtml(_t("Agregar devolución al ticket"))}</button>
-                        <button type="button" class="wgs-secondary-action-btn" data-action="cancel-cancellation-refund">${this._escapeHtml(_t("Cancelar"))}</button>
-                    </div>
-                </div>
-            `;
-        };
-
         const renderParticipantEditForm = (item) => {
             if (
                 formMode !== "participants"
@@ -1410,10 +1279,7 @@ patch(ControlButtons.prototype, {
                 renderDetailHeader,
                 renderPartnerDetailAvatar,
                 renderSubscriptionCard,
-                renderPendingDocumentSummary,
                 renderParticipantEditForm,
-                renderPendingChargeForm,
-                renderCancellationRefundForm,
                 renderRenewalForm,
                 renderUpsaleForm,
                 renderNewSubscriptionForm,
@@ -1628,8 +1494,6 @@ patch(ControlButtons.prototype, {
                 openReenrollForm,
                 openUpsaleForm,
                 openParticipantEditForm,
-                openPendingChargeForm,
-                openCancellationRefundForm,
                 fetchResyncAccess: (subscriptionId) => this._resyncSubscriptionAccess(subscriptionId),
                 loadDetail,
                 detailCache,

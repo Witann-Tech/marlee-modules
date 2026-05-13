@@ -6,13 +6,21 @@ function renderSubscriptionCard({
     participantNames,
     accessSummary,
     accessSiteLabel,
-    pendingDocumentHtml,
     inlineFormsHtml,
     escapeHtml,
     formatDateDisplay,
     formatMoney,
     _t,
 }) {
+    const canEditParticipants = Number(item.max_participants_total || 1) > 1;
+    const participantActionHtml = canEditParticipants ? `
+                <button
+                    type="button"
+                    class="wgs-action-btn"
+                    data-action="open-participants"
+                    data-subscription-id="${escapeHtml(String(item.subscription_id || 0))}"
+                >${escapeHtml(_t("Editar participantes"))}</button>
+    ` : "";
     return `
         <div class="wgs-subscription-card">
             <div class="wgs-subscription-card-header">
@@ -53,56 +61,19 @@ function renderSubscriptionCard({
                     data-subscription-id="${escapeHtml(String(item.subscription_id || 0))}"
                     ${item.can_renew ? "" : "disabled"}
                 >${escapeHtml(_t("Upsale"))}</button>
-                <button
-                    type="button"
-                    class="wgs-action-btn"
-                    data-action="open-pending"
-                    data-subscription-id="${escapeHtml(String(item.subscription_id || 0))}"
-                    ${item.has_pending_document ? "" : "disabled"}
-                >${escapeHtml(_t("Cobrar pendiente"))}</button>
-                <button
-                    type="button"
-                    class="wgs-action-btn"
-                    data-action="open-participants"
-                    data-subscription-id="${escapeHtml(String(item.subscription_id || 0))}"
-                >${escapeHtml(_t("Editar participantes"))}</button>
+                ${participantActionHtml}
                 <button
                     type="button"
                     class="wgs-action-btn"
                     data-action="resync-access"
                     data-subscription-id="${escapeHtml(String(item.subscription_id || 0))}"
                 >${escapeHtml(_t("Resincronizar acceso"))}</button>
-                <button
-                    type="button"
-                    class="wgs-action-btn"
-                    data-action="open-cancellation-refund"
-                    data-subscription-id="${escapeHtml(String(item.subscription_id || 0))}"
-                >${escapeHtml(_t("Cancelar suscripción"))}</button>
             </div>
-            ${pendingDocumentHtml || ""}
             ${inlineFormsHtml || ""}
         </div>
     `;
 }
 
-function renderPendingDocumentSummary({
-    item,
-    escapeHtml,
-    formatMoney,
-    _t,
-}) {
-    if (!item || !item.has_pending_document) {
-        return "";
-    }
-    return `
-        <div class="wgs-subscription-participants">
-            <span>${escapeHtml(_t("Documento pendiente"))}</span>
-            <p>${escapeHtml(item.pending_document_name || "-")} · ${escapeHtml(formatMoney(item.pending_amount_total || 0))}</p>
-        </div>
-    `;
-}
-
 export {
-    renderPendingDocumentSummary,
     renderSubscriptionCard,
 };

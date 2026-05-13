@@ -23,8 +23,6 @@ function resetDetailInlineForms(state, {
     state.formMode = null;
     state.renewalForm = null;
     state.upsaleForm = null;
-    state.pendingChargeForm = null;
-    state.cancellationRefundForm = null;
     state.participantEditForm = null;
     state.newPartnerForm = null;
     state.partnerPhotoForm = null;
@@ -54,8 +52,6 @@ function clearDirectorySelectionState(state, {
     state.formMode = null;
     state.renewalForm = null;
     state.upsaleForm = null;
-    state.pendingChargeForm = null;
-    state.cancellationRefundForm = null;
     state.participantEditForm = null;
     state.newPartnerForm = null;
     state.partnerPhotoForm = null;
