@@ -12,6 +12,16 @@ class PosOrderPricingMixin(models.Model):
     _inherit = 'pos.order'
     _WGS_PLAN_FIELD_NAMES = ('subscription_plan_id', 'plan_id', 'recurring_plan_id')
     _WGS_PRICING_FIELD_NAMES = ('subscription_pricing_id', 'pricing_id', 'recurring_pricing_id')
+    _WGS_PERIOD_ALIGNMENT_FIELD_NAMES = (
+        'align_to_period_start',
+        'align_to_period',
+        'align_billing_period',
+        'align_invoice_period',
+        'align_invoice_dates',
+        'auto_align_to_period_start',
+        'is_aligned_to_period_start',
+        'invoice_on_period_start',
+    )
     _WGS_PRODUCT_PRICING_RELATION_FIELD_NAMES = (
         'subscription_pricing_ids',
         'recurring_pricing_ids',
@@ -315,6 +325,59 @@ class PosOrderPricingMixin(models.Model):
             return start_date
         return period_end
 
+    def _wgs_get_period_alignment_field_name(self, plan):
+        if not plan:
+            return False
+
+        for field_name in self._WGS_PERIOD_ALIGNMENT_FIELD_NAMES:
+            if field_name in plan._fields:
+                return field_name
+
+        for field_name, field in plan._fields.items():
+            if field.type != 'boolean':
+                continue
+            normalized_name = (field_name or '').lower()
+            normalized_label = (getattr(field, 'string', '') or '').lower()
+            searchable = f'{normalized_name} {normalized_label}'
+            if 'align' in searchable and ('period' in searchable or 'billing' in searchable or 'invoice' in searchable):
+                return field_name
+        return False
+
+    def _wgs_plan_aligns_to_period_start(self, plan):
+        field_name = self._wgs_get_period_alignment_field_name(plan)
+        if not field_name:
+            return False
+
+        value = plan[field_name]
+        if isinstance(value, bool):
+            return value
+        normalized = str(value or '').strip().lower()
+        return normalized in ('1', 'true', 'yes', 'y', 'period_start', 'start', 'calendar', 'month_start')
+
+    def _wgs_should_align_plan_to_calendar_month(self, plan):
+        if not self._wgs_plan_aligns_to_period_start(plan):
+            return False
+        interval_value, interval_unit = self._wgs_extract_interval_from_plan(plan)
+        return int(interval_value or 1) == 1 and (interval_unit or 'month') == 'month'
+
+    def _wgs_get_aligned_monthly_first_period_schedule(self, start_date):
+        access_start_date = fields.Date.to_date(start_date) or fields.Date.context_today(self)
+        period_start = access_start_date.replace(day=1)
+        next_billing_date = period_start + relativedelta(months=1)
+        period_end = next_billing_date - timedelta(days=1)
+        period_days = max(1, (next_billing_date - period_start).days)
+        charge_days = max(1, (period_end - access_start_date).days + 1)
+        return {
+            'subscription_start_date': period_start,
+            'subscription_end_date': period_end,
+            'next_billing_date': next_billing_date,
+            'period_start_date': period_start,
+            'access_start_date': access_start_date,
+            'period_days': period_days,
+            'charge_days': min(charge_days, period_days),
+            'proration_ratio': min(charge_days, period_days) / float(period_days),
+        }
+
     def _wgs_extract_interval_from_plan(self, plan):
         interval_value = 1
         interval_unit = 'month'
@@ -383,6 +446,7 @@ class PosOrderPricingMixin(models.Model):
         source_order=False,
         source_subscription_id=False,
         include_credit=False,
+        start_date=False,
     ):
         product.ensure_one()
         pricing_resolution = self._wgs_resolve_recurring_pricing(
@@ -406,6 +470,7 @@ class PosOrderPricingMixin(models.Model):
         subscription_start_date = False
         subscription_end_date = False
         next_billing_date = False
+        first_period_alignment = {}
         if include_credit and source_order:
             credit_amount = self._wgs_get_upsale_source_recurring_amount(source_order)
             display_credit_amount = self._wgs_get_upsale_source_recurring_amount(
@@ -420,6 +485,19 @@ class PosOrderPricingMixin(models.Model):
         if include_credit and source_order:
             display_charge_now = round(max(display_recurring_price - display_credit_amount, 0.0), 2)
         else:
+            resolved_plan = self._wgs_resolve_plan_record(
+                product,
+                plan_id=choice.get('plan_id') or preferred_plan_id,
+                pricing_id=choice.get('pricing_id') or preferred_pricing_id,
+            )
+            if flow == 'new' and self._wgs_should_align_plan_to_calendar_month(resolved_plan):
+                first_period_alignment = self._wgs_get_aligned_monthly_first_period_schedule(
+                    start_date or fields.Date.context_today(self)
+                )
+                subscription_start_date = first_period_alignment['subscription_start_date']
+                subscription_end_date = first_period_alignment['subscription_end_date']
+                next_billing_date = first_period_alignment['next_billing_date']
+                charge_now = round(max(recurring_price * first_period_alignment['proration_ratio'], 0.0), 2)
             display_charge_now = self._wgs_get_price_with_taxes_for_pos(
                 product,
                 charge_now,
@@ -447,6 +525,17 @@ class PosOrderPricingMixin(models.Model):
             'subscription_start_date': fields.Date.to_string(subscription_start_date) if subscription_start_date else False,
             'subscription_end_date': fields.Date.to_string(subscription_end_date) if subscription_end_date else False,
             'next_billing_date': fields.Date.to_string(next_billing_date) if next_billing_date else False,
+            'first_period_alignment': bool(first_period_alignment),
+            'first_period_start_date': (
+                fields.Date.to_string(first_period_alignment['period_start_date'])
+                if first_period_alignment else False
+            ),
+            'first_period_access_start_date': (
+                fields.Date.to_string(first_period_alignment['access_start_date'])
+                if first_period_alignment else False
+            ),
+            'first_period_days': int(first_period_alignment.get('period_days') or 0) if first_period_alignment else 0,
+            'first_period_charge_days': int(first_period_alignment.get('charge_days') or 0) if first_period_alignment else 0,
             'source_recurring_price': float(credit_amount),
             'source_display_recurring_price': float(display_credit_amount),
             'interval_value': int(choice.get('interval_value') or 1),
@@ -583,6 +672,7 @@ class PosOrderPricingMixin(models.Model):
         preferred_plan_id=False,
         preferred_pricing_id=False,
         include_credit=False,
+        start_date=False,
     ):
         source_order = source_order.exists() if source_order else self.env['sale.order']
         if flow in ('renewal', 'reenroll'):
@@ -610,6 +700,7 @@ class PosOrderPricingMixin(models.Model):
             source_order=source_order,
             source_subscription_id=source_order.id if source_order else False,
             include_credit=include_credit,
+            start_date=start_date,
         )
 
     def _wgs_extract_plan_id_from_product(self, product):

@@ -374,7 +374,8 @@ async function recalculateNewSubscriptionCharge(state, product, preferredPlan, {
             false,
             Number(preferredPlan && preferredPlan.price ? preferredPlan.price : product.default_price || 0),
             preferredPlan ? Number(preferredPlan.plan_id || 0) || false : false,
-            preferredPlan ? Number(preferredPlan.pricing_id || 0) || false : false
+            preferredPlan ? Number(preferredPlan.pricing_id || 0) || false : false,
+            state.newSubscriptionForm.startDate || false
         );
         applyPricingPayloadToNewSubscriptionForm(state, payload, preferredPlan, {
             _t,
@@ -420,7 +421,8 @@ async function applySelectedProduct(state, productId, {
                 false,
                 Number(product.default_price || 0),
                 false,
-                false
+                false,
+                state.newSubscriptionForm.startDate || false
             );
             const pricing = quote && quote.pricing ? quote.pricing : {};
             applyPricingPayloadToNewSubscriptionForm(state, pricing, null, {

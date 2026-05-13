@@ -380,7 +380,7 @@ patch(ControlButtons.prototype, {
         return Array.isArray(backendCatalog) ? backendCatalog : [];
     },
 
-    async _fetchSubscriptionPricing(partnerId = false, productId = false, flow = "new", sourceSubscriptionId = false, pendingMoveId = false, fallback = 0, planId = false, pricingId = false) {
+    async _fetchSubscriptionPricing(partnerId = false, productId = false, flow = "new", sourceSubscriptionId = false, pendingMoveId = false, fallback = 0, planId = false, pricingId = false, startDate = false) {
         return this.subscriptionPosApi.fetchSubscriptionPricing(
             partnerId || false,
             productId || false,
@@ -389,11 +389,12 @@ patch(ControlButtons.prototype, {
             pendingMoveId || false,
             fallback || 0,
             planId || false,
-            pricingId || false
+            pricingId || false,
+            startDate || false
         );
     },
 
-    async _fetchSubscriptionQuote(partnerId = false, productId = false, flow = "new", sourceSubscriptionId = false, pendingMoveId = false, fallback = 0, planId = false, pricingId = false) {
+    async _fetchSubscriptionQuote(partnerId = false, productId = false, flow = "new", sourceSubscriptionId = false, pendingMoveId = false, fallback = 0, planId = false, pricingId = false, startDate = false) {
         return this.subscriptionPosApi.fetchSubscriptionQuote(
             partnerId || false,
             productId || false,
@@ -402,7 +403,8 @@ patch(ControlButtons.prototype, {
             pendingMoveId || false,
             fallback || 0,
             planId || false,
-            pricingId || false
+            pricingId || false,
+            startDate || false
         );
     },
 
@@ -910,8 +912,7 @@ patch(ControlButtons.prototype, {
             await openRenewalFlow(modalState, item, {
                 stopPartnerCamera,
                 renderDetail,
-                fetchSubscriptionQuote: (partnerId, productId, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId) =>
-                    this._fetchSubscriptionQuote(partnerId, productId, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId),
+                fetchSubscriptionQuote: (...args) => this._fetchSubscriptionQuote(...args),
                 _t,
             });
         };
@@ -920,8 +921,7 @@ patch(ControlButtons.prototype, {
             await openReenrollFlow(modalState, item, {
                 stopPartnerCamera,
                 renderDetail,
-                fetchSubscriptionQuote: (partnerId, productId, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId) =>
-                    this._fetchSubscriptionQuote(partnerId, productId, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId),
+                fetchSubscriptionQuote: (...args) => this._fetchSubscriptionQuote(...args),
                 _t,
             });
         };
@@ -929,8 +929,7 @@ patch(ControlButtons.prototype, {
         const recalculateNewSubscriptionCharge = async (product, preferredPlan = null) => {
             await recalculateNewSubscriptionChargeFlow(modalState, product, preferredPlan, {
                 renderDetail,
-                fetchSubscriptionPricing: (partnerId, productId, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId) =>
-                    this._fetchSubscriptionPricing(partnerId, productId, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId),
+                fetchSubscriptionPricing: (...args) => this._fetchSubscriptionPricing(...args),
                 _t,
             });
         };
@@ -938,8 +937,7 @@ patch(ControlButtons.prototype, {
         const applySelectedUpsaleProduct = async (productId) => {
             await applySelectedUpsaleProductFlow(modalState, productId, {
                 renderDetail,
-                fetchSubscriptionQuote: (partnerId, productIdArg, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId) =>
-                    this._fetchSubscriptionQuote(partnerId, productIdArg, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId),
+                fetchSubscriptionQuote: (...args) => this._fetchSubscriptionQuote(...args),
                 _t,
             });
         };
@@ -947,8 +945,7 @@ patch(ControlButtons.prototype, {
         const updateSelectedUpsalePlan = async (planChoice) => {
             await updateSelectedUpsalePlanFlow(modalState, planChoice, {
                 renderDetail,
-                fetchSubscriptionQuote: (partnerId, productIdArg, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId) =>
-                    this._fetchSubscriptionQuote(partnerId, productIdArg, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId),
+                fetchSubscriptionQuote: (...args) => this._fetchSubscriptionQuote(...args),
                 _t,
             });
         };
@@ -982,8 +979,7 @@ patch(ControlButtons.prototype, {
         const applySelectedProduct = async (productId) => {
             await applySelectedProductFlow(modalState, productId, {
                 renderDetail,
-                fetchSubscriptionQuote: (partnerId, productIdValue, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId) =>
-                    this._fetchSubscriptionQuote(partnerId, productIdValue, flow, sourceSubscriptionId, pendingMoveId, fallback, planId, pricingId),
+                fetchSubscriptionQuote: (...args) => this._fetchSubscriptionQuote(...args),
                 _t,
             });
         };
@@ -1006,13 +1002,24 @@ patch(ControlButtons.prototype, {
                 return "";
             }
             const plan = getSelectedPlan();
-            const automaticEndDate = plan
-                ? getPlanPeriodEndDate(newSubscriptionForm.startDate, plan.interval_value, plan.interval_unit)
+            const pricingSnapshot = newSubscriptionForm.pricingSnapshot || {};
+            const automaticEndDate = pricingSnapshot.subscription_end_date
+                ? pricingSnapshot.subscription_end_date
+                : (plan ? getPlanPeriodEndDate(newSubscriptionForm.startDate, plan.interval_value, plan.interval_unit) : "");
+            const nextBillingDate = pricingSnapshot.next_billing_date || "";
+            const firstPeriodNote = pricingSnapshot.first_period_alignment
+                ? `
+                    <div class="wgs-inline-notice">
+                        ${this._escapeHtml(_t("Primer periodo proporcional"))}: ${this._escapeHtml(this._formatDateDisplay(pricingSnapshot.subscription_start_date || newSubscriptionForm.startDate) || "-")} - ${this._escapeHtml(this._formatDateDisplay(automaticEndDate) || "-")}
+                        ${pricingSnapshot.first_period_access_start_date ? ` · ${this._escapeHtml(_t("Acceso desde"))}: ${this._escapeHtml(this._formatDateDisplay(pricingSnapshot.first_period_access_start_date) || "-")}` : ""}
+                        ${nextBillingDate ? ` · ${this._escapeHtml(_t("Siguiente cobro"))}: ${this._escapeHtml(this._formatDateDisplay(nextBillingDate) || "-")}` : ""}
+                    </div>
+                `
                 : "";
             const partnerCurp = String(currentDetail && currentDetail.curp ? currentDetail.curp : "").trim();
             const requiresCurp = Boolean(newSubscriptionForm.requiresCurp);
             const needsCurpCapture = requiresCurp && !partnerCurp;
-            const snapshotCharge = buildChargeFromSnapshot(newSubscriptionForm, "recurring");
+            const snapshotCharge = buildChargeFromSnapshot(newSubscriptionForm, "charge_now");
             const resolvedDisplayAmount = getChargeDisplayAmount(snapshotCharge);
             const discountPercent = Number(
                 newSubscriptionForm
@@ -1104,6 +1111,7 @@ patch(ControlButtons.prototype, {
                         ${Number(newSubscriptionForm.maxParticipantsTotal || 1) > 1 ? `<div><span>${this._escapeHtml(_t("Participantes seleccionados"))}</span><strong>${this._escapeHtml(String((newSubscriptionForm.participantIds || []).length || 0))}</strong></div>` : ""}
                         <div><span>${this._escapeHtml(_t("Cobertura del plan"))}</span><strong>${this._escapeHtml(this._formatDateDisplay(automaticEndDate) || "-")}</strong></div>
                     </div>
+                    ${firstPeriodNote}
                     ${renderDiscountAuthorizationSection({
                         form: newSubscriptionForm,
                         formError,

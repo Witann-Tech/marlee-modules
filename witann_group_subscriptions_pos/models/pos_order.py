@@ -819,6 +819,7 @@ class PosOrder(models.Model):
         fallback=0.0,
         preferred_plan_id=False,
         preferred_pricing_id=False,
+        start_date=False,
     ):
         product.ensure_one()
         source_order = source_order.exists() if source_order else self.env['sale.order']
@@ -835,6 +836,7 @@ class PosOrder(models.Model):
             preferred_plan_id=preferred_plan_id,
             preferred_pricing_id=preferred_pricing_id,
             include_credit=bool(source_order),
+            start_date=start_date,
         )
         candidates = list(snapshot.get('candidates') or [])
         candidates.sort(key=lambda row: (row['sequence'], row.get('pricing_id') or 0))
@@ -853,6 +855,11 @@ class PosOrder(models.Model):
             'subscription_start_date': snapshot.get('subscription_start_date') or False,
             'subscription_end_date': snapshot.get('subscription_end_date') or False,
             'next_billing_date': snapshot.get('next_billing_date') or False,
+            'first_period_alignment': bool(snapshot.get('first_period_alignment')),
+            'first_period_start_date': snapshot.get('first_period_start_date') or False,
+            'first_period_access_start_date': snapshot.get('first_period_access_start_date') or False,
+            'first_period_days': int(snapshot.get('first_period_days') or 0),
+            'first_period_charge_days': int(snapshot.get('first_period_charge_days') or 0),
             'source_recurring_price': float(snapshot.get('source_recurring_price') or 0.0),
             'source_display_recurring_price': float(snapshot.get('source_display_recurring_price') or 0.0),
             'default_plan_id': snapshot.get('plan_id') or False,
@@ -971,6 +978,7 @@ class PosOrder(models.Model):
         preferred_plan_id=False,
         preferred_pricing_id=False,
         include_offers=False,
+        start_date=False,
     ):
         request_data = self._wgs_prepare_subscription_pricing_request_for_pos(
             partner_id=partner_id,
@@ -994,6 +1002,7 @@ class PosOrder(models.Model):
                 fallback=fallback,
                 preferred_plan_id=preferred_plan_id,
                 preferred_pricing_id=preferred_pricing_id,
+                start_date=start_date,
             )
             pricing['flow'] = normalized_flow
             pricing['is_upgrade'] = bool(source_order) if normalized_flow == 'upsale' else False
@@ -1041,6 +1050,7 @@ class PosOrder(models.Model):
         fallback=0.0,
         preferred_plan_id=False,
         preferred_pricing_id=False,
+        start_date=False,
     ):
         self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar pricing de suscripción desde Punto de Venta.'))
         return self._wgs_build_subscription_quote_payload_for_pos(
@@ -1053,6 +1063,7 @@ class PosOrder(models.Model):
             preferred_plan_id=preferred_plan_id,
             preferred_pricing_id=preferred_pricing_id,
             include_offers=False,
+            start_date=start_date,
         )['pricing']
 
     @api.model
@@ -1066,6 +1077,7 @@ class PosOrder(models.Model):
         fallback=0.0,
         preferred_plan_id=False,
         preferred_pricing_id=False,
+        start_date=False,
     ):
         self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar cotizaciones de suscripción desde Punto de Venta.'))
         return self._wgs_build_subscription_quote_payload_for_pos(
@@ -1078,6 +1090,7 @@ class PosOrder(models.Model):
             preferred_plan_id=preferred_plan_id,
             preferred_pricing_id=preferred_pricing_id,
             include_offers=True,
+            start_date=start_date,
         )
 
     @api.model
