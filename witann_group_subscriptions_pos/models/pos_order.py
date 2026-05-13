@@ -284,6 +284,13 @@ class PosOrder(models.Model):
         return self.env['sale.order'].get_partner_directory_row_for_pos(partner_id)
 
     @api.model
+    def wgs_search_subscription_participants_for_pos(self, search_term=False, limit=120):
+        return self.env['sale.order'].search_subscription_participants_for_pos(
+            search_term=search_term,
+            limit=limit,
+        )
+
+    @api.model
     def wgs_get_partner_subscription_detail_for_pos(self, partner_id):
         return self.env['sale.order'].get_partner_subscription_detail_for_pos(partner_id)
 

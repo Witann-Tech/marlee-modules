@@ -20,6 +20,13 @@ export function createSubscriptionPosApi(orm) {
         async fetchPartnerDirectoryRow(partnerId) {
             return orm.call("pos.order", "wgs_get_partner_directory_row_for_pos", [partnerId || false]);
         },
+        async searchSubscriptionParticipants(searchTerm = "", limit = 120) {
+            return orm.call(
+                "pos.order",
+                "wgs_search_subscription_participants_for_pos",
+                [searchTerm || "", limit || 120]
+            );
+        },
         async fetchPartnerSubscriptionDetail(partnerId) {
             return orm.call("pos.order", "wgs_get_partner_subscription_detail_for_pos", [partnerId]);
         },

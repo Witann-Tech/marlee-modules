@@ -662,6 +662,10 @@ patch(ControlButtons.prototype, {
         let formNotice = "";
         let catalogLoading = false;
         let productCatalog = [];
+        let participantRows = [];
+        let participantRowsLoading = false;
+        let participantRowsLoadToken = 0;
+        let participantRowsSearchTimer = null;
         let renewalForm = null;
         let upsaleForm = null;
         let participantEditForm = null;
@@ -940,6 +944,9 @@ patch(ControlButtons.prototype, {
                 fetchSubscriptionQuote: (...args) => this._fetchSubscriptionQuote(...args),
                 _t,
             });
+            if (upsaleForm && Number(upsaleForm.maxParticipantsTotal || 1) > 1) {
+                void loadParticipantRows(upsaleForm.participantSearch || "");
+            }
         };
 
         const updateSelectedUpsalePlan = async (planChoice) => {
@@ -962,6 +969,9 @@ patch(ControlButtons.prototype, {
                 fetchSubscriptionProductCatalog: (searchTerm) => this._fetchSubscriptionProductCatalog(searchTerm),
                 _t,
             });
+            if (upsaleForm && Number(upsaleForm.maxParticipantsTotal || 1) > 1) {
+                void loadParticipantRows(upsaleForm.participantSearch || "");
+            }
         };
 
         const toggleEditedParticipantHandler = (partnerId, checked) => {
@@ -974,6 +984,9 @@ patch(ControlButtons.prototype, {
                 renderDetail,
                 createDefaultParticipantEditForm: (payload) => this._getDefaultParticipantEditForm(payload),
             });
+            if (participantEditForm && Number(participantEditForm.maxParticipantsTotal || 1) > 1) {
+                void loadParticipantRows(participantEditForm.participantSearch || "");
+            }
         };
 
         const applySelectedProduct = async (productId) => {
@@ -982,6 +995,9 @@ patch(ControlButtons.prototype, {
                 fetchSubscriptionQuote: (...args) => this._fetchSubscriptionQuote(...args),
                 _t,
             });
+            if (newSubscriptionForm && Number(newSubscriptionForm.maxParticipantsTotal || 1) > 1) {
+                void loadParticipantRows(newSubscriptionForm.participantSearch || "");
+            }
         };
 
         const updateSelectedPlanHandler = async (planChoice) => {
@@ -995,7 +1011,65 @@ patch(ControlButtons.prototype, {
             toggleParticipantFlow(modalState, partnerId, checked);
         };
 
-        const filterParticipantRowsByTerm = (searchTerm = "") => filterParticipantRowsFlow(rows, searchTerm);
+        const getParticipantSourceRows = () => {
+            const byId = new Map();
+            for (const row of [...participantRows, ...rows]) {
+                const rowId = Number(row && row.id ? row.id : 0) || false;
+                if (rowId && !byId.has(rowId)) {
+                    byId.set(rowId, row);
+                }
+            }
+            if (currentDetail && currentDetail.partner_id && !byId.has(Number(currentDetail.partner_id))) {
+                byId.set(Number(currentDetail.partner_id), {
+                    id: Number(currentDetail.partner_id),
+                    name: currentDetail.partner_name || "",
+                    email: currentDetail.email || false,
+                    phone: currentDetail.phone || false,
+                    image_url: currentDetail.image_url || false,
+                });
+            }
+            return [...byId.values()];
+        };
+
+        const filterParticipantRowsByTerm = (searchTerm = "") => filterParticipantRowsFlow(
+            getParticipantSourceRows(),
+            searchTerm
+        );
+
+        const loadParticipantRows = async (searchTerm = "") => {
+            const requestToken = Number(participantRowsLoadToken || 0) + 1;
+            participantRowsLoadToken = requestToken;
+            participantRowsLoading = true;
+            renderDetailPreservingFocus(currentDetail);
+            try {
+                const normalizedSearch = String(searchTerm || "").trim();
+                const result = await this.subscriptionPosApi.searchSubscriptionParticipants(
+                    normalizedSearch,
+                    normalizedSearch ? 300 : 3000
+                );
+                if (participantRowsLoadToken !== requestToken) {
+                    return;
+                }
+                participantRows = Array.isArray(result) ? result : [];
+            } catch (error) {
+                console.error("Error al buscar participantes de suscripción POS", error);
+            } finally {
+                if (participantRowsLoadToken === requestToken) {
+                    participantRowsLoading = false;
+                    renderDetailPreservingFocus(currentDetail);
+                }
+            }
+        };
+
+        const scheduleParticipantRowsLoad = (searchTerm = "") => {
+            if (participantRowsSearchTimer) {
+                clearTimeout(participantRowsSearchTimer);
+            }
+            participantRowsSearchTimer = setTimeout(() => {
+                participantRowsSearchTimer = null;
+                void loadParticipantRows(searchTerm || "");
+            }, 250);
+        };
 
         const renderNewSubscriptionForm = () => {
             if (formMode !== "new") {
@@ -1126,6 +1200,7 @@ patch(ControlButtons.prototype, {
                         <div class="wgs-inline-participants">
                             <span class="wgs-inline-section-title">${this._escapeHtml(_t("Participantes permitidos"))}</span>
                             <input type="text" class="wgs-inline-search" data-field="participant_search" placeholder="${this._escapeHtml(_t("Buscar participante"))}" value="${this._escapeHtml(newSubscriptionForm.participantSearch || "")}" />
+                            ${participantRowsLoading ? `<div class="wgs-inline-loading">${this._escapeHtml(_t("Buscando participantes..."))}</div>` : ""}
                             <div class="wgs-inline-participant-list">${participantOptions}</div>
                         </div>
                     ` : ""}
@@ -1591,6 +1666,9 @@ patch(ControlButtons.prototype, {
             }
             if (shouldRender) {
                 renderDetailPreservingFocus(currentDetail);
+                if (["participant_search", "upsale_participant_search", "edit_participant_search"].includes(field)) {
+                    scheduleParticipantRowsLoad(target.value || "");
+                }
             }
         });
 

@@ -873,6 +873,38 @@ class SaleOrder(models.Model):
         return self._wgs_build_partner_directory_row_for_pos(partner, status_map.get(partner.id, {}))
 
     @api.model
+    def search_subscription_participants_for_pos(self, search_term=False, limit=120):
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar participantes desde Punto de Venta.'))
+
+        Partner = self._wgs_partner_model_for_pos()
+        try:
+            limit = int(limit or 120)
+        except (TypeError, ValueError):
+            limit = 120
+        limit = min(max(limit, 1), 3000)
+
+        search_partner_ids = self._get_partner_ids_matching_directory_search_for_pos(search_term)
+        domain = []
+        if search_partner_ids is not False:
+            if not search_partner_ids:
+                return []
+            domain.append(('id', 'in', search_partner_ids))
+
+        partners = Partner.search(domain, order='name asc, id asc', limit=limit)
+        rows = []
+        for partner in partners:
+            phone = self._get_partner_field_value_for_pos(partner, ('phone', 'mobile'))
+            email = self._get_partner_field_value_for_pos(partner, ('email',))
+            rows.append({
+                'id': partner.id,
+                'name': partner.display_name,
+                'email': email or False,
+                'phone': phone or False,
+                'image_url': '/web/image/res.partner/%s/image_128' % partner.id,
+            })
+        return rows
+
+    @api.model
     def _wgs_build_partner_directory_row_for_pos(self, partner, status):
         partner.ensure_one()
         status = dict(status or {})
