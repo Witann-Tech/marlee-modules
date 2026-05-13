@@ -361,17 +361,18 @@ class PosOrderPricingMixin(models.Model):
         return int(interval_value or 1) == 1 and (interval_unit or 'month') == 'month'
 
     def _wgs_get_aligned_monthly_first_period_schedule(self, start_date):
-        start_date = fields.Date.to_date(start_date) or fields.Date.context_today(self)
-        period_start = start_date.replace(day=1)
+        access_start_date = fields.Date.to_date(start_date) or fields.Date.context_today(self)
+        period_start = access_start_date.replace(day=1)
         next_billing_date = period_start + relativedelta(months=1)
         period_end = next_billing_date - timedelta(days=1)
         period_days = max(1, (next_billing_date - period_start).days)
-        charge_days = max(1, (period_end - start_date).days + 1)
+        charge_days = max(1, (period_end - access_start_date).days + 1)
         return {
-            'subscription_start_date': start_date,
+            'subscription_start_date': period_start,
             'subscription_end_date': period_end,
             'next_billing_date': next_billing_date,
             'period_start_date': period_start,
+            'access_start_date': access_start_date,
             'period_days': period_days,
             'charge_days': min(charge_days, period_days),
             'proration_ratio': min(charge_days, period_days) / float(period_days),
@@ -527,6 +528,10 @@ class PosOrderPricingMixin(models.Model):
             'first_period_alignment': bool(first_period_alignment),
             'first_period_start_date': (
                 fields.Date.to_string(first_period_alignment['period_start_date'])
+                if first_period_alignment else False
+            ),
+            'first_period_access_start_date': (
+                fields.Date.to_string(first_period_alignment['access_start_date'])
                 if first_period_alignment else False
             ),
             'first_period_days': int(first_period_alignment.get('period_days') or 0) if first_period_alignment else 0,

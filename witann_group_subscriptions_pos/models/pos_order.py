@@ -857,6 +857,7 @@ class PosOrder(models.Model):
             'next_billing_date': snapshot.get('next_billing_date') or False,
             'first_period_alignment': bool(snapshot.get('first_period_alignment')),
             'first_period_start_date': snapshot.get('first_period_start_date') or False,
+            'first_period_access_start_date': snapshot.get('first_period_access_start_date') or False,
             'first_period_days': int(snapshot.get('first_period_days') or 0),
             'first_period_charge_days': int(snapshot.get('first_period_charge_days') or 0),
             'source_recurring_price': float(snapshot.get('source_recurring_price') or 0.0),

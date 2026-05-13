@@ -161,7 +161,8 @@ class TestPosSubscriptionPricing(TransactionCase):
     def test_aligned_monthly_first_period_schedule_is_calendar_based(self):
         schedule = self.PosOrder._wgs_get_aligned_monthly_first_period_schedule('2026-05-12')
 
-        self.assertEqual(schedule['subscription_start_date'], fields.Date.to_date('2026-05-12'))
+        self.assertEqual(schedule['subscription_start_date'], fields.Date.to_date('2026-05-01'))
+        self.assertEqual(schedule['access_start_date'], fields.Date.to_date('2026-05-12'))
         self.assertEqual(schedule['subscription_end_date'], fields.Date.to_date('2026-05-31'))
         self.assertEqual(schedule['next_billing_date'], fields.Date.to_date('2026-06-01'))
         self.assertEqual(schedule['period_days'], 31)
@@ -213,7 +214,8 @@ class TestPosSubscriptionPricing(TransactionCase):
         self.assertEqual(charge['recurring_price'], 100.0)
         self.assertEqual(charge['charge_now'], 64.52)
         self.assertEqual(charge['display_charge_now'], 74.84)
-        self.assertEqual(charge['subscription_start_date'], '2026-05-12')
+        self.assertEqual(charge['subscription_start_date'], '2026-05-01')
+        self.assertEqual(charge['first_period_access_start_date'], '2026-05-12')
         self.assertEqual(charge['subscription_end_date'], '2026-05-31')
         self.assertEqual(charge['next_billing_date'], '2026-06-01')
         self.assertTrue(charge['first_period_alignment'])

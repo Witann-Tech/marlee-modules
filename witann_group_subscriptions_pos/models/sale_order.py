@@ -1218,8 +1218,12 @@ class SaleOrder(models.Model):
         start_date = self._get_first_available_date(
             ('wgs_effective_start_date', 'start_date', 'date_start', 'subscription_start_date', 'date_order')
         )
-        next_invoice_date = self._get_first_available_date(('recurring_next_date', 'next_invoice_date'))
-        hard_end_date = self._get_first_available_date(('date_end', 'end_date'))
+        next_invoice_date = self._get_first_available_date(
+            ('recurring_next_date', 'next_invoice_date', 'recurring_next_invoice_date')
+        )
+        hard_end_date = self._get_first_available_date(
+            ('date_end', 'end_date', 'subscription_end_date', 'recurring_end_date')
+        )
         recurrence_delta = self._get_recurrence_delta()
 
         if start_date and (not next_invoice_date or next_invoice_date <= start_date):
@@ -1299,8 +1303,12 @@ class SaleOrder(models.Model):
         start_date = self._get_first_available_date(
             ('wgs_effective_start_date', 'start_date', 'date_start', 'subscription_start_date', 'date_order')
         )
-        next_invoice_date = self._get_first_available_date(('recurring_next_date', 'next_invoice_date'))
-        hard_end_date = self._get_first_available_date(('date_end', 'end_date'))
+        next_invoice_date = self._get_first_available_date(
+            ('recurring_next_date', 'next_invoice_date', 'recurring_next_invoice_date')
+        )
+        hard_end_date = self._get_first_available_date(
+            ('date_end', 'end_date', 'subscription_end_date', 'recurring_end_date')
+        )
         has_replacement_subscription = self._wgs_has_replacement_subscription_for_pos()
 
         recurrence_delta = self._get_recurrence_delta()
