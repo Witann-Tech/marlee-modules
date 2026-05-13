@@ -29,7 +29,7 @@ function getAuthorizedDiscountPercent(form) {
 
 function getDiscountedDisplayAmount(charge, form) {
     const snapshotFlow = String(form && form.pricingSnapshot && form.pricingSnapshot.flow ? form.pricingSnapshot.flow : "new");
-    const derivedChargeType = ["renewal", "reenroll", "pending_charge", "upsale"].includes(snapshotFlow)
+    const derivedChargeType = ["renewal", "reenroll", "upsale"].includes(snapshotFlow)
         ? "charge_now"
         : "recurring";
     const effectiveCharge = charge && charge.displayAmount !== undefined

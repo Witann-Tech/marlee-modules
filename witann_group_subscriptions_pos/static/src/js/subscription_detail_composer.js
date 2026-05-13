@@ -4,10 +4,7 @@ import { canOpenNewSubscription } from "./subscription_view_utils";
 
 function renderSubscriptionCards(detail, {
     renderSubscriptionCard,
-    renderPendingDocumentSummary,
     renderParticipantEditForm,
-    renderPendingChargeForm,
-    renderCancellationRefundForm,
     renderRenewalForm,
     renderUpsaleForm,
     getStateClass,
@@ -35,16 +32,8 @@ function renderSubscriptionCards(detail, {
         const accessSiteLabel = (accessSummary.site_names || []).length
             ? escapeHtml((accessSummary.site_names || []).join(", "))
             : escapeHtml(_t("Sin sitios"));
-        const pendingDocumentHtml = renderPendingDocumentSummary({
-            item,
-            escapeHtml,
-            formatMoney,
-            _t,
-        });
         const inlineFormsHtml = [
             renderParticipantEditForm(item),
-            renderPendingChargeForm(item),
-            renderCancellationRefundForm(item),
             renderRenewalForm(item),
             renderUpsaleForm(item),
         ].join("");
@@ -54,7 +43,6 @@ function renderSubscriptionCards(detail, {
             participantNames,
             accessSummary,
             accessSiteLabel,
-            pendingDocumentHtml,
             inlineFormsHtml,
             escapeHtml,
             formatDateDisplay,
@@ -68,10 +56,7 @@ function renderDetailContent(detail, {
     renderDetailHeader,
     renderPartnerDetailAvatar,
     renderSubscriptionCard,
-    renderPendingDocumentSummary,
     renderParticipantEditForm,
-    renderPendingChargeForm,
-    renderCancellationRefundForm,
     renderRenewalForm,
     renderUpsaleForm,
     renderNewSubscriptionForm,
@@ -104,10 +89,7 @@ function renderDetailContent(detail, {
     });
     const subscriptionsHtml = renderSubscriptionCards(detail, {
         renderSubscriptionCard,
-        renderPendingDocumentSummary,
         renderParticipantEditForm,
-        renderPendingChargeForm,
-        renderCancellationRefundForm,
         renderRenewalForm,
         renderUpsaleForm,
         getStateClass,
