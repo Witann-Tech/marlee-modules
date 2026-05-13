@@ -405,14 +405,14 @@ function buildSubscriptionInlineActionHandlers({
             const posCharge = buildChargeBreakdown(
                 null,
                 null,
-                buildChargeFromSnapshot(state.newSubscriptionForm, "recurring")
+                buildChargeFromSnapshot(state.newSubscriptionForm, "charge_now")
             );
             if (participantIds.length > Number(state.newSubscriptionForm.maxParticipantsTotal || 1)) {
                 state.formError = _t("Estas excediendo el cupo maximo de participantes para este paquete.");
                 renderDetail(state.currentDetail);
                 return;
             }
-            const automaticEndDate = getPlanPeriodEndDate(
+            const automaticEndDate = pricingSnapshot.subscription_end_date || getPlanPeriodEndDate(
                 state.newSubscriptionForm.startDate,
                 Number(pricingSnapshot.interval_value || 1) || 1,
                 pricingSnapshot.interval_unit || "month"
@@ -500,7 +500,7 @@ function buildSubscriptionInlineActionHandlers({
                         participant_ids: participantIds,
                         plan_id: Number(pricingSnapshot.plan_id || 0) || false,
                         pricing_id: Number(pricingSnapshot.pricing_id || 0) || false,
-                        start_date: state.newSubscriptionForm.startDate,
+                        start_date: pricingSnapshot.subscription_start_date || state.newSubscriptionForm.startDate,
                         end_date: automaticEndDate || false,
                         product_id: Number(state.newSubscriptionForm.productId || 0) || false,
                         product_name: state.newSubscriptionForm.productName || false,
@@ -911,6 +911,11 @@ async function handleSubscriptionInlineFieldChange({ field, target }, {
         state.newSubscriptionForm.authorizedDiscount = null;
     } else if (state.formMode === "new" && field === "start_date") {
         state.newSubscriptionForm.startDate = target.value || formatTodayISO();
+        const snapshot = state.newSubscriptionForm.pricingSnapshot || {};
+        const selectedChoice = `${Number(snapshot.plan_id || 0)}:${Number(snapshot.pricing_id || 0)}`;
+        if (Number(state.newSubscriptionForm.productId || 0) && selectedChoice !== "0:0") {
+            await updateSelectedPlan(selectedChoice);
+        }
     } else if (state.formMode === "new" && field === "participant_toggle") {
         toggleParticipant(target.value, target.checked);
     } else if ((state.formMode === "renewal" || state.formMode === "reenroll") && field === "renewal_discount_code") {

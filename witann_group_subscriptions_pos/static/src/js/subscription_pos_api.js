@@ -58,18 +58,18 @@ export function createSubscriptionPosApi(orm) {
         async fetchSubscriptionProductCatalog(searchTerm = "", limit = 200, companyId = false) {
             return orm.call("pos.order", "wgs_get_subscription_product_catalog_for_pos", [searchTerm, limit, companyId || false]);
         },
-        async fetchSubscriptionPricing(partnerId = false, productId = false, flow = "new", sourceSubscriptionId = false, pendingMoveId = false, fallback = 0, planId = false, pricingId = false) {
+        async fetchSubscriptionPricing(partnerId = false, productId = false, flow = "new", sourceSubscriptionId = false, pendingMoveId = false, fallback = 0, planId = false, pricingId = false, startDate = false) {
             return orm.call(
                 "pos.order",
                 "wgs_get_subscription_pricing_for_pos",
-                [partnerId || false, productId || false, flow || "new", sourceSubscriptionId || false, pendingMoveId || false, fallback || 0, planId || false, pricingId || false]
+                [partnerId || false, productId || false, flow || "new", sourceSubscriptionId || false, pendingMoveId || false, fallback || 0, planId || false, pricingId || false, startDate || false]
             );
         },
-        async fetchSubscriptionQuote(partnerId = false, productId = false, flow = "new", sourceSubscriptionId = false, pendingMoveId = false, fallback = 0, planId = false, pricingId = false) {
+        async fetchSubscriptionQuote(partnerId = false, productId = false, flow = "new", sourceSubscriptionId = false, pendingMoveId = false, fallback = 0, planId = false, pricingId = false, startDate = false) {
             return orm.call(
                 "pos.order",
                 "wgs_get_subscription_quote_for_pos",
-                [partnerId || false, productId || false, flow || "new", sourceSubscriptionId || false, pendingMoveId || false, fallback || 0, planId || false, pricingId || false]
+                [partnerId || false, productId || false, flow || "new", sourceSubscriptionId || false, pendingMoveId || false, fallback || 0, planId || false, pricingId || false, startDate || false]
             );
         },
         async saveSubscriptionParticipants(subscriptionId, participantIds) {

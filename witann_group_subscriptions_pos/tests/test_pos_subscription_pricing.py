@@ -158,6 +158,68 @@ class TestPosSubscriptionPricing(TransactionCase):
         self.assertEqual(threshold, fields.Date.to_date('2026-03-27'))
         self.assertEqual(period_end, fields.Date.to_date('2026-03-26'))
 
+    def test_aligned_monthly_first_period_schedule_is_calendar_based(self):
+        schedule = self.PosOrder._wgs_get_aligned_monthly_first_period_schedule('2026-05-12')
+
+        self.assertEqual(schedule['subscription_start_date'], fields.Date.to_date('2026-05-12'))
+        self.assertEqual(schedule['subscription_end_date'], fields.Date.to_date('2026-05-31'))
+        self.assertEqual(schedule['next_billing_date'], fields.Date.to_date('2026-06-01'))
+        self.assertEqual(schedule['period_days'], 31)
+        self.assertEqual(schedule['charge_days'], 20)
+
+    def test_aligned_monthly_plan_charges_first_period_proportionally(self):
+        alignment_field = self.PosOrder._wgs_get_period_alignment_field_name(self.plan)
+        if not alignment_field:
+            self.skipTest('El runtime no expone el campo nativo de alineación de periodo.')
+        if 'sale.subscription.pricing' not in self.env.registry:
+            self.skipTest('sale.subscription.pricing no existe en este runtime.')
+
+        self.plan.write({alignment_field: True})
+
+        pricing_model = self.env['sale.subscription.pricing']
+        pricing_vals = {}
+        for field_name in ('product_tmpl_id', 'product_template_id'):
+            if field_name in pricing_model._fields:
+                pricing_vals[field_name] = self.product.product_tmpl_id.id
+                break
+        for field_name in ('plan_id', 'subscription_plan_id', 'recurring_plan_id'):
+            if field_name in pricing_model._fields:
+                pricing_vals[field_name] = self.plan.id
+                break
+        for field_name in ('fixed_price', 'price', 'recurring_price', 'price_unit', 'list_price', 'amount'):
+            if field_name in pricing_model._fields:
+                pricing_vals[field_name] = 100.0
+                break
+        if 'name' in pricing_model._fields:
+            pricing_vals['name'] = 'Pricing mensual alineado POS'
+
+        try:
+            pricing_model.create(pricing_vals)
+        except Exception:
+            self.skipTest('No se pudo crear sale.subscription.pricing alineado en este runtime.')
+
+        charge = self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
+            partner_id=self.partner.id,
+            product_id=self.product.id,
+            flow='new',
+            source_subscription_id=False,
+            pending_move_id=False,
+            fallback=100.0,
+            preferred_plan_id=self.plan.id,
+            preferred_pricing_id=False,
+            start_date='2026-05-12',
+        )
+
+        self.assertEqual(charge['recurring_price'], 100.0)
+        self.assertEqual(charge['charge_now'], 64.52)
+        self.assertEqual(charge['display_charge_now'], 74.84)
+        self.assertEqual(charge['subscription_start_date'], '2026-05-12')
+        self.assertEqual(charge['subscription_end_date'], '2026-05-31')
+        self.assertEqual(charge['next_billing_date'], '2026-06-01')
+        self.assertTrue(charge['first_period_alignment'])
+        self.assertEqual(charge['first_period_days'], 31)
+        self.assertEqual(charge['first_period_charge_days'], 20)
+
     def test_subscription_pricing_beats_generic_pricelist_candidate(self):
         pricing_model_name = 'sale.subscription.pricing'
         if pricing_model_name not in self.env.registry:
