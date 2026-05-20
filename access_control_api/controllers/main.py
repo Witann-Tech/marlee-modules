@@ -9,6 +9,7 @@ _logger = logging.getLogger(__name__)
 
 
 class AccessControlApi(http.Controller):
+    _BOOTSTRAP_CURSOR_STRIDE = 100000
 
     def _touch_device_telemetry(self, device, heartbeat=False, sync=False, error_marker=False):
         if not device or not device.exists():
@@ -28,24 +29,50 @@ class AccessControlApi(http.Controller):
         device.sudo().write(vals)
         return True
 
-    def _site_bootstrap_result(self, site, site_code, device_serial, cursor, next_cursor, reason="bootstrap"):
+    def _bootstrap_cursor_encode(self, snapshot_cursor, offset):
+        snapshot_cursor = max(0, int(snapshot_cursor or 0))
+        offset = max(0, int(offset or 0))
+        return -(((snapshot_cursor + 1) * self._BOOTSTRAP_CURSOR_STRIDE) + offset)
+
+    def _bootstrap_cursor_decode(self, cursor):
+        if (cursor or 0) >= 0:
+            return 0, 0
+        raw = abs(int(cursor))
+        snapshot_plus = raw // self._BOOTSTRAP_CURSOR_STRIDE
+        offset = raw % self._BOOTSTRAP_CURSOR_STRIDE
+        snapshot_cursor = max(0, snapshot_plus - 1)
+        return snapshot_cursor, offset
+
+    def _site_bootstrap_result(self, site, site_code, device_serial, cursor, limit, include_biophoto=True, reason="bootstrap"):
         Person = site.env["access_control.person"].sudo()
-        persons = Person.search(
-            [
-                ("active", "=", True),
-                ("global_user_id", "!=", False),
-                ("site_ids", "in", site.id),
-            ],
-            order="global_user_id asc",
-        )
+        domain = [
+            ("active", "=", True),
+            ("global_user_id", "!=", False),
+            ("site_ids", "in", site.id),
+        ]
+        if cursor < 0:
+            snapshot_cursor, offset = self._bootstrap_cursor_decode(cursor)
+        else:
+            snapshot_cursor = self._site_change_max_cursor(site)
+            offset = 0
+
+        persons = Person.search(domain, order="global_user_id asc", offset=offset, limit=limit)
+        total = Person.search_count(domain)
         upserts = [
             self._person_sync_payload(
                 person,
-                include_face_pic=True,
-                clear_face_pic=not bool(person.face_pic_b64),
+                include_face_pic=bool(include_biophoto and person.face_pic_b64),
+                clear_face_pic=bool(include_biophoto and not person.face_pic_b64),
             )
             for person in persons
         ]
+        next_offset = offset + len(upserts)
+        has_more = next_offset < total
+        next_cursor = (
+            self._bootstrap_cursor_encode(snapshot_cursor, next_offset)
+            if has_more
+            else snapshot_cursor
+        )
         return {
             "ok": True,
             "reason": reason,
@@ -53,13 +80,10 @@ class AccessControlApi(http.Controller):
             "deviceSerial": device_serial or None,
             "cursor": cursor,
             "nextCursor": next_cursor,
-            "hasMore": False,
+            "hasMore": has_more,
             "upserts": upserts,
             "deletes": [],
         }
-
-    def _bootstrap_cursor_for_stale_state(self, cursor, max_cursor):
-        return cursor if max_cursor <= 0 else max_cursor
 
     def _site_change_max_cursor(self, site):
         Change = site.env["access_control.sync_change"].sudo()
@@ -116,6 +140,20 @@ class AccessControlApi(http.Controller):
             return int(value)
         except (TypeError, ValueError):
             return default
+
+    def _as_bool(self, value, default=None):
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        text = str(value).strip().lower()
+        if text in ("1", "true", "t", "yes", "y", "on"):
+            return True
+        if text in ("0", "false", "f", "no", "n", "off"):
+            return False
+        return default
 
     def _normalize_modality(self, modality):
         if not modality:
@@ -281,6 +319,10 @@ class AccessControlApi(http.Controller):
         cursor = self._as_int(data.get("cursor"), default=0) or 0
         limit = self._as_int(data.get("limit"), default=500) or 500
         limit = max(1, min(limit, 2000))
+        include_biophoto = self._as_bool(
+            data.get("includeBiophoto", data.get("includeFaces")),
+            default=True,
+        )
 
         if not site_code:
             return {
@@ -333,7 +375,7 @@ class AccessControlApi(http.Controller):
         Change = request.env["access_control.sync_change"].sudo()
         site_max_cursor = self._site_change_max_cursor(site)
 
-        # Bootstrap: return full active snapshot for the site.
+        # Bootstrap cursor (0 or negative internal cursor) returns a paged snapshot.
         if cursor <= 0:
             self._touch_device_telemetry(device, heartbeat=True, sync=True, error_marker=True)
             return self._site_bootstrap_result(
@@ -341,7 +383,8 @@ class AccessControlApi(http.Controller):
                 site_code,
                 device_serial,
                 cursor,
-                site_max_cursor,
+                limit,
+                include_biophoto=include_biophoto,
                 reason="bootstrap",
             )
 
@@ -361,13 +404,13 @@ class AccessControlApi(http.Controller):
                     cursor,
                     site_max_cursor,
                 )
-                bootstrap_cursor = self._bootstrap_cursor_for_stale_state(cursor, site_max_cursor)
                 return self._site_bootstrap_result(
                     site,
                     site_code,
                     device_serial,
                     cursor,
-                    bootstrap_cursor,
+                    limit,
+                    include_biophoto=include_biophoto,
                     reason="stale_cursor_bootstrap",
                 )
             self._touch_device_telemetry(device, heartbeat=True, sync=True, error_marker=True)
@@ -424,8 +467,8 @@ class AccessControlApi(http.Controller):
             upserts.append(
                 self._person_sync_payload(
                     person,
-                    include_face_pic=bool(state["include_face_pic"]),
-                    clear_face_pic=bool(state["clear_face_pic"]),
+                    include_face_pic=bool(include_biophoto and state["include_face_pic"]),
+                    clear_face_pic=bool(include_biophoto and state["clear_face_pic"]),
                 )
             )
 
@@ -433,13 +476,14 @@ class AccessControlApi(http.Controller):
         has_more = len(changes) >= limit
         self._touch_device_telemetry(device, heartbeat=True, sync=True, error_marker=True)
         _logger.info(
-            "sync_delta site=%s device=%s cursor=%s next_cursor=%s upserts=%s deletes=%s",
+            "sync_delta site=%s device=%s cursor=%s next_cursor=%s upserts=%s deletes=%s include_biophoto=%s",
             site_code,
             device_serial or None,
             cursor,
             next_cursor,
             len(upserts),
             len(deletes),
+            include_biophoto,
         )
 
         return {

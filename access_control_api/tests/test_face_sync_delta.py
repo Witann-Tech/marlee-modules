@@ -115,28 +115,61 @@ class TestFaceSyncDelta(TransactionCase):
         payload = self.controller._person_sync_payload(person, include_face_pic=False, clear_face_pic=False)
         self.assertNotIn("facePicB64", payload)
 
-    def test_bootstrap_helper_returns_full_snapshot(self):
+    def test_bootstrap_helper_paginates_and_respects_limit(self):
+        _, person_1 = self._make_person(self._make_image_b64())
+        _, person_2 = self._make_person(self._make_image_b64(color=(40, 40, 180)))
+
+        first = self.controller._site_bootstrap_result(
+            self.site,
+            self.site.code,
+            "DEV-001",
+            0,
+            1,
+            reason="bootstrap",
+        )
+
+        self.assertEqual(first["reason"], "bootstrap")
+        self.assertEqual(first["cursor"], 0)
+        self.assertEqual(first["deviceSerial"], "DEV-001")
+        self.assertEqual(len(first["upserts"]), 1)
+        self.assertTrue(first["hasMore"])
+        self.assertLess(first["nextCursor"], 0)
+        self.assertEqual(first["upserts"][0]["globalUserId"], min(person_1.global_user_id, person_2.global_user_id))
+
+        second = self.controller._site_bootstrap_result(
+            self.site,
+            self.site.code,
+            "DEV-001",
+            first["nextCursor"],
+            1,
+            reason="bootstrap",
+        )
+
+        self.assertEqual(len(second["upserts"]), 1)
+        self.assertFalse(second["hasMore"])
+        self.assertGreaterEqual(second["nextCursor"], 0)
+        self.assertNotEqual(second["upserts"][0]["globalUserId"], first["upserts"][0]["globalUserId"])
+
+    def test_bootstrap_cursor_encode_decode_roundtrip(self):
+        encoded = self.controller._bootstrap_cursor_encode(3378, 40)
+        self.assertLess(encoded, 0)
+        self.assertEqual(self.controller._bootstrap_cursor_decode(encoded), (3378, 40))
+
+    def test_bootstrap_without_biophoto_omits_facepicb64(self):
         _, person = self._make_person(self._make_image_b64())
         result = self.controller._site_bootstrap_result(
             self.site,
             self.site.code,
             "DEV-001",
-            3303,
-            3303,
-            reason="stale_cursor_bootstrap",
+            0,
+            20,
+            include_biophoto=False,
+            reason="bootstrap",
         )
 
-        self.assertEqual(result["reason"], "stale_cursor_bootstrap")
-        self.assertEqual(result["cursor"], 3303)
-        self.assertEqual(result["nextCursor"], 3303)
-        self.assertEqual(result["deviceSerial"], "DEV-001")
         self.assertEqual(len(result["upserts"]), 1)
         self.assertEqual(result["upserts"][0]["globalUserId"], person.global_user_id)
-        self.assertIn("facePicB64", result["upserts"][0])
-
-    def test_stale_cursor_reuses_client_cursor_when_queue_is_empty(self):
-        self.assertEqual(self.controller._bootstrap_cursor_for_stale_state(3303, 0), 3303)
-        self.assertEqual(self.controller._bootstrap_cursor_for_stale_state(3303, 120), 120)
+        self.assertNotIn("facePicB64", result["upserts"][0])
 
     def test_site_change_max_cursor_is_scoped_per_site(self):
         other_site = self.Site.create({"name": "Norte", "code": "MX-NTE"})
@@ -174,10 +207,8 @@ class TestFaceSyncDelta(TransactionCase):
         self.assertEqual(self.controller._site_change_max_cursor(self.site), first_site_change.id)
         self.assertEqual(self.controller._site_change_max_cursor(other_site), other_site_change.id)
         self.assertGreater(other_site_change.id, first_site_change.id)
-        self.assertEqual(
-            self.controller._bootstrap_cursor_for_stale_state(first_site_change.id + 10, self.controller._site_change_max_cursor(self.site)),
-            first_site_change.id,
-        )
+        encoded = self.controller._bootstrap_cursor_encode(first_site_change.id, 20)
+        self.assertEqual(self.controller._bootstrap_cursor_decode(encoded), (first_site_change.id, 20))
 
     def test_suspended_person_uses_zero_access_group(self):
         _, person = self._make_person(self._make_image_b64())
