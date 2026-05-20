@@ -171,6 +171,49 @@ class TestFaceSyncDelta(TransactionCase):
         self.assertEqual(result["upserts"][0]["globalUserId"], person.global_user_id)
         self.assertNotIn("facePicB64", result["upserts"][0])
 
+    def test_biophoto_snapshot_only_returns_people_with_face_and_respects_limit(self):
+        _, person_with_face_1 = self._make_person(self._make_image_b64())
+        _, person_with_face_2 = self._make_person(self._make_image_b64(color=(40, 40, 180)))
+        partner_without_face = self.Partner.create({"name": "Sin rostro"})
+        self.Person.create(
+            {
+                "partner_id": partner_without_face.id,
+                "global_user_id": 9993,
+                "active": True,
+                "site_ids": [(6, 0, [self.site.id])],
+            }
+        )
+
+        first = self.controller._site_biophoto_result(
+            self.site,
+            self.site.code,
+            "DEV-001",
+            3388,
+            1,
+            reason="biophoto_bootstrap",
+        )
+
+        self.assertEqual(first["reason"], "biophoto_bootstrap")
+        self.assertEqual(len(first["upserts"]), 1)
+        self.assertTrue(first["hasMore"])
+        self.assertLess(first["nextCursor"], 0)
+        self.assertIn("facePicB64", first["upserts"][0])
+
+        second = self.controller._site_biophoto_result(
+            self.site,
+            self.site.code,
+            "DEV-001",
+            first["nextCursor"],
+            1,
+            reason="biophoto",
+        )
+
+        self.assertEqual(len(second["upserts"]), 1)
+        self.assertFalse(second["hasMore"])
+        self.assertGreaterEqual(second["nextCursor"], 0)
+        gids = {first["upserts"][0]["globalUserId"], second["upserts"][0]["globalUserId"]}
+        self.assertEqual(gids, {person_with_face_1.global_user_id, person_with_face_2.global_user_id})
+
     def test_site_change_max_cursor_is_scoped_per_site(self):
         other_site = self.Site.create({"name": "Norte", "code": "MX-NTE"})
         _, person = self._make_person(self._make_image_b64())

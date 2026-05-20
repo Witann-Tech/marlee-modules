@@ -85,6 +85,49 @@ class AccessControlApi(http.Controller):
             "deletes": [],
         }
 
+    def _site_biophoto_result(self, site, site_code, device_serial, cursor, limit, reason="biophoto"):
+        Person = site.env["access_control.person"].sudo()
+        domain = [
+            ("active", "=", True),
+            ("global_user_id", "!=", False),
+            ("site_ids", "in", site.id),
+            ("face_pic_b64", "!=", False),
+        ]
+        if cursor < 0:
+            snapshot_cursor, offset = self._bootstrap_cursor_decode(cursor)
+        else:
+            snapshot_cursor = self._site_change_max_cursor(site)
+            offset = 0
+
+        persons = Person.search(domain, order="global_user_id asc", offset=offset, limit=limit)
+        total = Person.search_count(domain)
+        upserts = [
+            self._person_sync_payload(
+                person,
+                include_face_pic=True,
+                clear_face_pic=False,
+            )
+            for person in persons
+        ]
+        next_offset = offset + len(upserts)
+        has_more = next_offset < total
+        next_cursor = (
+            self._bootstrap_cursor_encode(snapshot_cursor, next_offset)
+            if has_more
+            else snapshot_cursor
+        )
+        return {
+            "ok": True,
+            "reason": reason,
+            "siteCode": site_code,
+            "deviceSerial": device_serial or None,
+            "cursor": cursor,
+            "nextCursor": next_cursor,
+            "hasMore": has_more,
+            "upserts": upserts,
+            "deletes": [],
+        }
+
     def _site_change_max_cursor(self, site):
         Change = site.env["access_control.sync_change"].sudo()
         return Change.search([("site_id", "=", site.id)], order="id desc", limit=1).id or 0
@@ -319,10 +362,16 @@ class AccessControlApi(http.Controller):
         cursor = self._as_int(data.get("cursor"), default=0) or 0
         limit = self._as_int(data.get("limit"), default=500) or 500
         limit = max(1, min(limit, 2000))
+        only_biophoto = self._as_bool(
+            data.get("onlyBiophoto", data.get("forceBiophoto")),
+            default=False,
+        )
         include_biophoto = self._as_bool(
             data.get("includeBiophoto", data.get("includeFaces")),
             default=True,
         )
+        if only_biophoto:
+            include_biophoto = True
 
         if not site_code:
             return {
@@ -374,6 +423,17 @@ class AccessControlApi(http.Controller):
         Person = request.env["access_control.person"].sudo()
         Change = request.env["access_control.sync_change"].sudo()
         site_max_cursor = self._site_change_max_cursor(site)
+
+        if only_biophoto:
+            self._touch_device_telemetry(device, heartbeat=True, sync=True, error_marker=True)
+            return self._site_biophoto_result(
+                site,
+                site_code,
+                device_serial,
+                cursor,
+                limit,
+                reason="biophoto" if cursor < 0 else "biophoto_bootstrap",
+            )
 
         # Bootstrap cursor (0 or negative internal cursor) returns a paged snapshot.
         if cursor <= 0:
