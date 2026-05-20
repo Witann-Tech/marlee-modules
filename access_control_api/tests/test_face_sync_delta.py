@@ -130,6 +130,47 @@ class TestFaceSyncDelta(TransactionCase):
         self.assertEqual(self.controller._bootstrap_cursor_for_stale_state(3303, 0), 3303)
         self.assertEqual(self.controller._bootstrap_cursor_for_stale_state(3303, 120), 120)
 
+    def test_site_change_max_cursor_is_scoped_per_site(self):
+        other_site = self.Site.create({"name": "Norte", "code": "MX-NTE"})
+        _, person = self._make_person(self._make_image_b64())
+        other_partner = self.Partner.create({"name": "Persona Norte"})
+        other_person = self.Person.create(
+            {
+                "partner_id": other_partner.id,
+                "global_user_id": 9990,
+                "active": True,
+                "site_ids": [(6, 0, [other_site.id])],
+            }
+        )
+
+        self.Change.search([]).unlink()
+        first_site_change = self.Change.create(
+            {
+                "site_id": self.site.id,
+                "person_id": person.id,
+                "global_user_id": person.global_user_id,
+                "action": "upsert",
+                "reason": "first_site",
+            }
+        )
+        other_site_change = self.Change.create(
+            {
+                "site_id": other_site.id,
+                "person_id": other_person.id,
+                "global_user_id": other_person.global_user_id,
+                "action": "upsert",
+                "reason": "other_site",
+            }
+        )
+
+        self.assertEqual(self.controller._site_change_max_cursor(self.site), first_site_change.id)
+        self.assertEqual(self.controller._site_change_max_cursor(other_site), other_site_change.id)
+        self.assertGreater(other_site_change.id, first_site_change.id)
+        self.assertEqual(
+            self.controller._bootstrap_cursor_for_stale_state(first_site_change.id + 10, self.controller._site_change_max_cursor(self.site)),
+            first_site_change.id,
+        )
+
     def test_suspended_person_uses_zero_access_group(self):
         _, person = self._make_person(self._make_image_b64())
         person.write({"access_state": "suspended"})

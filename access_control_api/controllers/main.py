@@ -43,6 +43,10 @@ class AccessControlApi(http.Controller):
     def _bootstrap_cursor_for_stale_state(self, cursor, max_cursor):
         return cursor if max_cursor <= 0 else max_cursor
 
+    def _site_change_max_cursor(self, site):
+        Change = site.env["access_control.sync_change"].sudo()
+        return Change.search([("site_id", "=", site.id)], order="id desc", limit=1).id or 0
+
     def _is_valid_user_api_key(self, token):
         """Support Odoo user API keys created from user preferences."""
         ApiKeys = request.env["res.users.apikeys"].sudo()
@@ -308,7 +312,7 @@ class AccessControlApi(http.Controller):
 
         Person = request.env["access_control.person"].sudo()
         Change = request.env["access_control.sync_change"].sudo()
-        max_cursor = Change.search([], order="id desc", limit=1).id or 0
+        site_max_cursor = self._site_change_max_cursor(site)
 
         # Bootstrap: return full active snapshot for the site.
         if cursor <= 0:
@@ -317,7 +321,7 @@ class AccessControlApi(http.Controller):
                 site_code,
                 device_serial,
                 cursor,
-                max_cursor,
+                site_max_cursor,
                 reason="bootstrap",
             )
 
@@ -328,15 +332,15 @@ class AccessControlApi(http.Controller):
         )
 
         if not changes:
-            if cursor > max_cursor:
+            if cursor > site_max_cursor:
                 _logger.warning(
-                    "sync_delta stale cursor detected site=%s device=%s cursor=%s max_cursor=%s; returning bootstrap snapshot",
+                    "sync_delta stale cursor detected site=%s device=%s cursor=%s site_max_cursor=%s; returning bootstrap snapshot",
                     site_code,
                     device_serial or None,
                     cursor,
-                    max_cursor,
+                    site_max_cursor,
                 )
-                bootstrap_cursor = self._bootstrap_cursor_for_stale_state(cursor, max_cursor)
+                bootstrap_cursor = self._bootstrap_cursor_for_stale_state(cursor, site_max_cursor)
                 return self._site_bootstrap_result(
                     site,
                     site_code,
