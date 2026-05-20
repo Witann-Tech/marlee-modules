@@ -10,6 +10,8 @@
           <field name="partner_id"/>
           <field name="global_user_id" readonly="active"/>
           <field name="site_ids" widget="many2many_tags"/>
+          <field name="last_access_at" readonly="1"/>
+          <field name="last_access_result" readonly="1"/>
         </list>
       </field>
     </record>
@@ -30,6 +32,10 @@
               <field name="partner_id" required="1"/>
               <field name="global_user_id" readonly="active"/>
               <field name="site_ids" widget="many2many_tags" options="{'no_create_edit': False}"/>
+              <field name="last_access_at" readonly="1"/>
+              <field name="last_access_result" readonly="1"/>
+              <field name="last_access_site_id" readonly="1"/>
+              <field name="last_access_device_id" readonly="1"/>
               <field name="face_pic_b64" invisible="1"/>
             </group>
           </sheet>

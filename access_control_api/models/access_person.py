@@ -38,6 +38,14 @@ class AccessPerson(models.Model):
     face_image = fields.Binary(string="Foto de rostro", attachment=True)
     face_pic_b64 = fields.Text(string="Foto de rostro (Base64)")
     has_face_pic = fields.Boolean(string="Tiene foto de rostro", compute="_compute_has_face_pic", store=False)
+    last_access_at = fields.Datetime(string="Último acceso", readonly=True, index=True)
+    last_access_result = fields.Selection(
+        [("allowed", "Permitido"), ("denied", "Denegado"), ("error", "Error")],
+        string="Resultado último acceso",
+        readonly=True,
+    )
+    last_access_site_id = fields.Many2one("access_control.site", string="Sitio último acceso", readonly=True)
+    last_access_device_id = fields.Many2one("access_control.device", string="Dispositivo último acceso", readonly=True)
 
     @api.depends("face_image", "face_pic_b64", "partner_face_image")
     def _compute_has_face_pic(self):
@@ -322,3 +330,19 @@ class AccessPerson(models.Model):
             "Persona desactivada, marcada para sincronización y con ID global liberado.",
             typ="warning",
         )
+
+    def register_access_event(self, occurred_at, result=None, site=None, device=None):
+        for rec in self:
+            if not occurred_at:
+                continue
+            if rec.last_access_at and occurred_at <= rec.last_access_at:
+                continue
+            rec.sudo().write(
+                {
+                    "last_access_at": occurred_at,
+                    "last_access_result": result or False,
+                    "last_access_site_id": site.id if site else False,
+                    "last_access_device_id": device.id if device else False,
+                }
+            )
+        return True

@@ -692,6 +692,13 @@ class AccessControlApi(http.Controller):
                     "raw_payload": json.dumps(item, ensure_ascii=True, default=str),
                 }
             )
+            if person:
+                person.register_access_event(
+                    occurred_at=occurred_at,
+                    result=result,
+                    site=site if site else (device.site_id if device and device.site_id else False),
+                    device=device,
+                )
             self._touch_device_telemetry(device, heartbeat=True, error_marker=True)
             received += 1
 

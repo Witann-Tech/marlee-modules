@@ -3,6 +3,7 @@ import base64
 import io
 from unittest.mock import patch
 
+from odoo import fields
 from odoo.tests.common import TransactionCase
 from odoo.exceptions import ValidationError
 
@@ -279,6 +280,25 @@ class TestFaceSyncDelta(TransactionCase):
         self.assertTrue(self.device.last_heartbeat_at)
         self.assertTrue(self.device.last_sync_at)
         self.assertFalse(self.device.last_error)
+
+    def test_register_access_event_updates_person_last_access(self):
+        _, person = self._make_person(self._make_image_b64())
+        occurred_at = fields.Datetime.now()
+
+        person.register_access_event(
+            occurred_at=occurred_at,
+            result="allowed",
+            site=self.site,
+            device=self.device,
+        )
+        person.invalidate_recordset(
+            ["last_access_at", "last_access_result", "last_access_site_id", "last_access_device_id"]
+        )
+
+        self.assertEqual(person.last_access_at, occurred_at)
+        self.assertEqual(person.last_access_result, "allowed")
+        self.assertEqual(person.last_access_site_id.id, self.site.id)
+        self.assertEqual(person.last_access_device_id.id, self.device.id)
 
     def test_partner_face_update_queues_upsert_with_face(self):
         partner, person = self._make_person(self._make_image_b64(color=(180, 40, 40)))
