@@ -10,6 +10,24 @@ _logger = logging.getLogger(__name__)
 
 class AccessControlApi(http.Controller):
 
+    def _touch_device_telemetry(self, device, heartbeat=False, sync=False, error_marker=False):
+        if not device or not device.exists():
+            return False
+        vals = {}
+        now = fields.Datetime.now()
+        if heartbeat:
+            vals["last_heartbeat_at"] = now
+        if sync:
+            vals["last_sync_at"] = now
+        if error_marker is True:
+            vals["last_error"] = False
+        elif isinstance(error_marker, str):
+            vals["last_error"] = error_marker
+        if not vals:
+            return False
+        device.sudo().write(vals)
+        return True
+
     def _site_bootstrap_result(self, site, site_code, device_serial, cursor, next_cursor, reason="bootstrap"):
         Person = site.env["access_control.person"].sudo()
         persons = Person.search(
@@ -288,6 +306,7 @@ class AccessControlApi(http.Controller):
                 "deletes": [],
             }
 
+        device = False
         if device_serial:
             Device = request.env["access_control.device"].sudo()
             device = Device.search(
@@ -316,6 +335,7 @@ class AccessControlApi(http.Controller):
 
         # Bootstrap: return full active snapshot for the site.
         if cursor <= 0:
+            self._touch_device_telemetry(device, heartbeat=True, sync=True, error_marker=True)
             return self._site_bootstrap_result(
                 site,
                 site_code,
@@ -333,6 +353,7 @@ class AccessControlApi(http.Controller):
 
         if not changes:
             if cursor > site_max_cursor:
+                self._touch_device_telemetry(device, heartbeat=True, sync=True, error_marker=True)
                 _logger.warning(
                     "sync_delta stale cursor detected site=%s device=%s cursor=%s site_max_cursor=%s; returning bootstrap snapshot",
                     site_code,
@@ -349,6 +370,7 @@ class AccessControlApi(http.Controller):
                     bootstrap_cursor,
                     reason="stale_cursor_bootstrap",
                 )
+            self._touch_device_telemetry(device, heartbeat=True, sync=True, error_marker=True)
             return {
                 "ok": True,
                 "reason": "no_changes",
@@ -409,6 +431,7 @@ class AccessControlApi(http.Controller):
 
         next_cursor = changes[-1].id
         has_more = len(changes) >= limit
+        self._touch_device_telemetry(device, heartbeat=True, sync=True, error_marker=True)
         _logger.info(
             "sync_delta site=%s device=%s cursor=%s next_cursor=%s upserts=%s deletes=%s",
             site_code,
@@ -565,6 +588,7 @@ class AccessControlApi(http.Controller):
                     "raw_payload": json.dumps(item, ensure_ascii=True, default=str),
                 }
             )
+            self._touch_device_telemetry(device, heartbeat=True, error_marker=True)
             received += 1
 
         return {

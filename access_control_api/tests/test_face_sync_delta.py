@@ -21,10 +21,18 @@ class TestFaceSyncDelta(TransactionCase):
         super().setUpClass()
         cls.controller = AccessControlApi()
         cls.Site = cls.env["access_control.site"].sudo()
+        cls.Device = cls.env["access_control.device"].sudo()
         cls.Partner = cls.env["res.partner"].sudo()
         cls.Person = cls.env["access_control.person"].sudo()
         cls.Change = cls.env["access_control.sync_change"].sudo()
         cls.site = cls.Site.create({"name": "Centro", "code": "MX-CEN"})
+        cls.device = cls.Device.create(
+            {
+                "name": "Puerta Test",
+                "device_serial": "DEV-TEST-001",
+                "site_id": cls.site.id,
+            }
+        )
 
     def setUp(self):
         super().setUp()
@@ -176,6 +184,27 @@ class TestFaceSyncDelta(TransactionCase):
         person.write({"access_state": "suspended"})
         payload = self.controller._person_sync_payload(person, include_face_pic=False, clear_face_pic=False)
         self.assertEqual(payload["accessGroup"], 0)
+
+    def test_touch_device_telemetry_updates_heartbeat_and_sync(self):
+        self.device.write(
+            {
+                "last_heartbeat_at": False,
+                "last_sync_at": False,
+                "last_error": "old",
+            }
+        )
+        updated = self.controller._touch_device_telemetry(
+            self.device,
+            heartbeat=True,
+            sync=True,
+            error_marker=True,
+        )
+        self.device.invalidate_recordset(["last_heartbeat_at", "last_sync_at", "last_error"])
+
+        self.assertTrue(updated)
+        self.assertTrue(self.device.last_heartbeat_at)
+        self.assertTrue(self.device.last_sync_at)
+        self.assertFalse(self.device.last_error)
 
     def test_partner_face_update_queues_upsert_with_face(self):
         partner, person = self._make_person(self._make_image_b64(color=(180, 40, 40)))
