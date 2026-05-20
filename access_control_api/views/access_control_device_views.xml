@@ -50,6 +50,8 @@
           <field name="device_serial"/>
           <field name="site_id"/>
           <field name="active"/>
+          <filter name="active" string="Activos" domain="[('active', '=', True)]"/>
+          <filter name="archived" string="Archivados" domain="[('active', '=', False)]"/>
         </search>
       </field>
     </record>
