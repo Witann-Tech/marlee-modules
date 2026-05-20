@@ -107,6 +107,29 @@ class TestFaceSyncDelta(TransactionCase):
         payload = self.controller._person_sync_payload(person, include_face_pic=False, clear_face_pic=False)
         self.assertNotIn("facePicB64", payload)
 
+    def test_bootstrap_helper_returns_full_snapshot(self):
+        _, person = self._make_person(self._make_image_b64())
+        result = self.controller._site_bootstrap_result(
+            self.site,
+            self.site.code,
+            "DEV-001",
+            3303,
+            3303,
+            reason="stale_cursor_bootstrap",
+        )
+
+        self.assertEqual(result["reason"], "stale_cursor_bootstrap")
+        self.assertEqual(result["cursor"], 3303)
+        self.assertEqual(result["nextCursor"], 3303)
+        self.assertEqual(result["deviceSerial"], "DEV-001")
+        self.assertEqual(len(result["upserts"]), 1)
+        self.assertEqual(result["upserts"][0]["globalUserId"], person.global_user_id)
+        self.assertIn("facePicB64", result["upserts"][0])
+
+    def test_stale_cursor_reuses_client_cursor_when_queue_is_empty(self):
+        self.assertEqual(self.controller._bootstrap_cursor_for_stale_state(3303, 0), 3303)
+        self.assertEqual(self.controller._bootstrap_cursor_for_stale_state(3303, 120), 120)
+
     def test_suspended_person_uses_zero_access_group(self):
         _, person = self._make_person(self._make_image_b64())
         person.write({"access_state": "suspended"})

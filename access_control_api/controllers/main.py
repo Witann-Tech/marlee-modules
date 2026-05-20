@@ -10,6 +10,39 @@ _logger = logging.getLogger(__name__)
 
 class AccessControlApi(http.Controller):
 
+    def _site_bootstrap_result(self, site, site_code, device_serial, cursor, next_cursor, reason="bootstrap"):
+        Person = site.env["access_control.person"].sudo()
+        persons = Person.search(
+            [
+                ("active", "=", True),
+                ("global_user_id", "!=", False),
+                ("site_ids", "in", site.id),
+            ],
+            order="global_user_id asc",
+        )
+        upserts = [
+            self._person_sync_payload(
+                person,
+                include_face_pic=True,
+                clear_face_pic=not bool(person.face_pic_b64),
+            )
+            for person in persons
+        ]
+        return {
+            "ok": True,
+            "reason": reason,
+            "siteCode": site_code,
+            "deviceSerial": device_serial or None,
+            "cursor": cursor,
+            "nextCursor": next_cursor,
+            "hasMore": False,
+            "upserts": upserts,
+            "deletes": [],
+        }
+
+    def _bootstrap_cursor_for_stale_state(self, cursor, max_cursor):
+        return cursor if max_cursor <= 0 else max_cursor
+
     def _is_valid_user_api_key(self, token):
         """Support Odoo user API keys created from user preferences."""
         ApiKeys = request.env["res.users.apikeys"].sudo()
@@ -275,30 +308,18 @@ class AccessControlApi(http.Controller):
 
         Person = request.env["access_control.person"].sudo()
         Change = request.env["access_control.sync_change"].sudo()
+        max_cursor = Change.search([], order="id desc", limit=1).id or 0
 
         # Bootstrap: return full active snapshot for the site.
         if cursor <= 0:
-            persons = Person.search(
-                [
-                    ("active", "=", True),
-                    ("global_user_id", "!=", False),
-                    ("site_ids", "in", site.id),
-                ],
-                order="global_user_id asc",
+            return self._site_bootstrap_result(
+                site,
+                site_code,
+                device_serial,
+                cursor,
+                max_cursor,
+                reason="bootstrap",
             )
-            upserts = [self._person_sync_payload(p, include_face_pic=True, clear_face_pic=not bool(p.face_pic_b64)) for p in persons]
-            max_cursor = Change.search([], order="id desc", limit=1).id or 0
-            return {
-                "ok": True,
-                "reason": "bootstrap",
-                "siteCode": site_code,
-                "deviceSerial": device_serial or None,
-                "cursor": cursor,
-                "nextCursor": max_cursor,
-                "hasMore": False,
-                "upserts": upserts,
-                "deletes": [],
-            }
 
         changes = Change.search(
             [("site_id", "=", site.id), ("id", ">", cursor)],
@@ -307,6 +328,23 @@ class AccessControlApi(http.Controller):
         )
 
         if not changes:
+            if cursor > max_cursor:
+                _logger.warning(
+                    "sync_delta stale cursor detected site=%s device=%s cursor=%s max_cursor=%s; returning bootstrap snapshot",
+                    site_code,
+                    device_serial or None,
+                    cursor,
+                    max_cursor,
+                )
+                bootstrap_cursor = self._bootstrap_cursor_for_stale_state(cursor, max_cursor)
+                return self._site_bootstrap_result(
+                    site,
+                    site_code,
+                    device_serial,
+                    cursor,
+                    bootstrap_cursor,
+                    reason="stale_cursor_bootstrap",
+                )
             return {
                 "ok": True,
                 "reason": "no_changes",
