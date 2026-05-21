@@ -23,10 +23,12 @@ class ResPartner(models.Model):
         "access_control.person",
         "partner_id",
         string="Control de acceso",
+        groups="access_control_api.group_access_control_contact_access",
     )
     camera_capture_helper = fields.Char(
         string="Captura de foto",
         compute="_compute_camera_capture_helper",
+        groups="access_control_api.group_access_control_contact_access",
     )
 
     @api.model
@@ -131,9 +133,11 @@ class ResPartner(models.Model):
 
     @api.onchange("image_1920")
     def _onchange_image_1920_sync_access_people(self):
+        Person = self.env["access_control.person"].sudo()
         for partner in self:
             img = partner._prepare_biometric_face_b64(partner.image_1920, log_context=f"partner_onchange:{partner.id or 'new'}")
-            for person in partner.access_person_ids:
+            people = Person.search([("partner_id", "=", partner.id)])
+            for person in people:
                 person.face_image = img
                 person.face_pic_b64 = img
 
