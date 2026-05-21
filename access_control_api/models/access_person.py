@@ -17,6 +17,12 @@ class AccessPerson(models.Model):
         string="Estado de acceso",
     )
     managed_by_subscription = fields.Boolean(string="Gestionado por suscripción", default=False, index=True)
+    access_origin = fields.Selection(
+        [("manual", "Manual"), ("subscription", "Suscripción")],
+        string="Origen",
+        compute="_compute_access_origin",
+        store=False,
+    )
 
     name = fields.Char(related="partner_id.name", store=True, readonly=True, index=True)
 
@@ -55,6 +61,11 @@ class AccessPerson(models.Model):
                 or rec.face_image
                 or rec.partner_face_image
             )
+
+    @api.depends("managed_by_subscription")
+    def _compute_access_origin(self):
+        for rec in self:
+            rec.access_origin = "subscription" if rec.managed_by_subscription else "manual"
 
     @api.model
     def _used_global_user_ids(self):

@@ -8,6 +8,7 @@
         <list string="Personas">
           <field name="active"/>
           <field name="partner_id"/>
+          <field name="access_origin" readonly="1"/>
           <field name="global_user_id" readonly="active"/>
           <field name="site_ids" widget="many2many_tags"/>
           <field name="last_access_at" readonly="1"/>
@@ -30,6 +31,7 @@
             <group>
               <field name="active" widget="boolean_toggle"/>
               <field name="partner_id" required="1"/>
+              <field name="access_origin" readonly="1"/>
               <field name="global_user_id" readonly="active"/>
               <field name="site_ids" widget="many2many_tags" options="{'no_create_edit': False}"/>
               <field name="last_access_at" readonly="1"/>

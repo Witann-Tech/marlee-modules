@@ -19,6 +19,7 @@
             <field name="access_person_ids" context="{'default_partner_id': id}" nolabel="1">
               <list editable="bottom" string="Personas de acceso">
                 <field name="active"/>
+                <field name="access_origin" readonly="1"/>
                 <field name="global_user_id"/>
                 <field name="site_ids" widget="many2many_tags"/>
                 <field name="last_access_at" readonly="1"/>
@@ -28,6 +29,7 @@
                 <sheet>
                   <group>
                     <field name="active" widget="boolean_toggle"/>
+                    <field name="access_origin" readonly="1"/>
                     <field name="global_user_id"/>
                     <field name="site_ids" widget="many2many_tags"/>
                     <field name="last_access_at" readonly="1"/>
