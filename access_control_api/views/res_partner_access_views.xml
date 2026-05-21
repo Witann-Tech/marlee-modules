@@ -15,7 +15,7 @@
           </div>
         </xpath>
         <xpath expr="//notebook" position="inside">
-          <page string="Control de Acceso">
+          <page string="Control de Acceso" groups="access_control_api.group_access_control_contact_access">
             <field name="access_person_ids" context="{'default_partner_id': id}" nolabel="1">
               <list editable="bottom" string="Personas de acceso">
                 <field name="active"/>

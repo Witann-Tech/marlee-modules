@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+  <data noupdate="0">
+    <record id="group_access_control_contact_access" model="res.groups">
+      <field name="name">Control de acceso en contactos</field>
+      <field name="category_id" ref="base.module_category_hidden"/>
+      <field name="implied_ids" eval="[(4, ref('base.group_user'))]"/>
+      <field name="comment">Puede ver y administrar la pestaña Control de Acceso en contactos.</field>
+    </record>
+  </data>
+</odoo>
