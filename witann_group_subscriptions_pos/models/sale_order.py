@@ -1,5 +1,5 @@
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 
 from dateutil.relativedelta import relativedelta
 
@@ -484,6 +484,124 @@ class SaleOrder(models.Model):
             'ok': True,
             'partner_id': partner.id,
             'image_url': '/web/image/res.partner/%s/image_128?unique=%s' % (partner.id, fields.Datetime.now().timestamp()),
+        }
+
+    @api.model
+    def _wgs_parse_access_log_datetime_for_pos(self, value, fallback):
+        if not value:
+            return fallback
+        try:
+            parsed = fields.Datetime.to_datetime(value)
+        except Exception:
+            return fallback
+        return parsed or fallback
+
+    @api.model
+    def _wgs_get_pos_access_sites_for_pos(self, company):
+        Site = self.env['access_control.site'].sudo()
+        if not company:
+            return Site.browse()
+        return Site.search([
+            ('active', '=', True),
+            ('company_id', '=', company.id),
+        ], order='name asc, id asc')
+
+    @api.model
+    def wgs_get_access_event_log_for_pos(self, options=False):
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar la bitácora de accesos desde Punto de Venta.'))
+
+        data = dict(options or {})
+        try:
+            company_id = int(data.get('company_id') or 0)
+        except (TypeError, ValueError):
+            company_id = 0
+        company = self.env['res.company'].sudo().browse(company_id).exists() if company_id else self.env.company
+        sites = self._wgs_get_pos_access_sites_for_pos(company)
+        Device = self.env['access_control.device'].sudo()
+        devices = Device.search(
+            [('site_id', 'in', sites.ids), ('active', '=', True)],
+            order='name asc, device_serial asc, id asc',
+        ) if sites else Device.browse()
+
+        try:
+            limit = int(data.get('limit') or 100)
+        except (TypeError, ValueError):
+            limit = 100
+        limit = min(max(limit, 1), 500)
+
+        today = fields.Date.context_today(self)
+        default_from = datetime.combine(today, time.min)
+        default_to = datetime.combine(today + timedelta(days=1), time.min)
+        from_dt = self._wgs_parse_access_log_datetime_for_pos(data.get('from'), default_from)
+        to_dt = self._wgs_parse_access_log_datetime_for_pos(data.get('to'), default_to)
+        if to_dt <= from_dt:
+            to_dt = from_dt + timedelta(days=1)
+        to_dt_exclusive = to_dt + timedelta(minutes=1)
+
+        domain = [
+            ('site_id', 'in', sites.ids),
+            ('occurred_at', '>=', fields.Datetime.to_string(from_dt)),
+            ('occurred_at', '<', fields.Datetime.to_string(to_dt_exclusive)),
+        ]
+        result_filter = data.get('result') or 'all'
+        if result_filter in ('allowed', 'denied', 'error'):
+            domain.append(('result', '=', result_filter))
+
+        try:
+            device_id = int(data.get('device_id') or 0)
+        except (TypeError, ValueError):
+            device_id = 0
+        if device_id and device_id in devices.ids:
+            domain.append(('device_id', '=', device_id))
+
+        Event = self.env['access_control.access_event'].sudo()
+        events = Event.search(domain, order='occurred_at desc, id desc', limit=limit)
+        total = Event.search_count(domain)
+        result_labels = {
+            'allowed': _('Exitoso'),
+            'denied': _('Fallido'),
+            'error': _('Error'),
+        }
+
+        rows = []
+        for event in events:
+            partner = event.person_id.partner_id if event.person_id and event.person_id.partner_id else False
+            rows.append({
+                'id': event.id,
+                'event_id': event.event_id or False,
+                'occurred_at': fields.Datetime.to_string(event.occurred_at) if event.occurred_at else False,
+                'site_id': event.site_id.id if event.site_id else False,
+                'site_name': event.site_id.display_name if event.site_id else False,
+                'device_id': event.device_id.id if event.device_id else False,
+                'device_name': event.device_id.display_name if event.device_id else (event.device_serial or False),
+                'device_serial': event.device_serial or (event.device_id.device_serial if event.device_id else False),
+                'partner_id': partner.id if partner else False,
+                'partner_name': partner.display_name if partner else (
+                    _('Usuario global %s') % event.global_user_id if event.global_user_id else _('Sin identificar')
+                ),
+                'global_user_id': event.global_user_id or False,
+                'result': event.result or False,
+                'result_label': result_labels.get(event.result, event.result or '-'),
+            })
+
+        return {
+            'ok': True,
+            'company_id': company.id if company else False,
+            'site_ids': sites.ids,
+            'site_names': sites.mapped('display_name'),
+            'devices': [
+                {
+                    'id': device.id,
+                    'name': device.display_name,
+                    'serial': device.device_serial or False,
+                    'site_id': device.site_id.id if device.site_id else False,
+                    'site_name': device.site_id.display_name if device.site_id else False,
+                }
+                for device in devices
+            ],
+            'rows': rows,
+            'total': total,
+            'limit': limit,
         }
 
     @api.model
