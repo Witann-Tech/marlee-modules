@@ -29,6 +29,15 @@ class AccessControlApi(http.Controller):
         device.sudo().write(vals)
         return True
 
+    def _mark_people_synced(self, people, synced_at=None):
+        people = people.exists() if people else people
+        if not people:
+            return False
+        people.with_context(skip_access_sync_queue=True).sudo().write(
+            {"last_sf_sync_at": synced_at or fields.Datetime.now()}
+        )
+        return True
+
     def _bootstrap_cursor_encode(self, snapshot_cursor, offset):
         snapshot_cursor = max(0, int(snapshot_cursor or 0))
         offset = max(0, int(offset or 0))
@@ -66,6 +75,7 @@ class AccessControlApi(http.Controller):
             )
             for person in persons
         ]
+        self._mark_people_synced(persons)
         next_offset = offset + len(upserts)
         has_more = next_offset < total
         next_cursor = (
@@ -109,6 +119,7 @@ class AccessControlApi(http.Controller):
             )
             for person in persons
         ]
+        self._mark_people_synced(persons)
         next_offset = offset + len(upserts)
         has_more = next_offset < total
         next_cursor = (
@@ -513,15 +524,20 @@ class AccessControlApi(http.Controller):
 
         upserts = []
         deletes = []
+        synced_people = Person.browse()
         for gid, state in sorted(latest_by_gid.items()):
             change = state["change"]
             if change.action == "delete":
                 deletes.append({"globalUserId": gid})
+                if change.person_id.exists():
+                    synced_people |= change.person_id
                 continue
 
             person = change.person_id
             if not person.exists() or not person.active or not person.global_user_id or site.id not in person.site_ids.ids:
                 deletes.append({"globalUserId": gid})
+                if person.exists():
+                    synced_people |= person
                 continue
 
             upserts.append(
@@ -531,9 +547,11 @@ class AccessControlApi(http.Controller):
                     clear_face_pic=bool(include_biophoto and state["clear_face_pic"]),
                 )
             )
+            synced_people |= person
 
         next_cursor = changes[-1].id
         has_more = len(changes) >= limit
+        self._mark_people_synced(synced_people)
         self._touch_device_telemetry(device, heartbeat=True, sync=True, error_marker=True)
         _logger.info(
             "sync_delta site=%s device=%s cursor=%s next_cursor=%s upserts=%s deletes=%s include_biophoto=%s",
