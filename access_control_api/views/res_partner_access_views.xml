@@ -6,7 +6,7 @@
       <field name="model">res.partner</field>
       <field name="inherit_id" ref="base.view_partner_tree"/>
       <field name="arch" type="xml">
-        <xpath expr="//field[@name='name']" position="after">
+        <xpath expr="//list" position="inside">
           <field name="access_global_user_id" optional="hide" groups="access_control_api.group_access_control_contact_access"/>
           <field name="access_origin" optional="hide" groups="access_control_api.group_access_control_contact_access"/>
           <field name="access_last_access_at" optional="hide" groups="access_control_api.group_access_control_contact_access"/>
