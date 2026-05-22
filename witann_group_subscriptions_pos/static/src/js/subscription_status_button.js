@@ -624,6 +624,10 @@ patch(ControlButtons.prototype, {
         closeButton.textContent = _t("Cerrar");
         const closeModal = () => {
             stopPartnerCamera();
+            if (resyncAccessCooldownTimer) {
+                window.clearInterval(resyncAccessCooldownTimer);
+                resyncAccessCooldownTimer = null;
+            }
             overlay.remove();
         };
         closeButton.addEventListener("click", closeModal);
@@ -707,6 +711,9 @@ patch(ControlButtons.prototype, {
         let accessLogLoading = false;
         let accessLogError = "";
         let accessLogLoaded = false;
+        let resyncAccessCooldownTimer = null;
+        const resyncAccessLoadingIds = new Set();
+        const resyncAccessCooldowns = new Map();
         const detailCache = new Map();
         let newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
         const modalState = {
@@ -839,6 +846,63 @@ patch(ControlButtons.prototype, {
             if (!showDirectory) {
                 renderAccessLog();
             }
+        };
+
+        const cleanupResyncAccessCooldowns = () => {
+            const now = Date.now();
+            for (const [subscriptionId, expiresAt] of resyncAccessCooldowns.entries()) {
+                if (!expiresAt || expiresAt <= now) {
+                    resyncAccessCooldowns.delete(subscriptionId);
+                }
+            }
+        };
+
+        const getResyncAccessState = (subscriptionId) => {
+            const numericId = Number(subscriptionId || 0);
+            cleanupResyncAccessCooldowns();
+            const expiresAt = resyncAccessCooldowns.get(numericId) || 0;
+            return {
+                loading: resyncAccessLoadingIds.has(numericId),
+                remainingSeconds: expiresAt > Date.now() ? Math.ceil((expiresAt - Date.now()) / 1000) : 0,
+            };
+        };
+
+        const ensureResyncAccessCooldownTicker = () => {
+            if (resyncAccessCooldownTimer) {
+                return;
+            }
+            resyncAccessCooldownTimer = window.setInterval(() => {
+                cleanupResyncAccessCooldowns();
+                if (!resyncAccessCooldowns.size) {
+                    window.clearInterval(resyncAccessCooldownTimer);
+                    resyncAccessCooldownTimer = null;
+                }
+                if (currentDetail && activeTab === "directory") {
+                    renderDetailPreservingFocus(currentDetail);
+                }
+            }, 1000);
+        };
+
+        const setResyncAccessLoading = (subscriptionId, loading) => {
+            const numericId = Number(subscriptionId || 0);
+            if (!numericId) {
+                return;
+            }
+            if (loading) {
+                resyncAccessLoadingIds.add(numericId);
+            } else {
+                resyncAccessLoadingIds.delete(numericId);
+            }
+        };
+
+        const startResyncAccessCooldown = (subscriptionId, cooldownSeconds) => {
+            const numericId = Number(subscriptionId || 0);
+            const seconds = Math.max(1, Number(cooldownSeconds || 60));
+            if (!numericId) {
+                return;
+            }
+            resyncAccessCooldowns.set(numericId, Date.now() + seconds * 1000);
+            ensureResyncAccessCooldownTicker();
         };
 
         const getDirectoryCriteria = () => ({
@@ -1464,6 +1528,7 @@ patch(ControlButtons.prototype, {
                 renderUpsaleForm,
                 renderNewSubscriptionForm,
                 getStateClass: (state) => this._getStateClass(state),
+                getResyncAccessState,
                 formMode,
                 partnerPhotoForm,
                 partnerEditForm,
@@ -1715,6 +1780,9 @@ patch(ControlButtons.prototype, {
                 openUpsaleForm,
                 openParticipantEditForm,
                 fetchResyncAccess: (subscriptionId) => this._resyncSubscriptionAccess(subscriptionId),
+                getResyncAccessState,
+                setResyncAccessLoading,
+                startResyncAccessCooldown,
                 loadDetail,
                 detailCache,
                 getCurrentSubscriptionItem,
@@ -2370,6 +2438,24 @@ patch(ControlButtons.prototype, {
             .wgs-action-btn:disabled {
                 opacity: 0.7;
                 cursor: not-allowed;
+            }
+            .wgs-action-loading {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                gap: 0.45rem;
+            }
+            .wgs-action-loading::before {
+                content: "";
+                width: 0.85rem;
+                height: 0.85rem;
+                border: 2px solid #cbd5e1;
+                border-top-color: #0f766e;
+                border-radius: 999px;
+                animation: wgs-spin 0.8s linear infinite;
+            }
+            @keyframes wgs-spin {
+                to { transform: rotate(360deg); }
             }
             .wgs-detail-note {
                 font-size: 0.8rem;

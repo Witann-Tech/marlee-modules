@@ -642,6 +642,7 @@ class SaleOrder(models.Model):
             'ok': True,
             'subscription_id': subscription.id,
             'access_summary': subscription._wgs_get_access_people_summary_for_pos(),
+            'cooldown_seconds': self._WGS_POS_ACCESS_RESYNC_COOLDOWN_SECONDS,
         }
 
     def _wgs_get_access_people_summary_for_pos(self):

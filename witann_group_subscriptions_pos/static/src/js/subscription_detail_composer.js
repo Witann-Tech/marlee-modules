@@ -8,6 +8,7 @@ function renderSubscriptionCards(detail, {
     renderRenewalForm,
     renderUpsaleForm,
     getStateClass,
+    getResyncAccessState,
     escapeHtml,
     formatDateDisplay,
     formatMoney,
@@ -44,6 +45,9 @@ function renderSubscriptionCards(detail, {
             accessSummary,
             accessSiteLabel,
             inlineFormsHtml,
+            resyncAccessState: typeof getResyncAccessState === "function"
+                ? getResyncAccessState(item.subscription_id)
+                : {},
             escapeHtml,
             formatDateDisplay,
             formatMoney,
@@ -61,6 +65,7 @@ function renderDetailContent(detail, {
     renderUpsaleForm,
     renderNewSubscriptionForm,
     getStateClass,
+    getResyncAccessState,
     formMode,
     partnerPhotoForm,
     partnerEditForm,
@@ -93,6 +98,7 @@ function renderDetailContent(detail, {
         renderRenewalForm,
         renderUpsaleForm,
         getStateClass,
+        getResyncAccessState,
         escapeHtml,
         formatDateDisplay,
         formatMoney,

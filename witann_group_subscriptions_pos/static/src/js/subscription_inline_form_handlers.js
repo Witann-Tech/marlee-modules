@@ -213,6 +213,9 @@ function buildSubscriptionInlineActionHandlers({
     openUpsaleForm,
     openParticipantEditForm,
     fetchResyncAccess,
+    getResyncAccessState,
+    setResyncAccessLoading,
+    startResyncAccessCooldown,
     loadDetail,
     detailCache,
     getCurrentSubscriptionItem,
@@ -254,9 +257,20 @@ function buildSubscriptionInlineActionHandlers({
                 return;
             }
             clearFeedback();
+            const resyncState = typeof getResyncAccessState === "function" ? getResyncAccessState(subscriptionId) : {};
+            if (resyncState.loading || Number(resyncState.remainingSeconds || 0) > 0) {
+                return;
+            }
+            if (typeof setResyncAccessLoading === "function") {
+                setResyncAccessLoading(subscriptionId, true);
+            }
+            renderDetail(state.currentDetail);
             try {
                 const result = await fetchResyncAccess(subscriptionId);
                 const summary = result && result.access_summary ? result.access_summary : {};
+                if (typeof startResyncAccessCooldown === "function") {
+                    startResyncAccessCooldown(subscriptionId, Number(result && result.cooldown_seconds ? result.cooldown_seconds : 60));
+                }
                 state.formNotice = _t("Acceso resincronizado. Personas activas: %s. Personas sin registro: %s.")
                     .replace("%s", String(summary.active_count || 0))
                     .replace("%s", String(summary.missing_count || 0));
@@ -267,6 +281,11 @@ function buildSubscriptionInlineActionHandlers({
             } catch (error) {
                 console.error("Error al resincronizar acceso desde POS", error);
                 state.formError = (error && error.message) ? error.message : _t("No se pudo resincronizar el acceso de esta suscripción.");
+                renderDetail(state.currentDetail);
+            } finally {
+                if (typeof setResyncAccessLoading === "function") {
+                    setResyncAccessLoading(subscriptionId, false);
+                }
                 renderDetail(state.currentDetail);
             }
         },
