@@ -33,8 +33,14 @@ class AccessControlApi(http.Controller):
         people = people.exists() if people else people
         if not people:
             return False
-        people.with_context(skip_access_sync_queue=True).sudo().write(
-            {"last_sf_sync_at": synced_at or fields.Datetime.now()}
+        synced_at = synced_at or fields.Datetime.now()
+        pins = people.mapped("global_user_id")
+        people.with_context(skip_access_sync_queue=True).sudo().write({"last_sf_sync_at": synced_at})
+        _logger.info(
+            "access_sync marked_last_sf_sync person_ids=%s pins=%s synced_at=%s",
+            people.ids,
+            pins,
+            fields.Datetime.to_string(synced_at),
         )
         return True
 
@@ -531,9 +537,15 @@ class AccessControlApi(http.Controller):
                 deletes.append({"globalUserId": gid})
                 if change.person_id.exists():
                     synced_people |= change.person_id
+                else:
+                    person = Person.search([("global_user_id", "=", gid)], limit=1)
+                    if person:
+                        synced_people |= person
                 continue
 
             person = change.person_id
+            if not person.exists():
+                person = Person.search([("global_user_id", "=", gid)], limit=1)
             if not person.exists() or not person.active or not person.global_user_id or site.id not in person.site_ids.ids:
                 deletes.append({"globalUserId": gid})
                 if person.exists():
