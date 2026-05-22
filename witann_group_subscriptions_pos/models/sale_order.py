@@ -1,16 +1,17 @@
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 
 from dateutil.relativedelta import relativedelta
 
 from odoo import _, api, fields, models
-from odoo.exceptions import AccessError, ValidationError
+from odoo.exceptions import AccessError, UserError, ValidationError
 
 _logger = logging.getLogger(__name__)
 
 
 class SaleOrder(models.Model):
     _inherit = 'sale.order'
+    _WGS_POS_ACCESS_RESYNC_COOLDOWN_SECONDS = 60
     _WGS_POS_SUBSCRIPTION_STATE_PRIORITY = {
         'progress': 0,
         'renew': 1,
@@ -486,6 +487,124 @@ class SaleOrder(models.Model):
         }
 
     @api.model
+    def _wgs_parse_access_log_datetime_for_pos(self, value, fallback):
+        if not value:
+            return fallback
+        try:
+            parsed = fields.Datetime.to_datetime(value)
+        except Exception:
+            return fallback
+        return parsed or fallback
+
+    @api.model
+    def _wgs_get_pos_access_sites_for_pos(self, company):
+        Site = self.env['access_control.site'].sudo()
+        if not company:
+            return Site.browse()
+        return Site.search([
+            ('active', '=', True),
+            ('company_id', '=', company.id),
+        ], order='name asc, id asc')
+
+    @api.model
+    def wgs_get_access_event_log_for_pos(self, options=False):
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar la bitácora de accesos desde Punto de Venta.'))
+
+        data = dict(options or {})
+        try:
+            company_id = int(data.get('company_id') or 0)
+        except (TypeError, ValueError):
+            company_id = 0
+        company = self.env['res.company'].sudo().browse(company_id).exists() if company_id else self.env.company
+        sites = self._wgs_get_pos_access_sites_for_pos(company)
+        Device = self.env['access_control.device'].sudo()
+        devices = Device.search(
+            [('site_id', 'in', sites.ids), ('active', '=', True)],
+            order='name asc, device_serial asc, id asc',
+        ) if sites else Device.browse()
+
+        try:
+            limit = int(data.get('limit') or 100)
+        except (TypeError, ValueError):
+            limit = 100
+        limit = min(max(limit, 1), 500)
+
+        today = fields.Date.context_today(self)
+        default_from = datetime.combine(today, time.min)
+        default_to = datetime.combine(today + timedelta(days=1), time.min)
+        from_dt = self._wgs_parse_access_log_datetime_for_pos(data.get('from'), default_from)
+        to_dt = self._wgs_parse_access_log_datetime_for_pos(data.get('to'), default_to)
+        if to_dt <= from_dt:
+            to_dt = from_dt + timedelta(days=1)
+        to_dt_exclusive = to_dt + timedelta(minutes=1)
+
+        domain = [
+            ('site_id', 'in', sites.ids),
+            ('occurred_at', '>=', fields.Datetime.to_string(from_dt)),
+            ('occurred_at', '<', fields.Datetime.to_string(to_dt_exclusive)),
+        ]
+        result_filter = data.get('result') or 'all'
+        if result_filter in ('allowed', 'denied', 'error'):
+            domain.append(('result', '=', result_filter))
+
+        try:
+            device_id = int(data.get('device_id') or 0)
+        except (TypeError, ValueError):
+            device_id = 0
+        if device_id and device_id in devices.ids:
+            domain.append(('device_id', '=', device_id))
+
+        Event = self.env['access_control.access_event'].sudo()
+        events = Event.search(domain, order='occurred_at desc, id desc', limit=limit)
+        total = Event.search_count(domain)
+        result_labels = {
+            'allowed': _('Exitoso'),
+            'denied': _('Fallido'),
+            'error': _('Error'),
+        }
+
+        rows = []
+        for event in events:
+            partner = event.person_id.partner_id if event.person_id and event.person_id.partner_id else False
+            rows.append({
+                'id': event.id,
+                'event_id': event.event_id or False,
+                'occurred_at': fields.Datetime.to_string(event.occurred_at) if event.occurred_at else False,
+                'site_id': event.site_id.id if event.site_id else False,
+                'site_name': event.site_id.display_name if event.site_id else False,
+                'device_id': event.device_id.id if event.device_id else False,
+                'device_name': event.device_id.display_name if event.device_id else (event.device_serial or False),
+                'device_serial': event.device_serial or (event.device_id.device_serial if event.device_id else False),
+                'partner_id': partner.id if partner else False,
+                'partner_name': partner.display_name if partner else (
+                    _('Usuario global %s') % event.global_user_id if event.global_user_id else _('Sin identificar')
+                ),
+                'global_user_id': event.global_user_id or False,
+                'result': event.result or False,
+                'result_label': result_labels.get(event.result, event.result or '-'),
+            })
+
+        return {
+            'ok': True,
+            'company_id': company.id if company else False,
+            'site_ids': sites.ids,
+            'site_names': sites.mapped('display_name'),
+            'devices': [
+                {
+                    'id': device.id,
+                    'name': device.display_name,
+                    'serial': device.device_serial or False,
+                    'site_id': device.site_id.id if device.site_id else False,
+                    'site_name': device.site_id.display_name if device.site_id else False,
+                }
+                for device in devices
+            ],
+            'rows': rows,
+            'total': total,
+            'limit': limit,
+        }
+
+    @api.model
     def wgs_resync_subscription_access_for_pos(self, subscription_id):
         self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para resincronizar acceso desde Punto de Venta.'))
 
@@ -494,6 +613,21 @@ class SaleOrder(models.Model):
             raise AccessError(_('La suscripción seleccionada no existe.'))
         if not subscription._is_subscription_record_for_pos():
             raise AccessError(_('La orden seleccionada no corresponde a una suscripción válida.'))
+
+        self.env.cr.execute('SELECT id FROM sale_order WHERE id = %s FOR UPDATE', [subscription.id])
+        ICP = self.env['ir.config_parameter'].sudo()
+        cooldown_key = 'witann_group_subscriptions_pos.access_resync_last_at.%s' % subscription.id
+        now = fields.Datetime.now()
+        last_resync_raw = ICP.get_param(cooldown_key)
+        last_resync = fields.Datetime.to_datetime(last_resync_raw) if last_resync_raw else False
+        if last_resync:
+            elapsed = (now - last_resync).total_seconds()
+            remaining = int(self._WGS_POS_ACCESS_RESYNC_COOLDOWN_SECONDS - elapsed)
+            if remaining > 0:
+                raise UserError(
+                    _('Espera %s segundos antes de volver a resincronizar el acceso de esta suscripción.') % remaining
+                )
+        ICP.set_param(cooldown_key, fields.Datetime.to_string(now))
 
         if hasattr(subscription, '_ensure_subscription_owner_is_participant'):
             subscription._ensure_subscription_owner_is_participant()
@@ -508,6 +642,7 @@ class SaleOrder(models.Model):
             'ok': True,
             'subscription_id': subscription.id,
             'access_summary': subscription._wgs_get_access_people_summary_for_pos(),
+            'cooldown_seconds': self._WGS_POS_ACCESS_RESYNC_COOLDOWN_SECONDS,
         }
 
     def _wgs_get_access_people_summary_for_pos(self):
@@ -682,6 +817,16 @@ class SaleOrder(models.Model):
 
         today = fields.Date.context_today(self)
         subscriptions_by_partner = self._get_pos_subscription_orders_by_partners(partners)
+        access_last_map = {}
+        if include_profile_fields:
+            try:
+                access_last_map = self._get_access_person_last_access_map_for_pos(partners)
+            except Exception as error:
+                self._wgs_raise_pos_data_error(
+                    _('No se pudo consultar la información de acceso para construir el directorio de suscripciones.'),
+                    error=error,
+                    partner_ids=partners.ids,
+                )
 
         result = {}
         for partner in partners:
@@ -743,6 +888,8 @@ class SaleOrder(models.Model):
                 except Exception as error:
                     _logger.warning('WGS POS: partner last access fallback for partner %s (%s)', partner.id, error)
                     last_access_value = False
+                if not last_access_value:
+                    last_access_value = access_last_map.get(partner.id)
 
                 values.update({
                     'phone': phone_value or False,

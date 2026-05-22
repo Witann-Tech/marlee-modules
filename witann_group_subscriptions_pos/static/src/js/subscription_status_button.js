@@ -57,6 +57,12 @@ import {
     renderDirectorySummary,
 } from "./subscription_directory_render";
 import {
+    getTodayAccessLogRange,
+    localDateTimeInputToUtcString,
+    renderAccessLogContent,
+    renderAccessLogToolbar,
+} from "./subscription_access_log_render";
+import {
     countDirectoryRows,
     filterDirectoryRows,
     sortDirectoryRows,
@@ -437,6 +443,13 @@ patch(ControlButtons.prototype, {
             <p class="wgs-subtitle">${this._escapeHtml(_t("Directorio de clientes con detalle de suscripciones nativas, participantes y datos clave."))}</p>
         `;
 
+        const tabs = document.createElement("div");
+        tabs.className = "wgs-status-tabs";
+        tabs.innerHTML = `
+            <button type="button" class="wgs-status-tab wgs-status-tab-active" data-tab="directory">${this._escapeHtml(_t("Directorio"))}</button>
+            <button type="button" class="wgs-status-tab" data-tab="access_log">${this._escapeHtml(_t("Bitacora de accesos"))}</button>
+        `;
+
         const toolbar = document.createElement("div");
         toolbar.className = "wgs-status-toolbar";
         toolbar.innerHTML = `
@@ -467,6 +480,9 @@ patch(ControlButtons.prototype, {
             </select>
             <button type="button" class="wgs-status-close-btn wgs-btn-export">${this._escapeHtml(_t("Descargar XLS"))}</button>
         `;
+
+        const accessLogToolbar = document.createElement("div");
+        accessLogToolbar.className = "wgs-access-log-toolbar-shell";
 
         const summary = document.createElement("div");
         summary.className = "wgs-status-summary";
@@ -528,6 +544,9 @@ patch(ControlButtons.prototype, {
         layout.appendChild(listPane);
         layout.appendChild(detailPane);
         body.appendChild(layout);
+
+        const accessLogBody = document.createElement("div");
+        accessLogBody.className = "wgs-access-log-body";
 
         let activeCameraStream = null;
         const stopPartnerCamera = () => {
@@ -605,15 +624,22 @@ patch(ControlButtons.prototype, {
         closeButton.textContent = _t("Cerrar");
         const closeModal = () => {
             stopPartnerCamera();
+            if (resyncAccessCooldownTimer) {
+                window.clearInterval(resyncAccessCooldownTimer);
+                resyncAccessCooldownTimer = null;
+            }
             overlay.remove();
         };
         closeButton.addEventListener("click", closeModal);
         footer.appendChild(closeButton);
 
         modal.appendChild(header);
+        modal.appendChild(tabs);
         modal.appendChild(toolbar);
+        modal.appendChild(accessLogToolbar);
         modal.appendChild(summary);
         modal.appendChild(body);
+        modal.appendChild(accessLogBody);
         modal.appendChild(footer);
         overlay.appendChild(modal);
 
@@ -647,6 +673,7 @@ patch(ControlButtons.prototype, {
 
         let filteredSnapshot = [...rows];
         let selectedPartnerId = rows[0] ? rows[0].id : false;
+        let activeTab = "directory";
         let detailRequestToken = 0;
         let currentDetail = null;
         let directoryLoading = false;
@@ -672,6 +699,21 @@ patch(ControlButtons.prototype, {
         let newPartnerForm = null;
         let partnerPhotoForm = null;
         let partnerEditForm = null;
+        let accessLogFilters = {
+            ...getTodayAccessLogRange(),
+            result: "all",
+            deviceId: "",
+        };
+        let accessLogRows = [];
+        let accessLogDevices = [];
+        let accessLogSiteNames = [];
+        let accessLogTotal = 0;
+        let accessLogLoading = false;
+        let accessLogError = "";
+        let accessLogLoaded = false;
+        let resyncAccessCooldownTimer = null;
+        const resyncAccessLoadingIds = new Set();
+        const resyncAccessCooldowns = new Map();
         const detailCache = new Map();
         let newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
         const modalState = {
@@ -772,6 +814,97 @@ patch(ControlButtons.prototype, {
             });
         };
 
+        const renderAccessLog = () => {
+            accessLogToolbar.innerHTML = renderAccessLogToolbar({
+                filters: accessLogFilters,
+                devices: accessLogDevices,
+                escapeHtml: (value) => this._escapeHtml(value),
+                _t,
+            });
+            accessLogBody.innerHTML = renderAccessLogContent({
+                rows: accessLogRows,
+                loading: accessLogLoading,
+                error: accessLogError,
+                total: accessLogTotal,
+                siteNames: accessLogSiteNames,
+                escapeHtml: (value) => this._escapeHtml(value),
+                formatDateTimeDisplay: (value) => this._formatDateTimeDisplay(value),
+                _t,
+            });
+        };
+
+        const renderActiveTabChrome = () => {
+            const showDirectory = activeTab === "directory";
+            toolbar.style.display = showDirectory ? "" : "none";
+            summary.style.display = showDirectory ? "" : "none";
+            body.style.display = showDirectory ? "" : "none";
+            accessLogToolbar.style.display = showDirectory ? "none" : "";
+            accessLogBody.style.display = showDirectory ? "none" : "";
+            for (const button of tabs.querySelectorAll("[data-tab]")) {
+                button.classList.toggle("wgs-status-tab-active", button.dataset.tab === activeTab);
+            }
+            if (!showDirectory) {
+                renderAccessLog();
+            }
+        };
+
+        const cleanupResyncAccessCooldowns = () => {
+            const now = Date.now();
+            for (const [subscriptionId, expiresAt] of resyncAccessCooldowns.entries()) {
+                if (!expiresAt || expiresAt <= now) {
+                    resyncAccessCooldowns.delete(subscriptionId);
+                }
+            }
+        };
+
+        const getResyncAccessState = (subscriptionId) => {
+            const numericId = Number(subscriptionId || 0);
+            cleanupResyncAccessCooldowns();
+            const expiresAt = resyncAccessCooldowns.get(numericId) || 0;
+            return {
+                loading: resyncAccessLoadingIds.has(numericId),
+                remainingSeconds: expiresAt > Date.now() ? Math.ceil((expiresAt - Date.now()) / 1000) : 0,
+            };
+        };
+
+        const ensureResyncAccessCooldownTicker = () => {
+            if (resyncAccessCooldownTimer) {
+                return;
+            }
+            resyncAccessCooldownTimer = window.setInterval(() => {
+                cleanupResyncAccessCooldowns();
+                if (!resyncAccessCooldowns.size) {
+                    window.clearInterval(resyncAccessCooldownTimer);
+                    resyncAccessCooldownTimer = null;
+                }
+                if (currentDetail && activeTab === "directory") {
+                    renderDetailPreservingFocus(currentDetail);
+                }
+            }, 1000);
+        };
+
+        const setResyncAccessLoading = (subscriptionId, loading) => {
+            const numericId = Number(subscriptionId || 0);
+            if (!numericId) {
+                return;
+            }
+            if (loading) {
+                resyncAccessLoadingIds.add(numericId);
+            } else {
+                resyncAccessLoadingIds.delete(numericId);
+            }
+        };
+
+        const startResyncAccessCooldown = (subscriptionId, cooldownSeconds) => {
+            const numericId = Number(subscriptionId || 0);
+            const seconds = Math.max(1, Number(cooldownSeconds || 60));
+            if (!numericId) {
+                return;
+            }
+            resyncAccessCooldowns.set(numericId, Date.now() + seconds * 1000);
+            ensureResyncAccessCooldownTicker();
+        };
+
         const getDirectoryCriteria = () => ({
             stateFilter: (searchInput.value || "").trim() ? "all" : (stateSelect.value || "actionable"),
             searchTerm: searchInput.value || "",
@@ -819,6 +952,34 @@ patch(ControlButtons.prototype, {
                 pageOffset: directoryPageOffset,
                 _t,
             }, preferredPartnerId);
+        };
+
+        const loadAccessLog = async () => {
+            accessLogLoading = true;
+            accessLogError = "";
+            renderActiveTabChrome();
+            try {
+                const result = await this.subscriptionPosApi.fetchAccessEventLog({
+                    company_id: getCurrentCompanyId(this) || false,
+                    from: localDateTimeInputToUtcString(accessLogFilters.from),
+                    to: localDateTimeInputToUtcString(accessLogFilters.to),
+                    result: accessLogFilters.result || "all",
+                    device_id: accessLogFilters.deviceId || false,
+                    limit: 150,
+                });
+                accessLogRows = Array.isArray(result && result.rows) ? result.rows : [];
+                accessLogDevices = Array.isArray(result && result.devices) ? result.devices : [];
+                accessLogSiteNames = Array.isArray(result && result.site_names) ? result.site_names : [];
+                accessLogTotal = Number(result && result.total ? result.total : accessLogRows.length);
+                accessLogLoaded = true;
+            } catch (error) {
+                console.error("Error al consultar bitacora de accesos POS", error);
+                accessLogRows = [];
+                accessLogError = (error && error.message) ? error.message : _t("No se pudo consultar la bitacora de accesos.");
+            } finally {
+                accessLogLoading = false;
+                renderActiveTabChrome();
+            }
         };
 
         const focusDirectoryPartner = async (partnerId) => {
@@ -1367,6 +1528,7 @@ patch(ControlButtons.prototype, {
                 renderUpsaleForm,
                 renderNewSubscriptionForm,
                 getStateClass: (state) => this._getStateClass(state),
+                getResyncAccessState,
                 formMode,
                 partnerPhotoForm,
                 partnerEditForm,
@@ -1401,6 +1563,10 @@ patch(ControlButtons.prototype, {
         const render = () => {
             listFormContainer.innerHTML = renderNewPartnerForm();
             syncPartnerCameraPreview();
+            renderActiveTabChrome();
+            if (activeTab !== "directory") {
+                return;
+            }
             const query = searchInput.value || "";
             const stateFilter = query.trim() ? "all" : stateSelect.value;
             const birthdayFilter = birthdaySelect.value;
@@ -1508,6 +1674,42 @@ patch(ControlButtons.prototype, {
             refreshDirectoryRowsForControls();
         });
 
+        tabs.addEventListener("click", (event) => {
+            const tabButton = event.target.closest("[data-tab]");
+            if (!tabButton) {
+                return;
+            }
+            const nextTab = tabButton.dataset.tab || "directory";
+            if (activeTab === nextTab) {
+                return;
+            }
+            activeTab = nextTab;
+            render();
+            if (activeTab === "access_log" && !accessLogLoaded) {
+                loadAccessLog();
+            }
+        });
+
+        accessLogToolbar.addEventListener("change", (event) => {
+            if (event.target.classList.contains("wgs-access-log-from")) {
+                accessLogFilters.from = event.target.value || "";
+            } else if (event.target.classList.contains("wgs-access-log-to")) {
+                accessLogFilters.to = event.target.value || "";
+            } else if (event.target.classList.contains("wgs-access-log-result")) {
+                accessLogFilters.result = event.target.value || "all";
+            } else if (event.target.classList.contains("wgs-access-log-device")) {
+                accessLogFilters.deviceId = event.target.value || "";
+            }
+        });
+
+        accessLogToolbar.addEventListener("click", (event) => {
+            const refreshButton = event.target.closest(".wgs-access-log-refresh");
+            if (!refreshButton) {
+                return;
+            }
+            loadAccessLog();
+        });
+
         const listPaneActions = {
             ...buildListPartnerActionHandlers({
                 state: modalState,
@@ -1578,6 +1780,9 @@ patch(ControlButtons.prototype, {
                 openUpsaleForm,
                 openParticipantEditForm,
                 fetchResyncAccess: (subscriptionId) => this._resyncSubscriptionAccess(subscriptionId),
+                getResyncAccessState,
+                setResyncAccessLoading,
+                startResyncAccessCooldown,
                 loadDetail,
                 detailCache,
                 getCurrentSubscriptionItem,
@@ -1891,6 +2096,26 @@ patch(ControlButtons.prototype, {
                 color: #475569;
                 font-size: 0.84rem;
             }
+            .wgs-status-tabs {
+                display: flex;
+                gap: 0.45rem;
+                padding: 0.65rem 1.2rem 0;
+                background: #f8fafc;
+            }
+            .wgs-status-tab {
+                border: 1px solid #cbd5e1;
+                background: #ffffff;
+                color: #334155;
+                border-radius: 0.65rem 0.65rem 0 0;
+                padding: 0.55rem 0.85rem;
+                font-weight: 700;
+                cursor: pointer;
+            }
+            .wgs-status-tab-active {
+                border-color: #0f766e;
+                background: #0f766e;
+                color: #ffffff;
+            }
             .wgs-status-toolbar {
                 padding: 0.8rem 1.2rem;
                 display: grid;
@@ -1902,6 +2127,9 @@ patch(ControlButtons.prototype, {
             .wgs-status-toolbar input,
             .wgs-status-toolbar select,
             .wgs-status-toolbar button,
+            .wgs-access-log-toolbar input,
+            .wgs-access-log-toolbar select,
+            .wgs-access-log-toolbar button,
             .wgs-inline-form-grid input,
             .wgs-inline-form-grid select {
                 width: 100%;
@@ -1911,6 +2139,47 @@ patch(ControlButtons.prototype, {
                 font-size: 0.88rem;
                 background: #fff;
                 color: #111827;
+            }
+            .wgs-access-log-toolbar-shell {
+                padding: 0.8rem 1.2rem;
+                border-bottom: 1px solid #e5e7eb;
+            }
+            .wgs-access-log-toolbar {
+                display: grid;
+                grid-template-columns: repeat(4, minmax(160px, 1fr)) minmax(130px, 0.6fr);
+                gap: 0.6rem;
+                align-items: end;
+            }
+            .wgs-access-log-toolbar label {
+                display: grid;
+                gap: 0.25rem;
+                margin: 0;
+                font-size: 0.74rem;
+                font-weight: 700;
+                letter-spacing: 0.04em;
+                text-transform: uppercase;
+                color: #64748b;
+            }
+            .wgs-access-log-body {
+                min-height: 0;
+                overflow: auto;
+                padding: 0.9rem 1.2rem 1.2rem;
+            }
+            .wgs-access-log-summary {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 0.5rem;
+                margin-bottom: 0.75rem;
+            }
+            .wgs-access-log-table-wrap {
+                border: 1px solid #e5e7eb;
+                border-radius: 0.75rem;
+                overflow: auto;
+                background: #ffffff;
+            }
+            .wgs-access-log-error {
+                color: #9f1239;
+                font-weight: 700;
             }
             .wgs-status-summary {
                 padding: 0.55rem 1.2rem;
@@ -2169,6 +2438,24 @@ patch(ControlButtons.prototype, {
             .wgs-action-btn:disabled {
                 opacity: 0.7;
                 cursor: not-allowed;
+            }
+            .wgs-action-loading {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                gap: 0.45rem;
+            }
+            .wgs-action-loading::before {
+                content: "";
+                width: 0.85rem;
+                height: 0.85rem;
+                border: 2px solid #cbd5e1;
+                border-top-color: #0f766e;
+                border-radius: 999px;
+                animation: wgs-spin 0.8s linear infinite;
+            }
+            @keyframes wgs-spin {
+                to { transform: rotate(360deg); }
             }
             .wgs-detail-note {
                 font-size: 0.8rem;
@@ -2471,10 +2758,11 @@ patch(ControlButtons.prototype, {
                     max-height: 42vh;
                 }
             }
-            @media (max-width: 900px) {
-                .wgs-status-toolbar,
-                .wgs-detail-contact-grid,
-                .wgs-subscription-grid,
+	            @media (max-width: 900px) {
+	                .wgs-status-toolbar,
+	                .wgs-access-log-toolbar,
+	                .wgs-detail-contact-grid,
+	                .wgs-subscription-grid,
                 .wgs-detail-actions-bar,
                 .wgs-subscription-actions,
                 .wgs-inline-form-grid,

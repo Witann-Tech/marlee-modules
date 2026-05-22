@@ -172,6 +172,24 @@ class TestFaceSyncDelta(TransactionCase):
         self.assertEqual(result["upserts"][0]["globalUserId"], person.global_user_id)
         self.assertNotIn("facePicB64", result["upserts"][0])
 
+    def test_bootstrap_marks_person_last_sf_sync_without_queueing_change(self):
+        _, person = self._make_person(self._make_image_b64())
+        self.Change.search([]).unlink()
+
+        self.controller._site_bootstrap_result(
+            self.site,
+            self.site.code,
+            "DEV-001",
+            0,
+            20,
+            include_biophoto=False,
+            reason="bootstrap",
+        )
+        person.invalidate_recordset(["last_sf_sync_at"])
+
+        self.assertTrue(person.last_sf_sync_at)
+        self.assertFalse(self.Change.search([]))
+
     def test_biophoto_snapshot_only_returns_people_with_face_and_respects_limit(self):
         _, person_with_face_1 = self._make_person(self._make_image_b64())
         _, person_with_face_2 = self._make_person(self._make_image_b64(color=(40, 40, 180)))

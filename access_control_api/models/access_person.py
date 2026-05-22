@@ -45,6 +45,7 @@ class AccessPerson(models.Model):
     face_pic_b64 = fields.Text(string="Foto de rostro (Base64)")
     has_face_pic = fields.Boolean(string="Tiene foto de rostro", compute="_compute_has_face_pic", store=False)
     last_access_at = fields.Datetime(string="Último acceso", readonly=True, index=True)
+    last_sf_sync_at = fields.Datetime(string="Último sync SF", readonly=True, index=True)
     last_access_result = fields.Selection(
         [("allowed", "Permitido"), ("denied", "Denegado"), ("error", "Error")],
         string="Resultado último acceso",
@@ -198,21 +199,26 @@ class AccessPerson(models.Model):
     def write(self, vals):
         vals = self._normalize_face_vals(vals)
         vals = self._fill_face_from_partner(vals)
+        skip_sync_queue = self.env.context.get("skip_access_sync_queue")
         # Al dar de baja, se libera el ID global para reutilización futura.
         if vals.get("active") is False and "global_user_id" not in vals:
             vals["global_user_id"] = False
-        before = {
-            rec.id: {
-                "active": rec.active,
-                "access_state": rec.access_state,
-                "global_user_id": rec.global_user_id,
-                "site_ids": set(rec.site_ids.ids),
-                "face_pic_b64": rec.face_pic_b64 or False,
+        before = {}
+        if not skip_sync_queue:
+            before = {
+                rec.id: {
+                    "active": rec.active,
+                    "access_state": rec.access_state,
+                    "global_user_id": rec.global_user_id,
+                    "site_ids": set(rec.site_ids.ids),
+                    "face_pic_b64": rec.face_pic_b64 or False,
+                }
+                for rec in self
             }
-            for rec in self
-        }
 
         res = super().write(vals)
+        if skip_sync_queue:
+            return res
 
         Change = self.env["access_control.sync_change"].sudo()
         Site = self.env["access_control.site"].sudo()
@@ -239,17 +245,17 @@ class AccessPerson(models.Model):
             # En transición activo->inactivo, forzar delete en todos los sitios previos.
             if prev_active and not new_active and prev_gid:
                 for site_id in sorted(prev_sync_sites):
-                    Change.queue_delete(prev_gid, [site_id], reason="person_write_deactivated")
+                    Change.queue_delete(prev_gid, [site_id], person=rec, reason="person_write_deactivated")
                 continue
 
             removed_sites = prev_sync_sites - new_sync_sites
             for site_id in sorted(removed_sites):
-                Change.queue_delete(prev_gid, [site_id], reason="person_write_removed")
+                Change.queue_delete(prev_gid, [site_id], person=rec, reason="person_write_removed")
 
             # If global user id changed, old id must be removed from sites that remain active.
             if prev_gid and new_gid and prev_gid != new_gid:
                 for site_id in sorted(prev_sync_sites & new_sync_sites):
-                    Change.queue_delete(prev_gid, [site_id], reason="person_write_gid_changed")
+                    Change.queue_delete(prev_gid, [site_id], person=rec, reason="person_write_gid_changed")
 
             # Any valid current state should be upserted for current sync sites.
             for site_id in sorted(new_sync_sites):
@@ -348,7 +354,7 @@ class AccessPerson(models.Model):
                 continue
             if rec.last_access_at and occurred_at <= rec.last_access_at:
                 continue
-            rec.sudo().write(
+            rec.with_context(skip_access_sync_queue=True).sudo().write(
                 {
                     "last_access_at": occurred_at,
                     "last_access_result": result or False,
