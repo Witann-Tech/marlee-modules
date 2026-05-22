@@ -4,13 +4,14 @@ from datetime import date, datetime
 from dateutil.relativedelta import relativedelta
 
 from odoo import _, api, fields, models
-from odoo.exceptions import AccessError, ValidationError
+from odoo.exceptions import AccessError, UserError, ValidationError
 
 _logger = logging.getLogger(__name__)
 
 
 class SaleOrder(models.Model):
     _inherit = 'sale.order'
+    _WGS_POS_ACCESS_RESYNC_COOLDOWN_SECONDS = 60
     _WGS_POS_SUBSCRIPTION_STATE_PRIORITY = {
         'progress': 0,
         'renew': 1,
@@ -495,6 +496,21 @@ class SaleOrder(models.Model):
         if not subscription._is_subscription_record_for_pos():
             raise AccessError(_('La orden seleccionada no corresponde a una suscripción válida.'))
 
+        self.env.cr.execute('SELECT id FROM sale_order WHERE id = %s FOR UPDATE', [subscription.id])
+        ICP = self.env['ir.config_parameter'].sudo()
+        cooldown_key = 'witann_group_subscriptions_pos.access_resync_last_at.%s' % subscription.id
+        now = fields.Datetime.now()
+        last_resync_raw = ICP.get_param(cooldown_key)
+        last_resync = fields.Datetime.to_datetime(last_resync_raw) if last_resync_raw else False
+        if last_resync:
+            elapsed = (now - last_resync).total_seconds()
+            remaining = int(self._WGS_POS_ACCESS_RESYNC_COOLDOWN_SECONDS - elapsed)
+            if remaining > 0:
+                raise UserError(
+                    _('Espera %s segundos antes de volver a resincronizar el acceso de esta suscripción.') % remaining
+                )
+        ICP.set_param(cooldown_key, fields.Datetime.to_string(now))
+
         if hasattr(subscription, '_ensure_subscription_owner_is_participant'):
             subscription._ensure_subscription_owner_is_participant()
         if hasattr(subscription, '_wgs_sync_access_control_people'):
@@ -682,6 +698,16 @@ class SaleOrder(models.Model):
 
         today = fields.Date.context_today(self)
         subscriptions_by_partner = self._get_pos_subscription_orders_by_partners(partners)
+        access_last_map = {}
+        if include_profile_fields:
+            try:
+                access_last_map = self._get_access_person_last_access_map_for_pos(partners)
+            except Exception as error:
+                self._wgs_raise_pos_data_error(
+                    _('No se pudo consultar la información de acceso para construir el directorio de suscripciones.'),
+                    error=error,
+                    partner_ids=partners.ids,
+                )
 
         result = {}
         for partner in partners:
@@ -743,6 +769,8 @@ class SaleOrder(models.Model):
                 except Exception as error:
                     _logger.warning('WGS POS: partner last access fallback for partner %s (%s)', partner.id, error)
                     last_access_value = False
+                if not last_access_value:
+                    last_access_value = access_last_map.get(partner.id)
 
                 values.update({
                     'phone': phone_value or False,

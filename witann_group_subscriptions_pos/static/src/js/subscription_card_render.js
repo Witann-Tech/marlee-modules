@@ -62,6 +62,12 @@ function renderSubscriptionCard({
                     ${item.can_renew ? "" : "disabled"}
                 >${escapeHtml(_t("Upsale"))}</button>
                 ${participantActionHtml}
+                <button
+                    type="button"
+                    class="wgs-action-btn"
+                    data-action="resync-access"
+                    data-subscription-id="${escapeHtml(String(item.subscription_id || 0))}"
+                >${escapeHtml(_t("Resincronizar acceso"))}</button>
             </div>
             ${inlineFormsHtml || ""}
         </div>
