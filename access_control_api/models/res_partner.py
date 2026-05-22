@@ -30,6 +30,22 @@ class ResPartner(models.Model):
         compute="_compute_camera_capture_helper",
         groups="access_control_api.group_access_control_contact_access",
     )
+    access_global_user_id = fields.Integer(
+        string="ID global",
+        compute="_compute_access_summary",
+        groups="access_control_api.group_access_control_contact_access",
+    )
+    access_last_access_at = fields.Datetime(
+        string="Último acceso",
+        compute="_compute_access_summary",
+        groups="access_control_api.group_access_control_contact_access",
+    )
+    access_origin = fields.Selection(
+        [("manual", "Manual"), ("subscription", "Suscripción")],
+        string="Origen acceso",
+        compute="_compute_access_summary",
+        groups="access_control_api.group_access_control_contact_access",
+    )
 
     @api.model
     def _normalize_image_b64(self, image_b64):
@@ -130,6 +146,21 @@ class ResPartner(models.Model):
     def _compute_camera_capture_helper(self):
         for partner in self:
             partner.camera_capture_helper = False
+
+    @api.depends(
+        "access_person_ids.global_user_id",
+        "access_person_ids.last_access_at",
+        "access_person_ids.managed_by_subscription",
+    )
+    def _compute_access_summary(self):
+        Person = self.env["access_control.person"].sudo()
+        people = Person.search([("partner_id", "in", self.ids)])
+        people_by_partner = {person.partner_id.id: person for person in people}
+        for partner in self:
+            person = people_by_partner.get(partner.id)
+            partner.access_global_user_id = person.global_user_id if person else False
+            partner.access_last_access_at = person.last_access_at if person else False
+            partner.access_origin = person.access_origin if person else False
 
     @api.onchange("image_1920")
     def _onchange_image_1920_sync_access_people(self):
