@@ -1010,7 +1010,9 @@ patch(ControlButtons.prototype, {
                 accessLogNotice = _t("Comando enviado a %s.").replace("%s", deviceLabel);
             } catch (error) {
                 console.error("Error al abrir puerta desde POS", error);
-                accessLogError = (error && error.message) ? error.message : _t("No se pudo abrir la puerta.");
+                accessLogError = (
+                    error && error.data && (error.data.message || error.data.debug)
+                ) || (error && error.message) || _t("No se pudo abrir la puerta.");
             } finally {
                 accessLogOpeningDoorId = 0;
                 renderAccessLog();

@@ -531,12 +531,25 @@ class SaleOrder(models.Model):
         if company and device.site_id and device.site_id.company_id and device.site_id.company_id.id != company.id:
             raise UserError(_('La puerta seleccionada no pertenece a la empresa activa del Punto de Venta.'))
 
-        result = device.open_door_via_adms(
-            door_id=data.get('door_id') or data.get('doorId') or 1,
-            open_time_seconds=data.get('open_time_seconds') or data.get('openTimeSeconds') or 5,
-            reason=data.get('reason') or 'subscription_access_log_button',
-            operator_user=self.env.user,
-        )
+        if not hasattr(device, 'queue_open_door_command'):
+            raise UserError(_('El módulo de control de acceso no tiene disponible el comando de apertura de puerta.'))
+
+        try:
+            result = device.queue_open_door_command(
+                door_id=data.get('door_id') or data.get('doorId') or 1,
+                open_time_seconds=data.get('open_time_seconds') or data.get('openTimeSeconds') or 5,
+                reason=data.get('reason') or 'subscription_access_log_button',
+                operator_user=self.env.user,
+            )
+        except UserError:
+            raise
+        except Exception as error:
+            _logger.exception(
+                'WGS POS: unexpected error opening access door device_id=%s user_id=%s',
+                device.id,
+                self.env.user.id,
+            )
+            raise UserError(_('No se pudo enviar el comando de apertura de puerta. %s') % str(error)) from error
         return result
 
     @api.model

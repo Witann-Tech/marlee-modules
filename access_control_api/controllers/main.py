@@ -99,6 +99,7 @@ class AccessControlApi(http.Controller):
             "hasMore": has_more,
             "upserts": upserts,
             "deletes": [],
+            "commands": [],
         }
 
     def _site_biophoto_result(self, site, site_code, device_serial, cursor, limit, reason="biophoto"):
@@ -143,6 +144,7 @@ class AccessControlApi(http.Controller):
             "hasMore": has_more,
             "upserts": upserts,
             "deletes": [],
+            "commands": [],
         }
 
     def _site_change_max_cursor(self, site):
@@ -503,10 +505,34 @@ class AccessControlApi(http.Controller):
                 "hasMore": False,
                 "upserts": [],
                 "deletes": [],
+                "commands": [],
             }
 
         latest_by_gid = {}
+        commands = []
         for ch in changes:
+            if ch.action == "command":
+                command_payload = {}
+                if ch.command_payload:
+                    try:
+                        command_payload = json.loads(ch.command_payload)
+                    except (TypeError, ValueError):
+                        command_payload = {}
+                command_payload.update(
+                    {
+                        "id": ch.id,
+                        "type": ch.command_type or "command",
+                        "priority": bool(ch.priority),
+                        "siteCode": ch.site_id.code if ch.site_id else site_code,
+                        "deviceSerial": (
+                            command_payload.get("deviceSerial")
+                            or (ch.device_id.device_serial if ch.device_id else None)
+                            or None
+                        ),
+                    }
+                )
+                commands.append(command_payload)
+                continue
             gid = ch.global_user_id
             if not gid:
                 continue
@@ -578,13 +604,14 @@ class AccessControlApi(http.Controller):
         self._mark_people_synced(synced_people)
         self._touch_device_telemetry(device, heartbeat=True, sync=True, error_marker=True)
         _logger.info(
-            "sync_delta site=%s device=%s cursor=%s next_cursor=%s upserts=%s deletes=%s include_biophoto=%s",
+            "sync_delta site=%s device=%s cursor=%s next_cursor=%s upserts=%s deletes=%s commands=%s include_biophoto=%s",
             site_code,
             device_serial or None,
             cursor,
             next_cursor,
             len(upserts),
             len(deletes),
+            len(commands),
             include_biophoto,
         )
 
@@ -598,6 +625,7 @@ class AccessControlApi(http.Controller):
             "hasMore": has_more,
             "upserts": upserts,
             "deletes": deletes,
+            "commands": commands,
         }
 
     @http.route(

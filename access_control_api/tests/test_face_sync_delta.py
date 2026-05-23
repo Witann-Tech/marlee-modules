@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import base64
 import io
+import json
 from unittest.mock import patch
 
 from odoo import fields
@@ -319,36 +320,26 @@ class TestFaceSyncDelta(TransactionCase):
         self.assertTrue(self.device.last_sync_at)
         self.assertFalse(self.device.last_error)
 
-    def test_device_open_door_via_adms_posts_internal_command(self):
-        self.env["ir.config_parameter"].sudo().set_param("ADMS_BASE_URL", "https://adms.example.test")
-        self.env["ir.config_parameter"].sudo().set_param("INTERNAL_API_TOKEN", "secret-token")
-
-        class MockResponse:
-            content = b'{"ok": true}'
-
-            def raise_for_status(self):
-                return None
-
-            def json(self):
-                return {"ok": True}
-
-        with patch("odoo.addons.access_control_api.models.access_device.requests.post", return_value=MockResponse()) as post:
-            result = self.device.open_door_via_adms(
-                door_id=1,
-                open_time_seconds=5,
-                reason="subscription_access_log_button",
-                operator_user=self.env.user,
-            )
+    def test_device_open_door_queues_priority_command(self):
+        result = self.device.queue_open_door_command(
+            door_id=1,
+            open_time_seconds=5,
+            reason="subscription_access_log_button",
+            operator_user=self.env.user,
+        )
+        change = self.Change.browse(result["change_id"])
+        payload = json.loads(change.command_payload)
 
         self.assertTrue(result["ok"])
-        post.assert_called_once()
-        _, kwargs = post.call_args
-        self.assertEqual(kwargs["json"]["deviceSerial"], self.device.device_serial)
-        self.assertEqual(kwargs["json"]["doorId"], 1)
-        self.assertEqual(kwargs["json"]["openTimeSeconds"], 5)
-        self.assertEqual(kwargs["json"]["operatorUserId"], self.env.user.id)
-        self.assertEqual(kwargs["json"]["reason"], "subscription_access_log_button")
-        self.assertEqual(kwargs["headers"]["Authorization"], "Bearer secret-token")
+        self.assertEqual(change.action, "command")
+        self.assertEqual(change.command_type, "open_door")
+        self.assertTrue(change.priority)
+        self.assertEqual(payload["deviceSerial"], self.device.device_serial)
+        self.assertEqual(payload["doorId"], 1)
+        self.assertEqual(payload["openTimeSeconds"], 5)
+        self.assertEqual(payload["operatorUserId"], self.env.user.id)
+        self.assertEqual(payload["reason"], "subscription_access_log_button")
+        self.assertTrue(payload["priority"])
 
     def test_register_access_event_updates_person_last_access(self):
         _, person = self._make_person(self._make_image_b64())
