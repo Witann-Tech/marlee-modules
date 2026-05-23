@@ -53,7 +53,11 @@ function toTimestamp(value) {
     if (!value) {
         return null;
     }
-    const ts = Date.parse(String(value).trim());
+    const text = String(value).trim();
+    const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(text)
+        ? `${text.replace(" ", "T")}Z`
+        : text;
+    const ts = Date.parse(normalized);
     return Number.isNaN(ts) ? null : ts;
 }
 

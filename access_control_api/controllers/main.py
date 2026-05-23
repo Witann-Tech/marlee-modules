@@ -2,6 +2,8 @@
 import base64
 import json
 import logging
+import pytz
+from dateutil import parser as date_parser
 from odoo import http, fields
 from odoo.http import request
 
@@ -228,6 +230,37 @@ class AccessControlApi(http.Controller):
         if m in ("face",):
             return m
         return None
+
+    def _access_event_timezone(self):
+        ICP = request.env["ir.config_parameter"].sudo()
+        tz_name = (
+            ICP.get_param("access_control.event_timezone")
+            or ICP.get_param("access_control_api.event_timezone")
+            or request.env.user.tz
+            or "America/Mexico_City"
+        )
+        try:
+            return pytz.timezone(tz_name)
+        except Exception:
+            _logger.warning("access_event invalid timezone=%s; falling back to UTC", tz_name)
+            return pytz.UTC
+
+    def _parse_access_event_datetime(self, value):
+        if not value:
+            return fields.Datetime.now()
+        try:
+            parsed = date_parser.parse(str(value))
+        except Exception:
+            _logger.warning("access_event invalid occurredAt=%s; using server time", value)
+            return fields.Datetime.now()
+        if parsed.tzinfo:
+            return parsed.astimezone(pytz.UTC).replace(tzinfo=None)
+        try:
+            localized = self._access_event_timezone().localize(parsed)
+        except Exception:
+            _logger.warning("access_event could not localize occurredAt=%s; using UTC", value)
+            localized = pytz.UTC.localize(parsed)
+        return localized.astimezone(pytz.UTC).replace(tzinfo=None)
 
     def _person_sync_payload(self, person, include_face_pic=True, clear_face_pic=False, priority=False):
         payload = {
@@ -726,10 +759,7 @@ class AccessControlApi(http.Controller):
                 result = "denied"
 
             occurred_at_raw = item.get("occurredAt") or item.get("occurred_at")
-            try:
-                occurred_at = fields.Datetime.to_datetime(occurred_at_raw) if occurred_at_raw else fields.Datetime.now()
-            except Exception:
-                occurred_at = fields.Datetime.now()
+            occurred_at = self._parse_access_event_datetime(occurred_at_raw)
 
             Event.create(
                 {
