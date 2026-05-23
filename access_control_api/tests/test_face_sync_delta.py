@@ -278,6 +278,26 @@ class TestFaceSyncDelta(TransactionCase):
         payload = self.controller._person_sync_payload(person, include_face_pic=False, clear_face_pic=False)
         self.assertEqual(payload["accessGroup"], 0)
 
+    def test_priority_upsert_queue_marks_change_and_payload(self):
+        _, person = self._make_person(self._make_image_b64())
+        self.Change.search([]).unlink()
+
+        self.Change.with_context(access_sync_priority=True).queue_upsert_for_person(
+            person,
+            reason="manual_resync",
+            include_face_pic=False,
+        )
+        change = self.Change.search([("person_id", "=", person.id)], limit=1)
+        payload = self.controller._person_sync_payload(
+            person,
+            include_face_pic=False,
+            clear_face_pic=False,
+            priority=change.priority,
+        )
+
+        self.assertTrue(change.priority)
+        self.assertTrue(payload["priority"])
+
     def test_touch_device_telemetry_updates_heartbeat_and_sync(self):
         self.device.write(
             {
@@ -298,6 +318,37 @@ class TestFaceSyncDelta(TransactionCase):
         self.assertTrue(self.device.last_heartbeat_at)
         self.assertTrue(self.device.last_sync_at)
         self.assertFalse(self.device.last_error)
+
+    def test_device_open_door_via_adms_posts_internal_command(self):
+        self.env["ir.config_parameter"].sudo().set_param("ADMS_BASE_URL", "https://adms.example.test")
+        self.env["ir.config_parameter"].sudo().set_param("INTERNAL_API_TOKEN", "secret-token")
+
+        class MockResponse:
+            content = b'{"ok": true}'
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"ok": True}
+
+        with patch("odoo.addons.access_control_api.models.access_device.requests.post", return_value=MockResponse()) as post:
+            result = self.device.open_door_via_adms(
+                door_id=1,
+                open_time_seconds=5,
+                reason="subscription_access_log_button",
+                operator_user=self.env.user,
+            )
+
+        self.assertTrue(result["ok"])
+        post.assert_called_once()
+        _, kwargs = post.call_args
+        self.assertEqual(kwargs["json"]["deviceSerial"], self.device.device_serial)
+        self.assertEqual(kwargs["json"]["doorId"], 1)
+        self.assertEqual(kwargs["json"]["openTimeSeconds"], 5)
+        self.assertEqual(kwargs["json"]["operatorUserId"], self.env.user.id)
+        self.assertEqual(kwargs["json"]["reason"], "subscription_access_log_button")
+        self.assertEqual(kwargs["headers"]["Authorization"], "Bearer secret-token")
 
     def test_register_access_event_updates_person_last_access(self):
         _, person = self._make_person(self._make_image_b64())

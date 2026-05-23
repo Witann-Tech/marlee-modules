@@ -47,6 +47,7 @@ function getAccessResultClass(result) {
 function renderAccessLogToolbar({
     filters,
     devices,
+    openingDoor,
     escapeHtml,
     _t,
 }) {
@@ -82,6 +83,9 @@ function renderAccessLogToolbar({
                 </select>
             </label>
             <button type="button" class="wgs-primary-action-btn wgs-access-log-refresh">${escapeHtml(_t("Buscar"))}</button>
+            <button type="button" class="wgs-primary-action-btn wgs-access-log-open-door" ${filters.deviceId && !openingDoor ? "" : "disabled"}>
+                ${escapeHtml(openingDoor ? _t("Abriendo...") : _t("Abrir puerta"))}
+            </button>
         </div>
     `;
 }
@@ -118,6 +122,7 @@ function renderAccessLogContent({
     rows,
     loading,
     error,
+    notice,
     total,
     siteNames,
     escapeHtml,
@@ -133,6 +138,7 @@ function renderAccessLogContent({
             <span class="wgs-summary-pill">${escapeHtml(totalLabel)}</span>
             <span class="wgs-summary-pill">${escapeHtml(_t("Sitio"))}: ${escapeHtml(sitesLabel)}</span>
         </div>
+        ${notice ? `<div class="wgs-access-log-notice">${escapeHtml(notice)}</div>` : ""}
         <div class="wgs-access-log-table-wrap">
             <table class="wgs-status-table wgs-access-log-table">
                 <thead>

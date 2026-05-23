@@ -710,6 +710,8 @@ patch(ControlButtons.prototype, {
         let accessLogTotal = 0;
         let accessLogLoading = false;
         let accessLogError = "";
+        let accessLogNotice = "";
+        let accessLogOpeningDoor = false;
         let accessLogLoaded = false;
         let resyncAccessCooldownTimer = null;
         const resyncAccessLoadingIds = new Set();
@@ -818,6 +820,7 @@ patch(ControlButtons.prototype, {
             accessLogToolbar.innerHTML = renderAccessLogToolbar({
                 filters: accessLogFilters,
                 devices: accessLogDevices,
+                openingDoor: accessLogOpeningDoor,
                 escapeHtml: (value) => this._escapeHtml(value),
                 _t,
             });
@@ -825,6 +828,7 @@ patch(ControlButtons.prototype, {
                 rows: accessLogRows,
                 loading: accessLogLoading,
                 error: accessLogError,
+                notice: accessLogNotice,
                 total: accessLogTotal,
                 siteNames: accessLogSiteNames,
                 escapeHtml: (value) => this._escapeHtml(value),
@@ -957,6 +961,7 @@ patch(ControlButtons.prototype, {
         const loadAccessLog = async () => {
             accessLogLoading = true;
             accessLogError = "";
+            accessLogNotice = "";
             renderActiveTabChrome();
             try {
                 const result = await this.subscriptionPosApi.fetchAccessEventLog({
@@ -979,6 +984,34 @@ patch(ControlButtons.prototype, {
             } finally {
                 accessLogLoading = false;
                 renderActiveTabChrome();
+            }
+        };
+
+        const openSelectedAccessDoor = async () => {
+            if (!accessLogFilters.deviceId || accessLogOpeningDoor) {
+                return;
+            }
+            accessLogOpeningDoor = true;
+            accessLogError = "";
+            accessLogNotice = "";
+            renderAccessLog();
+            try {
+                const result = await this.subscriptionPosApi.openAccessDoor(accessLogFilters.deviceId, {
+                    company_id: getCurrentCompanyId(this) || false,
+                    door_id: 1,
+                    open_time_seconds: 5,
+                    reason: "subscription_access_log_button",
+                });
+                const deviceLabel = result && (result.device_name || result.device_serial)
+                    ? (result.device_name || result.device_serial)
+                    : _t("puerta seleccionada");
+                accessLogNotice = _t("Comando enviado a %s.").replace("%s", deviceLabel);
+            } catch (error) {
+                console.error("Error al abrir puerta desde POS", error);
+                accessLogError = (error && error.message) ? error.message : _t("No se pudo abrir la puerta.");
+            } finally {
+                accessLogOpeningDoor = false;
+                renderAccessLog();
             }
         };
 
@@ -1699,15 +1732,20 @@ patch(ControlButtons.prototype, {
                 accessLogFilters.result = event.target.value || "all";
             } else if (event.target.classList.contains("wgs-access-log-device")) {
                 accessLogFilters.deviceId = event.target.value || "";
+                accessLogNotice = "";
             }
         });
 
         accessLogToolbar.addEventListener("click", (event) => {
             const refreshButton = event.target.closest(".wgs-access-log-refresh");
-            if (!refreshButton) {
+            if (refreshButton) {
+                loadAccessLog();
                 return;
             }
-            loadAccessLog();
+            const openDoorButton = event.target.closest(".wgs-access-log-open-door");
+            if (openDoorButton) {
+                openSelectedAccessDoor();
+            }
         });
 
         const listPaneActions = {
@@ -2146,7 +2184,7 @@ patch(ControlButtons.prototype, {
             }
             .wgs-access-log-toolbar {
                 display: grid;
-                grid-template-columns: repeat(4, minmax(160px, 1fr)) minmax(130px, 0.6fr);
+                grid-template-columns: repeat(4, minmax(150px, 1fr)) repeat(2, minmax(130px, 0.6fr));
                 gap: 0.6rem;
                 align-items: end;
             }
@@ -2179,6 +2217,11 @@ patch(ControlButtons.prototype, {
             }
             .wgs-access-log-error {
                 color: #9f1239;
+                font-weight: 700;
+            }
+            .wgs-access-log-notice {
+                margin: 0 0 0.75rem;
+                color: #166534;
                 font-weight: 700;
             }
             .wgs-status-summary {

@@ -223,13 +223,15 @@ class AccessControlApi(http.Controller):
             return m
         return None
 
-    def _person_sync_payload(self, person, include_face_pic=True, clear_face_pic=False):
+    def _person_sync_payload(self, person, include_face_pic=True, clear_face_pic=False, priority=False):
         payload = {
             "globalUserId": person.global_user_id,
             "name": person.name or "",
             "active": bool(person.active),
             "accessGroup": 0 if person.access_state == "suspended" else 1,
         }
+        if priority:
+            payload["priority"] = True
         if clear_face_pic:
             _logger.info("sync_delta facePicB64=null pin=%s person_id=%s", person.global_user_id, person.id)
             payload["facePicB64"] = None
@@ -514,9 +516,12 @@ class AccessControlApi(http.Controller):
                     "change": ch,
                     "include_face_pic": False,
                     "clear_face_pic": False,
+                    "priority": False,
                 },
             )
             state["change"] = ch
+            if ch.priority:
+                state["priority"] = True
             if ch.action == "delete":
                 state["include_face_pic"] = False
                 state["clear_face_pic"] = False
@@ -534,7 +539,10 @@ class AccessControlApi(http.Controller):
         for gid, state in sorted(latest_by_gid.items()):
             change = state["change"]
             if change.action == "delete":
-                deletes.append({"globalUserId": gid})
+                payload = {"globalUserId": gid}
+                if state["priority"]:
+                    payload["priority"] = True
+                deletes.append(payload)
                 if change.person_id.exists():
                     synced_people |= change.person_id
                 else:
@@ -547,7 +555,10 @@ class AccessControlApi(http.Controller):
             if not person.exists():
                 person = Person.search([("global_user_id", "=", gid)], limit=1)
             if not person.exists() or not person.active or not person.global_user_id or site.id not in person.site_ids.ids:
-                deletes.append({"globalUserId": gid})
+                payload = {"globalUserId": gid}
+                if state["priority"]:
+                    payload["priority"] = True
+                deletes.append(payload)
                 if person.exists():
                     synced_people |= person
                 continue
@@ -557,6 +568,7 @@ class AccessControlApi(http.Controller):
                     person,
                     include_face_pic=bool(include_biophoto and state["include_face_pic"]),
                     clear_face_pic=bool(include_biophoto and state["clear_face_pic"]),
+                    priority=bool(state["priority"]),
                 )
             )
             synced_people |= person

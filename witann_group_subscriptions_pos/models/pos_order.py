@@ -355,6 +355,10 @@ class PosOrder(models.Model):
         return self.env['sale.order'].wgs_get_access_event_log_for_pos(options or {})
 
     @api.model
+    def wgs_open_access_door_for_pos(self, device_id, options=False):
+        return self.env['sale.order'].wgs_open_access_door_for_pos(device_id, options or {})
+
+    @api.model
     def wgs_get_product_record_for_pos(self, product_id, company_id=False):
         self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar productos desde Punto de Venta.'))
         product = self._wgs_browse_product_for_pos(product_id)
