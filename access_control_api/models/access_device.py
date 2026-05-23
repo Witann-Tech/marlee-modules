@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 import json
 import logging
+import os
 
 import requests
 
 from odoo import models, fields
 from odoo.exceptions import UserError
+from odoo.tools import config as odoo_config
 
 
 _logger = logging.getLogger(__name__)
@@ -45,11 +47,25 @@ class AccessControlDevice(models.Model):
             ICP.get_param("adms.base_url")
             or ICP.get_param("ADMS_BASE_URL")
             or ICP.get_param("access_control.adms_base_url")
+            or os.environ.get("ADMS_BASE_URL")
+            or os.environ.get("ACCESS_CONTROL_ADMS_BASE_URL")
+            or odoo_config.get("adms_base_url")
+            or odoo_config.get("ADMS_BASE_URL")
+            or odoo_config.get("access_control_adms_base_url")
+            or odoo_config.get("access_control.adms_base_url")
         )
         token = (
             ICP.get_param("adms.internal_api_token")
             or ICP.get_param("INTERNAL_API_TOKEN")
             or ICP.get_param("access_control.internal_api_token")
+            or os.environ.get("INTERNAL_API_TOKEN")
+            or os.environ.get("ADMS_INTERNAL_API_TOKEN")
+            or os.environ.get("ACCESS_CONTROL_INTERNAL_API_TOKEN")
+            or odoo_config.get("internal_api_token")
+            or odoo_config.get("INTERNAL_API_TOKEN")
+            or odoo_config.get("adms_internal_api_token")
+            or odoo_config.get("access_control_internal_api_token")
+            or odoo_config.get("access_control.internal_api_token")
         )
         return (base_url or "").strip().rstrip("/"), (token or "").strip()
 
