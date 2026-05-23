@@ -507,6 +507,52 @@ class SaleOrder(models.Model):
         ], order='name asc, id asc')
 
     @api.model
+    def wgs_open_access_door_for_pos(self, device_id, options=False):
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para abrir puertas desde Punto de Venta.'))
+
+        try:
+            device_id = int(device_id or 0)
+        except (TypeError, ValueError):
+            device_id = 0
+        if device_id <= 0:
+            raise UserError(_('Selecciona una puerta antes de abrir.'))
+
+        Device = self.env['access_control.device'].sudo()
+        device = Device.browse(device_id).exists()
+        if not device or not device.active:
+            raise UserError(_('La puerta seleccionada no existe o está inactiva.'))
+
+        data = dict(options or {})
+        try:
+            company_id = int(data.get('company_id') or 0)
+        except (TypeError, ValueError):
+            company_id = 0
+        company = self.env['res.company'].sudo().browse(company_id).exists() if company_id else self.env.company
+        if company and device.site_id and device.site_id.company_id and device.site_id.company_id.id != company.id:
+            raise UserError(_('La puerta seleccionada no pertenece a la empresa activa del Punto de Venta.'))
+
+        if not hasattr(device, 'open_door_via_adms'):
+            raise UserError(_('El módulo de control de acceso no tiene disponible el comando de apertura de puerta.'))
+
+        try:
+            result = device.open_door_via_adms(
+                door_id=data.get('door_id') or data.get('doorId') or 1,
+                open_time_seconds=data.get('open_time_seconds') or data.get('openTimeSeconds') or 5,
+                reason=data.get('reason') or 'subscription_access_log_button',
+                operator_user=self.env.user,
+            )
+        except UserError:
+            raise
+        except Exception as error:
+            _logger.exception(
+                'WGS POS: unexpected error opening access door device_id=%s user_id=%s',
+                device.id,
+                self.env.user.id,
+            )
+            raise UserError(_('No se pudo enviar el comando de apertura de puerta. %s') % str(error)) from error
+        return result
+
+    @api.model
     def wgs_get_access_event_log_for_pos(self, options=False):
         self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar la bitácora de accesos desde Punto de Venta.'))
 
@@ -629,14 +675,30 @@ class SaleOrder(models.Model):
                 )
         ICP.set_param(cooldown_key, fields.Datetime.to_string(now))
 
+        Change = self.env['access_control.sync_change'].sudo()
+        last_change = Change.search([], order='id desc', limit=1)
+        last_change_id = last_change.id or 0
+
         if hasattr(subscription, '_ensure_subscription_owner_is_participant'):
             subscription._ensure_subscription_owner_is_participant()
         if hasattr(subscription, '_wgs_sync_access_control_people'):
-            subscription._wgs_sync_access_control_people()
+            subscription.with_context(access_sync_priority=True)._wgs_sync_access_control_people()
 
         partners = self._wgs_partner_model_for_pos().browse(sorted(subscription._wgs_get_access_related_partner_ids())).exists()
         if partners and hasattr(partners, '_sync_access_person_face'):
-            partners._sync_access_person_face()
+            partners.with_context(access_sync_priority=True)._sync_access_person_face()
+
+        manual_resync_changes = Change.search([
+            ('id', '>', last_change_id),
+            ('action', 'in', ('upsert', 'delete')),
+        ])
+        if manual_resync_changes:
+            manual_resync_changes.write({'priority': True})
+            _logger.info(
+                'WGS POS access resync marked priority subscription_id=%s change_ids=%s',
+                subscription.id,
+                manual_resync_changes.ids,
+            )
 
         return {
             'ok': True,

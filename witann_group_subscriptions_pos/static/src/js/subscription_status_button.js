@@ -710,6 +710,8 @@ patch(ControlButtons.prototype, {
         let accessLogTotal = 0;
         let accessLogLoading = false;
         let accessLogError = "";
+        let accessLogNotice = "";
+        let accessLogOpeningDoorId = 0;
         let accessLogLoaded = false;
         let resyncAccessCooldownTimer = null;
         const resyncAccessLoadingIds = new Set();
@@ -825,6 +827,9 @@ patch(ControlButtons.prototype, {
                 rows: accessLogRows,
                 loading: accessLogLoading,
                 error: accessLogError,
+                notice: accessLogNotice,
+                devices: accessLogDevices,
+                openingDoorId: accessLogOpeningDoorId,
                 total: accessLogTotal,
                 siteNames: accessLogSiteNames,
                 escapeHtml: (value) => this._escapeHtml(value),
@@ -957,6 +962,7 @@ patch(ControlButtons.prototype, {
         const loadAccessLog = async () => {
             accessLogLoading = true;
             accessLogError = "";
+            accessLogNotice = "";
             renderActiveTabChrome();
             try {
                 const result = await this.subscriptionPosApi.fetchAccessEventLog({
@@ -979,6 +985,36 @@ patch(ControlButtons.prototype, {
             } finally {
                 accessLogLoading = false;
                 renderActiveTabChrome();
+            }
+        };
+
+        const openAccessDoor = async (deviceId) => {
+            const numericDeviceId = Number(deviceId || 0);
+            if (!numericDeviceId || accessLogOpeningDoorId) {
+                return;
+            }
+            accessLogOpeningDoorId = numericDeviceId;
+            accessLogError = "";
+            accessLogNotice = "";
+            renderAccessLog();
+            try {
+                const result = await this.subscriptionPosApi.openAccessDoor(numericDeviceId, {
+                    company_id: getCurrentCompanyId(this) || false,
+                    door_id: 1,
+                    open_time_seconds: 5,
+                    reason: "subscription_access_log_button",
+                });
+                accessLogNotice = result && result.queued
+                    ? _t("Comando enviado al equipo.")
+                    : _t("Comando enviado.");
+            } catch (error) {
+                console.error("Error al abrir puerta desde POS", error);
+                accessLogError = (
+                    error && error.data && (error.data.message || error.data.debug)
+                ) || (error && error.message) || _t("No se pudo abrir la puerta.");
+            } finally {
+                accessLogOpeningDoorId = 0;
+                renderAccessLog();
             }
         };
 
@@ -1699,15 +1735,23 @@ patch(ControlButtons.prototype, {
                 accessLogFilters.result = event.target.value || "all";
             } else if (event.target.classList.contains("wgs-access-log-device")) {
                 accessLogFilters.deviceId = event.target.value || "";
+                accessLogNotice = "";
             }
         });
 
         accessLogToolbar.addEventListener("click", (event) => {
             const refreshButton = event.target.closest(".wgs-access-log-refresh");
-            if (!refreshButton) {
+            if (refreshButton) {
+                loadAccessLog();
+            }
+        });
+
+        accessLogBody.addEventListener("click", (event) => {
+            const openDoorButton = event.target.closest(".wgs-access-door-open-btn");
+            if (!openDoorButton) {
                 return;
             }
-            loadAccessLog();
+            openAccessDoor(openDoorButton.dataset.deviceId || false);
         });
 
         const listPaneActions = {
@@ -2146,7 +2190,7 @@ patch(ControlButtons.prototype, {
             }
             .wgs-access-log-toolbar {
                 display: grid;
-                grid-template-columns: repeat(4, minmax(160px, 1fr)) minmax(130px, 0.6fr);
+                grid-template-columns: repeat(4, minmax(150px, 1fr)) minmax(130px, 0.6fr);
                 gap: 0.6rem;
                 align-items: end;
             }
@@ -2171,6 +2215,44 @@ patch(ControlButtons.prototype, {
                 gap: 0.5rem;
                 margin-bottom: 0.75rem;
             }
+            .wgs-access-door-panel {
+                border: 1px solid #dbeafe;
+                border-radius: 0.85rem;
+                background: #eff6ff;
+                padding: 0.75rem;
+                margin-bottom: 0.85rem;
+                display: grid;
+                gap: 0.55rem;
+            }
+            .wgs-access-door-panel-title {
+                color: #1e3a8a;
+                font-weight: 800;
+                font-size: 0.86rem;
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+            }
+            .wgs-access-door-row {
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) minmax(110px, 0.18fr);
+                gap: 0.65rem;
+                align-items: center;
+                border: 1px solid #bfdbfe;
+                border-radius: 0.7rem;
+                background: #ffffff;
+                padding: 0.65rem 0.75rem;
+            }
+            .wgs-access-door-row strong {
+                display: block;
+                color: #0f172a;
+                font-size: 0.9rem;
+            }
+            .wgs-access-door-row span,
+            .wgs-access-door-empty {
+                display: block;
+                color: #64748b;
+                font-size: 0.78rem;
+                margin-top: 0.12rem;
+            }
             .wgs-access-log-table-wrap {
                 border: 1px solid #e5e7eb;
                 border-radius: 0.75rem;
@@ -2178,7 +2260,13 @@ patch(ControlButtons.prototype, {
                 background: #ffffff;
             }
             .wgs-access-log-error {
+                margin: 0 0 0.75rem;
                 color: #9f1239;
+                font-weight: 700;
+            }
+            .wgs-access-log-notice {
+                margin: 0 0 0.75rem;
+                color: #166534;
                 font-weight: 700;
             }
             .wgs-status-summary {
@@ -2761,6 +2849,7 @@ patch(ControlButtons.prototype, {
 	            @media (max-width: 900px) {
 	                .wgs-status-toolbar,
 	                .wgs-access-log-toolbar,
+	                .wgs-access-door-row,
 	                .wgs-detail-contact-grid,
 	                .wgs-subscription-grid,
                 .wgs-detail-actions-bar,

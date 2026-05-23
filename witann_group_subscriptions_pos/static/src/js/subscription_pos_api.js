@@ -33,6 +33,9 @@ export function createSubscriptionPosApi(orm) {
         async fetchAccessEventLog(options = {}) {
             return orm.call("pos.order", "wgs_get_access_event_log_for_pos", [options || {}]);
         },
+        async openAccessDoor(deviceId, options = {}) {
+            return orm.call("pos.order", "wgs_open_access_door_for_pos", [deviceId || false, options || {}]);
+        },
         async fetchPartnerRecord(partnerId) {
             return orm.call("pos.order", "wgs_get_partner_record_for_pos", [partnerId || false]);
         },

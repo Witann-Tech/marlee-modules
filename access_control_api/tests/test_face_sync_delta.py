@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 import base64
 import io
+import json
 from unittest.mock import patch
 
 from odoo import fields
 from odoo.tests.common import TransactionCase
-from odoo.exceptions import ValidationError
+from odoo.exceptions import UserError, ValidationError
 
 from odoo.addons.access_control_api.controllers.main import AccessControlApi
 from odoo.addons.access_control_api.models import res_partner as res_partner_module
@@ -278,6 +279,26 @@ class TestFaceSyncDelta(TransactionCase):
         payload = self.controller._person_sync_payload(person, include_face_pic=False, clear_face_pic=False)
         self.assertEqual(payload["accessGroup"], 0)
 
+    def test_priority_upsert_queue_marks_change_and_payload(self):
+        _, person = self._make_person(self._make_image_b64())
+        self.Change.search([]).unlink()
+
+        self.Change.with_context(access_sync_priority=True).queue_upsert_for_person(
+            person,
+            reason="manual_resync",
+            include_face_pic=False,
+        )
+        change = self.Change.search([("person_id", "=", person.id)], limit=1)
+        payload = self.controller._person_sync_payload(
+            person,
+            include_face_pic=False,
+            clear_face_pic=False,
+            priority=change.priority,
+        )
+
+        self.assertTrue(change.priority)
+        self.assertTrue(payload["priority"])
+
     def test_touch_device_telemetry_updates_heartbeat_and_sync(self):
         self.device.write(
             {
@@ -298,6 +319,89 @@ class TestFaceSyncDelta(TransactionCase):
         self.assertTrue(self.device.last_heartbeat_at)
         self.assertTrue(self.device.last_sync_at)
         self.assertFalse(self.device.last_error)
+
+    def test_device_open_door_posts_to_adms_and_audits(self):
+        self.env["ir.config_parameter"].sudo().set_param("ADMS_BASE_URL", "https://adms.example.test")
+        self.env["ir.config_parameter"].sudo().set_param("INTERNAL_API_TOKEN", "secret-token")
+
+        class MockResponse:
+            content = b'{"ok": true, "queued": true}'
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"ok": True, "queued": True}
+
+        with patch("odoo.addons.access_control_api.models.access_device.requests.post", return_value=MockResponse()) as post:
+            result = self.device.open_door_via_adms(
+                door_id=1,
+                open_time_seconds=5,
+                reason="subscription_access_log_button",
+                operator_user=self.env.user,
+            )
+        change = self.Change.search([("action", "=", "command"), ("device_id", "=", self.device.id)], limit=1)
+        payload = json.loads(change.command_payload)
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["queued"])
+        post.assert_called_once()
+        _, kwargs = post.call_args
+        self.assertEqual(kwargs["json"]["deviceSerial"], self.device.device_serial)
+        self.assertEqual(kwargs["json"]["doorId"], 1)
+        self.assertEqual(kwargs["json"]["openTimeSeconds"], 5)
+        self.assertEqual(kwargs["json"]["operatorUserId"], self.env.user.id)
+        self.assertEqual(kwargs["json"]["reason"], "subscription_access_log_button")
+        self.assertEqual(kwargs["headers"]["Authorization"], "Bearer secret-token")
+        self.assertEqual(change.action, "command")
+        self.assertEqual(change.command_type, "open_door")
+        self.assertTrue(change.priority)
+        self.assertEqual(payload["deviceSerial"], self.device.device_serial)
+        self.assertTrue(payload["ok"])
+
+    def test_device_open_door_rejects_unqueued_adms_response(self):
+        self.env["ir.config_parameter"].sudo().set_param("ADMS_BASE_URL", "https://adms.example.test")
+        self.env["ir.config_parameter"].sudo().set_param("INTERNAL_API_TOKEN", "secret-token")
+
+        class MockResponse:
+            content = b'{"ok": true, "queued": false}'
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"ok": True, "queued": False}
+
+        with patch("odoo.addons.access_control_api.models.access_device.requests.post", return_value=MockResponse()):
+            with self.assertRaises(UserError):
+                self.device.open_door_via_adms(
+                    door_id=1,
+                    open_time_seconds=5,
+                    reason="subscription_access_log_button",
+                    operator_user=self.env.user,
+                )
+
+    def test_device_open_door_uses_local_adms_default_without_token(self):
+        class MockResponse:
+            content = b'{"ok": true, "queued": true}'
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"ok": True, "queued": True}
+
+        with patch("odoo.addons.access_control_api.models.access_device.requests.post", return_value=MockResponse()) as post:
+            self.device.open_door_via_adms(
+                door_id=1,
+                open_time_seconds=5,
+                reason="subscription_access_log_button",
+                operator_user=self.env.user,
+            )
+        args, kwargs = post.call_args
+        self.assertEqual(args[0], "http://127.0.0.1:18080/admin/devices/open-door")
+        self.assertNotIn("Authorization", kwargs["headers"])
+        self.assertEqual(kwargs["headers"]["Content-Type"], "application/json")
 
     def test_register_access_event_updates_person_last_access(self):
         _, person = self._make_person(self._make_image_b64())
