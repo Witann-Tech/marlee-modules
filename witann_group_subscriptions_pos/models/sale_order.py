@@ -675,6 +675,10 @@ class SaleOrder(models.Model):
                 )
         ICP.set_param(cooldown_key, fields.Datetime.to_string(now))
 
+        Change = self.env['access_control.sync_change'].sudo()
+        last_change = Change.search([], order='id desc', limit=1)
+        last_change_id = last_change.id or 0
+
         if hasattr(subscription, '_ensure_subscription_owner_is_participant'):
             subscription._ensure_subscription_owner_is_participant()
         if hasattr(subscription, '_wgs_sync_access_control_people'):
@@ -683,6 +687,18 @@ class SaleOrder(models.Model):
         partners = self._wgs_partner_model_for_pos().browse(sorted(subscription._wgs_get_access_related_partner_ids())).exists()
         if partners and hasattr(partners, '_sync_access_person_face'):
             partners.with_context(access_sync_priority=True)._sync_access_person_face()
+
+        manual_resync_changes = Change.search([
+            ('id', '>', last_change_id),
+            ('action', 'in', ('upsert', 'delete')),
+        ])
+        if manual_resync_changes:
+            manual_resync_changes.write({'priority': True})
+            _logger.info(
+                'WGS POS access resync marked priority subscription_id=%s change_ids=%s',
+                subscription.id,
+                manual_resync_changes.ids,
+            )
 
         return {
             'ok': True,
