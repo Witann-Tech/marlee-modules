@@ -341,6 +341,28 @@ class TestFaceSyncDelta(TransactionCase):
         self.assertEqual(payload["reason"], "subscription_access_log_button")
         self.assertTrue(payload["priority"])
 
+    def test_pending_command_payload_is_returned_once(self):
+        result = self.device.queue_open_door_command(
+            door_id=1,
+            open_time_seconds=5,
+            reason="subscription_access_log_button",
+            operator_user=self.env.user,
+        )
+        change = self.Change.browse(result["change_id"])
+
+        commands = self.controller._command_payloads_for_changes(change, self.site.code)
+        self.controller._mark_commands_sent(change)
+        pending = self.controller._pending_command_changes(self.site, self.device)
+        change.invalidate_recordset(["command_state", "command_delivered_at"])
+
+        self.assertEqual(len(commands), 1)
+        self.assertEqual(commands[0]["type"], "open_door")
+        self.assertEqual(commands[0]["deviceSerial"], self.device.device_serial)
+        self.assertTrue(commands[0]["priority"])
+        self.assertEqual(change.command_state, "sent")
+        self.assertTrue(change.command_delivered_at)
+        self.assertFalse(pending)
+
     def test_register_access_event_updates_person_last_access(self):
         _, person = self._make_person(self._make_image_b64())
         occurred_at = fields.Datetime.now()

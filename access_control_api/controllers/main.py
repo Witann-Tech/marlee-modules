@@ -151,6 +151,54 @@ class AccessControlApi(http.Controller):
         Change = site.env["access_control.sync_change"].sudo()
         return Change.search([("site_id", "=", site.id)], order="id desc", limit=1).id or 0
 
+    def _command_payloads_for_changes(self, changes, site_code):
+        commands = []
+        for ch in changes:
+            command_payload = {}
+            if ch.command_payload:
+                try:
+                    command_payload = json.loads(ch.command_payload)
+                except (TypeError, ValueError):
+                    command_payload = {}
+            command_payload.update(
+                {
+                    "id": ch.id,
+                    "type": ch.command_type or "command",
+                    "priority": bool(ch.priority),
+                    "siteCode": ch.site_id.code if ch.site_id else site_code,
+                    "deviceSerial": (
+                        command_payload.get("deviceSerial")
+                        or (ch.device_id.device_serial if ch.device_id else None)
+                        or None
+                    ),
+                }
+            )
+            commands.append(command_payload)
+        return commands
+
+    def _pending_command_changes(self, site, device=False, limit=50):
+        Change = site.env["access_control.sync_change"].sudo()
+        domain = [
+            ("site_id", "=", site.id),
+            ("action", "=", "command"),
+            ("command_state", "=", "pending"),
+        ]
+        if device:
+            domain.append(("device_id", "in", [False, device.id]))
+        return Change.search(domain, order="priority desc, id asc", limit=limit)
+
+    def _mark_commands_sent(self, changes):
+        changes = changes.exists() if changes else changes
+        if not changes:
+            return False
+        changes.sudo().write(
+            {
+                "command_state": "sent",
+                "command_delivered_at": fields.Datetime.now(),
+            }
+        )
+        return True
+
     def _is_valid_user_api_key(self, token):
         """Support Odoo user API keys created from user preferences."""
         ApiKeys = request.env["res.users.apikeys"].sudo()
@@ -458,8 +506,11 @@ class AccessControlApi(http.Controller):
 
         # Bootstrap cursor (0 or negative internal cursor) returns a paged snapshot.
         if cursor <= 0:
+            pending_commands = self._pending_command_changes(site, device, limit=limit)
+            commands = self._command_payloads_for_changes(pending_commands, site_code)
+            self._mark_commands_sent(pending_commands)
             self._touch_device_telemetry(device, heartbeat=True, sync=True, error_marker=True)
-            return self._site_bootstrap_result(
+            result = self._site_bootstrap_result(
                 site,
                 site_code,
                 device_serial,
@@ -468,6 +519,8 @@ class AccessControlApi(http.Controller):
                 include_biophoto=include_biophoto,
                 reason="bootstrap",
             )
+            result["commands"] = commands
+            return result
 
         changes = Change.search(
             [("site_id", "=", site.id), ("id", ">", cursor)],
@@ -477,6 +530,9 @@ class AccessControlApi(http.Controller):
 
         if not changes:
             if cursor > site_max_cursor:
+                pending_commands = self._pending_command_changes(site, device, limit=limit)
+                commands = self._command_payloads_for_changes(pending_commands, site_code)
+                self._mark_commands_sent(pending_commands)
                 self._touch_device_telemetry(device, heartbeat=True, sync=True, error_marker=True)
                 _logger.warning(
                     "sync_delta stale cursor detected site=%s device=%s cursor=%s site_max_cursor=%s; returning bootstrap snapshot",
@@ -485,7 +541,7 @@ class AccessControlApi(http.Controller):
                     cursor,
                     site_max_cursor,
                 )
-                return self._site_bootstrap_result(
+                result = self._site_bootstrap_result(
                     site,
                     site_code,
                     device_serial,
@@ -494,10 +550,15 @@ class AccessControlApi(http.Controller):
                     include_biophoto=include_biophoto,
                     reason="stale_cursor_bootstrap",
                 )
+                result["commands"] = commands
+                return result
             self._touch_device_telemetry(device, heartbeat=True, sync=True, error_marker=True)
+            pending_commands = self._pending_command_changes(site, device, limit=limit)
+            commands = self._command_payloads_for_changes(pending_commands, site_code)
+            self._mark_commands_sent(pending_commands)
             return {
                 "ok": True,
-                "reason": "no_changes",
+                "reason": "commands" if commands else "no_changes",
                 "siteCode": site_code,
                 "deviceSerial": device_serial or None,
                 "cursor": cursor,
@@ -505,33 +566,15 @@ class AccessControlApi(http.Controller):
                 "hasMore": False,
                 "upserts": [],
                 "deletes": [],
-                "commands": [],
+                "commands": commands,
             }
 
         latest_by_gid = {}
-        commands = []
+        command_changes = Change.browse()
         for ch in changes:
             if ch.action == "command":
-                command_payload = {}
-                if ch.command_payload:
-                    try:
-                        command_payload = json.loads(ch.command_payload)
-                    except (TypeError, ValueError):
-                        command_payload = {}
-                command_payload.update(
-                    {
-                        "id": ch.id,
-                        "type": ch.command_type or "command",
-                        "priority": bool(ch.priority),
-                        "siteCode": ch.site_id.code if ch.site_id else site_code,
-                        "deviceSerial": (
-                            command_payload.get("deviceSerial")
-                            or (ch.device_id.device_serial if ch.device_id else None)
-                            or None
-                        ),
-                    }
-                )
-                commands.append(command_payload)
+                if ch.command_state == "pending" and (not device or not ch.device_id or ch.device_id.id == device.id):
+                    command_changes |= ch
                 continue
             gid = ch.global_user_id
             if not gid:
@@ -601,6 +644,10 @@ class AccessControlApi(http.Controller):
 
         next_cursor = changes[-1].id
         has_more = len(changes) >= limit
+        pending_commands = self._pending_command_changes(site, device, limit=limit)
+        command_changes |= pending_commands
+        commands = self._command_payloads_for_changes(command_changes, site_code)
+        self._mark_commands_sent(command_changes)
         self._mark_people_synced(synced_people)
         self._touch_device_telemetry(device, heartbeat=True, sync=True, error_marker=True)
         _logger.info(

@@ -25,6 +25,12 @@ class AccessSyncChange(models.Model):
     device_id = fields.Many2one("access_control.device", index=True, ondelete="set null")
     command_type = fields.Selection([("open_door", "Abrir puerta")], index=True)
     command_payload = fields.Text()
+    command_state = fields.Selection(
+        [("pending", "Pendiente"), ("sent", "Enviado")],
+        default="pending",
+        index=True,
+    )
+    command_delivered_at = fields.Datetime()
     include_face_pic = fields.Boolean(default=False)
     clear_face_pic = fields.Boolean(default=False)
     priority = fields.Boolean(default=False, index=True)
@@ -127,6 +133,7 @@ class AccessSyncChange(models.Model):
                 "action": "command",
                 "command_type": "open_door",
                 "command_payload": json.dumps(payload, ensure_ascii=True, default=str),
+                "command_state": "pending",
                 "priority": priority,
                 "reason": payload["reason"],
             }
