@@ -1004,9 +1004,11 @@ patch(ControlButtons.prototype, {
                     open_time_seconds: 5,
                     reason: "subscription_access_log_button",
                 });
-                accessLogNotice = result && result.queued
+                const doorNotice = result && result.queued
                     ? _t("Comando enviado al equipo.")
                     : _t("Comando enviado.");
+                await loadAccessLog();
+                accessLogNotice = doorNotice;
             } catch (error) {
                 console.error("Error al abrir puerta desde POS", error);
                 accessLogError = (

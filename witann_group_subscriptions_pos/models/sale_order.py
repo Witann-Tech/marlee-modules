@@ -1,3 +1,4 @@
+import json
 import logging
 from datetime import date, datetime, time, timedelta
 
@@ -611,10 +612,27 @@ class SaleOrder(models.Model):
 
         rows = []
         for event in events:
+            raw_payload = {}
+            if event.raw_payload:
+                try:
+                    raw_payload = json.loads(event.raw_payload)
+                except (TypeError, ValueError):
+                    raw_payload = {}
+            is_open_door_event = event.modality == 'manual_open_door' or event.event_id.startswith('open_door:')
             partner = event.person_id.partner_id if event.person_id and event.person_id.partner_id else False
+            partner_name = partner.display_name if partner else (
+                _('Usuario global %s') % event.global_user_id if event.global_user_id else _('Sin identificar')
+            )
+            if is_open_door_event:
+                operator_name = raw_payload.get('operatorUserName') or raw_payload.get('operator_user_name')
+                partner_name = _('Apertura manual por %s') % operator_name if operator_name else _('Apertura manual')
+            result_label = result_labels.get(event.result, event.result or '-')
+            if is_open_door_event and event.result == 'allowed':
+                result_label = _('Comando enviado')
             rows.append({
                 'id': event.id,
                 'event_id': event.event_id or False,
+                'event_type': 'open_door' if is_open_door_event else 'access',
                 'occurred_at': fields.Datetime.to_string(event.occurred_at) if event.occurred_at else False,
                 'site_id': event.site_id.id if event.site_id else False,
                 'site_name': event.site_id.display_name if event.site_id else False,
@@ -622,12 +640,10 @@ class SaleOrder(models.Model):
                 'device_name': event.device_id.display_name if event.device_id else (event.device_serial or False),
                 'device_serial': event.device_serial or (event.device_id.device_serial if event.device_id else False),
                 'partner_id': partner.id if partner else False,
-                'partner_name': partner.display_name if partner else (
-                    _('Usuario global %s') % event.global_user_id if event.global_user_id else _('Sin identificar')
-                ),
+                'partner_name': partner_name,
                 'global_user_id': event.global_user_id or False,
                 'result': event.result or False,
-                'result_label': result_labels.get(event.result, event.result or '-'),
+                'result_label': result_label,
             })
 
         return {

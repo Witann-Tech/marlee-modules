@@ -17,7 +17,7 @@ class AccessEvent(models.Model):
     global_user_id = fields.Integer(index=True)
 
     modality = fields.Selection(
-        [("face", "Rostro"), ("unknown", "Desconocido")],
+        [("face", "Rostro"), ("manual_open_door", "Apertura manual"), ("unknown", "Desconocido")],
         default="unknown",
         index=True,
     )
