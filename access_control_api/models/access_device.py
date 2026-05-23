@@ -67,7 +67,7 @@ class AccessControlDevice(models.Model):
             or odoo_config.get("access_control_internal_api_token")
             or odoo_config.get("access_control.internal_api_token")
         )
-        return (base_url or "").strip().rstrip("/"), (token or "").strip()
+        return (base_url or "http://127.0.0.1:18080").strip().rstrip("/"), (token or "").strip()
 
     def _audit_open_door_request(self, payload, response_data=None, ok=False):
         self.ensure_one()
@@ -99,8 +99,8 @@ class AccessControlDevice(models.Model):
             raise UserError("El dispositivo no tiene serial configurado.")
 
         base_url, token = self._get_adms_config()
-        if not base_url or not token:
-            raise UserError("Configura ADMS_BASE_URL e INTERNAL_API_TOKEN antes de abrir puertas.")
+        if not base_url:
+            raise UserError("Configura ADMS_BASE_URL antes de abrir puertas.")
 
         try:
             door_id = int(door_id or 1)
@@ -122,15 +122,16 @@ class AccessControlDevice(models.Model):
         }
 
         url = "%s/admin/devices/open-door" % base_url
+        headers = {"Content-Type": "application/json"}
+        if token:
+            headers["Authorization"] = "Bearer %s" % token
+            headers["X-API-Token"] = token
         response_data = {}
         try:
             response = requests.post(
                 url,
                 json=payload,
-                headers={
-                    "Authorization": "Bearer %s" % token,
-                    "Content-Type": "application/json",
-                },
+                headers=headers,
                 timeout=8,
             )
             response.raise_for_status()

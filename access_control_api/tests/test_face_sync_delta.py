@@ -381,14 +381,27 @@ class TestFaceSyncDelta(TransactionCase):
                     operator_user=self.env.user,
                 )
 
-    def test_device_open_door_config_required(self):
-        with self.assertRaises(UserError):
+    def test_device_open_door_uses_local_adms_default_without_token(self):
+        class MockResponse:
+            content = b'{"ok": true, "queued": true}'
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"ok": True, "queued": True}
+
+        with patch("odoo.addons.access_control_api.models.access_device.requests.post", return_value=MockResponse()) as post:
             self.device.open_door_via_adms(
                 door_id=1,
                 open_time_seconds=5,
                 reason="subscription_access_log_button",
                 operator_user=self.env.user,
             )
+        args, kwargs = post.call_args
+        self.assertEqual(args[0], "http://127.0.0.1:18080/admin/devices/open-door")
+        self.assertNotIn("Authorization", kwargs["headers"])
+        self.assertEqual(kwargs["headers"]["Content-Type"], "application/json")
 
     def test_register_access_event_updates_person_last_access(self):
         _, person = self._make_person(self._make_image_b64())
