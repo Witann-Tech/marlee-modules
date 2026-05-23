@@ -358,6 +358,19 @@ class TestFaceSyncDelta(TransactionCase):
         self.assertTrue(change.priority)
         self.assertEqual(payload["deviceSerial"], self.device.device_serial)
         self.assertTrue(payload["ok"])
+        event = self.env["access_control.access_event"].search(
+            [("event_id", "=", result["access_event_ref"])],
+            limit=1,
+        )
+        self.assertTrue(event)
+        event_payload = json.loads(event.raw_payload)
+        self.assertEqual(event.device_id.id, self.device.id)
+        self.assertEqual(event.site_id.id, self.site.id)
+        self.assertEqual(event.device_serial, self.device.device_serial)
+        self.assertEqual(event.modality, "manual_open_door")
+        self.assertEqual(event.result, "allowed")
+        self.assertEqual(event_payload["eventType"], "open_door")
+        self.assertEqual(event_payload["operatorUserId"], self.env.user.id)
 
     def test_device_open_door_rejects_unqueued_adms_response(self):
         self.env["ir.config_parameter"].sudo().set_param("ADMS_BASE_URL", "https://adms.example.test")

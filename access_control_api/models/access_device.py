@@ -2,6 +2,7 @@
 import json
 import logging
 import os
+import uuid
 
 import requests
 
@@ -91,6 +92,42 @@ class AccessControlDevice(models.Model):
         except Exception:
             _logger.exception("access_device open_door audit failed device_id=%s", self.id)
 
+    def _log_open_door_access_event(self, payload, response_data=None, operator_user=None):
+        self.ensure_one()
+        occurred_at = fields.Datetime.now()
+        raw_payload = dict(payload or {})
+        raw_payload.update(
+            {
+                "eventType": "open_door",
+                "source": "odoo_pos",
+                "operatorUserId": operator_user.id if operator_user else self.env.user.id,
+                "operatorUserName": operator_user.display_name if operator_user else self.env.user.display_name,
+            }
+        )
+        if response_data is not None:
+            raw_payload["admsResponse"] = response_data
+        event = self.env["access_control.access_event"].sudo().create(
+            {
+                "event_id": "open_door:%s:%s" % (self.device_serial, uuid.uuid4().hex),
+                "site_id": self.site_id.id if self.site_id else False,
+                "device_id": self.id,
+                "device_serial": self.device_serial,
+                "global_user_id": 0,
+                "modality": "manual_open_door",
+                "result": "allowed",
+                "occurred_at": occurred_at,
+                "raw_payload": json.dumps(raw_payload, ensure_ascii=True, default=str),
+            }
+        )
+        _logger.info(
+            "access_device open_door access_event event_id=%s device_id=%s serial=%s user_id=%s",
+            event.event_id,
+            self.id,
+            self.device_serial,
+            raw_payload["operatorUserId"],
+        )
+        return event
+
     def open_door_via_adms(self, door_id=1, open_time_seconds=5, reason="manual_open_door", operator_user=None):
         self.ensure_one()
         if not self.active:
@@ -160,6 +197,7 @@ class AccessControlDevice(models.Model):
             raise UserError("ADMS no confirmó el encolado del comando de apertura.")
 
         self._audit_open_door_request(payload, response_data=response_data, ok=True)
+        event = self._log_open_door_access_event(payload, response_data=response_data, operator_user=operator_user)
         _logger.info(
             "access_device open_door queued device_id=%s serial=%s user_id=%s door_id=%s open_time=%s",
             self.id,
@@ -176,4 +214,6 @@ class AccessControlDevice(models.Model):
             "device_serial": self.device_serial,
             "door_id": door_id,
             "open_time_seconds": open_time_seconds,
+            "access_event_id": event.id,
+            "access_event_ref": event.event_id,
         }
