@@ -531,11 +531,11 @@ class SaleOrder(models.Model):
         if company and device.site_id and device.site_id.company_id and device.site_id.company_id.id != company.id:
             raise UserError(_('La puerta seleccionada no pertenece a la empresa activa del Punto de Venta.'))
 
-        if not hasattr(device, 'queue_open_door_command'):
+        if not hasattr(device, 'open_door_via_adms'):
             raise UserError(_('El módulo de control de acceso no tiene disponible el comando de apertura de puerta.'))
 
         try:
-            result = device.queue_open_door_command(
+            result = device.open_door_via_adms(
                 door_id=data.get('door_id') or data.get('doorId') or 1,
                 open_time_seconds=data.get('open_time_seconds') or data.get('openTimeSeconds') or 5,
                 reason=data.get('reason') or 'subscription_access_log_button',

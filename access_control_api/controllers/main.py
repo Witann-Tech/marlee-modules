@@ -149,32 +149,11 @@ class AccessControlApi(http.Controller):
 
     def _site_change_max_cursor(self, site):
         Change = site.env["access_control.sync_change"].sudo()
-        return Change.search([("site_id", "=", site.id)], order="id desc", limit=1).id or 0
-
-    def _command_payloads_for_changes(self, changes, site_code):
-        commands = []
-        for ch in changes:
-            command_payload = {}
-            if ch.command_payload:
-                try:
-                    command_payload = json.loads(ch.command_payload)
-                except (TypeError, ValueError):
-                    command_payload = {}
-            command_payload.update(
-                {
-                    "id": ch.id,
-                    "type": ch.command_type or "command",
-                    "priority": bool(ch.priority),
-                    "siteCode": ch.site_id.code if ch.site_id else site_code,
-                    "deviceSerial": (
-                        command_payload.get("deviceSerial")
-                        or (ch.device_id.device_serial if ch.device_id else None)
-                        or None
-                    ),
-                }
-            )
-            commands.append(command_payload)
-        return commands
+        return Change.search(
+            [("site_id", "=", site.id), ("action", "!=", "command")],
+            order="id desc",
+            limit=1,
+        ).id or 0
 
     def _is_valid_user_api_key(self, token):
         """Support Odoo user API keys created from user preferences."""
@@ -495,7 +474,7 @@ class AccessControlApi(http.Controller):
             )
 
         changes = Change.search(
-            [("site_id", "=", site.id), ("id", ">", cursor)],
+            [("site_id", "=", site.id), ("id", ">", cursor), ("action", "!=", "command")],
             order="id asc",
             limit=limit,
         )
@@ -534,11 +513,8 @@ class AccessControlApi(http.Controller):
             }
 
         latest_by_gid = {}
-        command_changes = Change.browse()
         for ch in changes:
             if ch.action == "command":
-                if not device or not ch.device_id or ch.device_id.id == device.id:
-                    command_changes |= ch
                 continue
             gid = ch.global_user_id
             if not gid:
@@ -608,7 +584,6 @@ class AccessControlApi(http.Controller):
 
         next_cursor = changes[-1].id
         has_more = len(changes) >= limit
-        commands = self._command_payloads_for_changes(command_changes, site_code)
         self._mark_people_synced(synced_people)
         self._touch_device_telemetry(device, heartbeat=True, sync=True, error_marker=True)
         _logger.info(
@@ -619,7 +594,7 @@ class AccessControlApi(http.Controller):
             next_cursor,
             len(upserts),
             len(deletes),
-            len(commands),
+            0,
             include_biophoto,
         )
 
@@ -633,7 +608,7 @@ class AccessControlApi(http.Controller):
             "hasMore": has_more,
             "upserts": upserts,
             "deletes": deletes,
-            "commands": commands,
+            "commands": [],
         }
 
     @http.route(

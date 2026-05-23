@@ -1004,10 +1004,9 @@ patch(ControlButtons.prototype, {
                     open_time_seconds: 5,
                     reason: "subscription_access_log_button",
                 });
-                const deviceLabel = result && (result.device_name || result.device_serial)
-                    ? (result.device_name || result.device_serial)
-                    : _t("puerta seleccionada");
-                accessLogNotice = _t("Comando enviado a %s.").replace("%s", deviceLabel);
+                accessLogNotice = result && result.queued
+                    ? _t("Comando enviado al equipo.")
+                    : _t("Comando enviado.");
             } catch (error) {
                 console.error("Error al abrir puerta desde POS", error);
                 accessLogError = (

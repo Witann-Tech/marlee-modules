@@ -1,9 +1,7 @@
 # -*- coding: utf-8 -*-
-import json
 import logging
 
 from odoo import models, fields, api
-from odoo.exceptions import UserError
 
 
 _logger = logging.getLogger(__name__)
@@ -82,73 +80,6 @@ class AccessSyncChange(models.Model):
             reason,
         )
         return True
-
-    @api.model
-    def queue_open_door_command(
-        self,
-        device,
-        door_id=1,
-        open_time_seconds=5,
-        reason="manual_open_door",
-        operator_user=None,
-        priority=True,
-    ):
-        if not device or not device.exists() or not device.active:
-            raise UserError("El dispositivo seleccionado no existe o está inactivo.")
-        if not device.device_serial:
-            raise UserError("El dispositivo no tiene serial configurado.")
-        if not device.site_id:
-            raise UserError("El dispositivo no tiene sitio configurado.")
-        try:
-            door_id = int(door_id or 1)
-        except (TypeError, ValueError):
-            door_id = 1
-        try:
-            open_time_seconds = int(open_time_seconds or 5)
-        except (TypeError, ValueError):
-            open_time_seconds = 5
-        door_id = max(1, door_id)
-        open_time_seconds = min(max(1, open_time_seconds), 60)
-        operator_user = operator_user or self.env.user
-        priority = True if priority is None else bool(priority)
-        payload = {
-            "deviceSerial": device.device_serial,
-            "doorId": door_id,
-            "openTimeSeconds": open_time_seconds,
-            "operatorUserId": operator_user.id,
-            "reason": str(reason or "manual_open_door").strip(),
-            "priority": priority,
-        }
-        change = self.sudo().create(
-            {
-                "site_id": device.site_id.id,
-                "device_id": device.id,
-                "global_user_id": 0,
-                "action": "command",
-                "command_type": "open_door",
-                "command_payload": json.dumps(payload, ensure_ascii=True, default=str),
-                "priority": priority,
-                "reason": payload["reason"],
-            }
-        )
-        _logger.info(
-            "queue_command type=open_door change_id=%s device_id=%s serial=%s priority=%s reason=%s",
-            change.id,
-            device.id,
-            device.device_serial,
-            priority,
-            payload["reason"],
-        )
-        return {
-            "ok": True,
-            "change_id": change.id,
-            "device_id": device.id,
-            "device_name": device.display_name,
-            "device_serial": device.device_serial,
-            "door_id": door_id,
-            "open_time_seconds": open_time_seconds,
-            "priority": priority,
-        }
 
     @api.model
     def queue_delete(self, global_user_id, site_ids, person=None, reason="person_update", priority=None):
