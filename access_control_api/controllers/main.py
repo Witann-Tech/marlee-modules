@@ -2,6 +2,8 @@
 import base64
 import json
 import logging
+from datetime import datetime, timedelta, timezone
+
 import pytz
 from dateutil import parser as date_parser
 from odoo import http, fields
@@ -231,12 +233,13 @@ class AccessControlApi(http.Controller):
             return m
         return None
 
-    def _access_event_timezone(self):
-        ICP = request.env["ir.config_parameter"].sudo()
+    def _access_event_timezone(self, env=None):
+        env = env or request.env
+        ICP = env["ir.config_parameter"].sudo()
         tz_name = (
             ICP.get_param("access_control.event_timezone")
             or ICP.get_param("access_control_api.event_timezone")
-            or request.env.user.tz
+            or env.user.tz
             or "America/Mexico_City"
         )
         try:
@@ -245,22 +248,94 @@ class AccessControlApi(http.Controller):
             _logger.warning("access_event invalid timezone=%s; falling back to UTC", tz_name)
             return pytz.UTC
 
-    def _parse_access_event_datetime(self, value):
+    def _access_event_future_tolerance(self, env=None):
+        env = env or request.env
+        raw_value = env["ir.config_parameter"].sudo().get_param(
+            "access_control.event_future_tolerance_minutes",
+            default="5",
+        )
+        try:
+            minutes = int(raw_value or 0)
+        except (TypeError, ValueError):
+            minutes = 5
+        return timedelta(minutes=max(minutes, 0))
+
+    def _access_event_max_future_shift_hours(self, env=None):
+        env = env or request.env
+        raw_value = env["ir.config_parameter"].sudo().get_param(
+            "access_control.event_max_future_shift_hours",
+            default="12",
+        )
+        try:
+            hours = int(raw_value or 0)
+        except (TypeError, ValueError):
+            hours = 12
+        return max(hours, 0)
+
+    def _utc_now(self):
+        return datetime.now(timezone.utc).replace(tzinfo=None)
+
+    def _normalize_future_access_event_datetime(self, parsed_utc, received_at, raw_value=None, env=None):
+        if not parsed_utc or not received_at:
+            return parsed_utc
+        tolerance = self._access_event_future_tolerance(env)
+        future_delta = parsed_utc - received_at
+        if future_delta <= tolerance:
+            return parsed_utc
+
+        shift_hours = int(round(future_delta.total_seconds() / 3600.0))
+        max_shift_hours = self._access_event_max_future_shift_hours(env)
+        if not shift_hours or shift_hours > max_shift_hours:
+            _logger.warning(
+                "access_event future timestamp left unchanged raw=%s parsed_utc=%s received_at=%s delta_seconds=%s",
+                raw_value,
+                parsed_utc,
+                received_at,
+                int(future_delta.total_seconds()),
+            )
+            return parsed_utc
+
+        adjusted = parsed_utc - timedelta(hours=shift_hours)
+        if adjusted - received_at > tolerance:
+            _logger.warning(
+                "access_event future timestamp correction insufficient raw=%s parsed_utc=%s adjusted=%s received_at=%s shift_hours=%s",
+                raw_value,
+                parsed_utc,
+                adjusted,
+                received_at,
+                shift_hours,
+            )
+            return parsed_utc
+
+        _logger.warning(
+            "access_event corrected future timestamp raw=%s parsed_utc=%s adjusted=%s received_at=%s shift_hours=%s",
+            raw_value,
+            parsed_utc,
+            adjusted,
+            received_at,
+            shift_hours,
+        )
+        return adjusted
+
+    def _parse_access_event_datetime(self, value, env=None, received_at=None):
+        received_at = received_at or self._utc_now()
         if not value:
-            return fields.Datetime.now()
+            return received_at
         try:
             parsed = date_parser.parse(str(value))
         except Exception:
             _logger.warning("access_event invalid occurredAt=%s; using server time", value)
-            return fields.Datetime.now()
+            return received_at
         if parsed.tzinfo:
-            return parsed.astimezone(pytz.UTC).replace(tzinfo=None)
+            parsed_utc = parsed.astimezone(pytz.UTC).replace(tzinfo=None)
+            return self._normalize_future_access_event_datetime(parsed_utc, received_at, value, env)
         try:
-            localized = self._access_event_timezone().localize(parsed)
+            localized = self._access_event_timezone(env).localize(parsed)
         except Exception:
             _logger.warning("access_event could not localize occurredAt=%s; using UTC", value)
             localized = pytz.UTC.localize(parsed)
-        return localized.astimezone(pytz.UTC).replace(tzinfo=None)
+        parsed_utc = localized.astimezone(pytz.UTC).replace(tzinfo=None)
+        return self._normalize_future_access_event_datetime(parsed_utc, received_at, value, env)
 
     def _person_sync_payload(self, person, include_face_pic=True, clear_face_pic=False, priority=False):
         payload = {
@@ -759,7 +834,12 @@ class AccessControlApi(http.Controller):
                 result = "denied"
 
             occurred_at_raw = item.get("occurredAt") or item.get("occurred_at")
-            occurred_at = self._parse_access_event_datetime(occurred_at_raw)
+            received_at = self._utc_now()
+            occurred_at = self._parse_access_event_datetime(
+                occurred_at_raw,
+                env=request.env,
+                received_at=received_at,
+            )
 
             Event.create(
                 {
@@ -772,6 +852,7 @@ class AccessControlApi(http.Controller):
                     "modality": modality,
                     "result": result,
                     "occurred_at": occurred_at,
+                    "received_at": received_at,
                     "raw_payload": json.dumps(item, ensure_ascii=True, default=str),
                 }
             )
