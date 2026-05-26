@@ -540,6 +540,41 @@ class SaleOrder(models.Model):
         return fields.Datetime.to_string(parsed).replace(' ', 'T') + 'Z'
 
     @api.model
+    def _wgs_effective_access_log_datetime_for_pos(self, event):
+        occurred_at = fields.Datetime.to_datetime(event.occurred_at) if event.occurred_at else False
+        if not occurred_at:
+            return False
+
+        reference_at = (
+            fields.Datetime.to_datetime(event.received_at)
+            if event.received_at else fields.Datetime.to_datetime(event.create_date)
+        )
+        if not reference_at:
+            return occurred_at
+
+        future_delta = occurred_at - reference_at
+        if future_delta <= timedelta(minutes=5):
+            return occurred_at
+
+        shift_hours = int(round(future_delta.total_seconds() / 3600.0))
+        if not shift_hours or shift_hours > 12:
+            return occurred_at
+
+        adjusted = occurred_at - timedelta(hours=shift_hours)
+        if adjusted - reference_at > timedelta(minutes=5):
+            return occurred_at
+
+        _logger.warning(
+            'WGS POS access log display corrected future event event_id=%s occurred_at=%s reference_at=%s adjusted=%s shift_hours=%s',
+            event.event_id,
+            occurred_at,
+            reference_at,
+            adjusted,
+            shift_hours,
+        )
+        return adjusted
+
+    @api.model
     def _wgs_get_pos_access_sites_for_pos(self, company):
         Site = self.env['access_control.site'].sudo()
         if not company:
@@ -674,7 +709,9 @@ class SaleOrder(models.Model):
                 'id': event.id,
                 'event_id': event.event_id or False,
                 'event_type': 'open_door' if is_open_door_event else 'access',
-                'occurred_at': self._wgs_access_log_datetime_to_utc_iso_for_pos(event.occurred_at),
+                'occurred_at': self._wgs_access_log_datetime_to_utc_iso_for_pos(
+                    self._wgs_effective_access_log_datetime_for_pos(event)
+                ),
                 'site_id': event.site_id.id if event.site_id else False,
                 'site_name': event.site_id.display_name if event.site_id else False,
                 'device_id': event.device_id.id if event.device_id else False,
