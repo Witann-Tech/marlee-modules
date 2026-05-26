@@ -453,7 +453,7 @@ class TestFaceSyncDelta(TransactionCase):
 
         self.assertEqual(parsed, datetime(2026, 5, 26, 2, 50, 0))
 
-    def test_access_event_parser_defaults_to_sf_source_timezone(self):
+    def test_access_event_parser_defaults_to_mexico_and_corrects_device_drift(self):
         received_at = datetime(2026, 5, 26, 2, 59, 0)
 
         parsed = self.controller._parse_access_event_datetime(

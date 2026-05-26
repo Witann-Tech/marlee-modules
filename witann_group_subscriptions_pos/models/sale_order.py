@@ -509,20 +509,22 @@ class SaleOrder(models.Model):
         tz_name = (
             self.env['ir.config_parameter'].sudo().get_param('access_control.event_source_timezone')
             or self.env['ir.config_parameter'].sudo().get_param('access_control_api.event_source_timezone')
-            or 'America/Sao_Paulo'
+            or self.env['ir.config_parameter'].sudo().get_param('access_control.event_timezone')
+            or self.env['ir.config_parameter'].sudo().get_param('access_control_api.event_timezone')
+            or self.env.user.tz
+            or 'America/Mexico_City'
         )
         try:
             return pytz.timezone(tz_name)
         except Exception:
-            _logger.warning('WGS POS access log invalid source timezone=%s; falling back to America/Sao_Paulo', tz_name)
-            return pytz.timezone('America/Sao_Paulo')
+            _logger.warning('WGS POS access log invalid source timezone=%s; falling back to America/Mexico_City', tz_name)
+            return pytz.timezone('America/Mexico_City')
 
     @api.model
     def _wgs_access_log_candidate_timezones_for_pos(self, timezone_name=False):
         timezones = [
             self._wgs_access_log_source_timezone_for_pos(),
             self._wgs_access_log_timezone_for_pos(timezone_name),
-            pytz.timezone('America/Sao_Paulo'),
             pytz.UTC,
         ]
         unique = []

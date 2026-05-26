@@ -239,13 +239,16 @@ class AccessControlApi(http.Controller):
         tz_name = (
             ICP.get_param("access_control.event_source_timezone")
             or ICP.get_param("access_control_api.event_source_timezone")
-            or "America/Sao_Paulo"
+            or ICP.get_param("access_control.event_timezone")
+            or ICP.get_param("access_control_api.event_timezone")
+            or env.user.tz
+            or "America/Mexico_City"
         )
         try:
             return pytz.timezone(tz_name)
         except Exception:
-            _logger.warning("access_event invalid source timezone=%s; falling back to America/Sao_Paulo", tz_name)
-            return pytz.timezone("America/Sao_Paulo")
+            _logger.warning("access_event invalid source timezone=%s; falling back to America/Mexico_City", tz_name)
+            return pytz.timezone("America/Mexico_City")
 
     def _access_event_business_timezone(self, env=None):
         env = env or request.env
@@ -266,7 +269,6 @@ class AccessControlApi(http.Controller):
         timezones = [
             self._access_event_source_timezone(env),
             self._access_event_business_timezone(env),
-            pytz.timezone("America/Sao_Paulo"),
             pytz.UTC,
         ]
         unique = []
