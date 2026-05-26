@@ -247,6 +247,37 @@ class AccessControlApi(http.Controller):
             _logger.warning("access_event invalid source timezone=%s; falling back to America/Sao_Paulo", tz_name)
             return pytz.timezone("America/Sao_Paulo")
 
+    def _access_event_business_timezone(self, env=None):
+        env = env or request.env
+        ICP = env["ir.config_parameter"].sudo()
+        tz_name = (
+            ICP.get_param("access_control.event_timezone")
+            or ICP.get_param("access_control_api.event_timezone")
+            or env.user.tz
+            or "America/Mexico_City"
+        )
+        try:
+            return pytz.timezone(tz_name)
+        except Exception:
+            _logger.warning("access_event invalid business timezone=%s; falling back to America/Mexico_City", tz_name)
+            return pytz.timezone("America/Mexico_City")
+
+    def _access_event_candidate_timezones(self, env=None):
+        timezones = [
+            self._access_event_source_timezone(env),
+            self._access_event_business_timezone(env),
+            pytz.timezone("America/Sao_Paulo"),
+            pytz.UTC,
+        ]
+        unique = []
+        seen = set()
+        for tz in timezones:
+            zone = getattr(tz, "zone", str(tz))
+            if zone not in seen:
+                unique.append(tz)
+                seen.add(zone)
+        return unique
+
     def _access_event_future_tolerance(self, env=None):
         env = env or request.env
         raw_value = env["ir.config_parameter"].sudo().get_param(
@@ -316,6 +347,20 @@ class AccessControlApi(http.Controller):
         )
         return adjusted
 
+    def _choose_access_event_datetime_candidate(self, candidates, received_at):
+        valid = [candidate for candidate in candidates if candidate]
+        if not valid:
+            return received_at
+        if not received_at:
+            return valid[0]
+        return min(
+            valid,
+            key=lambda candidate: (
+                abs((candidate - received_at).total_seconds()),
+                candidate > received_at + self._access_event_future_tolerance(),
+            ),
+        )
+
     def _parse_access_event_datetime(self, value, env=None, received_at=None):
         received_at = received_at or self._utc_now()
         if not value:
@@ -328,13 +373,15 @@ class AccessControlApi(http.Controller):
         if parsed.tzinfo:
             parsed_utc = parsed.astimezone(pytz.UTC).replace(tzinfo=None)
             return self._normalize_future_access_event_datetime(parsed_utc, received_at, value, env)
-        try:
-            localized = self._access_event_source_timezone(env).localize(parsed)
-        except Exception:
-            _logger.warning("access_event could not localize occurredAt=%s; using UTC", value)
-            localized = pytz.UTC.localize(parsed)
-        parsed_utc = localized.astimezone(pytz.UTC).replace(tzinfo=None)
-        return self._normalize_future_access_event_datetime(parsed_utc, received_at, value, env)
+        candidates = []
+        for tz in self._access_event_candidate_timezones(env):
+            try:
+                localized = tz.localize(parsed)
+            except Exception:
+                continue
+            parsed_utc = localized.astimezone(pytz.UTC).replace(tzinfo=None)
+            candidates.append(self._normalize_future_access_event_datetime(parsed_utc, received_at, value, env))
+        return self._choose_access_event_datetime_candidate(candidates, received_at)
 
     def _person_sync_payload(self, person, include_face_pic=True, clear_face_pic=False, priority=False):
         payload = {
