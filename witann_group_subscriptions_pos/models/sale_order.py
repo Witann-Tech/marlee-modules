@@ -505,6 +505,19 @@ class SaleOrder(models.Model):
             return pytz.timezone('America/Mexico_City')
 
     @api.model
+    def _wgs_access_log_source_timezone_for_pos(self):
+        tz_name = (
+            self.env['ir.config_parameter'].sudo().get_param('access_control.event_source_timezone')
+            or self.env['ir.config_parameter'].sudo().get_param('access_control_api.event_source_timezone')
+            or 'America/Sao_Paulo'
+        )
+        try:
+            return pytz.timezone(tz_name)
+        except Exception:
+            _logger.warning('WGS POS access log invalid source timezone=%s; falling back to America/Sao_Paulo', tz_name)
+            return pytz.timezone('America/Sao_Paulo')
+
+    @api.model
     def _wgs_parse_access_log_datetime_for_pos(self, value, fallback, timezone_name=False):
         if not value:
             parsed = fallback
@@ -538,6 +551,31 @@ class SaleOrder(models.Model):
         if not parsed:
             return False
         return fields.Datetime.to_string(parsed).replace(' ', 'T') + 'Z'
+
+    @api.model
+    def _wgs_access_log_raw_datetime_for_pos(self, raw_payload):
+        raw_value = (
+            raw_payload.get('occurredAt')
+            or raw_payload.get('occurred_at')
+            or raw_payload.get('eventTime')
+            or raw_payload.get('event_time')
+        ) if isinstance(raw_payload, dict) else False
+        if not raw_value:
+            return False
+        try:
+            parsed = date_parser.parse(str(raw_value))
+        except Exception:
+            return False
+        if getattr(parsed, 'tzinfo', None):
+            return parsed.astimezone(pytz.UTC).replace(tzinfo=None)
+        return self._wgs_access_log_source_timezone_for_pos().localize(parsed).astimezone(pytz.UTC).replace(tzinfo=None)
+
+    @api.model
+    def _wgs_access_log_effective_datetime_for_pos(self, event, raw_payload):
+        raw_datetime = self._wgs_access_log_raw_datetime_for_pos(raw_payload)
+        if raw_datetime:
+            return raw_datetime
+        return fields.Datetime.to_datetime(event.occurred_at) if event.occurred_at else False
 
     @api.model
     def _wgs_get_pos_access_sites_for_pos(self, company):
@@ -625,11 +663,13 @@ class SaleOrder(models.Model):
         if to_dt <= from_dt:
             to_dt = from_dt + timedelta(days=1)
         to_dt_exclusive = to_dt + timedelta(minutes=1)
+        search_from_dt = from_dt - timedelta(hours=12)
+        search_to_dt = to_dt_exclusive + timedelta(hours=12)
 
         domain = [
             ('site_id', 'in', sites.ids),
-            ('occurred_at', '>=', fields.Datetime.to_string(from_dt)),
-            ('occurred_at', '<', fields.Datetime.to_string(to_dt_exclusive)),
+            ('occurred_at', '>=', fields.Datetime.to_string(search_from_dt)),
+            ('occurred_at', '<', fields.Datetime.to_string(search_to_dt)),
         ]
         result_filter = data.get('result') or 'all'
         if result_filter in ('allowed', 'denied', 'error'):
@@ -643,8 +683,8 @@ class SaleOrder(models.Model):
             domain.append(('device_id', '=', device_id))
 
         Event = self.env['access_control.access_event'].sudo()
-        events = Event.search(domain, order='occurred_at desc, id desc', limit=limit)
-        total = Event.search_count(domain)
+        search_limit = min(max(limit * 10, 500), 3000)
+        events = Event.search(domain, order='occurred_at desc, id desc', limit=search_limit)
         result_labels = {
             'allowed': _('Exitoso'),
             'denied': _('Fallido'),
@@ -659,6 +699,9 @@ class SaleOrder(models.Model):
                     raw_payload = json.loads(event.raw_payload)
                 except (TypeError, ValueError):
                     raw_payload = {}
+            effective_at = self._wgs_access_log_effective_datetime_for_pos(event, raw_payload)
+            if not effective_at or effective_at < from_dt or effective_at >= to_dt_exclusive:
+                continue
             is_open_door_event = event.modality == 'manual_open_door' or event.event_id.startswith('open_door:')
             partner = event.person_id.partner_id if event.person_id and event.person_id.partner_id else False
             partner_name = partner.display_name if partner else (
@@ -674,7 +717,7 @@ class SaleOrder(models.Model):
                 'id': event.id,
                 'event_id': event.event_id or False,
                 'event_type': 'open_door' if is_open_door_event else 'access',
-                'occurred_at': self._wgs_access_log_datetime_to_utc_iso_for_pos(event.occurred_at),
+                'occurred_at': self._wgs_access_log_datetime_to_utc_iso_for_pos(effective_at),
                 'site_id': event.site_id.id if event.site_id else False,
                 'site_name': event.site_id.display_name if event.site_id else False,
                 'device_id': event.device_id.id if event.device_id else False,
@@ -685,7 +728,14 @@ class SaleOrder(models.Model):
                 'global_user_id': event.global_user_id or False,
                 'result': event.result or False,
                 'result_label': result_label,
+                '_effective_at': effective_at,
             })
+        rows.sort(key=lambda row: (row.get('_effective_at') or datetime.min, row.get('id') or 0), reverse=True)
+        total = len(rows)
+        rows = [
+            {key: value for key, value in row.items() if key != '_effective_at'}
+            for row in rows[:limit]
+        ]
 
         return {
             'ok': True,

@@ -233,20 +233,19 @@ class AccessControlApi(http.Controller):
             return m
         return None
 
-    def _access_event_timezone(self, env=None):
+    def _access_event_source_timezone(self, env=None):
         env = env or request.env
         ICP = env["ir.config_parameter"].sudo()
         tz_name = (
-            ICP.get_param("access_control.event_timezone")
-            or ICP.get_param("access_control_api.event_timezone")
-            or env.user.tz
-            or "America/Mexico_City"
+            ICP.get_param("access_control.event_source_timezone")
+            or ICP.get_param("access_control_api.event_source_timezone")
+            or "America/Sao_Paulo"
         )
         try:
             return pytz.timezone(tz_name)
         except Exception:
-            _logger.warning("access_event invalid timezone=%s; falling back to UTC", tz_name)
-            return pytz.UTC
+            _logger.warning("access_event invalid source timezone=%s; falling back to America/Sao_Paulo", tz_name)
+            return pytz.timezone("America/Sao_Paulo")
 
     def _access_event_future_tolerance(self, env=None):
         env = env or request.env
@@ -330,7 +329,7 @@ class AccessControlApi(http.Controller):
             parsed_utc = parsed.astimezone(pytz.UTC).replace(tzinfo=None)
             return self._normalize_future_access_event_datetime(parsed_utc, received_at, value, env)
         try:
-            localized = self._access_event_timezone(env).localize(parsed)
+            localized = self._access_event_source_timezone(env).localize(parsed)
         except Exception:
             _logger.warning("access_event could not localize occurredAt=%s; using UTC", value)
             localized = pytz.UTC.localize(parsed)
