@@ -1,15 +1,21 @@
 {
     'name': 'Witann Group Subscriptions POS',
-    'version': '19.0.1.5.170',
+    'version': '19.0.1.5.171',
     'summary': 'Directorio y detalle de suscripciones nativas en Punto de Venta',
     'category': 'Point of Sale',
     'author': 'Witann Technologies',
     'license': 'LGPL-3',
     'depends': [
         'hr',
+        'mail',
         'point_of_sale',
         'sale_subscription',
         'witann_group_subscriptions',
+    ],
+    'data': [
+        'data/ir_cron_data.xml',
+        'views/hr_employee_views.xml',
+        'views/res_config_settings_views.xml',
     ],
     'assets': {
         'point_of_sale._assets_pos': [

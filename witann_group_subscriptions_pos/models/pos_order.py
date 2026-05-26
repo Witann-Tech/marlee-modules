@@ -614,9 +614,9 @@ class PosOrder(models.Model):
         if not pin:
             return self.env['hr.employee']
         Employee = self.env['hr.employee'].sudo().with_context(active_test=False)
-        if 'pin' not in Employee._fields:
+        if 'wgs_authorization_pin' not in Employee._fields:
             return self.env['hr.employee']
-        return Employee.search([('pin', '=', pin)], limit=1)
+        return Employee.search([('wgs_authorization_pin', '=', pin)], limit=1)
 
     @api.model
     def _wgs_get_partner_birthday_for_pos(self, partner):

@@ -498,6 +498,15 @@ class SaleOrder(models.Model):
         return parsed or fallback
 
     @api.model
+    def _wgs_access_log_datetime_to_utc_iso_for_pos(self, value):
+        if not value:
+            return False
+        parsed = fields.Datetime.to_datetime(value)
+        if not parsed:
+            return False
+        return fields.Datetime.to_string(parsed).replace(' ', 'T') + 'Z'
+
+    @api.model
     def _wgs_get_pos_access_sites_for_pos(self, company):
         Site = self.env['access_control.site'].sudo()
         if not company:
@@ -633,7 +642,7 @@ class SaleOrder(models.Model):
                 'id': event.id,
                 'event_id': event.event_id or False,
                 'event_type': 'open_door' if is_open_door_event else 'access',
-                'occurred_at': fields.Datetime.to_string(event.occurred_at) if event.occurred_at else False,
+                'occurred_at': self._wgs_access_log_datetime_to_utc_iso_for_pos(event.occurred_at),
                 'site_id': event.site_id.id if event.site_id else False,
                 'site_name': event.site_id.display_name if event.site_id else False,
                 'device_id': event.device_id.id if event.device_id else False,
