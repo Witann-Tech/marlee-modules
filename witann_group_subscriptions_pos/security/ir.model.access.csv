@@ -1,0 +1,2 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_wgs_pos_authorization_credential_hr_manager,wgs.pos.authorization.credential hr manager,model_wgs_pos_authorization_credential,hr.group_hr_manager,1,1,1,1
