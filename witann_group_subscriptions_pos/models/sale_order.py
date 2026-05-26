@@ -625,7 +625,7 @@ class SaleOrder(models.Model):
             )
             if is_open_door_event:
                 operator_name = raw_payload.get('operatorUserName') or raw_payload.get('operator_user_name')
-                partner_name = _('Apertura manual por %s') % operator_name if operator_name else _('Apertura manual')
+                partner_name = _('Apertura por botón por %s') % operator_name if operator_name else _('Apertura por botón')
             result_label = result_labels.get(event.result, event.result or '-')
             if is_open_door_event and event.result == 'allowed':
                 result_label = _('Comando enviado')

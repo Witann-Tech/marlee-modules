@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import uuid
+from datetime import datetime, timezone
 
 import requests
 
@@ -94,7 +95,7 @@ class AccessControlDevice(models.Model):
 
     def _log_open_door_access_event(self, payload, response_data=None, operator_user=None):
         self.ensure_one()
-        occurred_at = fields.Datetime.now()
+        occurred_at = datetime.now(timezone.utc).replace(tzinfo=None)
         raw_payload = dict(payload or {})
         raw_payload.update(
             {

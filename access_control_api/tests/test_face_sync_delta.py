@@ -2,6 +2,7 @@
 import base64
 import io
 import json
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from odoo import fields
@@ -333,6 +334,7 @@ class TestFaceSyncDelta(TransactionCase):
             def json(self):
                 return {"ok": True, "queued": True}
 
+        before_utc = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=1)
         with patch("odoo.addons.access_control_api.models.access_device.requests.post", return_value=MockResponse()) as post:
             result = self.device.open_door_via_adms(
                 door_id=1,
@@ -340,6 +342,7 @@ class TestFaceSyncDelta(TransactionCase):
                 reason="subscription_access_log_button",
                 operator_user=self.env.user,
             )
+        after_utc = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(seconds=1)
         change = self.Change.search([("action", "=", "command"), ("device_id", "=", self.device.id)], limit=1)
         payload = json.loads(change.command_payload)
 
@@ -369,8 +372,11 @@ class TestFaceSyncDelta(TransactionCase):
         self.assertEqual(event.device_serial, self.device.device_serial)
         self.assertEqual(event.modality, "manual_open_door")
         self.assertEqual(event.result, "allowed")
+        self.assertGreaterEqual(event.occurred_at, before_utc)
+        self.assertLessEqual(event.occurred_at, after_utc)
         self.assertEqual(event_payload["eventType"], "open_door")
         self.assertEqual(event_payload["operatorUserId"], self.env.user.id)
+        self.assertEqual(event_payload["reason"], "subscription_access_log_button")
 
     def test_device_open_door_rejects_unqueued_adms_response(self):
         self.env["ir.config_parameter"].sudo().set_param("ADMS_BASE_URL", "https://adms.example.test")
