@@ -70,7 +70,7 @@ function renderSubscriptionCard({
                     data-action="open-upsale"
                     data-subscription-id="${escapeHtml(String(item.subscription_id || 0))}"
                     ${item.can_renew ? "" : "disabled"}
-                >${escapeHtml(_t("Upsale"))}</button>
+                >${escapeHtml(_t("Cambiar Plan"))}</button>
                 ${participantActionHtml}
                 <button
                     type="button"
