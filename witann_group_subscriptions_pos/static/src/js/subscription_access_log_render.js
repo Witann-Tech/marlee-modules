@@ -1,5 +1,7 @@
 /** @odoo-module **/
 
+const WGS_POS_ACCESS_LOG_TIME_ZONE = "America/Mexico_City";
+
 function pad2(value) {
     return String(value).padStart(2, "0");
 }
@@ -27,11 +29,11 @@ function localDateTimeInputToUtcString(value) {
     if (!value) {
         return false;
     }
-    const parsed = new Date(value);
-    if (Number.isNaN(parsed.getTime())) {
+    const text = String(value || "").trim().replace("T", " ");
+    if (!text) {
         return false;
     }
-    return parsed.toISOString().slice(0, 19).replace("T", " ");
+    return text.length === 16 ? `${text}:00` : text;
 }
 
 function getAccessResultClass(result) {
@@ -193,6 +195,7 @@ function renderAccessLogContent({
 }
 
 export {
+    WGS_POS_ACCESS_LOG_TIME_ZONE,
     getTodayAccessLogRange,
     localDateTimeInputToUtcString,
     renderAccessLogContent,

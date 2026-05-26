@@ -441,6 +441,41 @@ class TestFaceSyncDelta(TransactionCase):
         self.assertEqual(person.last_access_site_id.id, self.site.id)
         self.assertEqual(person.last_access_device_id.id, self.device.id)
 
+    def test_access_event_parser_uses_configured_source_timezone(self):
+        self.env["ir.config_parameter"].sudo().set_param("access_control.event_source_timezone", "America/Mexico_City")
+        received_at = datetime(2026, 5, 26, 2, 50, 0)
+
+        parsed = self.controller._parse_access_event_datetime(
+            "2026-05-25 20:50:00",
+            env=self.env,
+            received_at=received_at,
+        )
+
+        self.assertEqual(parsed, datetime(2026, 5, 26, 2, 50, 0))
+
+    def test_access_event_parser_defaults_to_mexico_and_corrects_device_drift(self):
+        received_at = datetime(2026, 5, 26, 2, 59, 0)
+
+        parsed = self.controller._parse_access_event_datetime(
+            "2026-05-25 23:59:00",
+            env=self.env,
+            received_at=received_at,
+        )
+
+        self.assertEqual(parsed, datetime(2026, 5, 26, 2, 59, 0))
+
+    def test_access_event_parser_corrects_future_device_timezone_shift(self):
+        self.env["ir.config_parameter"].sudo().set_param("access_control.event_source_timezone", "America/Mexico_City")
+        received_at = datetime(2026, 5, 26, 2, 50, 0)
+
+        parsed = self.controller._parse_access_event_datetime(
+            "2026-05-25 23:50:00",
+            env=self.env,
+            received_at=received_at,
+        )
+
+        self.assertEqual(parsed, datetime(2026, 5, 26, 2, 50, 0))
+
     def test_partner_face_update_queues_upsert_with_face(self):
         partner, person = self._make_person(self._make_image_b64(color=(180, 40, 40)))
         self.Change.search([("person_id", "=", person.id)]).unlink()

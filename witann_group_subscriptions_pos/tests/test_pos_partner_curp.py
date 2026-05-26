@@ -1,5 +1,6 @@
 from odoo.tests.common import TransactionCase
 from odoo import Command, fields
+from odoo.exceptions import ValidationError
 
 
 class TestPosPartnerCurp(TransactionCase):
@@ -447,10 +448,11 @@ class TestPosPartnerCurp(TransactionCase):
             {
                 'name': 'Supervisor POS',
                 'pin': '2468',
+                'wgs_authorization_pin': '135790',
             }
         )
 
-        result = self.PosOrder.sudo().wgs_authorize_subscription_discount_for_pos(
+        rejected = self.PosOrder.sudo().wgs_authorize_subscription_discount_for_pos(
             partner.id,
             self.product.id,
             'new',
@@ -458,10 +460,44 @@ class TestPosPartnerCurp(TransactionCase):
             '2468',
             False,
         )
+        self.assertFalse(rejected['ok'])
+
+        result = self.PosOrder.sudo().wgs_authorize_subscription_discount_for_pos(
+            partner.id,
+            self.product.id,
+            'new',
+            'comeback_10',
+            '135790',
+            False,
+        )
 
         self.assertTrue(result['ok'])
         self.assertEqual(result['authorized_employee_id'], employee.id)
         self.assertEqual(result['discount_percent'], 10.0)
+
+    def test_authorization_pin_is_separate_from_pos_pin(self):
+        with self.assertRaises(ValidationError):
+            self.Employee.create(
+                {
+                    'name': 'Supervisor PIN duplicado',
+                    'pin': '2468',
+                    'wgs_authorization_pin': '2468',
+                }
+            )
+
+        self.Employee.create(
+            {
+                'name': 'Supervisor uno',
+                'wgs_authorization_pin': '975310',
+            }
+        )
+        with self.assertRaises(ValidationError):
+            self.Employee.create(
+                {
+                    'name': 'Supervisor dos',
+                    'wgs_authorization_pin': '975310',
+                }
+            )
 
     def test_family_product_returns_only_authorization_offer(self):
         partner = self.Partner.create({'name': 'Cliente familiar POS'})

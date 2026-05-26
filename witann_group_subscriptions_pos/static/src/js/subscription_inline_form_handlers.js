@@ -93,8 +93,8 @@ async function authorizeDiscountForForm(state, form, { partnerId, productId, flo
     }
     if (!String(form.supervisorPin || "").trim()) {
         state.formError = authorizationOnlyOffer
-            ? _t("Captura el PIN supervisor para autorizar esta venta.")
-            : _t("Captura el PIN supervisor para autorizar el descuento.");
+            ? _t("Captura el PIN de autorización para autorizar esta venta.")
+            : _t("Captura el PIN de autorización para autorizar el descuento.");
         renderDetail(state.currentDetail);
         return false;
     }

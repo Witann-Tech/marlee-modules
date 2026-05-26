@@ -57,6 +57,7 @@ import {
     renderDirectorySummary,
 } from "./subscription_directory_render";
 import {
+    WGS_POS_ACCESS_LOG_TIME_ZONE,
     getTodayAccessLogRange,
     localDateTimeInputToUtcString,
     renderAccessLogContent,
@@ -969,6 +970,7 @@ patch(ControlButtons.prototype, {
                     company_id: getCurrentCompanyId(this) || false,
                     from: localDateTimeInputToUtcString(accessLogFilters.from),
                     to: localDateTimeInputToUtcString(accessLogFilters.to),
+                    timezone: WGS_POS_ACCESS_LOG_TIME_ZONE,
                     result: accessLogFilters.result || "all",
                     device_id: accessLogFilters.deviceId || false,
                     limit: 150,

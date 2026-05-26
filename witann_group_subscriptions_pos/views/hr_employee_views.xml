@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+  <data>
+    <record id="view_employee_form_wgs_authorization_pin" model="ir.ui.view">
+      <field name="name">hr.employee.form.wgs.authorization.pin</field>
+      <field name="model">hr.employee</field>
+      <field name="inherit_id" ref="hr.view_employee_form"/>
+      <field name="arch" type="xml">
+        <xpath expr="//sheet/notebook" position="inside">
+          <page string="Autorización POS" name="wgs_pos_authorization" groups="hr.group_hr_manager">
+            <group>
+              <field name="wgs_authorization_pin" password="True"/>
+              <field name="wgs_authorization_pin_last_rotated_at" readonly="1"/>
+            </group>
+            <p class="text-muted">
+              Este PIN es independiente del PIN nativo de acceso al Punto de Venta y se usa para autorizar descuentos y paquetes de suscripción.
+            </p>
+          </page>
+        </xpath>
+      </field>
+    </record>
+  </data>
+</odoo>

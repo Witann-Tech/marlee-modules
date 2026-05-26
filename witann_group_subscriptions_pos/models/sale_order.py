@@ -2,6 +2,8 @@ import json
 import logging
 from datetime import date, datetime, time, timedelta
 
+import pytz
+from dateutil import parser as date_parser
 from dateutil.relativedelta import relativedelta
 
 from odoo import _, api, fields, models
@@ -488,14 +490,162 @@ class SaleOrder(models.Model):
         }
 
     @api.model
-    def _wgs_parse_access_log_datetime_for_pos(self, value, fallback):
-        if not value:
-            return fallback
+    def _wgs_access_log_timezone_for_pos(self, timezone_name=False):
+        tz_name = (
+            timezone_name
+            or self.env['ir.config_parameter'].sudo().get_param('access_control.event_timezone')
+            or self.env['ir.config_parameter'].sudo().get_param('access_control_api.event_timezone')
+            or self.env.user.tz
+            or 'America/Mexico_City'
+        )
         try:
-            parsed = fields.Datetime.to_datetime(value)
+            return pytz.timezone(tz_name)
         except Exception:
+            _logger.warning('WGS POS access log invalid timezone=%s; falling back to America/Mexico_City', tz_name)
+            return pytz.timezone('America/Mexico_City')
+
+    @api.model
+    def _wgs_access_log_source_timezone_for_pos(self):
+        tz_name = (
+            self.env['ir.config_parameter'].sudo().get_param('access_control.event_source_timezone')
+            or self.env['ir.config_parameter'].sudo().get_param('access_control_api.event_source_timezone')
+            or self.env['ir.config_parameter'].sudo().get_param('access_control.event_timezone')
+            or self.env['ir.config_parameter'].sudo().get_param('access_control_api.event_timezone')
+            or self.env.user.tz
+            or 'America/Mexico_City'
+        )
+        try:
+            return pytz.timezone(tz_name)
+        except Exception:
+            _logger.warning('WGS POS access log invalid source timezone=%s; falling back to America/Mexico_City', tz_name)
+            return pytz.timezone('America/Mexico_City')
+
+    @api.model
+    def _wgs_access_log_candidate_timezones_for_pos(self, timezone_name=False):
+        timezones = [
+            self._wgs_access_log_source_timezone_for_pos(),
+            self._wgs_access_log_timezone_for_pos(timezone_name),
+            pytz.UTC,
+        ]
+        unique = []
+        seen = set()
+        for tz in timezones:
+            zone = getattr(tz, 'zone', str(tz))
+            if zone not in seen:
+                unique.append(tz)
+                seen.add(zone)
+        return unique
+
+    @api.model
+    def _wgs_parse_access_log_datetime_for_pos(self, value, fallback, timezone_name=False):
+        if not value:
+            parsed = fallback
+        else:
+            try:
+                parsed = date_parser.parse(str(value))
+            except Exception:
+                parsed = fallback
+        if not parsed:
             return fallback
-        return parsed or fallback
+        if getattr(parsed, 'tzinfo', None):
+            return parsed.astimezone(pytz.UTC).replace(tzinfo=None)
+        if timezone_name:
+            return self._wgs_access_log_timezone_for_pos(timezone_name).localize(parsed).astimezone(pytz.UTC).replace(tzinfo=None)
+        return parsed
+
+    @api.model
+    def _wgs_access_log_default_local_range_for_pos(self, timezone_name=False):
+        tz = self._wgs_access_log_timezone_for_pos(timezone_name)
+        today = datetime.now(tz).date()
+        return (
+            datetime.combine(today, time.min),
+            datetime.combine(today + timedelta(days=1), time.min),
+        )
+
+    @api.model
+    def _wgs_access_log_datetime_to_utc_iso_for_pos(self, value):
+        if not value:
+            return False
+        parsed = fields.Datetime.to_datetime(value)
+        if not parsed:
+            return False
+        return fields.Datetime.to_string(parsed).replace(' ', 'T') + 'Z'
+
+    @api.model
+    def _wgs_normalize_access_log_candidate_datetime_for_pos(self, candidate, reference_at):
+        if not candidate or not reference_at:
+            return candidate
+        future_delta = candidate - reference_at
+        if future_delta <= timedelta(minutes=5):
+            return candidate
+
+        shift_hours = int(round(future_delta.total_seconds() / 3600.0))
+        if not shift_hours or shift_hours > 12:
+            return candidate
+
+        adjusted = candidate - timedelta(hours=shift_hours)
+        if adjusted - reference_at > timedelta(minutes=5):
+            return candidate
+        return adjusted
+
+    @api.model
+    def _wgs_choose_access_log_datetime_for_pos(self, candidates, reference_at):
+        valid = [candidate for candidate in candidates if candidate]
+        if not valid:
+            return reference_at
+        if not reference_at:
+            return valid[0]
+        return min(
+            valid,
+            key=lambda candidate: (
+                abs((candidate - reference_at).total_seconds()),
+                candidate > reference_at + timedelta(minutes=5),
+            ),
+        )
+
+    @api.model
+    def _wgs_access_log_raw_datetime_candidates_for_pos(self, raw_payload, reference_at=False, timezone_name=False):
+        raw_value = (
+            raw_payload.get('occurredAt')
+            or raw_payload.get('occurred_at')
+            or raw_payload.get('eventTime')
+            or raw_payload.get('event_time')
+            or raw_payload.get('time')
+            or raw_payload.get('timestamp')
+        ) if isinstance(raw_payload, dict) else False
+        if not raw_value:
+            return []
+        try:
+            parsed = date_parser.parse(str(raw_value))
+        except Exception:
+            return []
+        if getattr(parsed, 'tzinfo', None):
+            candidate = parsed.astimezone(pytz.UTC).replace(tzinfo=None)
+            return [self._wgs_normalize_access_log_candidate_datetime_for_pos(candidate, reference_at)]
+        candidates = []
+        for tz in self._wgs_access_log_candidate_timezones_for_pos(timezone_name):
+            try:
+                candidate = tz.localize(parsed).astimezone(pytz.UTC).replace(tzinfo=None)
+            except Exception:
+                continue
+            candidates.append(self._wgs_normalize_access_log_candidate_datetime_for_pos(candidate, reference_at))
+        return candidates
+
+    @api.model
+    def _wgs_access_log_effective_datetime_for_pos(self, event, raw_payload, timezone_name=False):
+        occurred_at = fields.Datetime.to_datetime(event.occurred_at) if event.occurred_at else False
+        if event.modality == 'manual_open_door' or event.event_id.startswith('open_door:'):
+            return occurred_at
+
+        reference_at = (
+            fields.Datetime.to_datetime(event.received_at)
+            if event.received_at else fields.Datetime.to_datetime(event.create_date)
+        )
+        candidates = []
+        if occurred_at:
+            candidates.append(self._wgs_normalize_access_log_candidate_datetime_for_pos(occurred_at, reference_at))
+        candidates.extend(self._wgs_access_log_raw_datetime_candidates_for_pos(raw_payload, reference_at, timezone_name))
+        return self._wgs_choose_access_log_datetime_for_pos(candidates, reference_at)
 
     @api.model
     def _wgs_get_pos_access_sites_for_pos(self, company):
@@ -576,19 +726,20 @@ class SaleOrder(models.Model):
             limit = 100
         limit = min(max(limit, 1), 500)
 
-        today = fields.Date.context_today(self)
-        default_from = datetime.combine(today, time.min)
-        default_to = datetime.combine(today + timedelta(days=1), time.min)
-        from_dt = self._wgs_parse_access_log_datetime_for_pos(data.get('from'), default_from)
-        to_dt = self._wgs_parse_access_log_datetime_for_pos(data.get('to'), default_to)
+        timezone_name = data.get('timezone') or data.get('time_zone') or False
+        default_from, default_to = self._wgs_access_log_default_local_range_for_pos(timezone_name)
+        from_dt = self._wgs_parse_access_log_datetime_for_pos(data.get('from'), default_from, timezone_name)
+        to_dt = self._wgs_parse_access_log_datetime_for_pos(data.get('to'), default_to, timezone_name)
         if to_dt <= from_dt:
             to_dt = from_dt + timedelta(days=1)
         to_dt_exclusive = to_dt + timedelta(minutes=1)
+        search_from_dt = from_dt - timedelta(hours=12)
+        search_to_dt = to_dt_exclusive + timedelta(hours=12)
 
         domain = [
             ('site_id', 'in', sites.ids),
-            ('occurred_at', '>=', fields.Datetime.to_string(from_dt)),
-            ('occurred_at', '<', fields.Datetime.to_string(to_dt_exclusive)),
+            ('occurred_at', '>=', fields.Datetime.to_string(search_from_dt)),
+            ('occurred_at', '<', fields.Datetime.to_string(search_to_dt)),
         ]
         result_filter = data.get('result') or 'all'
         if result_filter in ('allowed', 'denied', 'error'):
@@ -602,8 +753,8 @@ class SaleOrder(models.Model):
             domain.append(('device_id', '=', device_id))
 
         Event = self.env['access_control.access_event'].sudo()
-        events = Event.search(domain, order='occurred_at desc, id desc', limit=limit)
-        total = Event.search_count(domain)
+        search_limit = min(max(limit * 10, 500), 3000)
+        events = Event.search(domain, order='occurred_at desc, id desc', limit=search_limit)
         result_labels = {
             'allowed': _('Exitoso'),
             'denied': _('Fallido'),
@@ -618,6 +769,9 @@ class SaleOrder(models.Model):
                     raw_payload = json.loads(event.raw_payload)
                 except (TypeError, ValueError):
                     raw_payload = {}
+            effective_at = self._wgs_access_log_effective_datetime_for_pos(event, raw_payload, timezone_name)
+            if not effective_at or effective_at < from_dt or effective_at >= to_dt_exclusive:
+                continue
             is_open_door_event = event.modality == 'manual_open_door' or event.event_id.startswith('open_door:')
             partner = event.person_id.partner_id if event.person_id and event.person_id.partner_id else False
             partner_name = partner.display_name if partner else (
@@ -633,7 +787,7 @@ class SaleOrder(models.Model):
                 'id': event.id,
                 'event_id': event.event_id or False,
                 'event_type': 'open_door' if is_open_door_event else 'access',
-                'occurred_at': fields.Datetime.to_string(event.occurred_at) if event.occurred_at else False,
+                'occurred_at': self._wgs_access_log_datetime_to_utc_iso_for_pos(effective_at),
                 'site_id': event.site_id.id if event.site_id else False,
                 'site_name': event.site_id.display_name if event.site_id else False,
                 'device_id': event.device_id.id if event.device_id else False,
@@ -644,7 +798,14 @@ class SaleOrder(models.Model):
                 'global_user_id': event.global_user_id or False,
                 'result': event.result or False,
                 'result_label': result_label,
+                '_effective_at': effective_at,
             })
+        rows.sort(key=lambda row: (row.get('_effective_at') or datetime.min, row.get('id') or 0), reverse=True)
+        total = len(rows)
+        rows = [
+            {key: value for key, value in row.items() if key != '_effective_at'}
+            for row in rows[:limit]
+        ]
 
         return {
             'ok': True,

@@ -71,10 +71,10 @@ function renderDiscountAuthorizationSection({
             : "";
         return `
             <div class="wgs-inline-discount-card">
-                <div class="wgs-inline-section-title">${escapeHtml(authorizationOnlyOffer.label || _t("Autorización supervisor"))}</div>
+            <div class="wgs-inline-section-title">${escapeHtml(authorizationOnlyOffer.label || _t("Autorización POS"))}</div>
                 <div class="wgs-inline-form-grid">
                     <label>
-                        <span>${escapeHtml(_t("PIN supervisor"))}</span>
+                        <span>${escapeHtml(_t("PIN de autorización"))}</span>
                         <input type="password" data-field="${escapeHtml(pinField)}" value="${escapeHtml(form.supervisorPin || "")}" />
                     </label>
                 </div>
@@ -120,7 +120,7 @@ function renderDiscountAuthorizationSection({
                 </label>
                 ${hasSelectedOffer ? `
                     <label>
-                        <span>${escapeHtml(_t("PIN supervisor"))}</span>
+                        <span>${escapeHtml(_t("PIN de autorización"))}</span>
                         <input type="password" data-field="${escapeHtml(pinField)}" value="${escapeHtml(form.supervisorPin || "")}" />
                     </label>
                 ` : ""}
