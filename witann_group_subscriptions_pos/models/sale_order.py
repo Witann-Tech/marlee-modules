@@ -2,6 +2,8 @@ import json
 import logging
 from datetime import date, datetime, time, timedelta
 
+import pytz
+from dateutil import parser as date_parser
 from dateutil.relativedelta import relativedelta
 
 from odoo import _, api, fields, models
@@ -488,14 +490,45 @@ class SaleOrder(models.Model):
         }
 
     @api.model
-    def _wgs_parse_access_log_datetime_for_pos(self, value, fallback):
-        if not value:
-            return fallback
+    def _wgs_access_log_timezone_for_pos(self, timezone_name=False):
+        tz_name = (
+            timezone_name
+            or self.env['ir.config_parameter'].sudo().get_param('access_control.event_timezone')
+            or self.env['ir.config_parameter'].sudo().get_param('access_control_api.event_timezone')
+            or self.env.user.tz
+            or 'America/Mexico_City'
+        )
         try:
-            parsed = fields.Datetime.to_datetime(value)
+            return pytz.timezone(tz_name)
         except Exception:
+            _logger.warning('WGS POS access log invalid timezone=%s; falling back to America/Mexico_City', tz_name)
+            return pytz.timezone('America/Mexico_City')
+
+    @api.model
+    def _wgs_parse_access_log_datetime_for_pos(self, value, fallback, timezone_name=False):
+        if not value:
+            parsed = fallback
+        else:
+            try:
+                parsed = date_parser.parse(str(value))
+            except Exception:
+                parsed = fallback
+        if not parsed:
             return fallback
-        return parsed or fallback
+        if getattr(parsed, 'tzinfo', None):
+            return parsed.astimezone(pytz.UTC).replace(tzinfo=None)
+        if timezone_name:
+            return self._wgs_access_log_timezone_for_pos(timezone_name).localize(parsed).astimezone(pytz.UTC).replace(tzinfo=None)
+        return parsed
+
+    @api.model
+    def _wgs_access_log_default_local_range_for_pos(self, timezone_name=False):
+        tz = self._wgs_access_log_timezone_for_pos(timezone_name)
+        today = datetime.now(tz).date()
+        return (
+            datetime.combine(today, time.min),
+            datetime.combine(today + timedelta(days=1), time.min),
+        )
 
     @api.model
     def _wgs_access_log_datetime_to_utc_iso_for_pos(self, value):
@@ -585,11 +618,10 @@ class SaleOrder(models.Model):
             limit = 100
         limit = min(max(limit, 1), 500)
 
-        today = fields.Date.context_today(self)
-        default_from = datetime.combine(today, time.min)
-        default_to = datetime.combine(today + timedelta(days=1), time.min)
-        from_dt = self._wgs_parse_access_log_datetime_for_pos(data.get('from'), default_from)
-        to_dt = self._wgs_parse_access_log_datetime_for_pos(data.get('to'), default_to)
+        timezone_name = data.get('timezone') or data.get('time_zone') or False
+        default_from, default_to = self._wgs_access_log_default_local_range_for_pos(timezone_name)
+        from_dt = self._wgs_parse_access_log_datetime_for_pos(data.get('from'), default_from, timezone_name)
+        to_dt = self._wgs_parse_access_log_datetime_for_pos(data.get('to'), default_to, timezone_name)
         if to_dt <= from_dt:
             to_dt = from_dt + timedelta(days=1)
         to_dt_exclusive = to_dt + timedelta(minutes=1)

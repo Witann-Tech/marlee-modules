@@ -2,6 +2,8 @@
 
 import { parseISODate, toTimestamp } from "./subscription_view_utils";
 
+const WGS_POS_DISPLAY_TIME_ZONE = "America/Mexico_City";
+
 function formatMoney(value) {
     const amount = Number(value || 0);
     try {
@@ -40,6 +42,7 @@ function formatDateTimeDisplay(value) {
         return String(value);
     }
     return new Date(ts).toLocaleString("es-MX", {
+        timeZone: WGS_POS_DISPLAY_TIME_ZONE,
         day: "2-digit",
         month: "short",
         year: "numeric",
