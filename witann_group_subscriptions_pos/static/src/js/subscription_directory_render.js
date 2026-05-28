@@ -31,6 +31,19 @@ function renderDirectoryRows({
     formatDateTimeDisplay,
     _t,
 }) {
+    const renderAccessStatusIcon = (row) => {
+        const enabled = Boolean(row.access_enabled);
+        const label = row.access_label || (enabled ? _t("Acceso activo") : _t("Sin acceso"));
+        const state = row.access_state || "missing";
+        return `
+            <span
+                class="wgs-access-status-dot ${enabled ? "wgs-access-status-on" : "wgs-access-status-off"}"
+                title="${escapeHtml(label)}"
+                aria-label="${escapeHtml(label)}"
+                data-access-state="${escapeHtml(state)}"
+            ></span>
+        `;
+    };
     return rows.map((row) => {
         const rowClass = row.id === selectedPartnerId ? "wgs-selected-row" : "";
         const stateClass = getStateClass(row.state);
@@ -39,6 +52,7 @@ function renderDirectoryRows({
                 <td><img class="wgs-partner-avatar" src="${escapeHtml(row.image_url || "")}" alt="${escapeHtml(row.name || "")}" loading="lazy" decoding="async" /></td>
                 <td class="wgs-cell-name">${escapeHtml(row.name || "-")}</td>
                 <td><span class="wgs-state-badge ${stateClass}">${escapeHtml(row.state_label || _t("Sin suscripcion"))}</span></td>
+                <td class="wgs-access-status-cell">${renderAccessStatusIcon(row)}</td>
                 <td>${escapeHtml(row.package_label || "-")}</td>
                 <td>${escapeHtml(row.plan_name || "-")}</td>
                 <td>${escapeHtml(formatDateDisplay(row.valid_until) || "-")}</td>
@@ -63,6 +77,7 @@ function downloadDirectoryAsXls({
         <tr>
             <td>${escapeHtml(row.name || "-")}</td>
             <td>${escapeHtml(row.state_label || _t("Sin suscripcion"))}</td>
+            <td>${escapeHtml(row.access_label || _t("Sin acceso"))}</td>
             <td>${escapeHtml(row.package_label || "-")}</td>
             <td>${escapeHtml(row.plan_name || "-")}</td>
             <td>${escapeHtml(formatDateDisplay(row.start_date) || "-")}</td>
@@ -91,6 +106,7 @@ function downloadDirectoryAsXls({
                         <tr>
                             <th>${escapeHtml(_t("Cliente"))}</th>
                             <th>${escapeHtml(_t("Estado"))}</th>
+                            <th>${escapeHtml(_t("Acceso"))}</th>
                             <th>${escapeHtml(_t("Paquete"))}</th>
                             <th>${escapeHtml(_t("Plan"))}</th>
                             <th>${escapeHtml(_t("Inicio"))}</th>

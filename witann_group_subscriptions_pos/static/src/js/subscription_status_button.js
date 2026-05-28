@@ -520,6 +520,7 @@ patch(ControlButtons.prototype, {
                     <th>${_t("Foto")}</th>
                     <th>${_t("Cliente")}</th>
                     <th>${_t("Estado")}</th>
+                    <th>${_t("Acceso")}</th>
                     <th>${_t("Paquete")}</th>
                     <th>${_t("Plan")}</th>
                     <th>${_t("Vencimiento")}</th>
@@ -2835,6 +2836,45 @@ patch(ControlButtons.prototype, {
                 border-color: #cbd5e1;
                 color: #475569;
                 background: #f1f5f9;
+            }
+            .wgs-access-status-cell {
+                text-align: center;
+            }
+            .wgs-access-status-dot {
+                display: inline-block;
+                width: 0.78rem;
+                height: 0.78rem;
+                border-radius: 999px;
+                border: 2px solid #ffffff;
+                box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.16);
+                vertical-align: middle;
+            }
+            .wgs-access-status-on {
+                background: #16a34a;
+            }
+            .wgs-access-status-off {
+                background: #dc2626;
+            }
+            .wgs-access-status-chip {
+                display: inline-flex;
+                align-items: center;
+                gap: 0.38rem;
+                border-radius: 999px;
+                padding: 0.18rem 0.5rem 0.18rem 0.28rem;
+                font-size: 0.74rem;
+                font-weight: 800;
+                white-space: nowrap;
+                border: 1px solid #cbd5e1;
+            }
+            .wgs-access-status-chip-on {
+                color: #166534;
+                background: #dcfce7;
+                border-color: #86efac;
+            }
+            .wgs-access-status-chip-off {
+                color: #991b1b;
+                background: #fee2e2;
+                border-color: #fca5a5;
             }
             .wgs-simple-message {
                 padding: 1rem 1.2rem;

@@ -31,9 +31,6 @@ class SaleOrder(models.Model):
         'in progress',
         'in_progress',
         'en progreso',
-        'renew',
-        'to renew',
-        'por renovar',
     )
     _WGS_ACCESS_SUSPENDED_STATE_TOKENS = (
         'pause',
@@ -54,6 +51,9 @@ class SaleOrder(models.Model):
         'churned',
         'draft',
         'upsell',
+        'renew',
+        'to renew',
+        'por renovar',
     )
     _WGS_POS_DIRECTORY_STATE_ALIASES = {
         'actionable': ('progress', 'renew'),
@@ -257,6 +257,9 @@ class SaleOrder(models.Model):
             'gender': gender_value or False,
             'birthday': birthday_value or False,
             'last_access': last_access_value or False,
+            **self._wgs_get_partner_access_status_payload_for_pos(
+                self._get_access_person_status_map_for_pos(partner).get(partner.id),
+            ),
             'image_url': summary.get('image_url') or ('/web/image/res.partner/%s/image_128' % partner.id),
             'items': items,
         }
@@ -966,6 +969,7 @@ class SaleOrder(models.Model):
         subscriptions_by_partner = self._get_pos_subscription_orders_by_partners(partners)
         try:
             access_last_map = self._get_access_person_last_access_map_for_pos(partners)
+            access_status_map = self._get_access_person_status_map_for_pos(partners)
         except Exception as error:
             self._wgs_raise_pos_data_error(
                 _('No se pudo consultar la información de acceso para construir el directorio de suscripciones.'),
@@ -1044,6 +1048,9 @@ class SaleOrder(models.Model):
                 'gender': gender_value or False,
                 'birthday': birthday_value or False,
                 'last_access': last_access_value or False,
+                **self._wgs_get_partner_access_status_payload_for_pos(
+                    access_status_map.get(partner.id),
+                ),
                 'image_url': '/web/image/res.partner/%s/image_128' % partner.id,
             }
 
@@ -1057,9 +1064,11 @@ class SaleOrder(models.Model):
         today = fields.Date.context_today(self)
         subscriptions_by_partner = self._get_pos_subscription_orders_by_partners(partners)
         access_last_map = {}
+        access_status_map = {}
         if include_profile_fields:
             try:
                 access_last_map = self._get_access_person_last_access_map_for_pos(partners)
+                access_status_map = self._get_access_person_status_map_for_pos(partners)
             except Exception as error:
                 self._wgs_raise_pos_data_error(
                     _('No se pudo consultar la información de acceso para construir el directorio de suscripciones.'),
@@ -1136,6 +1145,9 @@ class SaleOrder(models.Model):
                     'gender': gender_value or False,
                     'birthday': birthday_value or False,
                     'last_access': last_access_value or False,
+                    **self._wgs_get_partner_access_status_payload_for_pos(
+                        access_status_map.get(partner.id),
+                    ),
                     'image_url': '/web/image/res.partner/%s/image_128' % partner.id,
                 })
 
@@ -1311,6 +1323,11 @@ class SaleOrder(models.Model):
             'birthday': status.get('birthday') or False,
             'gender': status.get('gender') or False,
             'last_access': status.get('last_access') or False,
+            'access_enabled': bool(status.get('access_enabled')),
+            'access_state': status.get('access_state') or 'missing',
+            'access_label': status.get('access_label') or _('Sin acceso'),
+            'access_person_id': status.get('access_person_id') or False,
+            'access_global_user_id': status.get('access_global_user_id') or False,
             'image_url': status.get('image_url') or ('/web/image/res.partner/%s/image_128' % partner.id),
         }
 
@@ -1663,11 +1680,12 @@ class SaleOrder(models.Model):
             access_state = False
             reason = _('La suscripción está cancelada o cerrada y puede reinscribirse.')
         elif next_invoice_date and next_invoice_date <= today:
+            access_state = False
             native_state_key = 'renew'
             native_state_label = _('Por renovar')
-            reason = _('La suscripción sigue activa, pero ya venció su siguiente fecha de cobro y debe renovarse.')
+            reason = _('La suscripción ya venció su siguiente fecha de cobro y debe renovarse para habilitar acceso.')
         elif access_state == 'enabled':
-            reason = _('Suscripción en progreso o en renovación.')
+            reason = _('Suscripción en progreso.')
         elif access_state == 'suspended':
             reason = _('La suscripción está pausada o suspendida.')
 
@@ -1767,19 +1785,20 @@ class SaleOrder(models.Model):
             is_valid = False
             reason = _('La suscripción está cancelada o cerrada y puede reinscribirse.')
         elif should_mark_for_renewal:
+            access_state = False
             native_state_key = 'renew'
             native_state_label = _('Por renovar')
-            is_valid = True
+            is_valid = False
             can_renew = True
-            reason = _('La suscripción sigue activa, pero ya venció su siguiente fecha de cobro y debe renovarse.')
+            reason = _('La suscripción ya venció su siguiente fecha de cobro y debe renovarse para habilitar acceso.')
         elif access_state == 'enabled':
             is_valid = True
             can_renew = True
-            reason = _('Suscripción en progreso o en renovación.')
+            reason = _('Suscripción en progreso.')
         elif access_state == 'suspended':
             reason = _('La suscripción está pausada o suspendida.')
         else:
-            reason = _('La suscripción no está en progreso ni en renovación.')
+            reason = _('La suscripción no está en progreso.')
 
         if native_state_key in ('cancel', 'closed') and not force_closed:
             can_reenroll = True
@@ -2065,10 +2084,10 @@ class SaleOrder(models.Model):
             return False
         if any(token in state_value for token in self._WGS_ACCESS_SUSPENDED_STATE_TOKENS):
             return 'suspended'
-        if any(token in state_value for token in self._WGS_ACCESS_ENABLED_STATE_TOKENS):
-            return 'enabled'
         if any(token in state_value for token in self._WGS_ACCESS_DISABLED_STATE_TOKENS):
             return False
+        if any(token in state_value for token in self._WGS_ACCESS_ENABLED_STATE_TOKENS):
+            return 'enabled'
         return False
 
     def _get_native_subscription_state_info_for_pos(self):
@@ -2306,6 +2325,61 @@ class SaleOrder(models.Model):
         if isinstance(value, date):
             return fields.Date.to_string(value)
         return str(value)
+
+    @api.model
+    def _wgs_get_partner_access_status_payload_for_pos(self, access_status=False):
+        access_status = dict(access_status or {})
+        if access_status:
+            return {
+                'access_enabled': bool(access_status.get('access_enabled')),
+                'access_state': access_status.get('access_state') or 'missing',
+                'access_label': access_status.get('access_label') or _('Sin acceso'),
+                'access_person_id': access_status.get('access_person_id') or False,
+                'access_global_user_id': access_status.get('access_global_user_id') or False,
+            }
+        return {
+            'access_enabled': False,
+            'access_state': 'missing',
+            'access_label': _('Sin person'),
+            'access_person_id': False,
+            'access_global_user_id': False,
+        }
+
+    def _get_access_person_status_map_for_pos(self, partners):
+        model_name = 'access_control.person'
+        if model_name not in self.env.registry or not partners:
+            return {}
+
+        person_model = self.env[model_name].sudo()
+        if 'partner_id' not in person_model._fields:
+            return {}
+
+        records = person_model.search([('partner_id', 'in', partners.ids)], order='id desc')
+        result = {}
+        for record in records:
+            partner_id = record.partner_id.id
+            if not partner_id or partner_id in result:
+                continue
+
+            access_enabled = bool(record.active and record.access_state == 'enabled')
+            if access_enabled:
+                access_state = 'enabled'
+                access_label = _('Acceso activo')
+            elif record.access_state == 'suspended':
+                access_state = 'suspended'
+                access_label = _('Acceso suspendido')
+            else:
+                access_state = 'inactive'
+                access_label = _('Acceso inactivo')
+
+            result[partner_id] = {
+                'access_enabled': access_enabled,
+                'access_state': access_state,
+                'access_label': access_label,
+                'access_person_id': record.id,
+                'access_global_user_id': record.global_user_id or False,
+            }
+        return result
 
     def _get_access_person_last_access_map_for_pos(self, partners):
         model_name = 'access_control.person'

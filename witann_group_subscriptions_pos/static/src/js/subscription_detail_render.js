@@ -31,6 +31,19 @@ function renderDetailHeader({
     formatDateTimeDisplay,
     _t,
 }) {
+    const accessEnabled = Boolean(detail.access_enabled);
+    const accessLabel = detail.access_label || (accessEnabled ? _t("Acceso activo") : _t("Sin acceso"));
+    const accessState = detail.access_state || "missing";
+    const accessStatusHtml = `
+        <span class="wgs-access-status-chip ${accessEnabled ? "wgs-access-status-chip-on" : "wgs-access-status-chip-off"}" title="${escapeHtml(accessLabel)}">
+            <span
+                class="wgs-access-status-dot ${accessEnabled ? "wgs-access-status-on" : "wgs-access-status-off"}"
+                aria-label="${escapeHtml(accessLabel)}"
+                data-access-state="${escapeHtml(accessState)}"
+            ></span>
+            <span>${escapeHtml(accessEnabled ? _t("Acceso activo") : _t("Sin acceso"))}</span>
+        </span>
+    `;
     const detailBodyHtml = isEditingPartnerInfo
         ? `
             ${formError ? `<div class="wgs-inline-error wgs-inline-error-compact">${escapeHtml(formError)}</div>` : ""}
@@ -88,6 +101,7 @@ function renderDetailHeader({
             <div class="wgs-detail-header-text">
                 <div class="wgs-detail-title-row">
                     <h4>${escapeHtml(detail.partner_name || "-")}</h4>
+                    ${accessStatusHtml}
                 </div>
                 ${detailBodyHtml}
             </div>
