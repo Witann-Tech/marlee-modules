@@ -31,9 +31,6 @@ class SaleOrder(models.Model):
         'in progress',
         'in_progress',
         'en progreso',
-        'renew',
-        'to renew',
-        'por renovar',
     )
     _WGS_ACCESS_SUSPENDED_STATE_TOKENS = (
         'pause',
@@ -54,6 +51,9 @@ class SaleOrder(models.Model):
         'churned',
         'draft',
         'upsell',
+        'renew',
+        'to renew',
+        'por renovar',
     )
     _WGS_POS_DIRECTORY_STATE_ALIASES = {
         'actionable': ('progress', 'renew'),
@@ -1663,11 +1663,12 @@ class SaleOrder(models.Model):
             access_state = False
             reason = _('La suscripción está cancelada o cerrada y puede reinscribirse.')
         elif next_invoice_date and next_invoice_date <= today:
+            access_state = False
             native_state_key = 'renew'
             native_state_label = _('Por renovar')
-            reason = _('La suscripción sigue activa, pero ya venció su siguiente fecha de cobro y debe renovarse.')
+            reason = _('La suscripción ya venció su siguiente fecha de cobro y debe renovarse para habilitar acceso.')
         elif access_state == 'enabled':
-            reason = _('Suscripción en progreso o en renovación.')
+            reason = _('Suscripción en progreso.')
         elif access_state == 'suspended':
             reason = _('La suscripción está pausada o suspendida.')
 
@@ -1767,19 +1768,20 @@ class SaleOrder(models.Model):
             is_valid = False
             reason = _('La suscripción está cancelada o cerrada y puede reinscribirse.')
         elif should_mark_for_renewal:
+            access_state = False
             native_state_key = 'renew'
             native_state_label = _('Por renovar')
-            is_valid = True
+            is_valid = False
             can_renew = True
-            reason = _('La suscripción sigue activa, pero ya venció su siguiente fecha de cobro y debe renovarse.')
+            reason = _('La suscripción ya venció su siguiente fecha de cobro y debe renovarse para habilitar acceso.')
         elif access_state == 'enabled':
             is_valid = True
             can_renew = True
-            reason = _('Suscripción en progreso o en renovación.')
+            reason = _('Suscripción en progreso.')
         elif access_state == 'suspended':
             reason = _('La suscripción está pausada o suspendida.')
         else:
-            reason = _('La suscripción no está en progreso ni en renovación.')
+            reason = _('La suscripción no está en progreso.')
 
         if native_state_key in ('cancel', 'closed') and not force_closed:
             can_reenroll = True
@@ -2065,10 +2067,10 @@ class SaleOrder(models.Model):
             return False
         if any(token in state_value for token in self._WGS_ACCESS_SUSPENDED_STATE_TOKENS):
             return 'suspended'
-        if any(token in state_value for token in self._WGS_ACCESS_ENABLED_STATE_TOKENS):
-            return 'enabled'
         if any(token in state_value for token in self._WGS_ACCESS_DISABLED_STATE_TOKENS):
             return False
+        if any(token in state_value for token in self._WGS_ACCESS_ENABLED_STATE_TOKENS):
+            return 'enabled'
         return False
 
     def _get_native_subscription_state_info_for_pos(self):

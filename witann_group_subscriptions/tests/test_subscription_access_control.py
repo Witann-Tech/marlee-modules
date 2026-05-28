@@ -1,3 +1,4 @@
+from odoo import fields
 from odoo.fields import Command
 from odoo.tests.common import TransactionCase
 
@@ -72,7 +73,7 @@ class TestSubscriptionAccessControl(TransactionCase):
 
     def test_active_subscription_creates_access_people(self):
         order = self._create_subscription_order()
-        progress_state = self._find_subscription_state_value('progress', 'en progreso', 'renew', 'por renovar')
+        progress_state = self._find_subscription_state_value('progress', 'en progreso')
 
         order.write({'subscription_state': progress_state})
 
@@ -90,7 +91,7 @@ class TestSubscriptionAccessControl(TransactionCase):
 
     def test_paused_subscription_suspends_access_without_deleting_person(self):
         order = self._create_subscription_order()
-        progress_state = self._find_subscription_state_value('progress', 'en progreso', 'renew', 'por renovar')
+        progress_state = self._find_subscription_state_value('progress', 'en progreso')
         pause_state = self._find_subscription_state_value('pause', 'pausa', 'hold', 'suspend')
 
         order.write({'subscription_state': progress_state})
@@ -99,14 +100,58 @@ class TestSubscriptionAccessControl(TransactionCase):
         owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
         participant_person = self.env['access_control.person'].search([('partner_id', '=', self.participant.id)], limit=1)
 
-        self.assertTrue(owner_person.active)
-        self.assertTrue(participant_person.active)
+        self.assertFalse(owner_person.active)
+        self.assertFalse(participant_person.active)
         self.assertEqual(owner_person.access_state, 'suspended')
         self.assertEqual(participant_person.access_state, 'suspended')
 
+    def test_renew_subscription_deactivates_access(self):
+        order = self._create_subscription_order()
+        progress_state = self._find_subscription_state_value('progress', 'en progreso')
+        renew_state = self._find_subscription_state_value('renew', 'to renew', 'por renovar')
+
+        order.write({'subscription_state': progress_state})
+        order.write({'subscription_state': renew_state})
+
+        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
+        participant_person = self.env['access_control.person'].search([('partner_id', '=', self.participant.id)], limit=1)
+
+        self.assertTrue(owner_person)
+        self.assertTrue(participant_person)
+        self.assertFalse(owner_person.active)
+        self.assertFalse(participant_person.active)
+        self.assertEqual(owner_person.access_state, 'suspended')
+        self.assertEqual(participant_person.access_state, 'suspended')
+
+    def test_expired_progress_subscription_deactivates_access(self):
+        order = self._create_subscription_order()
+        progress_state = self._find_subscription_state_value('progress', 'en progreso')
+        next_field = next(
+            (
+                field_name
+                for field_name in ('recurring_next_date', 'next_invoice_date', 'recurring_next_invoice_date')
+                if field_name in order._fields
+            ),
+            False,
+        )
+        if not next_field:
+            self.skipTest('No existe campo de próxima fecha de cobro en este runtime.')
+
+        order.write({'subscription_state': progress_state})
+        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
+        self.assertTrue(owner_person.active)
+
+        order.write({next_field: fields.Date.context_today(order)})
+
+        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
+        participant_person = self.env['access_control.person'].search([('partner_id', '=', self.participant.id)], limit=1)
+
+        self.assertFalse(owner_person.active)
+        self.assertFalse(participant_person.active)
+
     def test_cancelled_subscription_deactivates_managed_people(self):
         order = self._create_subscription_order()
-        progress_state = self._find_subscription_state_value('progress', 'en progreso', 'renew', 'por renovar')
+        progress_state = self._find_subscription_state_value('progress', 'en progreso')
         cancel_state = self._find_subscription_state_value('cancel', 'churn', 'close')
 
         order.write({'subscription_state': progress_state})
@@ -121,7 +166,7 @@ class TestSubscriptionAccessControl(TransactionCase):
         self.assertFalse(participant_person.active)
 
     def test_access_is_aggregated_across_multiple_subscriptions(self):
-        progress_state = self._find_subscription_state_value('progress', 'en progreso', 'renew', 'por renovar')
+        progress_state = self._find_subscription_state_value('progress', 'en progreso')
         pause_state = self._find_subscription_state_value('pause', 'pausa', 'hold', 'suspend')
 
         active_order = self._create_subscription_order()
@@ -138,7 +183,7 @@ class TestSubscriptionAccessControl(TransactionCase):
 
     def test_configured_access_sites_override_company_wide_sites(self):
         order = self._create_subscription_order()
-        progress_state = self._find_subscription_state_value('progress', 'en progreso', 'renew', 'por renovar')
+        progress_state = self._find_subscription_state_value('progress', 'en progreso')
         self.product.product_tmpl_id.write({'wgs_access_site_ids': [Command.set([self.site_b.id])]})
 
         order.write({'subscription_state': progress_state})
@@ -150,7 +195,7 @@ class TestSubscriptionAccessControl(TransactionCase):
         self.assertEqual(set(participant_person.site_ids.ids), {self.site_b.id})
 
     def test_access_sites_are_aggregated_across_multisite_subscriptions(self):
-        progress_state = self._find_subscription_state_value('progress', 'en progreso', 'renew', 'por renovar')
+        progress_state = self._find_subscription_state_value('progress', 'en progreso')
 
         self.product.product_tmpl_id.write({'wgs_access_site_ids': [Command.set([self.site.id])]})
         order_a = self._create_subscription_order()

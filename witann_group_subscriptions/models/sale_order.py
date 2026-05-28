@@ -15,9 +15,6 @@ class SaleOrder(models.Model):
         'in progress',
         'in_progress',
         'en progreso',
-        'renew',
-        'to renew',
-        'por renovar',
     )
     _WGS_ACCESS_SUSPENDED_STATE_TOKENS = (
         'pause',
@@ -38,6 +35,9 @@ class SaleOrder(models.Model):
         'churned',
         'draft',
         'upsell',
+        'renew',
+        'to renew',
+        'por renovar',
     )
 
     wgs_effective_start_date = fields.Date(
@@ -206,6 +206,16 @@ class SaleOrder(models.Model):
             order='id asc',
         ).ids
 
+    def _wgs_get_first_access_date_value(self, field_names):
+        self.ensure_one()
+        for field_name in field_names:
+            if field_name not in self._fields:
+                continue
+            value = self[field_name]
+            if value:
+                return fields.Date.to_date(value)
+        return False
+
     def _wgs_classify_subscription_access_state(self):
         self.ensure_one()
         if not self._get_subscription_recurring_lines():
@@ -218,11 +228,31 @@ class SaleOrder(models.Model):
             return False
         if any(token in state_value for token in self._WGS_ACCESS_SUSPENDED_STATE_TOKENS):
             return 'suspended'
-        if any(token in state_value for token in self._WGS_ACCESS_ENABLED_STATE_TOKENS):
-            return 'enabled'
         if any(token in state_value for token in self._WGS_ACCESS_DISABLED_STATE_TOKENS):
             return False
-        return False
+        if not any(token in state_value for token in self._WGS_ACCESS_ENABLED_STATE_TOKENS):
+            return False
+
+        today = fields.Date.context_today(self)
+        start_date = self._wgs_get_first_access_date_value(
+            ('wgs_effective_start_date', 'start_date', 'date_start', 'subscription_start_date', 'date_order')
+        )
+        if start_date and start_date > today:
+            return False
+
+        next_invoice_date = self._wgs_get_first_access_date_value(
+            ('recurring_next_date', 'next_invoice_date', 'recurring_next_invoice_date')
+        )
+        if next_invoice_date and next_invoice_date <= today:
+            return False
+
+        hard_end_date = self._wgs_get_first_access_date_value(
+            ('date_end', 'end_date', 'subscription_end_date', 'recurring_end_date')
+        )
+        if hard_end_date and hard_end_date < today:
+            return False
+
+        return 'enabled'
 
     @api.model
     def _wgs_get_related_subscription_orders_for_partner(self, partner):
@@ -279,7 +309,7 @@ class SaleOrder(models.Model):
         access_state = profile['access_state']
         site_ids = profile['site_ids']
 
-        if access_state and not site_ids:
+        if access_state == 'enabled' and not site_ids:
             _logger.warning(
                 'WGS ACCESS: no se encontraron sitios para partner=%s order_ids=%s; acceso desactivado por seguridad',
                 partner.id,
@@ -288,14 +318,14 @@ class SaleOrder(models.Model):
             if person:
                 vals = {
                     'managed_by_subscription': True,
-                    'access_state': 'enabled',
+                    'access_state': 'suspended',
                 }
                 if person.active:
                     vals['active'] = False
                 person.write(vals)
             return False
 
-        if access_state:
+        if access_state == 'enabled':
             vals = {
                 'partner_id': partner.id,
                 'active': True,
@@ -330,11 +360,11 @@ class SaleOrder(models.Model):
         if person and person.managed_by_subscription:
             vals = {
                 'managed_by_subscription': True,
-                'access_state': 'enabled',
+                'access_state': 'suspended',
             }
             if person.active:
                 vals['active'] = False
-            if person.active or person.access_state != 'enabled' or not person.managed_by_subscription:
+            if person.active or person.access_state != 'suspended' or not person.managed_by_subscription:
                 person.write(vals)
                 _logger.info(
                     'WGS ACCESS: person deactivated partner=%s person=%s orders=%s',
@@ -352,6 +382,25 @@ class SaleOrder(models.Model):
         partners = self.env['res.partner'].sudo().browse(sorted(partner_ids)).exists()
         for partner in partners:
             self._wgs_sync_access_control_partner(partner)
+
+    @api.model
+    def _cron_wgs_sync_subscription_access_control(self, batch_limit=5000):
+        domain = [('state', 'in', ['sale', 'done'])]
+        if 'order_line' in self._fields:
+            domain.append(('order_line.product_id.product_tmpl_id.recurring_invoice', '=', True))
+        orders = self.sudo().search(domain, order='write_date asc, id asc', limit=int(batch_limit or 5000))
+        orders = orders.filtered(lambda order: order._get_subscription_recurring_lines())
+        partner_ids = set()
+        for order in orders:
+            partner_ids.update(order._wgs_get_access_related_partner_ids())
+        if partner_ids:
+            self.browse()._wgs_sync_access_control_people(extra_partner_ids=partner_ids)
+        _logger.info(
+            'WGS ACCESS: cron resynced subscription access orders=%s partners=%s',
+            len(orders),
+            len(partner_ids),
+        )
+        return True
 
     @api.model_create_multi
     def create(self, vals_list):
