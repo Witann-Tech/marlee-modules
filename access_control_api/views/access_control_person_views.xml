@@ -10,6 +10,7 @@
           <field name="partner_id"/>
           <field name="access_origin" readonly="1"/>
           <field name="global_user_id" readonly="active"/>
+          <field name="authorize_timezone_id" readonly="1"/>
           <field name="site_ids" widget="many2many_tags"/>
           <field name="last_access_at" readonly="1"/>
           <field name="last_access_result" readonly="1"/>
@@ -33,6 +34,8 @@
               <field name="partner_id" required="1"/>
               <field name="access_origin" readonly="1"/>
               <field name="global_user_id" readonly="active"/>
+              <field name="access_timezone_id" options="{'no_create_edit': False}"/>
+              <field name="authorize_timezone_id" readonly="1"/>
               <field name="site_ids" widget="many2many_tags" options="{'no_create_edit': False}"/>
               <field name="last_access_at" readonly="1"/>
               <field name="last_access_result" readonly="1"/>
@@ -52,6 +55,7 @@
         <search string="Personas">
           <field name="partner_id"/>
           <field name="global_user_id"/>
+          <field name="access_timezone_id"/>
           <field name="site_ids"/>
           <filter string="Con foto de rostro" name="with_face_pic" domain="[('face_pic_b64','!=',False)]"/>
           <filter string="Activos" name="active" domain="[('active','=',True)]"/>

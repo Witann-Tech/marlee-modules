@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 import requests
 
-from odoo import models, fields
+from odoo import api, models, fields
 from odoo.exceptions import UserError
 from odoo.tools import config as odoo_config
 
@@ -42,6 +42,29 @@ class AccessControlDevice(models.Model):
         "CHECK(user_capacity IS NULL OR user_capacity > 0)",
         "La capacidad de usuarios debe ser mayor a cero.",
     )
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        records = super().create(vals_list)
+        records.filtered(lambda rec: rec.active)._queue_active_timezones_for_device_sites("device_create")
+        return records
+
+    def write(self, vals):
+        before = {rec.id: (rec.active, rec.site_id.id) for rec in self}
+        res = super().write(vals)
+        if {"active", "site_id"}.intersection(vals):
+            to_sync = self.filtered(
+                lambda rec: rec.active and before.get(rec.id) != (rec.active, rec.site_id.id)
+            )
+            if to_sync:
+                to_sync._queue_active_timezones_for_device_sites("device_write")
+        return res
+
+    def _queue_active_timezones_for_device_sites(self, reason):
+        site_ids = sorted(set(self.filtered(lambda rec: rec.active and rec.site_id).mapped("site_id").ids))
+        if not site_ids or "access_control.timezone" not in self.env.registry:
+            return False
+        return self.env["access_control.timezone"].sudo().queue_active_timezones_for_sites(site_ids=site_ids, reason=reason)
 
     def _get_adms_config(self):
         ICP = self.env["ir.config_parameter"].sudo()

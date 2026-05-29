@@ -33,6 +33,19 @@ class AccessPerson(models.Model):
         "site_id",
         string="Sitios",
     )
+    access_timezone_id = fields.Many2one(
+        "access_control.timezone",
+        string="Horario de acceso",
+        default=lambda self: self.env.ref("access_control_api.access_timezone_general", raise_if_not_found=False),
+        index=True,
+        help="Horario global que se enviará como AuthorizeTimezoneId. Acceso general usa timezone_id=1.",
+    )
+    authorize_timezone_id = fields.Integer(
+        string="AuthorizeTimezoneId",
+        related="access_timezone_id.timezone_id",
+        readonly=True,
+        store=True,
+    )
 
     # Id global secuencial utilizado por SpeedFace (1..10000)
     global_user_id = fields.Integer(string="ID global", index=True)
@@ -209,6 +222,7 @@ class AccessPerson(models.Model):
                 rec.id: {
                     "active": rec.active,
                     "access_state": rec.access_state,
+                    "access_timezone_id": rec.access_timezone_id.id,
                     "global_user_id": rec.global_user_id,
                     "site_ids": set(rec.site_ids.ids),
                     "face_pic_b64": rec.face_pic_b64 or False,
@@ -227,17 +241,20 @@ class AccessPerson(models.Model):
             prev = before[rec.id]
             prev_active = prev["active"]
             prev_access_state = prev["access_state"]
+            prev_access_timezone_id = prev["access_timezone_id"]
             prev_gid = prev["global_user_id"]
             prev_sites = prev["site_ids"]
             prev_face = prev["face_pic_b64"] or False
 
             new_active = rec.active
             new_access_state = rec.access_state
+            new_access_timezone_id = rec.access_timezone_id.id
             new_gid = rec.global_user_id
             new_sites = set(rec.site_ids.ids)
             new_face = rec.face_pic_b64 or False
             face_changed = prev_face != new_face
             access_state_changed = prev_access_state != new_access_state
+            access_timezone_changed = prev_access_timezone_id != new_access_timezone_id
 
             prev_sync_sites = {sid for sid in prev_sites if prev_active and prev_gid}
             new_sync_sites = {sid for sid in new_sites if new_active and new_gid}
@@ -260,10 +277,10 @@ class AccessPerson(models.Model):
             # Any valid current state should be upserted for current sync sites.
             for site_id in sorted(new_sync_sites):
                 include_face_pic = bool(new_face) and (
-                    face_changed or access_state_changed or site_id not in prev_sync_sites
+                    face_changed or access_state_changed or access_timezone_changed or site_id not in prev_sync_sites
                 )
                 clear_face_pic = (not new_face) and (
-                    face_changed or access_state_changed or site_id not in prev_sync_sites
+                    face_changed or access_state_changed or access_timezone_changed or site_id not in prev_sync_sites
                 )
                 Change.queue_upsert_for_person(
                     rec,
@@ -271,6 +288,7 @@ class AccessPerson(models.Model):
                     reason="person_write_upsert",
                     include_face_pic=include_face_pic,
                     clear_face_pic=clear_face_pic,
+                    priority=access_timezone_changed or None,
                 )
 
         return res

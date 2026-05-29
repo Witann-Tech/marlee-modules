@@ -279,6 +279,63 @@ class TestFaceSyncDelta(TransactionCase):
         person.write({"access_state": "suspended"})
         payload = self.controller._person_sync_payload(person, include_face_pic=False, clear_face_pic=False)
         self.assertEqual(payload["accessGroup"], 0)
+        self.assertEqual(payload["authorizeTimezoneId"], 1)
+        self.assertEqual(payload["authorizeDoorId"], 1)
+        self.assertEqual(payload["authorizeDevId"], 1)
+
+    def test_person_payload_uses_assigned_access_timezone(self):
+        timezone = self.env["access_control.timezone"].sudo().create(
+            {
+                "name": "Matutino",
+                "interval_ids": [
+                    (0, 0, {"day": "mon", "start_time": "06:00", "end_time": "14:00"}),
+                    (0, 0, {"day": "tue", "start_time": "06:00", "end_time": "14:00"}),
+                ],
+            }
+        )
+        _, person = self._make_person(self._make_image_b64())
+        person.write({"access_timezone_id": timezone.id})
+
+        payload = self.controller._person_sync_payload(person, include_face_pic=False, clear_face_pic=False)
+
+        self.assertEqual(timezone.timezone_id, 2)
+        self.assertEqual(payload["authorizeTimezoneId"], timezone.timezone_id)
+        self.assertEqual(payload["authorizeDoorId"], 1)
+        self.assertEqual(payload["authorizeDevId"], 1)
+        change = self.Change.search([("person_id", "=", person.id), ("action", "=", "upsert")], order="id desc", limit=1)
+        self.assertTrue(change.priority)
+
+    def test_timezone_upsert_command_payload_for_sync_delta(self):
+        self.Change.search([]).unlink()
+        timezone = self.env["access_control.timezone"].sudo().create(
+            {
+                "name": "L-V Matutino",
+                "interval_ids": [
+                    (0, 0, {"day": "mon", "start_time": "06:00", "end_time": "14:00"}),
+                    (0, 0, {"day": "tue", "start_time": "06:00", "end_time": "14:00"}),
+                ],
+            }
+        )
+        changes = self.Change.search([("command_type", "=", "timezone_upsert")], order="id asc")
+        commands = self.controller._command_payloads_for_changes(
+            changes,
+            self.site.code,
+            device_serial=self.device.device_serial,
+        )
+
+        self.assertEqual(len(commands), 1)
+        self.assertEqual(commands[0]["type"], "timezone_upsert")
+        self.assertEqual(commands[0]["siteCode"], self.site.code)
+        self.assertEqual(commands[0]["deviceSerial"], self.device.device_serial)
+        self.assertEqual(commands[0]["timezoneId"], timezone.timezone_id)
+        self.assertTrue(commands[0]["priority"])
+        self.assertEqual(
+            commands[0]["intervals"],
+            [
+                {"day": "mon", "start": "06:00", "end": "14:00"},
+                {"day": "tue", "start": "06:00", "end": "14:00"},
+            ],
+        )
 
     def test_priority_upsert_queue_marks_change_and_payload(self):
         _, person = self._make_person(self._make_image_b64())

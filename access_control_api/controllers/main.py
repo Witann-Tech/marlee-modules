@@ -154,10 +154,44 @@ class AccessControlApi(http.Controller):
     def _site_change_max_cursor(self, site):
         Change = site.env["access_control.sync_change"].sudo()
         return Change.search(
-            [("site_id", "=", site.id), ("action", "!=", "command")],
+            [
+                ("site_id", "=", site.id),
+                "|",
+                ("action", "!=", "command"),
+                ("command_type", "!=", "open_door"),
+            ],
             order="id desc",
             limit=1,
         ).id or 0
+
+    def _command_payloads_for_changes(self, changes, site_code, device_serial=None):
+        commands = []
+        for ch in changes:
+            if ch.action != "command" or ch.command_type == "open_door":
+                continue
+            command_payload = {}
+            if ch.command_payload:
+                try:
+                    command_payload = json.loads(ch.command_payload)
+                except (TypeError, ValueError):
+                    command_payload = {}
+            command_payload.update(
+                {
+                    "id": ch.id,
+                    "type": ch.command_type or "command",
+                    "priority": bool(ch.priority),
+                    "siteCode": ch.site_id.code if ch.site_id else site_code,
+                    "deviceSerial": (
+                        ch.device_id.device_serial
+                        if ch.device_id
+                        else device_serial
+                    )
+                    or command_payload.get("deviceSerial")
+                    or None,
+                }
+            )
+            commands.append(command_payload)
+        return commands
 
     def _is_valid_user_api_key(self, token):
         """Support Odoo user API keys created from user preferences."""
@@ -391,6 +425,9 @@ class AccessControlApi(http.Controller):
             "name": person.name or "",
             "active": bool(person.active),
             "accessGroup": 0 if person.access_state == "suspended" else 1,
+            "authorizeTimezoneId": int(person.authorize_timezone_id or 1),
+            "authorizeDoorId": 1,
+            "authorizeDevId": 1,
         }
         if priority:
             payload["priority"] = True
@@ -630,7 +667,13 @@ class AccessControlApi(http.Controller):
             )
 
         changes = Change.search(
-            [("site_id", "=", site.id), ("id", ">", cursor), ("action", "!=", "command")],
+            [
+                ("site_id", "=", site.id),
+                ("id", ">", cursor),
+                "|",
+                ("action", "!=", "command"),
+                ("command_type", "!=", "open_door"),
+            ],
             order="id asc",
             limit=limit,
         )
@@ -669,8 +712,11 @@ class AccessControlApi(http.Controller):
             }
 
         latest_by_gid = {}
+        command_changes = Change.browse()
         for ch in changes:
             if ch.action == "command":
+                if ch.command_type != "open_door":
+                    command_changes |= ch
                 continue
             gid = ch.global_user_id
             if not gid:
@@ -740,6 +786,10 @@ class AccessControlApi(http.Controller):
 
         next_cursor = changes[-1].id
         has_more = len(changes) >= limit
+        commands = self._command_payloads_for_changes(command_changes, site_code, device_serial=device_serial)
+        synced_timezones = command_changes.mapped("access_timezone_id")
+        if synced_timezones:
+            synced_timezones.mark_synced()
         self._mark_people_synced(synced_people)
         self._touch_device_telemetry(device, heartbeat=True, sync=True, error_marker=True)
         _logger.info(
@@ -750,7 +800,7 @@ class AccessControlApi(http.Controller):
             next_cursor,
             len(upserts),
             len(deletes),
-            0,
+            len(commands),
             include_biophoto,
         )
 
@@ -764,7 +814,7 @@ class AccessControlApi(http.Controller):
             "hasMore": has_more,
             "upserts": upserts,
             "deletes": deletes,
-            "commands": [],
+            "commands": commands,
         }
 
     @http.route(

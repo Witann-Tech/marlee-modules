@@ -26,6 +26,18 @@
             </field>
         </record>
 
+        <record id="action_access_control_timezones" model="ir.actions.act_window">
+            <field name="name">Horarios de acceso</field>
+            <field name="res_model">access_control.timezone</field>
+            <field name="view_mode">list,form</field>
+            <field name="context">{'active_test': False, 'search_default_active': 1}</field>
+            <field name="help" type="html">
+                <p class="o_view_nocontent_smiling_face">
+                    Crea horarios globales para SpeedFace/ADMS. El timezone_id=1 queda reservado para Acceso general.
+                </p>
+            </field>
+        </record>
+
         <menuitem id="access_control_menu_configuration" name="Inventario"
                   parent="access_control_menu_root" sequence="10"/>
 
@@ -36,6 +48,10 @@
         <menuitem id="access_control_menu_devices" name="Dispositivos"
                   parent="access_control_menu_configuration"
                   action="action_access_control_devices" sequence="20"/>
+
+        <menuitem id="access_control_menu_timezones" name="Horarios de acceso"
+                  parent="access_control_menu_configuration"
+                  action="action_access_control_timezones" sequence="30"/>
 
         <!-- Legacy: mantener IDs para desactivar menús antiguos al actualizar. -->
         <record id="action_access_control_people" model="ir.actions.act_window">

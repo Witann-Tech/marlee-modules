@@ -14,6 +14,7 @@
                     <group>
                         <field name="subscription_max_participants_total" readonly="1"/>
                         <field name="wgs_effective_start_date"/>
+                        <field name="wgs_access_timezone_id"/>
                         <field name="participant_ids" widget="many2many_tags"/>
                     </group>
                 </page>

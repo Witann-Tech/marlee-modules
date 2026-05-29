@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+  <data noupdate="1">
+    <record id="access_timezone_general" model="access_control.timezone">
+      <field name="name">Acceso general</field>
+      <field name="timezone_id">1</field>
+      <field name="active">1</field>
+      <field name="description">Reservado para acceso general / sin restricción.</field>
+      <field name="sync_state">synced</field>
+    </record>
+  </data>
+</odoo>

@@ -40,6 +40,14 @@ class ProductTemplate(models.Model):
         help='Si se configuran, la suscripción otorgará acceso únicamente a estos sitios. '
              'Si se dejan vacíos, se mantiene el comportamiento actual por empresa.',
     )
+    wgs_access_timezone_id = fields.Many2one(
+        'access_control.timezone',
+        string='Horario de acceso WGS',
+        default=lambda self: self.env.ref('access_control_api.access_timezone_general', raise_if_not_found=False),
+        domain="[('active', '=', True)]",
+        help='Horario global que se asignará a las personas de control de acceso. '
+             'Acceso general usa timezone_id=1.',
+    )
     max_participants_total = fields.Integer(
         string='Máximo de participantes (total)',
         default=1,
@@ -77,7 +85,28 @@ class ProductTemplate(models.Model):
                         % {'product': product.display_name}
                     )
 
-        return super().write(vals)
+        res = super().write(vals)
+        if 'wgs_access_timezone_id' in vals:
+            self._wgs_resync_access_for_timezone_change()
+        return res
+
+    def _wgs_resync_access_for_timezone_change(self):
+        if 'sale.order.line' not in self.env.registry:
+            return False
+        variant_ids = self.mapped('product_variant_ids').ids
+        if not variant_ids:
+            return False
+        SaleLine = self.env['sale.order.line'].sudo()
+        domain = [('product_id', 'in', variant_ids)]
+        if 'display_type' in SaleLine._fields:
+            domain.append(('display_type', '=', False))
+        if 'order_id' in SaleLine._fields:
+            domain.append(('order_id.state', 'in', ('sale', 'done')))
+        lines = SaleLine.search(domain)
+        orders = lines.mapped('order_id').filtered(lambda order: hasattr(order, '_wgs_sync_access_control_people'))
+        if orders:
+            orders.with_context(access_sync_priority=True)._wgs_sync_access_control_people()
+        return bool(orders)
 
     def _wgs_has_any_sales_history(self):
         self.ensure_one()

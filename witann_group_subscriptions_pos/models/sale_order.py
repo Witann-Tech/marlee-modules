@@ -859,6 +859,11 @@ class SaleOrder(models.Model):
         last_change = Change.search([], order='id desc', limit=1)
         last_change_id = last_change.id or 0
 
+        site_ids = subscription._wgs_get_access_site_ids() if hasattr(subscription, '_wgs_get_access_site_ids') else []
+        Timezone = self.env['access_control.timezone'].sudo() if 'access_control.timezone' in self.env.registry else False
+        if Timezone:
+            Timezone.queue_active_timezones_for_sites(site_ids=site_ids, reason='manual_subscription_resync')
+
         if hasattr(subscription, '_ensure_subscription_owner_is_participant'):
             subscription._ensure_subscription_owner_is_participant()
         if hasattr(subscription, '_wgs_sync_access_control_people'):
