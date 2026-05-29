@@ -58,11 +58,11 @@ export function createSubscriptionPosApi(orm) {
                 [partnerId, productId, flow || "new", sourceSubscriptionId || false]
             );
         },
-        async authorizeSubscriptionDiscount(partnerId, productId, flow = "new", discountCode = false, supervisorPin = false, sourceSubscriptionId = false) {
+        async authorizeSubscriptionDiscount(partnerId, productId, flow = "new", discountPercent = 0, supervisorPin = false, sourceSubscriptionId = false) {
             return orm.call(
                 "pos.order",
                 "wgs_authorize_subscription_discount_for_pos",
-                [partnerId, productId, flow || "new", discountCode || false, supervisorPin || false, sourceSubscriptionId || false]
+                [partnerId, productId, flow || "new", discountPercent || 0, supervisorPin || false, sourceSubscriptionId || false]
             );
         },
         async updatePartnerPhoto(partnerId, imageBase64) {

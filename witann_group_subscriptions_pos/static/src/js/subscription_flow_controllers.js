@@ -5,17 +5,10 @@ import {
 } from "./subscription_pricing_snapshot";
 import { canOpenNewSubscription } from "./subscription_view_utils";
 
-function applyDiscountOffersToForm(form, offers = []) {
-    form.discountOffers = Array.isArray(offers) ? offers : [];
-    form.selectedDiscountCode = "";
+function resetDiscountAuthorization(form) {
+    form.discountPercent = "";
     form.supervisorPin = "";
     form.authorizedDiscount = null;
-    if (form.discountOffers.length === 1) {
-        const [onlyOffer] = form.discountOffers;
-        if (!Number(onlyOffer.discount_percent || 0) && !Number(onlyOffer.discount_fixed_amount || 0)) {
-            form.selectedDiscountCode = String(onlyOffer.code || "");
-        }
-    }
 }
 
 function clampParticipantIds(participantIds, ownerId, maxTotal) {
@@ -135,8 +128,7 @@ async function openRenewalForm(state, item, {
         isReenroll: mode === "reenroll",
         startDate: mode === "reenroll" ? new Date().toISOString().slice(0, 10) : false,
         pricingSnapshot: null,
-        discountOffers: [],
-        selectedDiscountCode: "",
+        discountPercent: "",
         supervisorPin: "",
         authorizedDiscount: null,
         nextInvoiceDate: item.next_invoice_date || false,
@@ -165,7 +157,6 @@ async function openRenewalForm(state, item, {
                 sourceSubscriptionName: state.renewalForm.subscriptionName,
             }),
         };
-        applyDiscountOffersToForm(state.renewalForm, quote && Array.isArray(quote.offers) ? quote.offers : []);
     } catch (error) {
         console.error("Error al consultar cobro de renovación POS", error);
         state.formError = mode === "reenroll"
@@ -403,7 +394,7 @@ async function applySelectedProduct(state, productId, {
     state.newSubscriptionForm.maxParticipantsTotal = product ? Number(product.max_participants_total || 1) : 1;
     state.newSubscriptionForm.plans = [];
     state.newSubscriptionForm.pricingSnapshot = null;
-    applyDiscountOffersToForm(state.newSubscriptionForm, []);
+    resetDiscountAuthorization(state.newSubscriptionForm);
     state.newSubscriptionForm.participantIds = clampParticipantIds(
         state.newSubscriptionForm.participantIds,
         state.selectedPartnerId,
@@ -428,7 +419,6 @@ async function applySelectedProduct(state, productId, {
             applyPricingPayloadToNewSubscriptionForm(state, pricing, null, {
                 _t,
             });
-            applyDiscountOffersToForm(state.newSubscriptionForm, quote && Array.isArray(quote.offers) ? quote.offers : []);
         } catch (error) {
             console.error("Error al consultar cotización de suscripción POS", error);
             state.formError = _t("No se pudo recalcular el precio de la suscripción.");
@@ -486,6 +476,7 @@ async function applySelectedUpsaleProduct(state, productId, {
     state.upsaleForm.maxParticipantsTotal = product ? Number(product.max_participants_total || 1) : 1;
     state.upsaleForm.plans = [];
     state.upsaleForm.pricingSnapshot = null;
+    resetDiscountAuthorization(state.upsaleForm);
     state.upsaleForm.participantIds = clampParticipantIds(
         state.upsaleForm.participantIds,
         state.upsaleForm.holderPartnerId,
@@ -543,6 +534,7 @@ async function updateSelectedUpsalePlan(state, planChoice, {
         renderDetail(state.currentDetail);
         return;
     }
+    resetDiscountAuthorization(state.upsaleForm);
     state.upsaleForm.loading = true;
     renderDetail(state.currentDetail);
     try {

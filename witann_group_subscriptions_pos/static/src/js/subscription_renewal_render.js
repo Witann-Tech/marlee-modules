@@ -57,7 +57,7 @@ function renderRenewalForm({
                 escapeHtml,
                 formatMoney,
                 authorizeAction: formMode === "reenroll" ? "authorize-reenroll-discount" : "authorize-renewal-discount",
-                codeField: "renewal_discount_code",
+                percentField: "renewal_discount_percent",
                 pinField: "renewal_supervisor_pin",
                 _t,
             })}

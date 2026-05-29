@@ -1,6 +1,6 @@
 /** @odoo-module **/
 
-import { getAuthorizationOnlyOffer } from "./subscription_discount_render";
+import { getRequestedDiscountPercent } from "./subscription_discount_render";
 import { buildChargeFromSnapshot, getPricingSnapshot } from "./subscription_pricing_snapshot";
 
 async function ensureEligibleProductForPartner(state, partnerId, productId, {
@@ -62,17 +62,15 @@ function buildAuthorizedDiscountMetadata(form) {
 }
 
 function hasPendingDiscountAuthorization(form) {
-    const selectedCode = String(form && form.selectedDiscountCode ? form.selectedDiscountCode : "");
-    if (!selectedCode) {
+    const requestedPercent = getRequestedDiscountPercent(form);
+    if (requestedPercent <= 0) {
         return false;
     }
-    return !form.authorizedDiscount || String(form.authorizedDiscount.code || "") !== selectedCode;
+    return !form.authorizedDiscount || Number(form.authorizedDiscount.discountPercent || 0) !== requestedPercent;
 }
 
 function getPendingAuthorizationMessage(form, _t) {
-    return getAuthorizationOnlyOffer(form)
-        ? _t("Debes autorizar esta venta antes de agregarla al ticket.")
-        : _t("Debes autorizar el descuento seleccionado antes de agregarla al ticket.");
+    return _t("Debes autorizar el descuento capturado antes de agregarla al ticket.");
 }
 
 async function authorizeDiscountForForm(state, form, { partnerId, productId, flow, sourceSubscriptionId = false }, {
@@ -80,21 +78,14 @@ async function authorizeDiscountForForm(state, form, { partnerId, productId, flo
     renderDetail,
     _t,
 }) {
-    const authorizationOnlyOffer = getAuthorizationOnlyOffer(form);
-    if (authorizationOnlyOffer && !String(form.selectedDiscountCode || "").trim()) {
-        form.selectedDiscountCode = String(authorizationOnlyOffer.code || "");
-    }
-    if (!form || !String(form.selectedDiscountCode || "").trim()) {
-        state.formError = authorizationOnlyOffer
-            ? _t("No se encontró la autorización requerida para esta venta.")
-            : _t("Selecciona un beneficio antes de autorizar el descuento.");
+    const requestedPercent = getRequestedDiscountPercent(form);
+    if (requestedPercent <= 0 || requestedPercent > 100) {
+        state.formError = _t("Captura un porcentaje de descuento mayor a 0 y menor o igual a 100.");
         renderDetail(state.currentDetail);
         return false;
     }
     if (!String(form.supervisorPin || "").trim()) {
-        state.formError = authorizationOnlyOffer
-            ? _t("Captura el PIN de autorización para autorizar esta venta.")
-            : _t("Captura el PIN de autorización para autorizar el descuento.");
+        state.formError = _t("Captura el PIN WGS para autorizar el descuento.");
         renderDetail(state.currentDetail);
         return false;
     }
@@ -103,24 +94,20 @@ async function authorizeDiscountForForm(state, form, { partnerId, productId, flo
             partnerId,
             productId,
             flow,
-            form.selectedDiscountCode,
+            requestedPercent,
             form.supervisorPin,
             sourceSubscriptionId || false
         );
         if (!result || result.ok === false) {
             state.formError = result && result.error_message
                 ? result.error_message
-                : (
-                    authorizationOnlyOffer
-                        ? _t("No se pudo autorizar la venta solicitada.")
-                        : _t("No se pudo autorizar el descuento solicitado.")
-                );
+                : _t("No se pudo autorizar el descuento solicitado.");
             renderDetail(state.currentDetail);
             return false;
         }
         form.authorizedDiscount = {
-            code: result.code || form.selectedDiscountCode,
-            label: result.label || form.selectedDiscountCode,
+            code: result.code || "manual_percent",
+            label: result.label || _t("Descuento autorizado"),
             discountPercent: Number(result.discount_percent || 0) || 0,
             discountFixedAmount: Number(result.discount_fixed_amount || 0) || 0,
             authorizedEmployeeId: Number(result.authorized_employee_id || 0) || false,
@@ -128,20 +115,14 @@ async function authorizeDiscountForForm(state, form, { partnerId, productId, flo
             authorizedAt: result.authorized_at || false,
             birthdayYear: Number(result.birthday_year || 0) || false,
         };
-        state.formNotice = authorizationOnlyOffer
-            ? _t("Venta autorizada correctamente.")
-            : _t("Descuento autorizado correctamente.");
+        state.formNotice = _t("Descuento autorizado correctamente.");
         renderDetail(state.currentDetail);
         return true;
     } catch (error) {
         console.error("Error al autorizar descuento POS", error);
         state.formError = (error && error.message)
             ? error.message
-            : (
-                authorizationOnlyOffer
-                    ? _t("No se pudo autorizar la venta solicitada.")
-                    : _t("No se pudo autorizar el descuento solicitado.")
-            );
+            : _t("No se pudo autorizar el descuento solicitado.");
         renderDetail(state.currentDetail);
         return false;
     }
@@ -368,6 +349,30 @@ function buildSubscriptionInlineActionHandlers({
                     productId: state.renewalForm.productId,
                     flow: "reenroll",
                     sourceSubscriptionId: state.renewalForm.subscriptionId,
+                },
+                {
+                    authorizeSubscriptionDiscount,
+                    renderDetail,
+                    _t,
+                }
+            );
+        },
+        "authorize-upsale-discount": async () => {
+            state.formError = "";
+            state.formNotice = "";
+            if (!state.upsaleForm || !state.upsaleForm.holderPartnerId || !state.upsaleForm.productId) {
+                state.formError = _t("No hay un cambio de plan listo para autorizar descuento.");
+                renderDetail(state.currentDetail);
+                return;
+            }
+            await authorizeDiscountForForm(
+                state,
+                state.upsaleForm,
+                {
+                    partnerId: state.upsaleForm.holderPartnerId,
+                    productId: state.upsaleForm.productId,
+                    flow: "upsale",
+                    sourceSubscriptionId: state.upsaleForm.subscriptionId,
                 },
                 {
                     authorizeSubscriptionDiscount,
@@ -656,12 +661,18 @@ function buildSubscriptionInlineActionHandlers({
             }))) {
                 return;
             }
+            if (hasPendingDiscountAuthorization(state.upsaleForm)) {
+                state.formError = getPendingAuthorizationMessage(state.upsaleForm, _t);
+                renderDetail(state.currentDetail);
+                return;
+            }
             let targetLine = null;
             try {
                 const lineResult = await addConfiguredProductLineToOrder(order, productRecord, {
                     quantity: 1,
                     merge: false,
                     charge: buildChargeFromSnapshot(state.upsaleForm, "charge_now"),
+                    discount: getAuthorizedDiscountPercent(state.upsaleForm),
                     metadata: {
                         flow: "upsale",
                         partner_id: holderPartnerId || false,
@@ -674,6 +685,7 @@ function buildSubscriptionInlineActionHandlers({
                         product_name: state.upsaleForm.productName || false,
                         source_subscription_id: Number(pricingSnapshot.source_subscription_id || 0) || Number(state.upsaleForm.subscriptionId || 0) || false,
                         pricing_snapshot: state.upsaleForm.pricingSnapshot || false,
+                        ...buildAuthorizedDiscountMetadata(state.upsaleForm),
                     },
                 });
                 targetLine = lineResult && lineResult.line ? lineResult.line : null;
@@ -924,9 +936,8 @@ async function handleSubscriptionInlineFieldChange({ field, target }, {
         await applySelectedProduct(target.value);
     } else if (state.formMode === "new" && field === "plan_choice") {
         await updateSelectedPlan(target.value);
-    } else if (state.formMode === "new" && field === "new_discount_code") {
-        state.newSubscriptionForm.selectedDiscountCode = target.value || "";
-        state.newSubscriptionForm.supervisorPin = "";
+    } else if (state.formMode === "new" && field === "new_discount_percent") {
+        state.newSubscriptionForm.discountPercent = target.value || "";
         state.newSubscriptionForm.authorizedDiscount = null;
     } else if (state.formMode === "new" && field === "start_date") {
         state.newSubscriptionForm.startDate = target.value || formatTodayISO();
@@ -937,14 +948,16 @@ async function handleSubscriptionInlineFieldChange({ field, target }, {
         }
     } else if (state.formMode === "new" && field === "participant_toggle") {
         toggleParticipant(target.value, target.checked);
-    } else if ((state.formMode === "renewal" || state.formMode === "reenroll") && field === "renewal_discount_code") {
-        state.renewalForm.selectedDiscountCode = target.value || "";
-        state.renewalForm.supervisorPin = "";
+    } else if ((state.formMode === "renewal" || state.formMode === "reenroll") && field === "renewal_discount_percent") {
+        state.renewalForm.discountPercent = target.value || "";
         state.renewalForm.authorizedDiscount = null;
     } else if (state.formMode === "upsale" && field === "upsale_product_id") {
         await applySelectedUpsaleProduct(target.value);
     } else if (state.formMode === "upsale" && field === "upsale_plan_choice") {
         await updateSelectedUpsalePlan(target.value);
+    } else if (state.formMode === "upsale" && field === "upsale_discount_percent") {
+        state.upsaleForm.discountPercent = target.value || "";
+        state.upsaleForm.authorizedDiscount = null;
     } else if (state.formMode === "upsale" && field === "upsale_participant_toggle") {
         toggleUpsaleParticipant(target.value, target.checked);
     } else if (state.formMode === "participants" && field === "edit_participant_toggle") {
@@ -967,6 +980,11 @@ function handleSubscriptionInlineFieldInput({ field, target }, {
         state.newSubscriptionForm.supervisorPin = target.value || "";
         return true;
     }
+    if (state.formMode === "new" && field === "new_discount_percent") {
+        state.newSubscriptionForm.discountPercent = target.value || "";
+        state.newSubscriptionForm.authorizedDiscount = null;
+        return true;
+    }
     if (state.formMode === "new" && field === "subscription_curp") {
         state.newSubscriptionForm.curp = target.value || "";
         return true;
@@ -975,8 +993,22 @@ function handleSubscriptionInlineFieldInput({ field, target }, {
         state.renewalForm.supervisorPin = target.value || "";
         return true;
     }
+    if ((state.formMode === "renewal" || state.formMode === "reenroll") && field === "renewal_discount_percent") {
+        state.renewalForm.discountPercent = target.value || "";
+        state.renewalForm.authorizedDiscount = null;
+        return true;
+    }
     if (state.formMode === "upsale" && field === "upsale_participant_search") {
         state.upsaleForm.participantSearch = target.value || "";
+        return true;
+    }
+    if (state.formMode === "upsale" && field === "upsale_discount_percent") {
+        state.upsaleForm.discountPercent = target.value || "";
+        state.upsaleForm.authorizedDiscount = null;
+        return true;
+    }
+    if (state.formMode === "upsale" && field === "upsale_supervisor_pin") {
+        state.upsaleForm.supervisorPin = target.value || "";
         return true;
     }
     if (state.formMode === "participants" && field === "edit_participant_search") {

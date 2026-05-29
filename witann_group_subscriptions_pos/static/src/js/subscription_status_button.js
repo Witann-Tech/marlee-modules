@@ -363,12 +363,12 @@ patch(ControlButtons.prototype, {
         );
     },
 
-    async _authorizeSubscriptionDiscountForPos(partnerId, productId, flow = "new", discountCode = false, supervisorPin = false, sourceSubscriptionId = false) {
+    async _authorizeSubscriptionDiscountForPos(partnerId, productId, flow = "new", discountPercent = 0, supervisorPin = false, sourceSubscriptionId = false) {
         return this.subscriptionPosApi.authorizeSubscriptionDiscount(
             partnerId,
             productId,
             flow || "new",
-            discountCode || false,
+            discountPercent || 0,
             supervisorPin || false,
             sourceSubscriptionId || false
         );
@@ -1394,7 +1394,7 @@ patch(ControlButtons.prototype, {
                         escapeHtml: (value) => this._escapeHtml(value),
                         formatMoney: (value) => this._formatMoney(value),
                         authorizeAction: "authorize-new-discount",
-                        codeField: "new_discount_code",
+                        percentField: "new_discount_percent",
                         pinField: "new_supervisor_pin",
                         _t,
                     })}
@@ -1851,8 +1851,8 @@ patch(ControlButtons.prototype, {
                 saveSubscriptionParticipants: (subscriptionId, participantIds) => this._saveSubscriptionParticipants(subscriptionId, participantIds),
                 validateSubscriptionProductEligibility: (partnerId, productId, flow, sourceSubscriptionId) =>
                     this._validateSubscriptionProductEligibilityForPos(partnerId, productId, flow, sourceSubscriptionId),
-                authorizeSubscriptionDiscount: (partnerId, productId, flow, discountCode, supervisorPin, sourceSubscriptionId) =>
-                    this._authorizeSubscriptionDiscountForPos(partnerId, productId, flow, discountCode, supervisorPin, sourceSubscriptionId),
+                authorizeSubscriptionDiscount: (partnerId, productId, flow, discountPercent, supervisorPin, sourceSubscriptionId) =>
+                    this._authorizeSubscriptionDiscountForPos(partnerId, productId, flow, discountPercent, supervisorPin, sourceSubscriptionId),
                 formatTodayISO,
                 _t,
             }),

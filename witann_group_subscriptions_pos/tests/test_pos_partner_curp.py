@@ -404,7 +404,7 @@ class TestPosPartnerCurp(TransactionCase):
         self.assertFalse(result['ok'])
         self.assertEqual(result['error_code'], 'free_trial_invalid_flow')
 
-    def test_get_subscription_discount_offers_for_pos_supports_comeback(self):
+    def test_subscription_discount_offers_are_no_longer_condition_based(self):
         partner = self.Partner.create({'name': 'Cliente regreso POS'})
         self._create_subscription_like_order(partner, end_date='2026-03-01')
 
@@ -415,35 +415,10 @@ class TestPosPartnerCurp(TransactionCase):
             False,
         )
 
-        codes = {offer['code'] for offer in offers}
-        self.assertIn('comeback_10', codes)
-        self.assertIn('comeback_20', codes)
+        self.assertEqual(offers, [])
 
-    def test_get_subscription_discount_offers_for_pos_supports_birthday_once_per_year(self):
-        if not self.birthday_field:
-            self.skipTest('No existe campo de cumpleaños en este runtime.')
-
-        today = fields.Date.context_today(self.PosOrder)
-        partner = self.Partner.create(
-            {
-                'name': 'Cliente cumpleaños POS',
-                self.birthday_field: fields.Date.to_string(today.replace(year=2000)),
-            }
-        )
-
-        offers = self.PosOrder.sudo().wgs_get_subscription_discount_offers_for_pos(
-            partner.id,
-            self.product.id,
-            'renewal',
-            False,
-        )
-
-        codes = {offer['code'] for offer in offers}
-        self.assertIn('birthday_10', codes)
-
-    def test_authorize_subscription_discount_for_pos_validates_pin(self):
+    def test_authorize_subscription_discount_for_pos_validates_pin_and_percent(self):
         partner = self.Partner.create({'name': 'Cliente autorización POS'})
-        self._create_subscription_like_order(partner, end_date='2026-03-01')
         employee = self.Employee.create(
             {
                 'name': 'Supervisor POS',
@@ -456,24 +431,35 @@ class TestPosPartnerCurp(TransactionCase):
             partner.id,
             self.product.id,
             'new',
-            'comeback_10',
+            10,
             '2468',
             False,
         )
         self.assertFalse(rejected['ok'])
 
+        invalid_percent = self.PosOrder.sudo().wgs_authorize_subscription_discount_for_pos(
+            partner.id,
+            self.product.id,
+            'new',
+            0,
+            '135790',
+            False,
+        )
+        self.assertFalse(invalid_percent['ok'])
+
         result = self.PosOrder.sudo().wgs_authorize_subscription_discount_for_pos(
             partner.id,
             self.product.id,
             'new',
-            'comeback_10',
+            12.5,
             '135790',
             False,
         )
 
         self.assertTrue(result['ok'])
         self.assertEqual(result['authorized_employee_id'], employee.id)
-        self.assertEqual(result['discount_percent'], 10.0)
+        self.assertEqual(result['code'], 'manual_percent')
+        self.assertEqual(result['discount_percent'], 12.5)
 
     def test_authorization_pin_is_separate_from_pos_pin(self):
         with self.assertRaises(ValidationError):
@@ -499,7 +485,7 @@ class TestPosPartnerCurp(TransactionCase):
                 }
             )
 
-    def test_family_product_returns_only_authorization_offer(self):
+    def test_family_product_does_not_create_conditional_discount_offer(self):
         partner = self.Partner.create({'name': 'Cliente familiar POS'})
 
         offers = self.PosOrder.sudo().wgs_get_subscription_discount_offers_for_pos(
@@ -509,9 +495,7 @@ class TestPosPartnerCurp(TransactionCase):
             False,
         )
 
-        self.assertEqual(len(offers), 1)
-        self.assertEqual(offers[0]['code'], 'family_authorization')
-        self.assertEqual(float(offers[0]['discount_percent']), 0.0)
+        self.assertEqual(offers, [])
 
     def test_day_pass_is_allowed_in_reenroll_flow(self):
         partner = self.Partner.create({'name': 'Cliente day pass reinscripción'})
