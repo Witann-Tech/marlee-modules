@@ -23,6 +23,9 @@
       <field name="model">access_control.device</field>
       <field name="arch" type="xml">
         <form string="Dispositivo">
+          <header>
+            <button name="action_run_inventory_audit" type="object" string="Auditar inventario" class="btn-primary" invisible="not active"/>
+          </header>
           <sheet>
             <group>
               <field name="active" widget="boolean_toggle"/>

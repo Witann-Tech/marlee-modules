@@ -38,6 +38,19 @@
             </field>
         </record>
 
+        <record id="action_access_control_device_audit_runs" model="ir.actions.act_window">
+            <field name="name">Auditorías SF</field>
+            <field name="res_model">access_control.device_audit_run</field>
+            <field name="view_mode">list,form</field>
+        </record>
+
+        <record id="action_access_control_device_audit_lines" model="ir.actions.act_window">
+            <field name="name">Hallazgos SF</field>
+            <field name="res_model">access_control.device_audit_line</field>
+            <field name="view_mode">list,form</field>
+            <field name="domain">[('state', '=', 'open')]</field>
+        </record>
+
         <menuitem id="access_control_menu_configuration" name="Inventario"
                   parent="access_control_menu_root" sequence="10"/>
 
@@ -53,6 +66,17 @@
                   parent="access_control_menu_configuration"
                   action="action_access_control_timezones" sequence="30"/>
 
+        <menuitem id="access_control_menu_audit" name="Auditoría"
+                  parent="access_control_menu_root" sequence="20"/>
+
+        <menuitem id="access_control_menu_audit_runs" name="Corridas SF"
+                  parent="access_control_menu_audit"
+                  action="action_access_control_device_audit_runs" sequence="10"/>
+
+        <menuitem id="access_control_menu_audit_lines" name="Hallazgos abiertos"
+                  parent="access_control_menu_audit"
+                  action="action_access_control_device_audit_lines" sequence="20"/>
+
         <!-- Legacy: mantener IDs para desactivar menús antiguos al actualizar. -->
         <record id="action_access_control_people" model="ir.actions.act_window">
             <field name="name">Personas</field>
@@ -62,7 +86,7 @@
         </record>
 
         <menuitem id="access_control_menu_operations" name="Operación"
-                  parent="access_control_menu_root" sequence="20" active="False"/>
+                  parent="access_control_menu_root" sequence="30" active="False"/>
 
         <menuitem id="access_control_menu_people" name="Personas"
                   parent="access_control_menu_operations"

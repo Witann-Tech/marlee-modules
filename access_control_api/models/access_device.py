@@ -66,6 +66,19 @@ class AccessControlDevice(models.Model):
             return False
         return self.env["access_control.timezone"].sudo().queue_active_timezones_for_sites(site_ids=site_ids, reason=reason)
 
+    def action_run_inventory_audit(self):
+        runs = self.env["access_control.device_audit_run"].sudo().run_for_devices(self)
+        action = {
+            "type": "ir.actions.act_window",
+            "name": "Auditorías SF",
+            "res_model": "access_control.device_audit_run",
+            "view_mode": "list,form",
+            "domain": [("id", "in", runs.ids)],
+        }
+        if len(runs) == 1:
+            action.update({"view_mode": "form", "res_id": runs.id})
+        return action
+
     def _get_adms_config(self):
         ICP = self.env["ir.config_parameter"].sudo()
         base_url = (

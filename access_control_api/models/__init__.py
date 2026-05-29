@@ -1,6 +1,7 @@
 from . import access_person
 from . import access_site
 from . import access_device
+from . import access_device_audit
 from . import access_timezone
 from . import res_partner
 
