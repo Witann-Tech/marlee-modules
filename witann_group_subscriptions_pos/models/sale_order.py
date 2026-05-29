@@ -872,6 +872,21 @@ class SaleOrder(models.Model):
         partners = self._wgs_partner_model_for_pos().browse(sorted(subscription._wgs_get_access_related_partner_ids())).exists()
         if partners and hasattr(partners, '_sync_access_person_face'):
             partners.with_context(access_sync_priority=True)._sync_access_person_face()
+        Person = self.env['access_control.person'].sudo() if 'access_control.person' in self.env.registry else False
+        if Person and partners:
+            people = Person.search([
+                ('partner_id', 'in', partners.ids),
+                ('active', '=', True),
+                ('global_user_id', '!=', False),
+            ])
+            for person in people:
+                Change.with_context(access_sync_priority=True).queue_upsert_for_person(
+                    person,
+                    site_ids=person.site_ids,
+                    reason='manual_subscription_resync_user',
+                    include_face_pic=False,
+                    priority=True,
+                )
 
         manual_resync_changes = Change.search([
             ('id', '>', last_change_id),

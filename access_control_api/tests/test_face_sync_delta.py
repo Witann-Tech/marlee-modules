@@ -282,6 +282,9 @@ class TestFaceSyncDelta(TransactionCase):
         self.assertEqual(payload["authorizeTimezoneId"], 1)
         self.assertEqual(payload["authorizeDoorId"], 1)
         self.assertEqual(payload["authorizeDevId"], 1)
+        self.assertEqual(payload["authorize_timezone_id"], 1)
+        self.assertEqual(payload["authorize_door_id"], 1)
+        self.assertEqual(payload["authorize_dev_id"], 1)
 
     def test_person_payload_uses_assigned_access_timezone(self):
         timezone = self.env["access_control.timezone"].sudo().create(
@@ -302,6 +305,9 @@ class TestFaceSyncDelta(TransactionCase):
         self.assertEqual(payload["authorizeTimezoneId"], timezone.timezone_id)
         self.assertEqual(payload["authorizeDoorId"], 1)
         self.assertEqual(payload["authorizeDevId"], 1)
+        self.assertEqual(payload["authorize_timezone_id"], timezone.timezone_id)
+        self.assertEqual(payload["authorize_door_id"], 1)
+        self.assertEqual(payload["authorize_dev_id"], 1)
         change = self.Change.search([("person_id", "=", person.id), ("action", "=", "upsert")], order="id desc", limit=1)
         self.assertTrue(change.priority)
 

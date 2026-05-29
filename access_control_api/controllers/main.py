@@ -429,6 +429,13 @@ class AccessControlApi(http.Controller):
             "authorizeDoorId": 1,
             "authorizeDevId": 1,
         }
+        payload.update(
+            {
+                "authorize_timezone_id": payload["authorizeTimezoneId"],
+                "authorize_door_id": payload["authorizeDoorId"],
+                "authorize_dev_id": payload["authorizeDevId"],
+            }
+        )
         if priority:
             payload["priority"] = True
         if clear_face_pic:
