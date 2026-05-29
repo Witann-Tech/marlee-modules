@@ -202,18 +202,24 @@ class HrEmployee(models.Model):
             return False
 
         company = self.company_id or self.env.company
+        company_name = company.display_name or company.name or _('Empresa no definida')
         email_from = company.email or self.env.user.email_formatted or self.env.user.email or 'no-reply@example.invalid'
         body = _(
             '<p>Hola %(employee)s,</p>'
+            '<div style="margin: 12px 0; padding: 12px 14px; border: 1px solid #0f766e; background: #ecfdf5; border-radius: 8px;">'
+            '<div style="font-size: 12px; font-weight: 700; color: #0f766e; text-transform: uppercase; letter-spacing: 0.04em;">Empresa</div>'
+            '<div style="font-size: 18px; font-weight: 800; color: #0f172a;">%(company)s</div>'
+            '</div>'
             '<p>Tu nuevo PIN de autorización para descuentos y paquetes en POS es:</p>'
             '<p style="font-size: 20px; font-weight: 700; letter-spacing: 2px;">%(pin)s</p>'
             '<p>Este PIN es independiente de tu PIN de acceso al Punto de Venta.</p>'
         ) % {
             'employee': html_escape(self.name or ''),
+            'company': html_escape(company_name),
             'pin': pin,
         }
         self.env['mail.mail'].sudo().create({
-            'subject': _('Nuevo PIN de autorización POS'),
+            'subject': _('Nuevo PIN de autorización POS - %s') % company_name,
             'body_html': body,
             'email_to': email_to,
             'email_from': email_from,
