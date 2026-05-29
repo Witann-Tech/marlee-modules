@@ -1076,6 +1076,7 @@ class PosOrder(models.Model):
         values = super()._order_line_fields(line, session_id=session_id)
         ui_line = self._wgs_extract_ui_line_payload(line)
         config_payload = self._wgs_extract_subscription_config_payload(ui_line)
+        has_subscription_config = self._wgs_has_subscription_line_config_payload(config_payload)
 
         participant_ids = config_payload.get('participant_ids')
         if isinstance(participant_ids, list):
@@ -1154,7 +1155,86 @@ class PosOrder(models.Model):
         if birthday_year > 0:
             values['wgs_discount_birthday_year'] = birthday_year
 
+        if has_subscription_config:
+            locked_values = self._wgs_get_locked_subscription_line_price_values_for_pos(
+                config_payload,
+                fallback_price=values.get('price_unit'),
+            )
+            if locked_values.get('price_unit') is not False and 'price_unit' in values:
+                values['price_unit'] = locked_values['price_unit']
+            if 'discount' in values:
+                values['discount'] = locked_values['discount']
+        elif 'discount' in values:
+            values['discount'] = 0
+
         return values
+
+    @api.model
+    def _wgs_has_subscription_line_config_payload(self, config_payload):
+        if not isinstance(config_payload, dict):
+            return False
+        pricing_snapshot = config_payload.get('pricing_snapshot')
+        if isinstance(pricing_snapshot, dict) and pricing_snapshot:
+            return True
+        participant_ids = config_payload.get('participant_ids')
+        if isinstance(participant_ids, list) and participant_ids:
+            return True
+        for key in (
+            'plan_id',
+            'pricing_id',
+            'start_date',
+            'end_date',
+            'source_subscription_id',
+            'pending_move_id',
+            'refund_origin_line_id',
+            'discount_code',
+            'discount_authorized_employee_id',
+            'pricing_lock',
+        ):
+            if config_payload.get(key):
+                return True
+        return False
+
+    @api.model
+    def _wgs_get_locked_subscription_line_price_values_for_pos(self, config_payload, fallback_price=False):
+        config_payload = config_payload if isinstance(config_payload, dict) else {}
+        snapshot = config_payload.get('pricing_snapshot')
+        snapshot = snapshot if isinstance(snapshot, dict) else {}
+        lock_payload = config_payload.get('pricing_lock') or config_payload.get('pricingLock')
+        lock_payload = lock_payload if isinstance(lock_payload, dict) else {}
+
+        price_unit = False
+        for key in (
+            'ticket_charge_now',
+            'charge_now',
+            'ticket_amount_total',
+            'amount_total',
+            'ticket_price_unit',
+            'price_unit',
+            'ticket_recurring_price',
+            'recurring_price',
+        ):
+            if key in snapshot and snapshot.get(key) not in (None, ''):
+                price_unit = self._wgs_to_signed_float(snapshot.get(key))
+                break
+        if price_unit is False and lock_payload:
+            price_unit = self._wgs_to_signed_float(
+                lock_payload.get('price_unit', lock_payload.get('priceUnit', False))
+            )
+        if price_unit is False and fallback_price is not False:
+            price_unit = self._wgs_to_signed_float(fallback_price)
+
+        discount = self._wgs_to_float(config_payload.get('discount_percent'))
+        has_wgs_discount_authorization = bool(
+            discount > 0.0
+            and str(config_payload.get('discount_code') or '').strip()
+            and self._wgs_to_int(config_payload.get('discount_authorized_employee_id')) > 0
+            and config_payload.get('discount_authorized_at')
+        )
+        return {
+            'price_unit': price_unit,
+            'discount': discount if has_wgs_discount_authorization else 0.0,
+        }
 
     @api.model
     def _wgs_extract_ui_line_payload(self, line):
@@ -1195,6 +1275,7 @@ class PosOrder(models.Model):
             'discount_authorized_by': False,
             'discount_authorized_at': False,
             'discount_birthday_year': False,
+            'pricing_lock': False,
         }
         if not isinstance(ui_line, dict):
             return data
@@ -1216,6 +1297,21 @@ class PosOrder(models.Model):
                 pricing_snapshot = False
         if isinstance(pricing_snapshot, dict):
             data['pricing_snapshot'] = pricing_snapshot
+
+        pricing_lock = (
+            ui_line.get('pricing_lock')
+            or ui_line.get('pricingLock')
+            or raw_config.get('pricing_lock')
+            or raw_config.get('pricingLock')
+            or False
+        )
+        if isinstance(pricing_lock, str):
+            try:
+                pricing_lock = json.loads(pricing_lock)
+            except (TypeError, ValueError):
+                pricing_lock = False
+        if isinstance(pricing_lock, dict):
+            data['pricing_lock'] = pricing_lock
 
         participant_raw = (
             ui_line.get('wgs_participant_ids')
@@ -1521,6 +1617,14 @@ class PosOrder(models.Model):
             if birthday_year > 0:
                 write_values['wgs_discount_birthday_year'] = birthday_year
 
+            locked_values = self._wgs_get_locked_subscription_line_price_values_for_pos(
+                config,
+                fallback_price=target_line.price_unit,
+            )
+            if locked_values.get('price_unit') is not False:
+                write_values['price_unit'] = locked_values['price_unit']
+            write_values['discount'] = locked_values['discount']
+
             if write_values:
                 target_line.write(write_values)
                 _logger.info(
@@ -1622,6 +1726,15 @@ class PosOrder(models.Model):
             return abs(float(value or 0.0))
         except (TypeError, ValueError):
             return 0.0
+
+    @api.model
+    def _wgs_to_signed_float(self, value):
+        if value is False or value is None or value == '':
+            return False
+        try:
+            return float(value or 0.0)
+        except (TypeError, ValueError):
+            return False
 
     @api.model
     def _wgs_find_best_payload_dict(self, raw_line):

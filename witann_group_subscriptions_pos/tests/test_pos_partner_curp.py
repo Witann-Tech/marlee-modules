@@ -461,6 +461,52 @@ class TestPosPartnerCurp(TransactionCase):
         self.assertEqual(result['code'], 'manual_percent')
         self.assertEqual(result['discount_percent'], 12.5)
 
+    def test_subscription_line_price_lock_uses_snapshot_and_wgs_discount(self):
+        values = self.PosOrder.sudo()._wgs_get_locked_subscription_line_price_values_for_pos(
+            {
+                'pricing_snapshot': {
+                    'ticket_charge_now': 799.0,
+                },
+                'discount_code': 'manual_percent',
+                'discount_percent': 12.5,
+                'discount_authorized_employee_id': 1,
+                'discount_authorized_at': '2026-05-29 12:00:00',
+            },
+            fallback_price=1.0,
+        )
+
+        self.assertEqual(values['price_unit'], 799.0)
+        self.assertEqual(values['discount'], 12.5)
+
+    def test_subscription_line_price_lock_rejects_unauthorized_discount(self):
+        values = self.PosOrder.sudo()._wgs_get_locked_subscription_line_price_values_for_pos(
+            {
+                'pricing_snapshot': {
+                    'ticket_charge_now': 799.0,
+                },
+                'discount_percent': 50.0,
+            },
+            fallback_price=1.0,
+        )
+
+        self.assertEqual(values['price_unit'], 799.0)
+        self.assertEqual(values['discount'], 0.0)
+
+    def test_subscription_line_price_lock_preserves_zero_charge(self):
+        values = self.PosOrder.sudo()._wgs_get_locked_subscription_line_price_values_for_pos(
+            {
+                'pricing_snapshot': {
+                    'ticket_charge_now': 0.0,
+                    'ticket_recurring_price': 999.0,
+                },
+                'discount_percent': 0.0,
+            },
+            fallback_price=1.0,
+        )
+
+        self.assertEqual(values['price_unit'], 0.0)
+        self.assertEqual(values['discount'], 0.0)
+
     def test_authorization_pin_is_separate_from_pos_pin(self):
         with self.assertRaises(ValidationError):
             self.Employee.create(

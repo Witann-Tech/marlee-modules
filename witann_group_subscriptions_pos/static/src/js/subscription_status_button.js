@@ -4,6 +4,7 @@ import {
     addConfiguredProductLineToOrder,
     collectSubscriptionConfigsFromOrder,
     convertTaxExcludedPriceToDisplay,
+    enforceOrderLinePricingLocks,
     ensureProductLoadedInPos,
     ensurePartnerLoadedInPos,
     getCurrentOrder,
@@ -298,8 +299,15 @@ patch(ControlButtons.prototype, {
         this.orm = useService("orm");
         this.subscriptionPosApi = createSubscriptionPosApi(this.orm);
         this._ensureStatusStyles();
+        this._wgsPriceLockTimer = window.setInterval(() => {
+            enforceOrderLinePricingLocks(getCurrentOrder(this.pos));
+        }, 150);
 
         onWillUnmount(() => {
+            if (this._wgsPriceLockTimer) {
+                window.clearInterval(this._wgsPriceLockTimer);
+                this._wgsPriceLockTimer = null;
+            }
             const modal = document.getElementById(MODAL_ID);
             if (modal) {
                 modal.remove();
