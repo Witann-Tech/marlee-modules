@@ -217,7 +217,7 @@ class AccessControlApi(http.Controller):
             return False, "missing_token"
         token = auth.split(" ", 1)[1].strip()
         ICP = request.env["ir.config_parameter"].sudo()
-        expected = ICP.get_param("access_control.api_token") or ICP.get_param("access_control_api.api_token")
+        expected = ICP.get_param("access_control.api_token")
 
         if expected and token == expected:
             return True, None

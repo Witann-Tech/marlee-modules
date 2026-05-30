@@ -2,6 +2,7 @@
 import base64
 import io
 import json
+from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
@@ -65,6 +66,63 @@ class TestFaceSyncDelta(TransactionCase):
             }
         )
         return partner, person
+
+    def _auth_result(self, headers=None, params=None):
+        params = params or {}
+
+        class FakeConfigParameter:
+            def sudo(self):
+                return self
+
+            def get_param(self, key, default=False):
+                return params.get(key, default)
+
+        class FakeEnv:
+            def __getitem__(self, model):
+                if model == "ir.config_parameter":
+                    return FakeConfigParameter()
+                raise KeyError(model)
+
+        fake_request = SimpleNamespace(
+            httprequest=SimpleNamespace(headers=headers or {}),
+            env=FakeEnv(),
+        )
+        with patch("odoo.addons.access_control_api.controllers.main.request", fake_request):
+            with patch.object(self.controller, "_is_valid_user_api_key", return_value=False):
+                return self.controller._auth_ok()
+
+    def test_auth_accepts_canonical_access_control_api_token(self):
+        self.assertEqual(
+            self._auth_result(
+                headers={"Authorization": "Bearer expected-token"},
+                params={"access_control.api_token": "expected-token"},
+            ),
+            (True, None),
+        )
+
+    def test_auth_reports_server_token_not_configured_without_canonical_token(self):
+        self.assertEqual(
+            self._auth_result(headers={"Authorization": "Bearer expected-token"}),
+            (False, "server_token_not_configured"),
+        )
+
+    def test_auth_reports_invalid_token_when_canonical_token_mismatches(self):
+        self.assertEqual(
+            self._auth_result(
+                headers={"Authorization": "Bearer wrong-token"},
+                params={"access_control.api_token": "expected-token"},
+            ),
+            (False, "invalid_token"),
+        )
+
+    def test_auth_ignores_legacy_access_control_api_token_parameter(self):
+        self.assertEqual(
+            self._auth_result(
+                headers={"Authorization": "Bearer legacy-token"},
+                params={"access_control_api.api_token": "legacy-token"},
+            ),
+            (False, "server_token_not_configured"),
+        )
 
     def test_create_with_valid_face_includes_facepicb64(self):
         partner, person = self._make_person(self._make_image_b64())
