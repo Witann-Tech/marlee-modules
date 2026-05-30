@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 import requests
 
-from odoo import api, models, fields
+from odoo import _, api, models, fields
 from odoo.exceptions import UserError
 from odoo.tools import config as odoo_config
 
@@ -78,6 +78,74 @@ class AccessControlDevice(models.Model):
         if len(runs) == 1:
             action.update({"view_mode": "form", "res_id": runs.id})
         return action
+
+    def action_enqueue_clean_resync(self):
+        devices = self.exists()
+        inactive = devices.filtered(lambda rec: not rec.active)
+        if inactive:
+            raise UserError(_("Solo se pueden inicializar/re-sincronizar SpeedFace activos."))
+        site_ids = sorted(set(devices.filtered(lambda rec: rec.site_id).mapped("site_id").ids))
+        if not site_ids:
+            raise UserError(_("Selecciona al menos un SpeedFace con sitio configurado."))
+
+        Change = self.env["access_control.sync_change"].sudo()
+        Person = self.env["access_control.person"].sudo()
+        timezone_count = 0
+        if "access_control.timezone" in self.env.registry:
+            last_change_id = Change.search([], order="id desc", limit=1).id or 0
+            self.env["access_control.timezone"].sudo().queue_active_timezones_for_sites(
+                site_ids=site_ids,
+                reason="device_clean_resync_timezones",
+            )
+            timezone_count = Change.search_count(
+                [
+                    ("id", ">", last_change_id),
+                    ("command_type", "=", "timezone_upsert"),
+                    ("reason", "=", "device_clean_resync_timezones"),
+                ]
+            )
+
+        user_count = 0
+        for site_id in site_ids:
+            people = Person.search(
+                [
+                    ("active", "=", True),
+                    ("global_user_id", "!=", False),
+                    ("site_ids", "in", [site_id]),
+                ],
+                order="global_user_id asc",
+            )
+            for person in people:
+                if Change.with_context(access_sync_priority=True).queue_upsert_for_person(
+                    person,
+                    site_ids=[site_id],
+                    reason="device_clean_resync_user",
+                    include_face_pic=bool(person.face_pic_b64),
+                    priority=True,
+                ):
+                    user_count += 1
+
+        _logger.info(
+            "access_device clean_resync queued device_ids=%s site_ids=%s timezone_changes=%s user_changes=%s",
+            devices.ids,
+            site_ids,
+            timezone_count,
+            user_count,
+        )
+        return {
+            "type": "ir.actions.client",
+            "tag": "display_notification",
+            "params": {
+                "title": _("Re-sincronización SF encolada"),
+                "message": _(
+                    "Se encolaron %(timezones)s comando(s) de horario y %(users)s usuario(s) como prioridad. "
+                    "ADMS puede recogerlos con su cursor actual, sin reiniciar desde token 0."
+                )
+                % {"timezones": timezone_count, "users": user_count},
+                "type": "success",
+                "sticky": False,
+            },
+        }
 
     def _get_adms_config(self):
         ICP = self.env["ir.config_parameter"].sudo()

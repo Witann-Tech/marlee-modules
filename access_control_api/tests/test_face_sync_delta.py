@@ -2,8 +2,8 @@
 import base64
 import io
 import json
-from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from odoo import fields
@@ -420,6 +420,59 @@ class TestFaceSyncDelta(TransactionCase):
 
         self.assertTrue(change.priority)
         self.assertTrue(payload["priority"])
+
+    def test_device_clean_resync_queues_timezones_and_users_as_priority_changes(self):
+        timezone = self.env["access_control.timezone"].sudo().create(
+            {
+                "name": "Vespertino",
+                "interval_ids": [
+                    (0, 0, {"day": "mon", "start_time": "14:00", "end_time": "22:00"}),
+                ],
+            }
+        )
+        partner_1 = self.Partner.create({"name": "Persona Limpia 1"})
+        person_1 = self.Person.create(
+            {
+                "partner_id": partner_1.id,
+                "global_user_id": 7101,
+                "active": True,
+                "site_ids": [(6, 0, [self.site.id])],
+            }
+        )
+        partner_2 = self.Partner.create({"name": "Persona Limpia 2"})
+        person_2 = self.Person.create(
+            {
+                "partner_id": partner_2.id,
+                "global_user_id": 7102,
+                "active": True,
+                "site_ids": [(6, 0, [self.site.id])],
+            }
+        )
+        self.Change.search([]).unlink()
+
+        result = self.device.action_enqueue_clean_resync()
+
+        timezone_changes = self.Change.search(
+            [
+                ("command_type", "=", "timezone_upsert"),
+                ("reason", "=", "device_clean_resync_timezones"),
+            ]
+        )
+        user_changes = self.Change.search(
+            [
+                ("action", "=", "upsert"),
+                ("reason", "=", "device_clean_resync_user"),
+                ("global_user_id", "in", [person_1.global_user_id, person_2.global_user_id]),
+            ],
+            order="global_user_id asc",
+        )
+
+        self.assertEqual(result["tag"], "display_notification")
+        self.assertEqual(len(timezone_changes), 1)
+        self.assertEqual(timezone_changes.access_timezone_id.id, timezone.id)
+        self.assertTrue(timezone_changes.priority)
+        self.assertEqual(user_changes.mapped("global_user_id"), [person_1.global_user_id, person_2.global_user_id])
+        self.assertTrue(all(user_changes.mapped("priority")))
 
     def test_touch_device_telemetry_updates_heartbeat_and_sync(self):
         self.device.write(
