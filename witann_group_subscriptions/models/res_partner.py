@@ -1,6 +1,6 @@
 import re
 
-from odoo import _, api, models
+from odoo import _, api, fields, models
 from odoo.exceptions import ValidationError
 
 
@@ -9,6 +9,48 @@ class ResPartner(models.Model):
 
     _WGS_CURP_FIELD = 'x_studio_curp'
     _WGS_CURP_SYNC_CONTEXT_KEY = 'wgs_skip_curp_storage_sync'
+    _WGS_PACKAGE_SYNC_CONTEXT_KEY = 'wgs_skip_subscription_package_sync'
+
+    wgs_subscription_package_names = fields.Char(
+        string='Paquete contratado',
+        index=True,
+        copy=False,
+        readonly=True,
+    )
+
+    def _wgs_get_subscription_package_names(self):
+        self.ensure_one()
+        SaleOrder = self.env['sale.order'].sudo()
+        if not hasattr(SaleOrder, '_wgs_get_related_subscription_orders_for_partner'):
+            return []
+
+        package_names = []
+        seen_names = set()
+        orders = SaleOrder._wgs_get_related_subscription_orders_for_partner(self)
+        for order in orders:
+            if not order._wgs_classify_subscription_access_state():
+                continue
+            for line in order._get_subscription_recurring_lines():
+                product = line.product_id
+                product_tmpl = product.product_tmpl_id if product else False
+                package_name = product_tmpl.display_name if product_tmpl else (product.display_name if product else False)
+                if not package_name or package_name in seen_names:
+                    continue
+                seen_names.add(package_name)
+                package_names.append(package_name)
+        return package_names
+
+    def _wgs_refresh_subscription_package_names(self):
+        if self.env.context.get(self._WGS_PACKAGE_SYNC_CONTEXT_KEY):
+            return
+        for partner in self:
+            package_names = ', '.join(partner._wgs_get_subscription_package_names())
+            if (partner.wgs_subscription_package_names or '') == package_names:
+                continue
+            super(
+                ResPartner,
+                partner.with_context(**{self._WGS_PACKAGE_SYNC_CONTEXT_KEY: True}).sudo(),
+            ).write({'wgs_subscription_package_names': package_names or False})
 
     @api.model
     def _wgs_get_curp_field_name(self, vals=None):
