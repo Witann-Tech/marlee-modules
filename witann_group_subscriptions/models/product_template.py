@@ -86,11 +86,11 @@ class ProductTemplate(models.Model):
                     )
 
         res = super().write(vals)
-        if 'wgs_access_timezone_id' in vals:
-            self._wgs_resync_access_for_timezone_change()
+        if {'wgs_access_timezone_id', 'wgs_access_site_ids'}.intersection(vals):
+            self._wgs_resync_access_for_access_config_change()
         return res
 
-    def _wgs_resync_access_for_timezone_change(self):
+    def _wgs_resync_access_for_access_config_change(self):
         if 'sale.order.line' not in self.env.registry:
             return False
         variant_ids = self.mapped('product_variant_ids').ids

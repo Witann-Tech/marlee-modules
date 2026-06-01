@@ -194,6 +194,32 @@ class TestSubscriptionAccessControl(TransactionCase):
         self.assertEqual(set(owner_person.site_ids.ids), {self.site_b.id})
         self.assertEqual(set(participant_person.site_ids.ids), {self.site_b.id})
 
+    def test_changing_product_access_sites_resyncs_existing_subscribers(self):
+        order = self._create_subscription_order()
+        progress_state = self._find_subscription_state_value('progress', 'en progreso')
+        order.write({'subscription_state': progress_state})
+        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
+        participant_person = self.env['access_control.person'].search([('partner_id', '=', self.participant.id)], limit=1)
+        self.assertEqual(set(owner_person.site_ids.ids), {self.site.id})
+        self.assertEqual(set(participant_person.site_ids.ids), {self.site.id})
+
+        self.env['access_control.sync_change'].search([]).unlink()
+        self.product.product_tmpl_id.write({'wgs_access_site_ids': [Command.set([self.site.id, self.site_b.id])]})
+        owner_person.invalidate_recordset(['site_ids'])
+        participant_person.invalidate_recordset(['site_ids'])
+        changes = self.env['access_control.sync_change'].search(
+            [
+                ('person_id', 'in', [owner_person.id, participant_person.id]),
+                ('site_id', '=', self.site_b.id),
+                ('action', '=', 'upsert'),
+            ]
+        )
+
+        self.assertEqual(set(owner_person.site_ids.ids), {self.site.id, self.site_b.id})
+        self.assertEqual(set(participant_person.site_ids.ids), {self.site.id, self.site_b.id})
+        self.assertEqual(len(changes), 2)
+        self.assertTrue(all(changes.mapped('priority')))
+
     def test_access_sites_are_aggregated_across_multisite_subscriptions(self):
         progress_state = self._find_subscription_state_value('progress', 'en progreso')
 
