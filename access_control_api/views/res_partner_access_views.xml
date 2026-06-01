@@ -9,6 +9,8 @@
         <xpath expr="//list" position="inside">
           <field name="access_global_user_id" optional="hide" groups="access_control_api.group_access_control_contact_access"/>
           <field name="access_origin" optional="hide" groups="access_control_api.group_access_control_contact_access"/>
+          <field name="access_timezone_id" optional="hide" groups="access_control_api.group_access_control_contact_access"/>
+          <field name="access_authorize_timezone_id" optional="hide" groups="access_control_api.group_access_control_contact_access"/>
           <field name="access_last_access_at" optional="hide" groups="access_control_api.group_access_control_contact_access"/>
         </xpath>
       </field>
@@ -29,6 +31,12 @@
         </xpath>
         <xpath expr="//notebook" position="inside">
           <page string="Control de Acceso" groups="access_control_api.group_access_control_contact_access">
+            <group string="Resumen">
+              <field name="access_global_user_id" readonly="1"/>
+              <field name="access_origin" readonly="1"/>
+              <field name="access_timezone_id" readonly="1"/>
+              <field name="access_authorize_timezone_id" readonly="1"/>
+            </group>
             <field name="access_person_ids" context="{'default_partner_id': id}" nolabel="1" groups="access_control_api.group_access_control_contact_access">
               <list editable="bottom" string="Personas de acceso">
                 <field name="active"/>

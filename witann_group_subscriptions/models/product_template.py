@@ -92,7 +92,7 @@ class ProductTemplate(models.Model):
 
         res = super().write(vals)
         changed_access_fields = {'wgs_access_timezone_id', 'wgs_access_site_ids'}.intersection(vals)
-        if changed_access_fields:
+        if changed_access_fields and not self.env.context.get('wgs_skip_product_template_access_resync'):
             self._wgs_resync_access_for_access_config_change(changed_access_fields=changed_access_fields)
         return res
 
@@ -149,3 +149,16 @@ class ProductTemplate(models.Model):
                 return True
 
         return False
+
+
+class ProductProduct(models.Model):
+    _inherit = 'product.product'
+
+    def write(self, vals):
+        changed_access_fields = {'wgs_access_timezone_id', 'wgs_access_site_ids'}.intersection(vals)
+        templates = self.mapped('product_tmpl_id') if changed_access_fields else self.env['product.template']
+        if changed_access_fields:
+            res = super(ProductProduct, self.with_context(wgs_skip_product_template_access_resync=True)).write(vals)
+            templates.exists()._wgs_resync_access_for_access_config_change(changed_access_fields=changed_access_fields)
+            return res
+        return super().write(vals)

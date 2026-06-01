@@ -46,6 +46,17 @@ class ResPartner(models.Model):
         compute="_compute_access_summary",
         groups="access_control_api.group_access_control_contact_access",
     )
+    access_timezone_id = fields.Many2one(
+        "access_control.timezone",
+        string="Horario de acceso",
+        compute="_compute_access_summary",
+        groups="access_control_api.group_access_control_contact_access",
+    )
+    access_authorize_timezone_id = fields.Integer(
+        string="Timezone ID",
+        compute="_compute_access_summary",
+        groups="access_control_api.group_access_control_contact_access",
+    )
 
     @api.model
     def _normalize_image_b64(self, image_b64):
@@ -151,6 +162,8 @@ class ResPartner(models.Model):
         "access_person_ids.global_user_id",
         "access_person_ids.last_access_at",
         "access_person_ids.managed_by_subscription",
+        "access_person_ids.access_timezone_id",
+        "access_person_ids.authorize_timezone_id",
     )
     def _compute_access_summary(self):
         Person = self.env["access_control.person"].sudo()
@@ -161,6 +174,8 @@ class ResPartner(models.Model):
             partner.access_global_user_id = person.global_user_id if person else False
             partner.access_last_access_at = person.last_access_at if person else False
             partner.access_origin = person.access_origin if person else False
+            partner.access_timezone_id = person.access_timezone_id if person else False
+            partner.access_authorize_timezone_id = person.authorize_timezone_id if person else False
 
     @api.onchange("image_1920")
     def _onchange_image_1920_sync_access_people(self):
