@@ -1,6 +1,6 @@
 import re
 
-from odoo import _, api, models
+from odoo import _, api, fields, models
 from odoo.exceptions import ValidationError
 
 
@@ -9,6 +9,64 @@ class ResPartner(models.Model):
 
     _WGS_CURP_FIELD = 'x_studio_curp'
     _WGS_CURP_SYNC_CONTEXT_KEY = 'wgs_skip_curp_storage_sync'
+
+    wgs_owned_subscription_order_ids = fields.One2many(
+        'sale.order',
+        'partner_id',
+        string='Suscripciones como titular',
+    )
+    wgs_participating_subscription_order_ids = fields.Many2many(
+        'sale.order',
+        'sale_order_subscription_participant_rel',
+        'partner_id',
+        'order_id',
+        string='Suscripciones como participante',
+    )
+    wgs_subscription_package_names = fields.Char(
+        string='Paquete contratado',
+        compute='_compute_wgs_subscription_package_names',
+        store=True,
+        index=True,
+    )
+
+    def _wgs_get_current_subscription_package_names(self):
+        self.ensure_one()
+        SaleOrder = self.env['sale.order'].sudo()
+        if not hasattr(SaleOrder, '_wgs_get_related_subscription_orders_for_partner'):
+            return []
+        package_names = []
+        seen_names = set()
+        orders = SaleOrder._wgs_get_related_subscription_orders_for_partner(self)
+        for order in orders:
+            if not order._wgs_classify_subscription_access_state():
+                continue
+            for line in order._get_subscription_recurring_lines():
+                product = line.product_id
+                product_tmpl = product.product_tmpl_id if product else False
+                package_name = (product_tmpl.display_name if product_tmpl else product.display_name) if product else False
+                if not package_name or package_name in seen_names:
+                    continue
+                seen_names.add(package_name)
+                package_names.append(package_name)
+        return package_names
+
+    @api.depends(
+        'wgs_owned_subscription_order_ids.partner_id',
+        'wgs_owned_subscription_order_ids.participant_ids',
+        'wgs_owned_subscription_order_ids.subscription_state',
+        'wgs_owned_subscription_order_ids.wgs_effective_start_date',
+        'wgs_owned_subscription_order_ids.order_line.product_id',
+        'wgs_owned_subscription_order_ids.order_line.product_uom_qty',
+        'wgs_participating_subscription_order_ids.partner_id',
+        'wgs_participating_subscription_order_ids.participant_ids',
+        'wgs_participating_subscription_order_ids.subscription_state',
+        'wgs_participating_subscription_order_ids.wgs_effective_start_date',
+        'wgs_participating_subscription_order_ids.order_line.product_id',
+        'wgs_participating_subscription_order_ids.order_line.product_uom_qty',
+    )
+    def _compute_wgs_subscription_package_names(self):
+        for partner in self:
+            partner.wgs_subscription_package_names = ', '.join(partner._wgs_get_current_subscription_package_names())
 
     @api.model
     def _wgs_get_curp_field_name(self, vals=None):
