@@ -1,3 +1,5 @@
+from datetime import date, datetime
+
 from odoo.tests.common import TransactionCase
 from odoo import Command, fields
 from odoo.exceptions import ValidationError
@@ -530,6 +532,21 @@ class TestPosPartnerCurp(TransactionCase):
                     'wgs_authorization_pin': '975310',
                 }
             )
+
+    def test_authorization_pin_rotation_uses_calendar_days(self):
+        employee = self.Employee.create(
+            {
+                'name': 'Supervisor rotación diaria',
+                'work_email': 'supervisor@example.invalid',
+                'wgs_authorization_pin': '135790',
+            }
+        )
+        credential = employee._wgs_authorization_credential()
+        credential.write({'last_rotated_at': fields.Datetime.to_string(datetime(2026, 5, 31, 23, 30, 0))})
+
+        due = self.Employee._wgs_authorization_pin_rotation_due_credentials(1, today=date(2026, 6, 1))
+
+        self.assertIn(credential, due)
 
     def test_family_product_does_not_create_conditional_discount_offer(self):
         partner = self.Partner.create({'name': 'Cliente familiar POS'})
