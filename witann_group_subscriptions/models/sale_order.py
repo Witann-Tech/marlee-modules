@@ -404,8 +404,6 @@ class SaleOrder(models.Model):
         if not partner_ids:
             return
         partners = self.env['res.partner'].sudo().browse(sorted(partner_ids)).exists()
-        if hasattr(partners, '_wgs_refresh_subscription_package_names'):
-            partners._wgs_refresh_subscription_package_names()
         for partner in partners:
             self._wgs_sync_access_control_partner(partner)
 

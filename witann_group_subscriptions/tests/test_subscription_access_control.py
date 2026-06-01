@@ -89,23 +89,6 @@ class TestSubscriptionAccessControl(TransactionCase):
         self.assertEqual(set(owner_person.site_ids.ids), {self.site.id})
         self.assertEqual(set(participant_person.site_ids.ids), {self.site.id})
 
-    def test_active_subscription_updates_contact_package_summary(self):
-        order = self._create_subscription_order()
-        progress_state = self._find_subscription_state_value('progress', 'en progreso')
-
-        order.write({'subscription_state': progress_state})
-        self.owner.invalidate_recordset(['wgs_subscription_package_names'])
-        self.participant.invalidate_recordset(['wgs_subscription_package_names'])
-        matching_partners = self.env['res.partner'].search(
-            [('wgs_subscription_package_names', 'ilike', self.product.product_tmpl_id.name)],
-            order='wgs_subscription_package_names asc, id asc',
-        )
-
-        self.assertIn(self.product.product_tmpl_id.display_name, self.owner.wgs_subscription_package_names)
-        self.assertIn(self.product.product_tmpl_id.display_name, self.participant.wgs_subscription_package_names)
-        self.assertIn(self.owner, matching_partners)
-        self.assertIn(self.participant, matching_partners)
-
     def test_paused_subscription_suspends_access_without_deleting_person(self):
         order = self._create_subscription_order()
         progress_state = self._find_subscription_state_value('progress', 'en progreso')
