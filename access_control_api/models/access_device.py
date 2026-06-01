@@ -120,7 +120,7 @@ class AccessControlDevice(models.Model):
                     person,
                     site_ids=[site_id],
                     reason="device_clean_resync_user",
-                    include_face_pic=bool(person.face_pic_b64),
+                    include_face_pic=bool(person.face_pic_b64 or person.face_image or person.partner_id.image_1920),
                     priority=True,
                 ):
                     user_count += 1

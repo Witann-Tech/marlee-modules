@@ -474,6 +474,50 @@ class TestFaceSyncDelta(TransactionCase):
         self.assertEqual(user_changes.mapped("global_user_id"), [person_1.global_user_id, person_2.global_user_id])
         self.assertTrue(all(user_changes.mapped("priority")))
 
+    def test_device_clean_resync_uses_partner_face_when_person_face_is_missing(self):
+        partner = self.Partner.create(
+            {
+                "name": "Persona Legacy Foto",
+                "image_1920": self._make_image_b64(color=(40, 180, 40)),
+            }
+        )
+        person = self.Person.create(
+            {
+                "partner_id": partner.id,
+                "global_user_id": 7201,
+                "active": True,
+                "site_ids": [(6, 0, [self.site.id])],
+            }
+        )
+        person.with_context(skip_access_sync_queue=True).write(
+            {
+                "face_image": False,
+                "face_pic_b64": False,
+            }
+        )
+        self.Change.search([]).unlink()
+
+        self.device.action_enqueue_clean_resync()
+        change = self.Change.search(
+            [
+                ("person_id", "=", person.id),
+                ("reason", "=", "device_clean_resync_user"),
+            ],
+            limit=1,
+        )
+        payload = self.controller._person_sync_payload(
+            person,
+            include_face_pic=change.include_face_pic,
+            clear_face_pic=False,
+            priority=change.priority,
+        )
+
+        self.assertTrue(change.include_face_pic)
+        self.assertIn("facePicB64", payload)
+        self.assertTrue(payload["facePicB64"])
+        person.invalidate_recordset(["face_pic_b64"])
+        self.assertTrue(person.face_pic_b64)
+
     def test_touch_device_telemetry_updates_heartbeat_and_sync(self):
         self.device.write(
             {

@@ -419,6 +419,32 @@ class AccessControlApi(http.Controller):
             candidates.append(self._normalize_future_access_event_datetime(parsed_utc, received_at, value, env))
         return self._choose_access_event_datetime_candidate(candidates, received_at)
 
+    def _person_face_pic_b64(self, person):
+        Partner = person.env["res.partner"].sudo()
+        face_b64 = Partner._normalize_image_b64(person.face_pic_b64)
+        if face_b64:
+            return face_b64
+
+        source = person.face_image or person.partner_id.image_1920
+        if not source:
+            return False
+
+        face_b64 = Partner._prepare_biometric_face_b64(
+            source,
+            log_context="sync_payload:%s" % (person.id or "new"),
+        )
+        if face_b64:
+            try:
+                person.with_context(skip_access_sync_queue=True).sudo().write(
+                    {
+                        "face_image": face_b64,
+                        "face_pic_b64": face_b64,
+                    }
+                )
+            except Exception:
+                _logger.exception("sync_delta facePicB64 backfill failed pin=%s person_id=%s", person.global_user_id, person.id)
+        return face_b64
+
     def _person_sync_payload(self, person, include_face_pic=True, clear_face_pic=False, priority=False):
         payload = {
             "globalUserId": person.global_user_id,
@@ -442,7 +468,7 @@ class AccessControlApi(http.Controller):
             _logger.info("sync_delta facePicB64=null pin=%s person_id=%s", person.global_user_id, person.id)
             payload["facePicB64"] = None
         elif include_face_pic:
-            face_b64 = person.env["res.partner"].sudo()._normalize_image_b64(person.face_pic_b64)
+            face_b64 = self._person_face_pic_b64(person)
             if face_b64:
                 try:
                     raw = base64.b64decode(face_b64, validate=True)
