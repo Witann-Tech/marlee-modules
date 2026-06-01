@@ -493,18 +493,7 @@ class PosOrder(models.Model):
     @api.model
     def wgs_get_subscription_discount_offers_for_pos(self, partner_id, product_id, flow='new', source_subscription_id=False):
         self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar descuentos de suscripción desde Punto de Venta.'))
-
-        partner = self._wgs_browse_partner_for_pos(partner_id)
-        product = self._wgs_browse_product_for_pos(product_id)
-        source_subscription = self._wgs_browse_source_subscription_for_pos(source_subscription_id)
-        if not partner or not product:
-            return []
-        return self._wgs_build_subscription_discount_offers_for_pos(
-            partner=partner,
-            product=product,
-            flow=flow,
-            source_subscription=source_subscription,
-        )
+        return []
 
     @api.model
     def wgs_authorize_subscription_discount_for_pos(
@@ -512,7 +501,7 @@ class PosOrder(models.Model):
         partner_id,
         product_id,
         flow='new',
-        discount_code=False,
+        discount_percent=0.0,
         supervisor_pin=False,
         source_subscription_id=False,
     ):
@@ -520,7 +509,6 @@ class PosOrder(models.Model):
 
         partner = self._wgs_browse_partner_for_pos(partner_id)
         product = self._wgs_browse_product_for_pos(product_id)
-        source_subscription = self._wgs_browse_source_subscription_for_pos(source_subscription_id)
         if not partner:
             return {
                 'ok': False,
@@ -532,40 +520,39 @@ class PosOrder(models.Model):
                 'error_message': _('El producto seleccionado no existe o no está disponible.'),
             }
 
-        offers = self._wgs_build_subscription_discount_offers_for_pos(
-            partner=partner,
-            product=product,
-            flow=flow,
-            source_subscription=source_subscription,
-        )
-        offer = next(
-            (row for row in offers if str(row.get('code') or '') == str(discount_code or '')),
-            False,
-        )
-        if not offer:
+        normalized_flow = str(flow or 'new').strip().lower()
+        if normalized_flow not in ('new', 'upsale', 'renewal', 'reenroll'):
             return {
                 'ok': False,
-                'error_message': _('El descuento solicitado ya no está disponible para este cliente.'),
+                'error_message': _('El flujo de venta no permite autorizar descuentos de membresía.'),
+            }
+
+        percent = self._wgs_to_float(discount_percent)
+        if percent <= 0.0 or percent > 100.0:
+            return {
+                'ok': False,
+                'error_message': _('Captura un porcentaje de descuento mayor a 0 y menor o igual a 100.'),
             }
 
         authorizer = self._wgs_find_discount_authorizer_for_pos(supervisor_pin)
         if not authorizer:
             return {
                 'ok': False,
-                'error_message': _('El PIN2 de autorización no es válido.'),
+                'error_message': _('El PIN WGS de autorización no es válido.'),
             }
 
         authorized_at = fields.Datetime.now()
+        label = _('Descuento autorizado (%s%%)') % ('%g' % percent)
         return {
             'ok': True,
-            'code': offer.get('code'),
-            'label': offer.get('label'),
-            'discount_percent': float(offer.get('discount_percent') or 0.0),
-            'discount_fixed_amount': float(offer.get('discount_fixed_amount') or 0.0),
+            'code': 'manual_percent',
+            'label': label,
+            'discount_percent': percent,
+            'discount_fixed_amount': 0.0,
             'authorized_employee_id': authorizer.id,
             'authorized_by': authorizer.display_name,
             'authorized_at': fields.Datetime.to_string(authorized_at),
-            'birthday_year': int(offer.get('birthday_year') or 0),
+            'birthday_year': 0,
         }
 
     @api.model
@@ -619,44 +606,6 @@ class PosOrder(models.Model):
         return Employee._wgs_find_by_authorization_pin(pin)
 
     @api.model
-    def _wgs_get_partner_birthday_for_pos(self, partner):
-        sale_order_model = self.env['sale.order'].sudo()
-        if not hasattr(sale_order_model, '_get_partner_field_value_for_pos'):
-            return False
-        birthday_field_candidates = getattr(sale_order_model, '_PARTNER_BIRTHDAY_FIELD_CANDIDATES', ())
-        birthday_value = sale_order_model._get_partner_field_value_for_pos(partner, birthday_field_candidates)
-        return fields.Date.to_date(birthday_value) if birthday_value else False
-
-    @api.model
-    def _wgs_get_last_subscription_end_date_for_partner_for_pos(self, partner, today=False):
-        sale_order_model = self.env['sale.order'].sudo()
-        if not hasattr(sale_order_model, '_get_pos_subscription_orders'):
-            return False
-        today = fields.Date.to_date(today) if today else fields.Date.context_today(self)
-        subscriptions = sale_order_model._get_pos_subscription_orders(partner)
-        last_end_date = False
-        for subscription in subscriptions:
-            try:
-                item = subscription._build_pos_subscription_status_item(today)
-            except Exception:
-                continue
-            valid_until = fields.Date.to_date(item.get('valid_until')) if item and item.get('valid_until') else False
-            if valid_until and (not last_end_date or valid_until > last_end_date):
-                last_end_date = valid_until
-        return last_end_date
-
-    @api.model
-    def _wgs_has_birthday_discount_in_year_for_pos(self, partner, year):
-        line_model = self.env['pos.order.line'].sudo()
-        domain = [
-            ('order_id.partner_id', '=', partner.id),
-            ('wgs_discount_code', '=', 'birthday_10'),
-            ('wgs_discount_birthday_year', '=', int(year or 0)),
-            ('order_id.state', 'not in', ('draft', 'cancel')),
-        ]
-        return bool(line_model.search_count(domain))
-
-    @api.model
     def _wgs_has_free_trial_usage_for_curp(self, curp):
         sale_order_model = self.env['sale.order'].sudo()
         partner_model = self._wgs_partner_model_for_pos()
@@ -693,54 +642,6 @@ class PosOrder(models.Model):
             getattr(tmpl, 'wgs_single_day_access', False)
             or getattr(tmpl, 'wgs_free_trial_day', False)
         )
-
-    @api.model
-    def _wgs_build_subscription_discount_offers_for_pos(self, partner, product, flow='new', source_subscription=False, today=False):
-        offers = []
-        today = fields.Date.to_date(today) if today else fields.Date.context_today(self)
-        normalized_flow = str(flow or 'new').strip().lower()
-
-        if normalized_flow in ('new', 'renewal', 'reenroll') and bool(
-            getattr(product.product_tmpl_id, 'wgs_requires_family_authorization', False)
-        ):
-            return [{
-                'code': 'family_authorization',
-                'label': _('Venta familiar autorizada'),
-                'discount_percent': 0.0,
-                'discount_fixed_amount': 0.0,
-                'authorization_required': True,
-            }]
-
-        if normalized_flow in ('new', 'reenroll'):
-            last_end_date = self._wgs_get_last_subscription_end_date_for_partner_for_pos(partner, today=today)
-            if last_end_date:
-                absence_days = (today - last_end_date).days
-                if absence_days > 30:
-                    for percent in (10.0, 20.0):
-                        offers.append({
-                            'code': 'comeback_%s' % int(percent),
-                            'label': _('Regreso después de 30 días (%s%%)') % int(percent),
-                            'discount_percent': percent,
-                            'discount_fixed_amount': 0.0,
-                            'authorization_required': True,
-                            'absence_days': absence_days,
-                            'valid_until': False,
-                        })
-
-        if normalized_flow in ('renewal', 'reenroll'):
-            birthday = self._wgs_get_partner_birthday_for_pos(partner)
-            if birthday and birthday.month == today.month and not self._wgs_has_birthday_discount_in_year_for_pos(partner, today.year):
-                offers.append({
-                    'code': 'birthday_10',
-                    'label': _('Cumpleaños (%s%%)') % 10,
-                    'discount_percent': 10.0,
-                    'discount_fixed_amount': 0.0,
-                    'authorization_required': True,
-                    'birthday_year': today.year,
-                    'valid_until': False,
-                })
-
-        return offers
 
     @api.model
     def _wgs_is_subscription_buffer_ready(self):
@@ -1035,19 +936,6 @@ class PosOrder(models.Model):
         else:
             raise UserError(_('No se pudo resolver el flujo de pricing solicitado.'))
 
-        if include_offers:
-            if (
-                normalized_flow in ('new', 'upsale', 'renewal', 'reenroll')
-                and partner
-                and product
-            ):
-                offers = self._wgs_build_subscription_discount_offers_for_pos(
-                    partner=partner,
-                    product=product,
-                    flow=normalized_flow,
-                    source_subscription=source_order if source_order else False,
-                )
-
         return {
             'flow': normalized_flow,
             'pricing': pricing,
@@ -1188,6 +1076,7 @@ class PosOrder(models.Model):
         values = super()._order_line_fields(line, session_id=session_id)
         ui_line = self._wgs_extract_ui_line_payload(line)
         config_payload = self._wgs_extract_subscription_config_payload(ui_line)
+        has_subscription_config = self._wgs_has_subscription_line_config_payload(config_payload)
 
         participant_ids = config_payload.get('participant_ids')
         if isinstance(participant_ids, list):
@@ -1266,7 +1155,86 @@ class PosOrder(models.Model):
         if birthday_year > 0:
             values['wgs_discount_birthday_year'] = birthday_year
 
+        if has_subscription_config:
+            locked_values = self._wgs_get_locked_subscription_line_price_values_for_pos(
+                config_payload,
+                fallback_price=values.get('price_unit'),
+            )
+            if locked_values.get('price_unit') is not False and 'price_unit' in values:
+                values['price_unit'] = locked_values['price_unit']
+            if 'discount' in values:
+                values['discount'] = locked_values['discount']
+        elif 'discount' in values:
+            values['discount'] = 0
+
         return values
+
+    @api.model
+    def _wgs_has_subscription_line_config_payload(self, config_payload):
+        if not isinstance(config_payload, dict):
+            return False
+        pricing_snapshot = config_payload.get('pricing_snapshot')
+        if isinstance(pricing_snapshot, dict) and pricing_snapshot:
+            return True
+        participant_ids = config_payload.get('participant_ids')
+        if isinstance(participant_ids, list) and participant_ids:
+            return True
+        for key in (
+            'plan_id',
+            'pricing_id',
+            'start_date',
+            'end_date',
+            'source_subscription_id',
+            'pending_move_id',
+            'refund_origin_line_id',
+            'discount_code',
+            'discount_authorized_employee_id',
+            'pricing_lock',
+        ):
+            if config_payload.get(key):
+                return True
+        return False
+
+    @api.model
+    def _wgs_get_locked_subscription_line_price_values_for_pos(self, config_payload, fallback_price=False):
+        config_payload = config_payload if isinstance(config_payload, dict) else {}
+        snapshot = config_payload.get('pricing_snapshot')
+        snapshot = snapshot if isinstance(snapshot, dict) else {}
+        lock_payload = config_payload.get('pricing_lock') or config_payload.get('pricingLock')
+        lock_payload = lock_payload if isinstance(lock_payload, dict) else {}
+
+        price_unit = False
+        for key in (
+            'ticket_charge_now',
+            'charge_now',
+            'ticket_amount_total',
+            'amount_total',
+            'ticket_price_unit',
+            'price_unit',
+            'ticket_recurring_price',
+            'recurring_price',
+        ):
+            if key in snapshot and snapshot.get(key) not in (None, ''):
+                price_unit = self._wgs_to_signed_float(snapshot.get(key))
+                break
+        if price_unit is False and lock_payload:
+            price_unit = self._wgs_to_signed_float(
+                lock_payload.get('price_unit', lock_payload.get('priceUnit', False))
+            )
+        if price_unit is False and fallback_price is not False:
+            price_unit = self._wgs_to_signed_float(fallback_price)
+
+        discount = self._wgs_to_float(config_payload.get('discount_percent'))
+        has_wgs_discount_authorization = bool(
+            discount > 0.0
+            and str(config_payload.get('discount_code') or '').strip()
+            and self._wgs_to_int(config_payload.get('discount_authorized_employee_id')) > 0
+            and config_payload.get('discount_authorized_at')
+        )
+        return {
+            'price_unit': price_unit,
+            'discount': discount if has_wgs_discount_authorization else 0.0,
+        }
 
     @api.model
     def _wgs_extract_ui_line_payload(self, line):
@@ -1307,6 +1275,7 @@ class PosOrder(models.Model):
             'discount_authorized_by': False,
             'discount_authorized_at': False,
             'discount_birthday_year': False,
+            'pricing_lock': False,
         }
         if not isinstance(ui_line, dict):
             return data
@@ -1328,6 +1297,21 @@ class PosOrder(models.Model):
                 pricing_snapshot = False
         if isinstance(pricing_snapshot, dict):
             data['pricing_snapshot'] = pricing_snapshot
+
+        pricing_lock = (
+            ui_line.get('pricing_lock')
+            or ui_line.get('pricingLock')
+            or raw_config.get('pricing_lock')
+            or raw_config.get('pricingLock')
+            or False
+        )
+        if isinstance(pricing_lock, str):
+            try:
+                pricing_lock = json.loads(pricing_lock)
+            except (TypeError, ValueError):
+                pricing_lock = False
+        if isinstance(pricing_lock, dict):
+            data['pricing_lock'] = pricing_lock
 
         participant_raw = (
             ui_line.get('wgs_participant_ids')
@@ -1633,6 +1617,14 @@ class PosOrder(models.Model):
             if birthday_year > 0:
                 write_values['wgs_discount_birthday_year'] = birthday_year
 
+            locked_values = self._wgs_get_locked_subscription_line_price_values_for_pos(
+                config,
+                fallback_price=target_line.price_unit,
+            )
+            if locked_values.get('price_unit') is not False:
+                write_values['price_unit'] = locked_values['price_unit']
+            write_values['discount'] = locked_values['discount']
+
             if write_values:
                 target_line.write(write_values)
                 _logger.info(
@@ -1734,6 +1726,15 @@ class PosOrder(models.Model):
             return abs(float(value or 0.0))
         except (TypeError, ValueError):
             return 0.0
+
+    @api.model
+    def _wgs_to_signed_float(self, value):
+        if value is False or value is None or value == '':
+            return False
+        try:
+            return float(value or 0.0)
+        except (TypeError, ValueError):
+            return False
 
     @api.model
     def _wgs_find_best_payload_dict(self, raw_line):

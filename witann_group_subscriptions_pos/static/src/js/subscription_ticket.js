@@ -321,6 +321,220 @@ function setLineDiscount(line, discount) {
     line.discount = discount;
 }
 
+function toFiniteNumber(value, fallback = 0) {
+    const numberValue = Number(value);
+    return Number.isFinite(numberValue) ? numberValue : fallback;
+}
+
+function getLinePriceUnit(line) {
+    if (!line) {
+        return 0;
+    }
+    if (line.price_unit !== undefined) {
+        return toFiniteNumber(line.price_unit);
+    }
+    if (line.price !== undefined) {
+        return toFiniteNumber(line.price);
+    }
+    if (line.unit_price !== undefined) {
+        return toFiniteNumber(line.unit_price);
+    }
+    return 0;
+}
+
+function getLineDiscount(line) {
+    return toFiniteNumber(line && line.discount !== undefined ? line.discount : 0);
+}
+
+function getProtectedLinePriceLock(line) {
+    if (!line) {
+        return null;
+    }
+    if (line.wgsSubscriptionPriceLock) {
+        return line.wgsSubscriptionPriceLock;
+    }
+    if (line.wgsSubscriptionConfig) {
+        const config = line.wgsSubscriptionConfig || {};
+        const configLock = config.pricing_lock || config.pricingLock || {};
+        const priceUnit = toFiniteNumber(
+            configLock.price_unit !== undefined
+                ? configLock.price_unit
+                : (configLock.priceUnit !== undefined ? configLock.priceUnit : getLinePriceUnit(line))
+        );
+        const discount = toFiniteNumber(
+            config.discount_percent !== undefined
+                ? config.discount_percent
+                : (config.discountPercent !== undefined ? config.discountPercent : getLineDiscount(line))
+        );
+        line.wgsSubscriptionPriceLock = {
+            priceUnit,
+            discount,
+        };
+        return line.wgsSubscriptionPriceLock;
+    }
+    if (line.wgsPosPriceLock) {
+        return line.wgsPosPriceLock;
+    }
+    return null;
+}
+
+function getSubscriptionLinePriceLock(line) {
+    if (!line) {
+        return null;
+    }
+    if (line.wgsSubscriptionPriceLock) {
+        return line.wgsSubscriptionPriceLock;
+    }
+    if (!line.wgsSubscriptionConfig) {
+        return null;
+    }
+    return getProtectedLinePriceLock(line);
+}
+
+function callOriginalLineSetter(line, methodName, value) {
+    const prototype = Object.getPrototypeOf(line);
+    const original = prototype && prototype[`__wgs_original_${methodName}`];
+    if (typeof original === "function") {
+        original.call(line, value);
+        return true;
+    }
+    return false;
+}
+
+function restoreSubscriptionLinePricing(line) {
+    const lock = getProtectedLinePriceLock(line);
+    if (!line || !lock) {
+        return false;
+    }
+    line.__wgsAllowSubscriptionPriceEdit = true;
+    try {
+        if (
+            !callOriginalLineSetter(line, "set_unit_price", lock.priceUnit)
+            && !callOriginalLineSetter(line, "setUnitPrice", lock.priceUnit)
+        ) {
+            line.price_unit = lock.priceUnit;
+            line.price = lock.priceUnit;
+        }
+        if (
+            !callOriginalLineSetter(line, "set_discount", lock.discount)
+            && !callOriginalLineSetter(line, "setDiscount", lock.discount)
+        ) {
+            line.discount = lock.discount;
+        }
+    } finally {
+        line.__wgsAllowSubscriptionPriceEdit = false;
+    }
+    line.price_unit = lock.priceUnit;
+    line.price = lock.priceUnit;
+    line.discount = lock.discount;
+    return true;
+}
+
+function patchSubscriptionLinePricingPrototype(line) {
+    const prototype = line && Object.getPrototypeOf(line);
+    if (!prototype || prototype.__wgsSubscriptionPriceLockPatched) {
+        return;
+    }
+    for (const methodName of ["set_unit_price", "setUnitPrice"]) {
+        const original = prototype[methodName];
+        if (typeof original !== "function") {
+            continue;
+        }
+        Object.defineProperty(prototype, `__wgs_original_${methodName}`, {
+            value: original,
+            configurable: false,
+        });
+        prototype[methodName] = function guardedSubscriptionPriceSetter(value, ...args) {
+            if (this && this.__wgsAllowSubscriptionPriceEdit) {
+                return original.call(this, value, ...args);
+            }
+            if (getProtectedLinePriceLock(this)) {
+                restoreSubscriptionLinePricing(this);
+                return this;
+            }
+            return original.call(this, value, ...args);
+        };
+    }
+    for (const methodName of ["set_discount", "setDiscount"]) {
+        const original = prototype[methodName];
+        if (typeof original !== "function") {
+            continue;
+        }
+        Object.defineProperty(prototype, `__wgs_original_${methodName}`, {
+            value: original,
+            configurable: false,
+        });
+        prototype[methodName] = function guardedSubscriptionDiscountSetter(value, ...args) {
+            if (this && this.__wgsAllowSubscriptionPriceEdit) {
+                return original.call(this, value, ...args);
+            }
+            if (getProtectedLinePriceLock(this)) {
+                restoreSubscriptionLinePricing(this);
+                return this;
+            }
+            return original.call(this, value, ...args);
+        };
+    }
+    Object.defineProperty(prototype, "__wgsSubscriptionPriceLockPatched", {
+        value: true,
+        configurable: false,
+    });
+}
+
+function lockPosOrderLinePricing(line, priceUnit = null, discount = 0) {
+    if (!line) {
+        return;
+    }
+    line.wgsPosPriceLock = {
+        priceUnit: toFiniteNumber(priceUnit !== null ? priceUnit : getLinePriceUnit(line)),
+        discount: toFiniteNumber(discount),
+    };
+    patchSubscriptionLinePricingPrototype(line);
+    restoreSubscriptionLinePricing(line);
+}
+
+function lockSubscriptionLinePricing(line, metadata, priceUnit, discount) {
+    if (!line || !metadata) {
+        return;
+    }
+    const lock = {
+        priceUnit: toFiniteNumber(priceUnit),
+        discount: toFiniteNumber(discount),
+    };
+    metadata.pricing_lock = {
+        price_unit: lock.priceUnit,
+        discount_percent: lock.discount,
+    };
+    line.wgsSubscriptionConfig = metadata;
+    line.wgsSubscriptionPriceLock = lock;
+    line.wgsPosPriceLock = lock;
+    patchSubscriptionLinePricingPrototype(line);
+    restoreSubscriptionLinePricing(line);
+}
+
+export function enforceOrderLinePricingLocks(order) {
+    for (const line of getOrderLines(order)) {
+        if (!line) {
+            continue;
+        }
+        if (line.wgsSubscriptionConfig) {
+            const lock = getSubscriptionLinePriceLock(line) || {};
+            lockSubscriptionLinePricing(
+                line,
+                line.wgsSubscriptionConfig,
+                lock.priceUnit !== undefined ? lock.priceUnit : getLinePriceUnit(line),
+                lock.discount !== undefined ? lock.discount : getLineDiscount(line)
+            );
+            continue;
+        }
+        if (!line.wgsPosPriceLock) {
+            lockPosOrderLinePricing(line, getLinePriceUnit(line), 0);
+        } else {
+            restoreSubscriptionLinePricing(line);
+        }
+    }
+}
+
 function getSelectedOrderLine(source, maybeOrder = null) {
     const order = maybeOrder || getCurrentOrder(source);
     if (!order) {
@@ -634,7 +848,12 @@ export async function addConfiguredProductLineToOrder(source, order, product, op
         setLineDiscount(targetLine, Number(discount || 0));
     }
     if (metadata) {
-        targetLine.wgsSubscriptionConfig = metadata;
+        lockSubscriptionLinePricing(
+            targetLine,
+            metadata,
+            Number(resolvedLineUnitPrice || 0),
+            Number(discount || 0)
+        );
     }
     return { line: targetLine, reason: null };
 }

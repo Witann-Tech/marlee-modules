@@ -34,6 +34,8 @@
                 <field name="active"/>
                 <field name="access_origin" readonly="1"/>
                 <field name="global_user_id"/>
+                <field name="access_timezone_id"/>
+                <field name="authorize_timezone_id" readonly="1"/>
                 <field name="site_ids" widget="many2many_tags"/>
                 <field name="face_image" string="Biopic SF" widget="image" readonly="1" options="{'size': [64, 64]}"/>
                 <field name="last_sf_sync_at" readonly="1"/>
@@ -46,6 +48,8 @@
                     <field name="active" widget="boolean_toggle"/>
                     <field name="access_origin" readonly="1"/>
                     <field name="global_user_id"/>
+                    <field name="access_timezone_id"/>
+                    <field name="authorize_timezone_id" readonly="1"/>
                     <field name="site_ids" widget="many2many_tags"/>
                     <field name="face_image" string="Biopic SF" widget="image" readonly="1" options="{'size': [160, 160]}"/>
                     <field name="last_sf_sync_at" readonly="1"/>

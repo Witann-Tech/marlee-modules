@@ -1,6 +1,10 @@
 /** @odoo-module **/
 
 import { buildChargeFromSnapshot, getCurrentPlanChoice } from "./subscription_pricing_snapshot";
+import {
+    getDiscountedDisplayAmount,
+    renderDiscountAuthorizationSection,
+} from "./subscription_discount_render";
 
 function renderUpsaleForm({
     item,
@@ -51,6 +55,7 @@ function renderUpsaleForm({
     const recurringCharge = buildChargeFromSnapshot(upsaleForm, "recurring");
     const creditCharge = buildChargeFromSnapshot(upsaleForm, "credit");
     const chargeNow = buildChargeFromSnapshot(upsaleForm, "charge_now");
+    const chargeNowDisplayAmount = getDiscountedDisplayAmount(chargeNow, upsaleForm);
     return `
         <div class="wgs-inline-form-card">
             <div class="wgs-inline-form-header">
@@ -84,9 +89,19 @@ function renderUpsaleForm({
                 <div><span>${escapeHtml(_t("Plan actual"))}</span><strong>${escapeHtml(upsaleForm.sourcePlanName || item.plan_name || "-")}</strong></div>
                 <div><span>${escapeHtml(_t("Nuevo recurrente"))}</span><strong>${escapeHtml(formatMoney(getChargeDisplayAmount(recurringCharge)))}</strong></div>
                 <div><span>${escapeHtml(_t("Bonificación"))}</span><strong>${escapeHtml(formatMoney(getChargeDisplayAmount(creditCharge)))}</strong></div>
-                <div><span>${escapeHtml(_t("Cobro ahora"))}</span><strong>${escapeHtml(formatMoney(getChargeDisplayAmount(chargeNow)))}</strong></div>
+                <div><span>${escapeHtml(_t("Cobro ahora"))}</span><strong>${escapeHtml(formatMoney(chargeNowDisplayAmount))}</strong></div>
                 <div><span>${escapeHtml(_t("Cupo destino"))}</span><strong>${escapeHtml(String(upsaleForm.maxParticipantsTotal || 1))}</strong></div>
             </div>
+            ${renderDiscountAuthorizationSection({
+                form: upsaleForm,
+                formError,
+                escapeHtml,
+                formatMoney,
+                authorizeAction: "authorize-upsale-discount",
+                percentField: "upsale_discount_percent",
+                pinField: "upsale_supervisor_pin",
+                _t,
+            })}
             ${Number(upsaleForm.maxParticipantsTotal || 1) > 1 ? `
                 <div class="wgs-inline-participants">
                     <span class="wgs-inline-section-title">${escapeHtml(_t("Participantes resultantes"))}</span>

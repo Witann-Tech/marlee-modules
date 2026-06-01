@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import json
 import logging
 
 from odoo import models, fields, api
@@ -21,7 +22,11 @@ class AccessSyncChange(models.Model):
         index=True,
     )
     device_id = fields.Many2one("access_control.device", index=True, ondelete="set null")
-    command_type = fields.Selection([("open_door", "Abrir puerta")], index=True)
+    access_timezone_id = fields.Many2one("access_control.timezone", index=True, ondelete="set null")
+    command_type = fields.Selection(
+        [("open_door", "Abrir puerta"), ("timezone_upsert", "Crear/actualizar horario")],
+        index=True,
+    )
     command_payload = fields.Text()
     include_face_pic = fields.Boolean(default=False)
     clear_face_pic = fields.Boolean(default=False)
@@ -77,6 +82,49 @@ class AccessSyncChange(models.Model):
             bool(include_face_pic),
             bool(clear_face_pic),
             priority,
+            reason,
+        )
+        return True
+
+    @api.model
+    def queue_timezone_upsert(self, timezones, site_ids=None, reason="timezone_update"):
+        timezones = timezones.exists() if timezones else timezones
+        if not timezones:
+            return False
+        Site = self.env["access_control.site"].sudo()
+        resolved_site_ids = self._to_site_ids(site_ids)
+        if not resolved_site_ids:
+            Device = self.env["access_control.device"].sudo()
+            active_devices = Device.search([("active", "=", True), ("site_id.active", "=", True)])
+            resolved_site_ids = sorted(set(active_devices.mapped("site_id").ids))
+        if not resolved_site_ids:
+            return False
+        vals_list = []
+        for timezone in timezones:
+            if not timezone.active or timezone.timezone_id <= 1:
+                continue
+            payload = timezone._command_payload()
+            for site in Site.browse(resolved_site_ids).exists():
+                vals_list.append(
+                    {
+                        "site_id": site.id,
+                        "access_timezone_id": timezone.id,
+                        "global_user_id": 0,
+                        "action": "command",
+                        "command_type": "timezone_upsert",
+                        "command_payload": json.dumps(payload, ensure_ascii=True, default=str),
+                        "priority": True,
+                        "reason": reason,
+                    }
+                )
+        if not vals_list:
+            return False
+        changes = self.sudo().create(vals_list)
+        _logger.info(
+            "queue_timezone_upsert timezone_ids=%s site_ids=%s change_ids=%s reason=%s",
+            timezones.mapped("timezone_id"),
+            resolved_site_ids,
+            changes.ids,
             reason,
         )
         return True

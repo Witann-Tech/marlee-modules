@@ -14,6 +14,7 @@
           <field name="last_heartbeat_at"/>
           <field name="last_sync_at"/>
           <field name="last_error"/>
+          <button name="action_enqueue_clean_resync" type="object" string="Re-sincronizar SF" class="btn-link" invisible="not active"/>
         </list>
       </field>
     </record>
@@ -23,6 +24,10 @@
       <field name="model">access_control.device</field>
       <field name="arch" type="xml">
         <form string="Dispositivo">
+          <header>
+            <button name="action_run_inventory_audit" type="object" string="Auditar inventario" class="btn-primary" invisible="not active"/>
+            <button name="action_enqueue_clean_resync" type="object" string="Re-sincronizar SF" class="btn-secondary" invisible="not active"/>
+          </header>
           <sheet>
             <group>
               <field name="active" widget="boolean_toggle"/>

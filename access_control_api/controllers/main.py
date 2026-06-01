@@ -154,10 +154,44 @@ class AccessControlApi(http.Controller):
     def _site_change_max_cursor(self, site):
         Change = site.env["access_control.sync_change"].sudo()
         return Change.search(
-            [("site_id", "=", site.id), ("action", "!=", "command")],
+            [
+                ("site_id", "=", site.id),
+                "|",
+                ("action", "!=", "command"),
+                ("command_type", "!=", "open_door"),
+            ],
             order="id desc",
             limit=1,
         ).id or 0
+
+    def _command_payloads_for_changes(self, changes, site_code, device_serial=None):
+        commands = []
+        for ch in changes:
+            if ch.action != "command" or ch.command_type == "open_door":
+                continue
+            command_payload = {}
+            if ch.command_payload:
+                try:
+                    command_payload = json.loads(ch.command_payload)
+                except (TypeError, ValueError):
+                    command_payload = {}
+            command_payload.update(
+                {
+                    "id": ch.id,
+                    "type": ch.command_type or "command",
+                    "priority": bool(ch.priority),
+                    "siteCode": ch.site_id.code if ch.site_id else site_code,
+                    "deviceSerial": (
+                        ch.device_id.device_serial
+                        if ch.device_id
+                        else device_serial
+                    )
+                    or command_payload.get("deviceSerial")
+                    or None,
+                }
+            )
+            commands.append(command_payload)
+        return commands
 
     def _is_valid_user_api_key(self, token):
         """Support Odoo user API keys created from user preferences."""
@@ -183,7 +217,7 @@ class AccessControlApi(http.Controller):
             return False, "missing_token"
         token = auth.split(" ", 1)[1].strip()
         ICP = request.env["ir.config_parameter"].sudo()
-        expected = ICP.get_param("access_control.api_token") or ICP.get_param("access_control_api.api_token")
+        expected = ICP.get_param("access_control.api_token")
 
         if expected and token == expected:
             return True, None
@@ -385,20 +419,56 @@ class AccessControlApi(http.Controller):
             candidates.append(self._normalize_future_access_event_datetime(parsed_utc, received_at, value, env))
         return self._choose_access_event_datetime_candidate(candidates, received_at)
 
+    def _person_face_pic_b64(self, person):
+        Partner = person.env["res.partner"].sudo()
+        face_b64 = Partner._normalize_image_b64(person.face_pic_b64)
+        if face_b64:
+            return face_b64
+
+        source = person.face_image or person.partner_id.image_1920
+        if not source:
+            return False
+
+        face_b64 = Partner._prepare_biometric_face_b64(
+            source,
+            log_context="sync_payload:%s" % (person.id or "new"),
+        )
+        if face_b64:
+            try:
+                person.with_context(skip_access_sync_queue=True).sudo().write(
+                    {
+                        "face_image": face_b64,
+                        "face_pic_b64": face_b64,
+                    }
+                )
+            except Exception:
+                _logger.exception("sync_delta facePicB64 backfill failed pin=%s person_id=%s", person.global_user_id, person.id)
+        return face_b64
+
     def _person_sync_payload(self, person, include_face_pic=True, clear_face_pic=False, priority=False):
         payload = {
             "globalUserId": person.global_user_id,
             "name": person.name or "",
             "active": bool(person.active),
             "accessGroup": 0 if person.access_state == "suspended" else 1,
+            "authorizeTimezoneId": int(person.authorize_timezone_id or 1),
+            "authorizeDoorId": 1,
+            "authorizeDevId": 1,
         }
+        payload.update(
+            {
+                "authorize_timezone_id": payload["authorizeTimezoneId"],
+                "authorize_door_id": payload["authorizeDoorId"],
+                "authorize_dev_id": payload["authorizeDevId"],
+            }
+        )
         if priority:
             payload["priority"] = True
         if clear_face_pic:
             _logger.info("sync_delta facePicB64=null pin=%s person_id=%s", person.global_user_id, person.id)
             payload["facePicB64"] = None
         elif include_face_pic:
-            face_b64 = person.env["res.partner"].sudo()._normalize_image_b64(person.face_pic_b64)
+            face_b64 = self._person_face_pic_b64(person)
             if face_b64:
                 try:
                     raw = base64.b64decode(face_b64, validate=True)
@@ -630,7 +700,13 @@ class AccessControlApi(http.Controller):
             )
 
         changes = Change.search(
-            [("site_id", "=", site.id), ("id", ">", cursor), ("action", "!=", "command")],
+            [
+                ("site_id", "=", site.id),
+                ("id", ">", cursor),
+                "|",
+                ("action", "!=", "command"),
+                ("command_type", "!=", "open_door"),
+            ],
             order="id asc",
             limit=limit,
         )
@@ -669,8 +745,11 @@ class AccessControlApi(http.Controller):
             }
 
         latest_by_gid = {}
+        command_changes = Change.browse()
         for ch in changes:
             if ch.action == "command":
+                if ch.command_type != "open_door":
+                    command_changes |= ch
                 continue
             gid = ch.global_user_id
             if not gid:
@@ -740,6 +819,10 @@ class AccessControlApi(http.Controller):
 
         next_cursor = changes[-1].id
         has_more = len(changes) >= limit
+        commands = self._command_payloads_for_changes(command_changes, site_code, device_serial=device_serial)
+        synced_timezones = command_changes.mapped("access_timezone_id")
+        if synced_timezones:
+            synced_timezones.mark_synced()
         self._mark_people_synced(synced_people)
         self._touch_device_telemetry(device, heartbeat=True, sync=True, error_marker=True)
         _logger.info(
@@ -750,7 +833,7 @@ class AccessControlApi(http.Controller):
             next_cursor,
             len(upserts),
             len(deletes),
-            0,
+            len(commands),
             include_biophoto,
         )
 
@@ -764,7 +847,7 @@ class AccessControlApi(http.Controller):
             "hasMore": has_more,
             "upserts": upserts,
             "deletes": deletes,
-            "commands": [],
+            "commands": commands,
         }
 
     @http.route(

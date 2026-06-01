@@ -3,6 +3,7 @@ import base64
 import io
 import json
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from odoo import fields
@@ -65,6 +66,63 @@ class TestFaceSyncDelta(TransactionCase):
             }
         )
         return partner, person
+
+    def _auth_result(self, headers=None, params=None):
+        params = params or {}
+
+        class FakeConfigParameter:
+            def sudo(self):
+                return self
+
+            def get_param(self, key, default=False):
+                return params.get(key, default)
+
+        class FakeEnv:
+            def __getitem__(self, model):
+                if model == "ir.config_parameter":
+                    return FakeConfigParameter()
+                raise KeyError(model)
+
+        fake_request = SimpleNamespace(
+            httprequest=SimpleNamespace(headers=headers or {}),
+            env=FakeEnv(),
+        )
+        with patch("odoo.addons.access_control_api.controllers.main.request", fake_request):
+            with patch.object(self.controller, "_is_valid_user_api_key", return_value=False):
+                return self.controller._auth_ok()
+
+    def test_auth_accepts_canonical_access_control_api_token(self):
+        self.assertEqual(
+            self._auth_result(
+                headers={"Authorization": "Bearer expected-token"},
+                params={"access_control.api_token": "expected-token"},
+            ),
+            (True, None),
+        )
+
+    def test_auth_reports_server_token_not_configured_without_canonical_token(self):
+        self.assertEqual(
+            self._auth_result(headers={"Authorization": "Bearer expected-token"}),
+            (False, "server_token_not_configured"),
+        )
+
+    def test_auth_reports_invalid_token_when_canonical_token_mismatches(self):
+        self.assertEqual(
+            self._auth_result(
+                headers={"Authorization": "Bearer wrong-token"},
+                params={"access_control.api_token": "expected-token"},
+            ),
+            (False, "invalid_token"),
+        )
+
+    def test_auth_ignores_legacy_access_control_api_token_parameter(self):
+        self.assertEqual(
+            self._auth_result(
+                headers={"Authorization": "Bearer legacy-token"},
+                params={"access_control_api.api_token": "legacy-token"},
+            ),
+            (False, "server_token_not_configured"),
+        )
 
     def test_create_with_valid_face_includes_facepicb64(self):
         partner, person = self._make_person(self._make_image_b64())
@@ -279,6 +337,69 @@ class TestFaceSyncDelta(TransactionCase):
         person.write({"access_state": "suspended"})
         payload = self.controller._person_sync_payload(person, include_face_pic=False, clear_face_pic=False)
         self.assertEqual(payload["accessGroup"], 0)
+        self.assertEqual(payload["authorizeTimezoneId"], 1)
+        self.assertEqual(payload["authorizeDoorId"], 1)
+        self.assertEqual(payload["authorizeDevId"], 1)
+        self.assertEqual(payload["authorize_timezone_id"], 1)
+        self.assertEqual(payload["authorize_door_id"], 1)
+        self.assertEqual(payload["authorize_dev_id"], 1)
+
+    def test_person_payload_uses_assigned_access_timezone(self):
+        timezone = self.env["access_control.timezone"].sudo().create(
+            {
+                "name": "Matutino",
+                "interval_ids": [
+                    (0, 0, {"day": "mon", "start_time": "06:00", "end_time": "14:00"}),
+                    (0, 0, {"day": "tue", "start_time": "06:00", "end_time": "14:00"}),
+                ],
+            }
+        )
+        _, person = self._make_person(self._make_image_b64())
+        person.write({"access_timezone_id": timezone.id})
+
+        payload = self.controller._person_sync_payload(person, include_face_pic=False, clear_face_pic=False)
+
+        self.assertEqual(timezone.timezone_id, 2)
+        self.assertEqual(payload["authorizeTimezoneId"], timezone.timezone_id)
+        self.assertEqual(payload["authorizeDoorId"], 1)
+        self.assertEqual(payload["authorizeDevId"], 1)
+        self.assertEqual(payload["authorize_timezone_id"], timezone.timezone_id)
+        self.assertEqual(payload["authorize_door_id"], 1)
+        self.assertEqual(payload["authorize_dev_id"], 1)
+        change = self.Change.search([("person_id", "=", person.id), ("action", "=", "upsert")], order="id desc", limit=1)
+        self.assertTrue(change.priority)
+
+    def test_timezone_upsert_command_payload_for_sync_delta(self):
+        self.Change.search([]).unlink()
+        timezone = self.env["access_control.timezone"].sudo().create(
+            {
+                "name": "L-V Matutino",
+                "interval_ids": [
+                    (0, 0, {"day": "mon", "start_time": "06:00", "end_time": "14:00"}),
+                    (0, 0, {"day": "tue", "start_time": "06:00", "end_time": "14:00"}),
+                ],
+            }
+        )
+        changes = self.Change.search([("command_type", "=", "timezone_upsert")], order="id asc")
+        commands = self.controller._command_payloads_for_changes(
+            changes,
+            self.site.code,
+            device_serial=self.device.device_serial,
+        )
+
+        self.assertEqual(len(commands), 1)
+        self.assertEqual(commands[0]["type"], "timezone_upsert")
+        self.assertEqual(commands[0]["siteCode"], self.site.code)
+        self.assertEqual(commands[0]["deviceSerial"], self.device.device_serial)
+        self.assertEqual(commands[0]["timezoneId"], timezone.timezone_id)
+        self.assertTrue(commands[0]["priority"])
+        self.assertEqual(
+            commands[0]["intervals"],
+            [
+                {"day": "mon", "start": "06:00", "end": "14:00"},
+                {"day": "tue", "start": "06:00", "end": "14:00"},
+            ],
+        )
 
     def test_priority_upsert_queue_marks_change_and_payload(self):
         _, person = self._make_person(self._make_image_b64())
@@ -299,6 +420,103 @@ class TestFaceSyncDelta(TransactionCase):
 
         self.assertTrue(change.priority)
         self.assertTrue(payload["priority"])
+
+    def test_device_clean_resync_queues_timezones_and_users_as_priority_changes(self):
+        timezone = self.env["access_control.timezone"].sudo().create(
+            {
+                "name": "Vespertino",
+                "interval_ids": [
+                    (0, 0, {"day": "mon", "start_time": "14:00", "end_time": "22:00"}),
+                ],
+            }
+        )
+        partner_1 = self.Partner.create({"name": "Persona Limpia 1"})
+        person_1 = self.Person.create(
+            {
+                "partner_id": partner_1.id,
+                "global_user_id": 7101,
+                "active": True,
+                "site_ids": [(6, 0, [self.site.id])],
+            }
+        )
+        partner_2 = self.Partner.create({"name": "Persona Limpia 2"})
+        person_2 = self.Person.create(
+            {
+                "partner_id": partner_2.id,
+                "global_user_id": 7102,
+                "active": True,
+                "site_ids": [(6, 0, [self.site.id])],
+            }
+        )
+        self.Change.search([]).unlink()
+
+        result = self.device.action_enqueue_clean_resync()
+
+        timezone_changes = self.Change.search(
+            [
+                ("command_type", "=", "timezone_upsert"),
+                ("reason", "=", "device_clean_resync_timezones"),
+            ]
+        )
+        user_changes = self.Change.search(
+            [
+                ("action", "=", "upsert"),
+                ("reason", "=", "device_clean_resync_user"),
+                ("global_user_id", "in", [person_1.global_user_id, person_2.global_user_id]),
+            ],
+            order="global_user_id asc",
+        )
+
+        self.assertEqual(result["tag"], "display_notification")
+        self.assertEqual(len(timezone_changes), 1)
+        self.assertEqual(timezone_changes.access_timezone_id.id, timezone.id)
+        self.assertTrue(timezone_changes.priority)
+        self.assertEqual(user_changes.mapped("global_user_id"), [person_1.global_user_id, person_2.global_user_id])
+        self.assertTrue(all(user_changes.mapped("priority")))
+
+    def test_device_clean_resync_uses_partner_face_when_person_face_is_missing(self):
+        partner = self.Partner.create(
+            {
+                "name": "Persona Legacy Foto",
+                "image_1920": self._make_image_b64(color=(40, 180, 40)),
+            }
+        )
+        person = self.Person.create(
+            {
+                "partner_id": partner.id,
+                "global_user_id": 7201,
+                "active": True,
+                "site_ids": [(6, 0, [self.site.id])],
+            }
+        )
+        person.with_context(skip_access_sync_queue=True).write(
+            {
+                "face_image": False,
+                "face_pic_b64": False,
+            }
+        )
+        self.Change.search([]).unlink()
+
+        self.device.action_enqueue_clean_resync()
+        change = self.Change.search(
+            [
+                ("person_id", "=", person.id),
+                ("reason", "=", "device_clean_resync_user"),
+            ],
+            limit=1,
+        )
+        payload = self.controller._person_sync_payload(
+            person,
+            include_face_pic=change.include_face_pic,
+            clear_face_pic=False,
+            priority=change.priority,
+        )
+
+        self.assertTrue(change.include_face_pic)
+        self.assertIn("facePicB64", payload)
+        self.assertTrue(payload["facePicB64"])
+        person.invalidate_recordset(["face_pic_b64"])
+        self.assertTrue(person.face_pic_b64)
 
     def test_touch_device_telemetry_updates_heartbeat_and_sync(self):
         self.device.write(

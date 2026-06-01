@@ -10,6 +10,7 @@
                     <group>
                         <field name="max_participants_total"/>
                         <field name="wgs_access_site_ids" widget="many2many_tags"/>
+                        <field name="wgs_access_timezone_id"/>
                         <field name="wgs_requires_curp"/>
                         <field name="wgs_student_age_lock"/>
                         <field name="wgs_requires_family_authorization"/>

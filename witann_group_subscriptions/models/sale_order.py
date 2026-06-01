@@ -62,6 +62,13 @@ class SaleOrder(models.Model):
         string='Cupo total de participantes',
         compute='_compute_subscription_participant_capacity',
     )
+    wgs_access_timezone_id = fields.Many2one(
+        'access_control.timezone',
+        string='Horario de acceso',
+        domain="[('active', '=', True)]",
+        help='Si se deja vacío, se usa el horario configurado en el paquete. '
+             'Acceso general equivale a timezone_id=1.',
+    )
 
     @api.depends(
         'order_line',
@@ -206,6 +213,16 @@ class SaleOrder(models.Model):
             order='id asc',
         ).ids
 
+    def _wgs_get_access_timezone(self):
+        self.ensure_one()
+        if self.wgs_access_timezone_id:
+            return self.wgs_access_timezone_id
+        for line in self._get_subscription_recurring_lines():
+            product_tmpl = line.product_id.product_tmpl_id if line.product_id else False
+            if product_tmpl and product_tmpl.wgs_access_timezone_id:
+                return product_tmpl.wgs_access_timezone_id
+        return self.env.ref('access_control_api.access_timezone_general', raise_if_not_found=False)
+
     def _wgs_get_first_access_date_value(self, field_names):
         self.ensure_one()
         for field_name in field_names:
@@ -278,6 +295,7 @@ class SaleOrder(models.Model):
         enabled = False
         suspended = False
         site_ids = set()
+        access_timezone = False
         considered_orders = []
         for order in orders:
             state = order._wgs_classify_subscription_access_state()
@@ -285,6 +303,9 @@ class SaleOrder(models.Model):
                 continue
             considered_orders.append(order.id)
             site_ids.update(order._wgs_get_access_site_ids())
+            order_timezone = order._wgs_get_access_timezone()
+            if order_timezone and (not access_timezone or order_timezone.timezone_id > 1):
+                access_timezone = order_timezone
             if state == 'enabled':
                 enabled = True
             elif state == 'suspended':
@@ -292,6 +313,7 @@ class SaleOrder(models.Model):
 
         profile['site_ids'] = sorted(site_ids)
         profile['order_ids'] = considered_orders
+        profile['access_timezone_id'] = access_timezone.id if access_timezone else False
         if enabled:
             profile['access_state'] = 'enabled'
         elif suspended:
@@ -332,6 +354,7 @@ class SaleOrder(models.Model):
                 'access_state': access_state,
                 'site_ids': [Command.set(site_ids)],
                 'managed_by_subscription': True,
+                'access_timezone_id': profile.get('access_timezone_id') or False,
             }
             if person:
                 if not person.global_user_id:
@@ -342,6 +365,7 @@ class SaleOrder(models.Model):
                     not person.active
                     or person.access_state != access_state
                     or current_site_ids != desired_site_ids
+                    or person.access_timezone_id.id != (profile.get('access_timezone_id') or False)
                     or not person.managed_by_subscription
                 ):
                     person.write(vals)
@@ -414,7 +438,8 @@ class SaleOrder(models.Model):
         res = super().write(vals)
         if not self.env.context.get('skip_owner_participant_sync'):
             self._ensure_subscription_owner_is_participant()
-        self._wgs_sync_access_control_people(extra_partner_ids=before_partner_ids)
+        sync_orders = self.with_context(access_sync_priority=True) if 'wgs_access_timezone_id' in vals else self
+        sync_orders._wgs_sync_access_control_people(extra_partner_ids=before_partner_ids)
         return res
 
     def unlink(self):

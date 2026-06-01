@@ -1,0 +1,156 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+  <data>
+    <record id="view_access_control_device_audit_run_tree" model="ir.ui.view">
+      <field name="name">access_control.device_audit_run.lista</field>
+      <field name="model">access_control.device_audit_run</field>
+      <field name="arch" type="xml">
+        <list string="Auditorías SF">
+          <field name="started_at"/>
+          <field name="device_id"/>
+          <field name="device_serial"/>
+          <field name="state"/>
+          <field name="expected_count"/>
+          <field name="real_count"/>
+          <field name="orphan_count"/>
+          <field name="missing_count"/>
+          <field name="timezone_drift_count"/>
+          <field name="users_updated_at"/>
+          <field name="authorize_updated_at"/>
+        </list>
+      </field>
+    </record>
+
+    <record id="view_access_control_device_audit_run_form" model="ir.ui.view">
+      <field name="name">access_control.device_audit_run.formulario</field>
+      <field name="model">access_control.device_audit_run</field>
+      <field name="arch" type="xml">
+        <form string="Auditoría SF">
+          <sheet>
+            <group>
+              <field name="name" readonly="1"/>
+              <field name="device_id" readonly="1"/>
+              <field name="site_id" readonly="1"/>
+              <field name="device_serial" readonly="1"/>
+              <field name="state" readonly="1"/>
+              <field name="started_at" readonly="1"/>
+              <field name="completed_at" readonly="1"/>
+            </group>
+            <group string="Resumen">
+              <field name="expected_count" readonly="1"/>
+              <field name="real_count" readonly="1"/>
+              <field name="orphan_count" readonly="1"/>
+              <field name="missing_count" readonly="1"/>
+              <field name="drift_count" readonly="1"/>
+              <field name="timezone_drift_count" readonly="1"/>
+              <field name="users_updated_at" readonly="1"/>
+              <field name="authorize_updated_at" readonly="1"/>
+            </group>
+            <group invisible="not error_message">
+              <field name="error_message" readonly="1"/>
+            </group>
+            <notebook>
+              <page string="Hallazgos">
+                <field name="line_ids">
+                  <list>
+                    <field name="state"/>
+                    <field name="issue_type"/>
+                    <field name="global_user_id"/>
+                    <field name="person_id"/>
+                    <field name="expected_name"/>
+                    <field name="actual_name"/>
+                    <field name="expected_timezone_id"/>
+                    <field name="actual_timezone_id"/>
+                    <field name="expected_group"/>
+                    <field name="actual_group"/>
+                    <field name="expected_disable"/>
+                    <field name="actual_disable"/>
+                  </list>
+                </field>
+              </page>
+              <page string="Raw ADMS">
+                <field name="raw_snapshot" readonly="1"/>
+              </page>
+            </notebook>
+          </sheet>
+        </form>
+      </field>
+    </record>
+
+    <record id="view_access_control_device_audit_line_tree" model="ir.ui.view">
+      <field name="name">access_control.device_audit_line.lista</field>
+      <field name="model">access_control.device_audit_line</field>
+      <field name="arch" type="xml">
+        <list string="Hallazgos SF">
+          <field name="state"/>
+          <field name="device_id"/>
+          <field name="issue_type"/>
+          <field name="global_user_id"/>
+          <field name="person_id"/>
+          <field name="expected_name"/>
+          <field name="actual_name"/>
+          <field name="expected_timezone_id"/>
+          <field name="actual_timezone_id"/>
+        </list>
+      </field>
+    </record>
+
+    <record id="view_access_control_device_audit_line_form" model="ir.ui.view">
+      <field name="name">access_control.device_audit_line.formulario</field>
+      <field name="model">access_control.device_audit_line</field>
+      <field name="arch" type="xml">
+        <form string="Hallazgo SF">
+          <header>
+            <button name="action_resync" type="object" string="Re-sincronizar" class="btn-primary" invisible="issue_type == 'orphan' or state != 'open'"/>
+            <button name="action_open_delete_orphan_wizard" type="object" string="Borrar huérfano en ADMS" class="btn-secondary" invisible="issue_type != 'orphan' or state != 'open'"/>
+            <button name="action_ignore" type="object" string="Ignorar" class="btn-secondary" invisible="state != 'open'"/>
+          </header>
+          <sheet>
+            <group>
+              <field name="run_id" readonly="1"/>
+              <field name="device_id" readonly="1"/>
+              <field name="site_id" readonly="1"/>
+              <field name="state" readonly="1"/>
+              <field name="issue_type" readonly="1"/>
+              <field name="global_user_id" readonly="1"/>
+              <field name="person_id" readonly="1"/>
+            </group>
+            <group string="Comparación">
+              <field name="expected_name" readonly="1"/>
+              <field name="actual_name" readonly="1"/>
+              <field name="expected_timezone_id" readonly="1"/>
+              <field name="actual_timezone_id" readonly="1"/>
+              <field name="expected_group" readonly="1"/>
+              <field name="actual_group" readonly="1"/>
+              <field name="expected_disable" readonly="1"/>
+              <field name="actual_disable" readonly="1"/>
+            </group>
+            <group string="Raw">
+              <field name="raw_expected" readonly="1"/>
+              <field name="raw_actual" readonly="1"/>
+            </group>
+          </sheet>
+        </form>
+      </field>
+    </record>
+
+    <record id="view_access_control_device_audit_delete_wizard_form" model="ir.ui.view">
+      <field name="name">access_control.device_audit_delete_wizard.formulario</field>
+      <field name="model">access_control.device_audit_delete_wizard</field>
+      <field name="arch" type="xml">
+        <form string="Confirmar borrado">
+          <group>
+            <field name="device_id" readonly="1"/>
+            <field name="global_user_id" readonly="1"/>
+            <label for="confirmation" string="Escribe BORRAR para confirmar"/>
+            <field name="confirmation"/>
+          </group>
+          <footer>
+            <button name="action_confirm_delete" type="object" string="Borrar en ADMS" class="btn-primary"/>
+            <button string="Cancelar" special="cancel" class="btn-secondary"/>
+          </footer>
+        </form>
+      </field>
+    </record>
+  </data>
+</odoo>

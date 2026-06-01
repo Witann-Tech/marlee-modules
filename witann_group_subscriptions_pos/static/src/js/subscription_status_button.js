@@ -4,6 +4,7 @@ import {
     addConfiguredProductLineToOrder,
     collectSubscriptionConfigsFromOrder,
     convertTaxExcludedPriceToDisplay,
+    enforceOrderLinePricingLocks,
     ensureProductLoadedInPos,
     ensurePartnerLoadedInPos,
     getCurrentOrder,
@@ -196,6 +197,47 @@ function isInteractiveModalField(target) {
     );
 }
 
+function getButtonLabel(button) {
+    return String(button && (button.textContent || button.innerText) ? (button.textContent || button.innerText) : "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase();
+}
+
+function isNativePriceOrDiscountNumpadButton(button) {
+    if (!button || typeof button.closest !== "function") {
+        return false;
+    }
+    if (button.closest(`#${MODAL_ID}`)) {
+        return false;
+    }
+    const label = getButtonLabel(button);
+    if (["precio", "price", "%", "descuento", "discount"].includes(label)) {
+        return true;
+    }
+    const rawMode = String(
+        button.dataset.mode
+        || button.dataset.numpadMode
+        || button.dataset.action
+        || button.getAttribute("name")
+        || button.getAttribute("aria-label")
+        || ""
+    ).trim().toLowerCase();
+    return ["price", "precio", "discount", "descuento"].includes(rawMode);
+}
+
+function disableNativePriceAndDiscountNumpadButtons() {
+    for (const button of document.querySelectorAll("button, [role='button'], .btn")) {
+        if (!isNativePriceOrDiscountNumpadButton(button)) {
+            continue;
+        }
+        button.disabled = true;
+        button.classList.add("wgs-pos-price-discount-locked");
+        button.setAttribute("aria-disabled", "true");
+        button.title = _t("Precio y descuento bloqueados. Usa descuentos WGS desde Suscripciones.");
+    }
+}
+
 async function stageSubscriptionConfigsForOrder(orm, order) {
     const configs = collectSubscriptionConfigsFromOrder(order);
     if (!configs.length) {
@@ -298,8 +340,38 @@ patch(ControlButtons.prototype, {
         this.orm = useService("orm");
         this.subscriptionPosApi = createSubscriptionPosApi(this.orm);
         this._ensureStatusStyles();
+        this._wgsPriceLockTimer = window.setInterval(() => {
+            enforceOrderLinePricingLocks(getCurrentOrder(this.pos));
+            disableNativePriceAndDiscountNumpadButtons();
+        }, 150);
+        this._wgsBlockNativePriceDiscountHandler = (event) => {
+            const button = event.target && typeof event.target.closest === "function"
+                ? event.target.closest("button, [role='button'], .btn")
+                : null;
+            if (!isNativePriceOrDiscountNumpadButton(button)) {
+                return;
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            event.stopImmediatePropagation();
+            enforceOrderLinePricingLocks(getCurrentOrder(this.pos));
+            disableNativePriceAndDiscountNumpadButtons();
+        };
+        document.addEventListener("pointerdown", this._wgsBlockNativePriceDiscountHandler, true);
+        document.addEventListener("click", this._wgsBlockNativePriceDiscountHandler, true);
+        document.addEventListener("touchstart", this._wgsBlockNativePriceDiscountHandler, true);
 
         onWillUnmount(() => {
+            if (this._wgsPriceLockTimer) {
+                window.clearInterval(this._wgsPriceLockTimer);
+                this._wgsPriceLockTimer = null;
+            }
+            if (this._wgsBlockNativePriceDiscountHandler) {
+                document.removeEventListener("pointerdown", this._wgsBlockNativePriceDiscountHandler, true);
+                document.removeEventListener("click", this._wgsBlockNativePriceDiscountHandler, true);
+                document.removeEventListener("touchstart", this._wgsBlockNativePriceDiscountHandler, true);
+                this._wgsBlockNativePriceDiscountHandler = null;
+            }
             const modal = document.getElementById(MODAL_ID);
             if (modal) {
                 modal.remove();
@@ -363,12 +435,12 @@ patch(ControlButtons.prototype, {
         );
     },
 
-    async _authorizeSubscriptionDiscountForPos(partnerId, productId, flow = "new", discountCode = false, supervisorPin = false, sourceSubscriptionId = false) {
+    async _authorizeSubscriptionDiscountForPos(partnerId, productId, flow = "new", discountPercent = 0, supervisorPin = false, sourceSubscriptionId = false) {
         return this.subscriptionPosApi.authorizeSubscriptionDiscount(
             partnerId,
             productId,
             flow || "new",
-            discountCode || false,
+            discountPercent || 0,
             supervisorPin || false,
             sourceSubscriptionId || false
         );
@@ -1394,7 +1466,7 @@ patch(ControlButtons.prototype, {
                         escapeHtml: (value) => this._escapeHtml(value),
                         formatMoney: (value) => this._formatMoney(value),
                         authorizeAction: "authorize-new-discount",
-                        codeField: "new_discount_code",
+                        percentField: "new_discount_percent",
                         pinField: "new_supervisor_pin",
                         _t,
                     })}
@@ -1851,8 +1923,8 @@ patch(ControlButtons.prototype, {
                 saveSubscriptionParticipants: (subscriptionId, participantIds) => this._saveSubscriptionParticipants(subscriptionId, participantIds),
                 validateSubscriptionProductEligibility: (partnerId, productId, flow, sourceSubscriptionId) =>
                     this._validateSubscriptionProductEligibilityForPos(partnerId, productId, flow, sourceSubscriptionId),
-                authorizeSubscriptionDiscount: (partnerId, productId, flow, discountCode, supervisorPin, sourceSubscriptionId) =>
-                    this._authorizeSubscriptionDiscountForPos(partnerId, productId, flow, discountCode, supervisorPin, sourceSubscriptionId),
+                authorizeSubscriptionDiscount: (partnerId, productId, flow, discountPercent, supervisorPin, sourceSubscriptionId) =>
+                    this._authorizeSubscriptionDiscountForPos(partnerId, productId, flow, discountPercent, supervisorPin, sourceSubscriptionId),
                 formatTodayISO,
                 _t,
             }),
@@ -2130,6 +2202,11 @@ patch(ControlButtons.prototype, {
             .wgs-control-button {
                 flex: 1 1 auto;
                 min-width: 0;
+            }
+            .wgs-pos-price-discount-locked {
+                opacity: 0.45 !important;
+                cursor: not-allowed !important;
+                pointer-events: none !important;
             }
             .wgs-status-modal-header {
                 padding: 1rem 1.2rem;
