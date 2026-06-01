@@ -1,5 +1,10 @@
+import logging
+
 from odoo import _, api, fields, models
 from odoo.exceptions import ValidationError
+
+
+_logger = logging.getLogger(__name__)
 
 
 class ProductTemplate(models.Model):
@@ -86,11 +91,12 @@ class ProductTemplate(models.Model):
                     )
 
         res = super().write(vals)
-        if {'wgs_access_timezone_id', 'wgs_access_site_ids'}.intersection(vals):
-            self._wgs_resync_access_for_access_config_change()
+        changed_access_fields = {'wgs_access_timezone_id', 'wgs_access_site_ids'}.intersection(vals)
+        if changed_access_fields:
+            self._wgs_resync_access_for_access_config_change(changed_access_fields=changed_access_fields)
         return res
 
-    def _wgs_resync_access_for_access_config_change(self):
+    def _wgs_resync_access_for_access_config_change(self, changed_access_fields=None):
         if 'sale.order.line' not in self.env.registry:
             return False
         variant_ids = self.mapped('product_variant_ids').ids
@@ -100,10 +106,16 @@ class ProductTemplate(models.Model):
         domain = [('product_id', 'in', variant_ids)]
         if 'display_type' in SaleLine._fields:
             domain.append(('display_type', '=', False))
-        if 'order_id' in SaleLine._fields:
-            domain.append(('order_id.state', 'in', ('sale', 'done')))
         lines = SaleLine.search(domain)
         orders = lines.mapped('order_id').filtered(lambda order: hasattr(order, '_wgs_sync_access_control_people'))
+        _logger.info(
+            'WGS ACCESS: product access config changed templates=%s fields=%s variants=%s lines=%s orders=%s',
+            self.ids,
+            sorted(changed_access_fields or []),
+            variant_ids,
+            len(lines),
+            orders.ids,
+        )
         if orders:
             orders.with_context(access_sync_priority=True)._wgs_sync_access_control_people()
         return bool(orders)

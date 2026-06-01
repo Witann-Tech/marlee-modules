@@ -220,6 +220,38 @@ class TestSubscriptionAccessControl(TransactionCase):
         self.assertEqual(len(changes), 2)
         self.assertTrue(all(changes.mapped('priority')))
 
+    def test_changing_product_access_timezone_resyncs_existing_subscribers(self):
+        order = self._create_subscription_order()
+        progress_state = self._find_subscription_state_value('progress', 'en progreso')
+        order.write({'subscription_state': progress_state})
+        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
+        participant_person = self.env['access_control.person'].search([('partner_id', '=', self.participant.id)], limit=1)
+        general_timezone = self.env.ref('access_control_api.access_timezone_general')
+        restricted_timezone = self.env['access_control.timezone'].create(
+            {
+                'name': 'Matutino prueba',
+            }
+        )
+        self.assertEqual(owner_person.access_timezone_id, general_timezone)
+        self.assertEqual(participant_person.access_timezone_id, general_timezone)
+
+        self.env['access_control.sync_change'].search([]).unlink()
+        self.product.product_tmpl_id.write({'wgs_access_timezone_id': restricted_timezone.id})
+        owner_person.invalidate_recordset(['access_timezone_id'])
+        participant_person.invalidate_recordset(['access_timezone_id'])
+        changes = self.env['access_control.sync_change'].search(
+            [
+                ('person_id', 'in', [owner_person.id, participant_person.id]),
+                ('site_id', '=', self.site.id),
+                ('action', '=', 'upsert'),
+            ]
+        )
+
+        self.assertEqual(owner_person.access_timezone_id, restricted_timezone)
+        self.assertEqual(participant_person.access_timezone_id, restricted_timezone)
+        self.assertEqual(len(changes), 2)
+        self.assertTrue(all(changes.mapped('priority')))
+
     def test_access_sites_are_aggregated_across_multisite_subscriptions(self):
         progress_state = self._find_subscription_state_value('progress', 'en progreso')
 
