@@ -235,17 +235,32 @@ class HrEmployee(models.Model):
         return new_pin
 
     @api.model
+    def _wgs_authorization_pin_rotation_due_credentials(self, days, today=False):
+        days = int(days or 0)
+        Credential = self.env['wgs.pos.authorization.credential'].sudo()
+        if not days:
+            return Credential.browse()
+
+        today = today or fields.Date.context_today(self)
+        cutoff_date = fields.Date.to_date(today) - timedelta(days=days)
+        credentials = Credential.search([])
+
+        def _is_due(credential):
+            if not credential.last_rotated_at:
+                return True
+            rotated_at = fields.Datetime.to_datetime(credential.last_rotated_at)
+            rotated_date = fields.Datetime.context_timestamp(self, rotated_at).date()
+            return rotated_date <= cutoff_date
+
+        return credentials.filtered(_is_due)
+
+    @api.model
     def _cron_rotate_wgs_authorization_pins(self):
         days = self._wgs_authorization_pin_rotation_days()
         if not days:
             return {'rotated': 0, 'skipped': 0}
 
-        cutoff = fields.Datetime.now() - timedelta(days=days)
-        credentials = self.env['wgs.pos.authorization.credential'].sudo().search([
-            '|',
-            ('last_rotated_at', '=', False),
-            ('last_rotated_at', '<=', fields.Datetime.to_string(cutoff)),
-        ])
+        credentials = self._wgs_authorization_pin_rotation_due_credentials(days)
         rotated = 0
         skipped = 0
         for credential in credentials:
