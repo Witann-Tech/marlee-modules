@@ -1,6 +1,6 @@
 import re
 
-from odoo import _, api, models
+from odoo import _, api, fields, models
 from odoo.exceptions import ValidationError
 
 
@@ -9,6 +9,23 @@ class ResPartner(models.Model):
 
     _WGS_CURP_FIELD = 'x_studio_curp'
     _WGS_CURP_SYNC_CONTEXT_KEY = 'wgs_skip_curp_storage_sync'
+    _WGS_ACCESS_BLOCK_SYNC_CONTEXT_KEY = 'wgs_skip_access_block_sync'
+
+    wgs_access_blocked = fields.Boolean(
+        string='Acceso SF bloqueado',
+        copy=False,
+        index=True,
+        help='Bloqueo manual WGS: impide sincronizar acceso aunque exista una suscripción vigente.',
+    )
+    wgs_access_block_reason = fields.Text(string='Motivo de bloqueo SF', copy=False)
+    wgs_access_blocked_at = fields.Datetime(string='Bloqueado el', copy=False, readonly=True)
+    wgs_access_blocked_by_id = fields.Many2one(
+        'res.users',
+        string='Bloqueado por',
+        copy=False,
+        readonly=True,
+        ondelete='set null',
+    )
 
     @api.model
     def _wgs_get_curp_field_name(self, vals=None):
@@ -92,7 +109,21 @@ class ResPartner(models.Model):
         return partners
 
     def write(self, vals):
-        result = super().write(self._wgs_normalize_curp_in_vals(vals))
+        normalized_vals = self._wgs_normalize_curp_in_vals(vals)
+        access_block_fields = {
+            'wgs_access_blocked',
+            'wgs_access_block_reason',
+            'wgs_access_blocked_at',
+            'wgs_access_blocked_by_id',
+        }
+        before_sync_partner_ids = self.ids if access_block_fields.intersection(normalized_vals) else []
+        result = super().write(normalized_vals)
         self._wgs_sync_curp_storage()
         self._wgs_check_curp_uniqueness()
+        if before_sync_partner_ids and not self.env.context.get(self._WGS_ACCESS_BLOCK_SYNC_CONTEXT_KEY):
+            sale_order_model = self.env['sale.order'].sudo()
+            if hasattr(sale_order_model, '_wgs_sync_access_control_people'):
+                sale_order_model.with_context(access_sync_priority=True)._wgs_sync_access_control_people(
+                    extra_partner_ids=before_sync_partner_ids,
+                )
         return result

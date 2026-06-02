@@ -89,6 +89,41 @@ class TestSubscriptionAccessControl(TransactionCase):
         self.assertEqual(set(owner_person.site_ids.ids), {self.site.id})
         self.assertEqual(set(participant_person.site_ids.ids), {self.site.id})
 
+    def test_manual_access_block_overrides_active_subscription(self):
+        order = self._create_subscription_order()
+        progress_state = self._find_subscription_state_value('progress', 'en progreso')
+
+        order.write({'subscription_state': progress_state})
+        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
+        self.assertTrue(owner_person.active)
+        self.assertEqual(owner_person.access_state, 'enabled')
+
+        self.owner.write(
+            {
+                'wgs_access_blocked': True,
+                'wgs_access_block_reason': 'Bloqueo de prueba',
+                'wgs_access_blocked_at': fields.Datetime.now(),
+                'wgs_access_blocked_by_id': self.env.user.id,
+            }
+        )
+
+        owner_person.invalidate_recordset(['active', 'access_state'])
+        self.assertFalse(owner_person.active)
+        self.assertEqual(owner_person.access_state, 'suspended')
+
+        self.owner.write(
+            {
+                'wgs_access_blocked': False,
+                'wgs_access_block_reason': False,
+                'wgs_access_blocked_at': False,
+                'wgs_access_blocked_by_id': False,
+            }
+        )
+
+        owner_person.invalidate_recordset(['active', 'access_state'])
+        self.assertTrue(owner_person.active)
+        self.assertEqual(owner_person.access_state, 'enabled')
+
     def test_paused_subscription_suspends_access_without_deleting_person(self):
         order = self._create_subscription_order()
         progress_state = self._find_subscription_state_value('progress', 'en progreso')

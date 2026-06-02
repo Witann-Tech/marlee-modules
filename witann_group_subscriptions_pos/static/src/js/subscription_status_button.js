@@ -787,6 +787,7 @@ patch(ControlButtons.prototype, {
         let accessLogNotice = "";
         let accessLogOpeningDoorId = 0;
         let accessLogLoaded = false;
+        let partnerAccessActionKey = "";
         let resyncAccessCooldownTimer = null;
         const resyncAccessLoadingIds = new Set();
         const resyncAccessCooldowns = new Map();
@@ -1645,6 +1646,9 @@ patch(ControlButtons.prototype, {
                 formMode,
                 partnerPhotoForm,
                 partnerEditForm,
+                accessActionState: {
+                    loadingKey: partnerAccessActionKey,
+                },
                 formError,
                 formNotice,
                 escapeHtml: (value) => this._escapeHtml(value),
@@ -1864,6 +1868,90 @@ patch(ControlButtons.prototype, {
             "cancel-new": async () => {
                 resetInlineForms();
                 renderDetail(currentDetail);
+            },
+            "block-access": async () => {
+                if (!currentDetail || !currentDetail.partner_id || partnerAccessActionKey) {
+                    return;
+                }
+                const reason = window.prompt(_t("Motivo del bloqueo de acceso"));
+                if (!reason || !String(reason).trim()) {
+                    return;
+                }
+                clearFeedback();
+                partnerAccessActionKey = "block";
+                renderDetail(currentDetail);
+                try {
+                    const result = await this.subscriptionPosApi.blockPartnerAccess(currentDetail.partner_id, reason);
+                    if (!result || result.ok === false) {
+                        formError = result && result.error_message
+                            ? result.error_message
+                            : _t("No se pudo bloquear el acceso.");
+                    } else {
+                        formNotice = result.message || _t("Acceso bloqueado correctamente.");
+                        detailCache.delete(Number(currentDetail.partner_id || 0));
+                        await reloadDirectoryRows(currentDetail.partner_id);
+                        await loadDetail(currentDetail.partner_id, { force: true });
+                    }
+                } catch (error) {
+                    console.error("Error al bloquear acceso desde POS", error);
+                    formError = (error && error.message) ? error.message : _t("No se pudo bloquear el acceso.");
+                } finally {
+                    partnerAccessActionKey = "";
+                    renderDetail(currentDetail);
+                }
+            },
+            "unblock-access": async () => {
+                if (!currentDetail || !currentDetail.partner_id || partnerAccessActionKey) {
+                    return;
+                }
+                clearFeedback();
+                partnerAccessActionKey = "unblock";
+                renderDetail(currentDetail);
+                try {
+                    const result = await this.subscriptionPosApi.unblockPartnerAccess(currentDetail.partner_id);
+                    formNotice = result && result.message ? result.message : _t("Acceso desbloqueado correctamente.");
+                    detailCache.delete(Number(currentDetail.partner_id || 0));
+                    await reloadDirectoryRows(currentDetail.partner_id);
+                    await loadDetail(currentDetail.partner_id, { force: true });
+                } catch (error) {
+                    console.error("Error al desbloquear acceso desde POS", error);
+                    formError = (error && error.message) ? error.message : _t("No se pudo desbloquear el acceso.");
+                } finally {
+                    partnerAccessActionKey = "";
+                    renderDetail(currentDetail);
+                }
+            },
+            "grant-external-access": async ({ actionButton }) => {
+                if (!currentDetail || !currentDetail.partner_id || partnerAccessActionKey) {
+                    return;
+                }
+                const provider = actionButton.dataset.provider || "";
+                if (!provider) {
+                    return;
+                }
+                clearFeedback();
+                partnerAccessActionKey = provider;
+                renderDetail(currentDetail);
+                try {
+                    const result = await this.subscriptionPosApi.grantExternalAccess(currentDetail.partner_id, provider, {
+                        company_id: getCurrentCompanyId(this) || false,
+                        door_id: 1,
+                        open_time_seconds: 5,
+                    });
+                    formNotice = result && result.message ? result.message : _t("Acceso registrado correctamente.");
+                    if (accessLogLoaded) {
+                        await loadAccessLog();
+                    }
+                    detailCache.delete(Number(currentDetail.partner_id || 0));
+                    await reloadDirectoryRows(currentDetail.partner_id);
+                    await loadDetail(currentDetail.partner_id, { force: true });
+                } catch (error) {
+                    console.error("Error al registrar acceso externo desde POS", error);
+                    formError = (error && error.message) ? error.message : _t("No se pudo registrar el acceso externo.");
+                } finally {
+                    partnerAccessActionKey = "";
+                    renderDetail(currentDetail);
+                }
             },
             ...buildDetailPartnerActionHandlers({
                 state: modalState,
@@ -2581,13 +2669,19 @@ patch(ControlButtons.prototype, {
             }
             .wgs-detail-actions-bar,
             .wgs-subscription-actions,
-            .wgs-inline-actions {
+            .wgs-inline-actions,
+            .wgs-partner-access-actions {
                 display: grid;
                 grid-template-columns: repeat(2, minmax(0, 1fr));
                 gap: 0.55rem;
             }
+            .wgs-partner-access-actions {
+                margin-top: 0.8rem;
+                grid-template-columns: repeat(4, minmax(0, 1fr));
+            }
             .wgs-primary-action-btn,
             .wgs-secondary-action-btn,
+            .wgs-danger-action-btn,
             .wgs-action-btn,
             .wgs-inline-close-btn {
                 border-radius: 0.65rem;
@@ -2603,8 +2697,14 @@ patch(ControlButtons.prototype, {
                 color: #ffffff;
                 border-color: #0f766e;
             }
+            .wgs-danger-action-btn {
+                background: #fff1f2;
+                color: #be123c;
+                border-color: #fda4af;
+            }
             .wgs-primary-action-btn:disabled,
             .wgs-secondary-action-btn:disabled,
+            .wgs-danger-action-btn:disabled,
             .wgs-action-btn:disabled {
                 opacity: 0.7;
                 cursor: not-allowed;
@@ -2631,6 +2731,26 @@ patch(ControlButtons.prototype, {
                 font-size: 0.8rem;
                 color: #475569;
                 margin-bottom: 0.9rem;
+            }
+            .wgs-access-block-notice {
+                margin-top: 0.85rem;
+                padding: 0.75rem 0.85rem;
+                border: 1px solid #fda4af;
+                border-radius: 0.75rem;
+                background: #fff1f2;
+                color: #9f1239;
+                display: flex;
+                flex-direction: column;
+                gap: 0.25rem;
+            }
+            .wgs-access-block-notice strong {
+                color: #9f1239;
+                font-size: 0.86rem;
+            }
+            .wgs-access-block-notice span,
+            .wgs-access-block-notice small {
+                color: #be123c;
+                font-size: 0.8rem;
             }
             .wgs-detail-section {
                 display: flex;
@@ -2953,6 +3073,11 @@ patch(ControlButtons.prototype, {
                 background: #fee2e2;
                 border-color: #fca5a5;
             }
+            .wgs-access-status-chip-blocked {
+                color: #9f1239;
+                background: #fff1f2;
+                border-color: #fb7185;
+            }
             .wgs-simple-message {
                 padding: 1rem 1.2rem;
             }
@@ -2977,7 +3102,8 @@ patch(ControlButtons.prototype, {
                 .wgs-subscription-actions,
                 .wgs-inline-form-grid,
                 .wgs-inline-form-meta,
-                .wgs-inline-actions {
+                .wgs-inline-actions,
+                .wgs-partner-access-actions {
                     grid-template-columns: 1fr;
                 }
                 .wgs-detail-header-card {

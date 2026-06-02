@@ -26,24 +26,68 @@ function renderDetailHeader({
     detailAvatarHtml,
     formError,
     formNotice,
+    accessActionState = {},
     escapeHtml,
     formatDateDisplay,
     formatDateTimeDisplay,
     _t,
 }) {
     const accessEnabled = Boolean(detail.access_enabled);
+    const accessBlocked = Boolean(detail.access_blocked);
     const accessLabel = detail.access_label || (accessEnabled ? _t("Acceso activo") : _t("Sin acceso"));
     const accessState = detail.access_state || "missing";
+    const actionKey = accessActionState.loadingKey || "";
+    const isAccessActionBusy = Boolean(actionKey);
     const accessStatusHtml = `
-        <span class="wgs-access-status-chip ${accessEnabled ? "wgs-access-status-chip-on" : "wgs-access-status-chip-off"}" title="${escapeHtml(accessLabel)}">
+        <span class="wgs-access-status-chip ${accessEnabled ? "wgs-access-status-chip-on" : "wgs-access-status-chip-off"}${accessBlocked ? " wgs-access-status-chip-blocked" : ""}" title="${escapeHtml(accessLabel)}">
             <span
                 class="wgs-access-status-dot ${accessEnabled ? "wgs-access-status-on" : "wgs-access-status-off"}"
                 aria-label="${escapeHtml(accessLabel)}"
                 data-access-state="${escapeHtml(accessState)}"
             ></span>
-            <span>${escapeHtml(accessEnabled ? _t("Acceso activo") : _t("Sin acceso"))}</span>
+            <span>${escapeHtml(accessBlocked ? _t("Acceso bloqueado") : accessEnabled ? _t("Acceso activo") : _t("Sin acceso"))}</span>
         </span>
     `;
+    const accessBlockNoticeHtml = accessBlocked ? `
+        <div class="wgs-access-block-notice">
+            <strong>${escapeHtml(_t("Acceso bloqueado aunque la membresia este vigente."))}</strong>
+            <span>${escapeHtml(detail.access_block_reason || _t("Sin motivo capturado"))}</span>
+            ${detail.access_blocked_by ? `<small>${escapeHtml(_t("Bloqueado por"))}: ${escapeHtml(detail.access_blocked_by)}</small>` : ""}
+        </div>
+    ` : "";
+    const accessActionsHtml = !isEditingPartnerInfo && !isEditingPartnerPhoto ? `
+        <div class="wgs-partner-access-actions">
+            <button
+                type="button"
+                class="wgs-secondary-action-btn${actionKey === "wellhub" ? " wgs-action-loading" : ""}"
+                data-action="grant-external-access"
+                data-provider="wellhub"
+                ${isAccessActionBusy ? "disabled" : ""}
+            >${escapeHtml(actionKey === "wellhub" ? _t("Registrando...") : _t("Acceso WellHub"))}</button>
+            <button
+                type="button"
+                class="wgs-secondary-action-btn${actionKey === "totalpass" ? " wgs-action-loading" : ""}"
+                data-action="grant-external-access"
+                data-provider="totalpass"
+                ${isAccessActionBusy ? "disabled" : ""}
+            >${escapeHtml(actionKey === "totalpass" ? _t("Registrando...") : _t("Acceso TotalPass"))}</button>
+            ${accessBlocked ? `
+                <button
+                    type="button"
+                    class="wgs-secondary-action-btn${actionKey === "unblock" ? " wgs-action-loading" : ""}"
+                    data-action="unblock-access"
+                    ${isAccessActionBusy ? "disabled" : ""}
+                >${escapeHtml(actionKey === "unblock" ? _t("Desbloqueando...") : _t("Desbloquear acceso"))}</button>
+            ` : `
+                <button
+                    type="button"
+                    class="wgs-danger-action-btn${actionKey === "block" ? " wgs-action-loading" : ""}"
+                    data-action="block-access"
+                    ${isAccessActionBusy ? "disabled" : ""}
+                >${escapeHtml(actionKey === "block" ? _t("Bloqueando...") : _t("Bloquear acceso"))}</button>
+            `}
+        </div>
+    ` : "";
     const detailBodyHtml = isEditingPartnerInfo
         ? `
             ${formError ? `<div class="wgs-inline-error wgs-inline-error-compact">${escapeHtml(formError)}</div>` : ""}
@@ -94,6 +138,8 @@ function renderDetailHeader({
                 <div><span>${escapeHtml(_t("Ultimo acceso"))}</span><strong>${escapeHtml(formatDateTimeDisplay(detail.last_access) || "-")}</strong></div>
                 <div><span>${escapeHtml(_t("Resumen"))}</span><strong>${escapeHtml(detail.package_label || _t("Sin suscripcion"))}</strong></div>
             </div>
+            ${accessBlockNoticeHtml}
+            ${accessActionsHtml}
         `;
     return `
         <div class="wgs-detail-header-card ${isEditingPartnerPhoto ? "wgs-detail-header-card-editing" : ""}">

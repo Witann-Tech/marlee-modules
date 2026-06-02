@@ -36,6 +36,15 @@ export function createSubscriptionPosApi(orm) {
         async openAccessDoor(deviceId, options = {}) {
             return orm.call("pos.order", "wgs_open_access_door_for_pos", [deviceId || false, options || {}]);
         },
+        async blockPartnerAccess(partnerId, reason) {
+            return orm.call("pos.order", "wgs_block_partner_access_for_pos", [partnerId || false, reason || ""]);
+        },
+        async unblockPartnerAccess(partnerId) {
+            return orm.call("pos.order", "wgs_unblock_partner_access_for_pos", [partnerId || false]);
+        },
+        async grantExternalAccess(partnerId, provider, options = {}) {
+            return orm.call("pos.order", "wgs_grant_external_access_for_pos", [partnerId || false, provider || "", options || {}]);
+        },
         async fetchPartnerRecord(partnerId) {
             return orm.call("pos.order", "wgs_get_partner_record_for_pos", [partnerId || false]);
         },
