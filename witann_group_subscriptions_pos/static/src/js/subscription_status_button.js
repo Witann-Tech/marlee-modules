@@ -1873,6 +1873,7 @@ patch(ControlButtons.prototype, {
                 if (!currentDetail || !currentDetail.partner_id || partnerAccessActionKey) {
                     return;
                 }
+                const partnerId = Number(currentDetail.partner_id || 0);
                 const reason = window.prompt(_t("Motivo del bloqueo de acceso"));
                 if (!reason || !String(reason).trim()) {
                     return;
@@ -1881,16 +1882,16 @@ patch(ControlButtons.prototype, {
                 partnerAccessActionKey = "block";
                 renderDetail(currentDetail);
                 try {
-                    const result = await this.subscriptionPosApi.blockPartnerAccess(currentDetail.partner_id, reason);
+                    const result = await this.subscriptionPosApi.blockPartnerAccess(partnerId, reason);
                     if (!result || result.ok === false) {
                         formError = result && result.error_message
                             ? result.error_message
                             : _t("No se pudo bloquear el acceso.");
                     } else {
                         formNotice = result.message || _t("Acceso bloqueado correctamente.");
-                        detailCache.delete(Number(currentDetail.partner_id || 0));
-                        await reloadDirectoryRows(currentDetail.partner_id);
-                        await loadDetail(currentDetail.partner_id, { force: true });
+                        detailCache.delete(partnerId);
+                        await reloadDirectoryRows(partnerId);
+                        await loadDetail(partnerId, { force: true });
                     }
                 } catch (error) {
                     console.error("Error al bloquear acceso desde POS", error);
@@ -1904,15 +1905,16 @@ patch(ControlButtons.prototype, {
                 if (!currentDetail || !currentDetail.partner_id || partnerAccessActionKey) {
                     return;
                 }
+                const partnerId = Number(currentDetail.partner_id || 0);
                 clearFeedback();
                 partnerAccessActionKey = "unblock";
                 renderDetail(currentDetail);
                 try {
-                    const result = await this.subscriptionPosApi.unblockPartnerAccess(currentDetail.partner_id);
+                    const result = await this.subscriptionPosApi.unblockPartnerAccess(partnerId);
                     formNotice = result && result.message ? result.message : _t("Acceso desbloqueado correctamente.");
-                    detailCache.delete(Number(currentDetail.partner_id || 0));
-                    await reloadDirectoryRows(currentDetail.partner_id);
-                    await loadDetail(currentDetail.partner_id, { force: true });
+                    detailCache.delete(partnerId);
+                    await reloadDirectoryRows(partnerId);
+                    await loadDetail(partnerId, { force: true });
                 } catch (error) {
                     console.error("Error al desbloquear acceso desde POS", error);
                     formError = (error && error.message) ? error.message : _t("No se pudo desbloquear el acceso.");
@@ -1925,6 +1927,7 @@ patch(ControlButtons.prototype, {
                 if (!currentDetail || !currentDetail.partner_id || partnerAccessActionKey) {
                     return;
                 }
+                const partnerId = Number(currentDetail.partner_id || 0);
                 const provider = actionButton.dataset.provider || "";
                 if (!provider) {
                     return;
@@ -1933,7 +1936,7 @@ patch(ControlButtons.prototype, {
                 partnerAccessActionKey = provider;
                 renderDetail(currentDetail);
                 try {
-                    const result = await this.subscriptionPosApi.grantExternalAccess(currentDetail.partner_id, provider, {
+                    const result = await this.subscriptionPosApi.grantExternalAccess(partnerId, provider, {
                         company_id: getCurrentCompanyId(this) || false,
                         door_id: 1,
                         open_time_seconds: 5,
@@ -1942,9 +1945,9 @@ patch(ControlButtons.prototype, {
                     if (accessLogLoaded) {
                         await loadAccessLog();
                     }
-                    detailCache.delete(Number(currentDetail.partner_id || 0));
-                    await reloadDirectoryRows(currentDetail.partner_id);
-                    await loadDetail(currentDetail.partner_id, { force: true });
+                    detailCache.delete(partnerId);
+                    await reloadDirectoryRows(partnerId);
+                    await loadDetail(partnerId, { force: true });
                 } catch (error) {
                     console.error("Error al registrar acceso externo desde POS", error);
                     formError = (error && error.message) ? error.message : _t("No se pudo registrar el acceso externo.");
