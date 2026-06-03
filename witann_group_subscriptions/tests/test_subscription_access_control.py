@@ -124,6 +124,32 @@ class TestSubscriptionAccessControl(TransactionCase):
         self.assertTrue(owner_person.active)
         self.assertEqual(owner_person.access_state, 'enabled')
 
+    def test_manual_access_block_does_not_affect_other_participants(self):
+        order = self._create_subscription_order()
+        progress_state = self._find_subscription_state_value('progress', 'en progreso')
+
+        order.write({'subscription_state': progress_state})
+        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
+        participant_person = self.env['access_control.person'].search([('partner_id', '=', self.participant.id)], limit=1)
+        self.assertTrue(owner_person.active)
+        self.assertTrue(participant_person.active)
+
+        self.owner.write(
+            {
+                'wgs_access_blocked': True,
+                'wgs_access_block_reason': 'Bloqueo solo titular',
+                'wgs_access_blocked_at': fields.Datetime.now(),
+                'wgs_access_blocked_by_id': self.env.user.id,
+            }
+        )
+
+        owner_person.invalidate_recordset(['active', 'access_state'])
+        participant_person.invalidate_recordset(['active', 'access_state'])
+        self.assertFalse(owner_person.active)
+        self.assertEqual(owner_person.access_state, 'suspended')
+        self.assertTrue(participant_person.active)
+        self.assertEqual(participant_person.access_state, 'enabled')
+
     def test_paused_subscription_suspends_access_without_deleting_person(self):
         order = self._create_subscription_order()
         progress_state = self._find_subscription_state_value('progress', 'en progreso')

@@ -513,7 +513,7 @@ class SaleOrder(models.Model):
             'wgs_access_blocked_at': fields.Datetime.now(),
             'wgs_access_blocked_by_id': self.env.user.id,
         })
-        self.with_context(access_sync_priority=True)._wgs_sync_access_control_people(extra_partner_ids=[partner.id])
+        self.with_context(access_sync_priority=True)._wgs_sync_access_control_partner(partner)
         return {
             'ok': True,
             'partner_id': partner.id,
@@ -533,7 +533,7 @@ class SaleOrder(models.Model):
             'wgs_access_blocked_at': False,
             'wgs_access_blocked_by_id': False,
         })
-        self.with_context(access_sync_priority=True)._wgs_sync_access_control_people(extra_partner_ids=[partner.id])
+        self.with_context(access_sync_priority=True)._wgs_sync_access_control_partner(partner)
         return {
             'ok': True,
             'partner_id': partner.id,
