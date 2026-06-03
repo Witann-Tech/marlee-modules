@@ -1,5 +1,6 @@
 import json
 import logging
+import uuid
 from datetime import date, datetime, time, timedelta
 
 import pytz
@@ -259,6 +260,7 @@ class SaleOrder(models.Model):
             'last_access': last_access_value or False,
             **self._wgs_get_partner_access_status_payload_for_pos(
                 self._get_access_person_status_map_for_pos(partner).get(partner.id),
+                partner=partner,
             ),
             'image_url': summary.get('image_url') or ('/web/image/res.partner/%s/image_128' % partner.id),
             'items': items,
@@ -493,6 +495,114 @@ class SaleOrder(models.Model):
         }
 
     @api.model
+    def wgs_block_partner_access_for_pos(self, partner_id, reason):
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para bloquear acceso desde Punto de Venta.'))
+
+        partner = self._wgs_browse_partner_for_pos(partner_id)
+        if not partner:
+            raise AccessError(_('El cliente seleccionado no existe.'))
+        reason = (reason or '').strip()
+        if not reason:
+            return {
+                'ok': False,
+                'error_message': _('Captura el motivo del bloqueo de acceso.'),
+            }
+        target_partners = self._wgs_get_access_block_partners_for_pos(partner)
+        target_partners.with_context(wgs_skip_access_block_sync=True).sudo().write({
+            'wgs_access_blocked': True,
+            'wgs_access_block_reason': reason,
+            'wgs_access_blocked_at': fields.Datetime.now(),
+            'wgs_access_blocked_by_id': self.env.user.id,
+        })
+        self._wgs_sync_access_block_partners_for_pos(target_partners)
+        return {
+            'ok': True,
+            'partner_id': partner.id,
+            'affected_partner_ids': target_partners.ids,
+            'message': _('Acceso bloqueado para %s persona(s) del paquete.') % len(target_partners),
+        }
+
+    @api.model
+    def wgs_unblock_partner_access_for_pos(self, partner_id):
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para desbloquear acceso desde Punto de Venta.'))
+
+        partner = self._wgs_browse_partner_for_pos(partner_id)
+        if not partner:
+            raise AccessError(_('El cliente seleccionado no existe.'))
+        target_partners = self._wgs_get_access_block_partners_for_pos(partner)
+        target_partners.with_context(wgs_skip_access_block_sync=True).sudo().write({
+            'wgs_access_blocked': False,
+            'wgs_access_block_reason': False,
+            'wgs_access_blocked_at': False,
+            'wgs_access_blocked_by_id': False,
+        })
+        self._wgs_sync_access_block_partners_for_pos(target_partners)
+        return {
+            'ok': True,
+            'partner_id': partner.id,
+            'affected_partner_ids': target_partners.ids,
+            'message': _('Acceso desbloqueado para %s persona(s) del paquete.') % len(target_partners),
+        }
+
+    @api.model
+    def _wgs_get_access_block_partners_for_pos(self, partner):
+        partner = partner.exists()
+        if not partner:
+            return self._wgs_partner_model_for_pos().browse()
+
+        subscription_partners = set()
+        for subscription in self._wgs_get_access_block_subscription_orders_for_pos(partner):
+            if hasattr(subscription, '_wgs_get_access_related_partner_ids'):
+                subscription_partners.update(subscription._wgs_get_access_related_partner_ids())
+                continue
+            if subscription.partner_id:
+                subscription_partners.add(subscription.partner_id.id)
+            if 'participant_ids' in subscription._fields:
+                subscription_partners.update(subscription.participant_ids.ids)
+
+        if not subscription_partners:
+            subscription_partners.add(partner.id)
+        return self._wgs_partner_model_for_pos().browse(sorted(subscription_partners)).exists()
+
+    @api.model
+    def _wgs_get_access_block_subscription_orders_for_pos(self, partner):
+        today = fields.Date.context_today(self)
+        subscriptions = self._get_pos_subscription_orders(partner)
+        if not subscriptions:
+            return self.browse()
+
+        visible_items = []
+        subscription_ids = set()
+        for subscription in subscriptions:
+            try:
+                item = subscription._build_pos_subscription_status_item(today)
+            except Exception as error:
+                self._wgs_raise_pos_data_error(
+                    _('No se pudo resolver el paquete para bloquear acceso desde Punto de Venta.'),
+                    error=error,
+                    subscription_id=subscription.id,
+                    partner_id=partner.id,
+                )
+            if item and self._should_display_subscription_item_in_pos_detail(item, today=today):
+                item['_wgs_creation_sort_key'] = self._get_subscription_detail_creation_sort_key_for_pos(subscription)
+                visible_items.append(item)
+                subscription_ids.add(subscription.id)
+
+        filtered_items = self._filter_partner_subscription_detail_items_for_pos(visible_items)
+        filtered_subscription_ids = [
+            item.get('subscription_id')
+            for item in filtered_items
+            if item.get('subscription_id') in subscription_ids
+        ]
+        return self.sudo().browse(filtered_subscription_ids).exists()
+
+    @api.model
+    def _wgs_sync_access_block_partners_for_pos(self, partners):
+        sync_model = self.with_context(access_sync_priority=True)
+        for partner in partners.exists():
+            sync_model._wgs_sync_access_control_partner(partner)
+
+    @api.model
     def _wgs_access_log_timezone_for_pos(self, timezone_name=False):
         tz_name = (
             timezone_name
@@ -707,6 +817,150 @@ class SaleOrder(models.Model):
         return result
 
     @api.model
+    def _wgs_get_external_access_provider_label_for_pos(self, provider):
+        provider = (provider or '').strip().lower()
+        return {
+            'wellhub': 'WellHub',
+            'totalpass': 'TotalPass',
+        }.get(provider)
+
+    @api.model
+    def _wgs_get_access_person_for_partner_for_pos(self, partner):
+        Person = self.env['access_control.person'].sudo() if 'access_control.person' in self.env.registry else False
+        if not Person or not partner:
+            return self.env['access_control.person'].sudo().browse()
+        return Person.search([('partner_id', '=', partner.id)], limit=1)
+
+    @api.model
+    def _wgs_get_default_access_device_for_pos(self, company, device_id=False):
+        Device = self.env['access_control.device'].sudo()
+        try:
+            device_id = int(device_id or 0)
+        except (TypeError, ValueError):
+            device_id = 0
+        if device_id > 0:
+            device = Device.browse(device_id).exists()
+            return device if device and device.active else Device.browse()
+        sites = self._wgs_get_pos_access_sites_for_pos(company)
+        if not sites:
+            return Device.browse()
+        return Device.search(
+            [('site_id', 'in', sites.ids), ('active', '=', True)],
+            order='name asc, device_serial asc, id asc',
+            limit=1,
+        )
+
+    @api.model
+    def _wgs_log_external_access_event_for_pos(self, partner, provider, provider_label, device, adms_result=False, reason=False):
+        person = self._wgs_get_access_person_for_partner_for_pos(partner)
+        occurred_at = fields.Datetime.now()
+        message = _('Acceso %(provider)s %(name)s') % {
+            'provider': provider_label,
+            'name': partner.display_name,
+        }
+        raw_payload = {
+            'eventType': 'external_access',
+            'source': 'odoo_pos',
+            'provider': provider,
+            'providerLabel': provider_label,
+            'partnerId': partner.id,
+            'partnerName': partner.display_name,
+            'message': message,
+            'operatorUserId': self.env.user.id,
+            'operatorUserName': self.env.user.display_name,
+            'reason': reason or 'subscription_external_access_button',
+            'admsResponse': adms_result or {},
+        }
+        event = self.env['access_control.access_event'].sudo().create({
+            'event_id': 'external_access:%s:%s:%s' % (provider, device.device_serial or device.id, uuid.uuid4().hex),
+            'site_id': device.site_id.id if device.site_id else False,
+            'device_id': device.id,
+            'device_serial': device.device_serial or False,
+            'person_id': person.id if person else False,
+            'global_user_id': person.global_user_id if person and person.global_user_id else 0,
+            'modality': provider if provider in ('wellhub', 'totalpass') else 'unknown',
+            'result': 'allowed',
+            'occurred_at': occurred_at,
+            'raw_payload': json.dumps(raw_payload, ensure_ascii=True, default=str),
+        })
+        if person:
+            person.register_access_event(
+                occurred_at=occurred_at,
+                result='allowed',
+                site=device.site_id if device.site_id else False,
+                device=device,
+            )
+        return event
+
+    @api.model
+    def wgs_grant_external_access_for_pos(self, partner_id, provider, options=False):
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para registrar accesos externos desde Punto de Venta.'))
+
+        provider = (provider or '').strip().lower()
+        provider_label = self._wgs_get_external_access_provider_label_for_pos(provider)
+        if not provider_label:
+            raise UserError(_('Selecciona un proveedor de acceso válido.'))
+        partner = self._wgs_browse_partner_for_pos(partner_id)
+        if not partner:
+            raise AccessError(_('El cliente seleccionado no existe.'))
+
+        data = dict(options or {})
+        try:
+            company_id = int(data.get('company_id') or 0)
+        except (TypeError, ValueError):
+            company_id = 0
+        company = self.env['res.company'].sudo().browse(company_id).exists() if company_id else self.env.company
+        device = self._wgs_get_default_access_device_for_pos(company, data.get('device_id') or False)
+        if not device:
+            raise UserError(_('No hay SpeedFace activo para registrar este acceso.'))
+        if company and device.site_id and device.site_id.company_id and device.site_id.company_id.id != company.id:
+            raise UserError(_('La puerta seleccionada no pertenece a la empresa activa del Punto de Venta.'))
+        if not hasattr(device, 'open_door_via_adms'):
+            raise UserError(_('El módulo de control de acceso no tiene disponible el comando de apertura de puerta.'))
+
+        reason = 'subscription_external_access_%s' % provider
+        try:
+            open_result = device.open_door_via_adms(
+                door_id=data.get('door_id') or data.get('doorId') or 1,
+                open_time_seconds=data.get('open_time_seconds') or data.get('openTimeSeconds') or 5,
+                reason=reason,
+                operator_user=self.env.user,
+            )
+        except UserError:
+            raise
+        except Exception as error:
+            _logger.exception(
+                'WGS POS: unexpected error granting external access provider=%s partner_id=%s device_id=%s',
+                provider,
+                partner.id,
+                device.id,
+            )
+            raise UserError(_('No se pudo registrar el acceso externo. %s') % str(error)) from error
+
+        event = self._wgs_log_external_access_event_for_pos(
+            partner,
+            provider,
+            provider_label,
+            device,
+            adms_result=open_result,
+            reason=reason,
+        )
+        return {
+            'ok': True,
+            'partner_id': partner.id,
+            'provider': provider,
+            'provider_label': provider_label,
+            'message': _('Acceso %(provider)s registrado para %(name)s.') % {
+                'provider': provider_label,
+                'name': partner.display_name,
+            },
+            'device_id': device.id,
+            'device_name': device.display_name,
+            'access_event_id': event.id,
+            'access_event_ref': event.event_id,
+        }
+
+    @api.model
     def wgs_get_access_event_log_for_pos(self, options=False):
         self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar la bitácora de accesos desde Punto de Venta.'))
 
@@ -776,6 +1030,7 @@ class SaleOrder(models.Model):
             if not effective_at or effective_at < from_dt or effective_at >= to_dt_exclusive:
                 continue
             is_open_door_event = event.modality == 'manual_open_door' or event.event_id.startswith('open_door:')
+            is_external_access_event = event.modality in ('wellhub', 'totalpass') or event.event_id.startswith('external_access:')
             partner = event.person_id.partner_id if event.person_id and event.person_id.partner_id else False
             partner_name = partner.display_name if partner else (
                 _('Usuario global %s') % event.global_user_id if event.global_user_id else _('Sin identificar')
@@ -783,13 +1038,15 @@ class SaleOrder(models.Model):
             if is_open_door_event:
                 operator_name = raw_payload.get('operatorUserName') or raw_payload.get('operator_user_name')
                 partner_name = _('Apertura por botón por %s') % operator_name if operator_name else _('Apertura por botón')
+            elif is_external_access_event:
+                partner_name = raw_payload.get('message') or partner_name
             result_label = result_labels.get(event.result, event.result or '-')
             if is_open_door_event and event.result == 'allowed':
                 result_label = _('Comando enviado')
             rows.append({
                 'id': event.id,
                 'event_id': event.event_id or False,
-                'event_type': 'open_door' if is_open_door_event else 'access',
+                'event_type': 'open_door' if is_open_door_event else ('external_access' if is_external_access_event else 'access'),
                 'occurred_at': self._wgs_access_log_datetime_to_utc_iso_for_pos(effective_at),
                 'site_id': event.site_id.id if event.site_id else False,
                 'site_name': event.site_id.display_name if event.site_id else False,
@@ -1070,6 +1327,7 @@ class SaleOrder(models.Model):
                 'last_access': last_access_value or False,
                 **self._wgs_get_partner_access_status_payload_for_pos(
                     access_status_map.get(partner.id),
+                    partner=partner,
                 ),
                 'image_url': '/web/image/res.partner/%s/image_128' % partner.id,
             }
@@ -1167,6 +1425,7 @@ class SaleOrder(models.Model):
                     'last_access': last_access_value or False,
                     **self._wgs_get_partner_access_status_payload_for_pos(
                         access_status_map.get(partner.id),
+                        partner=partner,
                     ),
                     'image_url': '/web/image/res.partner/%s/image_128' % partner.id,
                 })
@@ -1348,6 +1607,10 @@ class SaleOrder(models.Model):
             'access_label': status.get('access_label') or _('Sin acceso'),
             'access_person_id': status.get('access_person_id') or False,
             'access_global_user_id': status.get('access_global_user_id') or False,
+            'access_blocked': bool(status.get('access_blocked')),
+            'access_block_reason': status.get('access_block_reason') or False,
+            'access_blocked_at': status.get('access_blocked_at') or False,
+            'access_blocked_by': status.get('access_blocked_by') or False,
             'image_url': status.get('image_url') or ('/web/image/res.partner/%s/image_128' % partner.id),
         }
 
@@ -2347,23 +2610,49 @@ class SaleOrder(models.Model):
         return str(value)
 
     @api.model
-    def _wgs_get_partner_access_status_payload_for_pos(self, access_status=False):
+    def _wgs_get_partner_access_block_payload_for_pos(self, partner=False):
+        if not partner or 'wgs_access_blocked' not in partner._fields:
+            return {
+                'access_blocked': False,
+                'access_block_reason': False,
+                'access_blocked_at': False,
+                'access_blocked_by': False,
+            }
+        return {
+            'access_blocked': bool(partner.wgs_access_blocked),
+            'access_block_reason': partner.wgs_access_block_reason or False,
+            'access_blocked_at': fields.Datetime.to_string(partner.wgs_access_blocked_at) if partner.wgs_access_blocked_at else False,
+            'access_blocked_by': partner.wgs_access_blocked_by_id.display_name if partner.wgs_access_blocked_by_id else False,
+        }
+
+    @api.model
+    def _wgs_get_partner_access_status_payload_for_pos(self, access_status=False, partner=False):
         access_status = dict(access_status or {})
         if access_status:
-            return {
+            payload = {
                 'access_enabled': bool(access_status.get('access_enabled')),
                 'access_state': access_status.get('access_state') or 'missing',
                 'access_label': access_status.get('access_label') or _('Sin acceso'),
                 'access_person_id': access_status.get('access_person_id') or False,
                 'access_global_user_id': access_status.get('access_global_user_id') or False,
             }
-        return {
-            'access_enabled': False,
-            'access_state': 'missing',
-            'access_label': _('Sin person'),
-            'access_person_id': False,
-            'access_global_user_id': False,
-        }
+        else:
+            payload = {
+                'access_enabled': False,
+                'access_state': 'missing',
+                'access_label': _('Sin person'),
+                'access_person_id': False,
+                'access_global_user_id': False,
+            }
+        block_payload = self._wgs_get_partner_access_block_payload_for_pos(partner)
+        if block_payload.get('access_blocked'):
+            payload.update({
+                'access_enabled': False,
+                'access_state': 'blocked',
+                'access_label': _('Acceso bloqueado'),
+            })
+        payload.update(block_payload)
+        return payload
 
     def _get_access_person_status_map_for_pos(self, partners):
         model_name = 'access_control.person'

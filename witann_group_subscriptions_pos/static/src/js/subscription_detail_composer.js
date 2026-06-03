@@ -69,6 +69,7 @@ function renderDetailContent(detail, {
     formMode,
     partnerPhotoForm,
     partnerEditForm,
+    accessActionState,
     formError,
     formNotice,
     escapeHtml,
@@ -105,6 +106,10 @@ function renderDetailContent(detail, {
         _t,
     });
     const allowNewSubscription = canOpenNewSubscription(detail);
+    const feedbackHtml = `
+        ${formError ? `<div class="wgs-inline-error wgs-inline-error-compact">${escapeHtml(formError)}</div>` : ""}
+        ${formNotice ? `<div class="wgs-inline-notice wgs-inline-notice-compact">${escapeHtml(formNotice)}</div>` : ""}
+    `;
 
     return `
         ${renderDetailHeader({
@@ -112,6 +117,7 @@ function renderDetailContent(detail, {
             isEditingPartnerPhoto,
             isEditingPartnerInfo,
             partnerEditForm,
+            accessActionState,
             detailAvatarHtml,
             formError,
             formNotice,
@@ -120,6 +126,7 @@ function renderDetailContent(detail, {
             formatDateTimeDisplay,
             _t,
         })}
+        ${feedbackHtml}
         <div class="wgs-detail-actions-bar">
             ${allowNewSubscription
                 ? `<button type="button" class="wgs-primary-action-btn" data-action="open-new">${escapeHtml(_t("Nueva suscripcion"))}</button>`

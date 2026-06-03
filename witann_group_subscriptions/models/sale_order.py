@@ -287,9 +287,14 @@ class SaleOrder(models.Model):
             'access_state': False,
             'site_ids': [],
             'order_ids': [],
+            'blocked': False,
+            'block_reason': False,
         }
         orders = self._wgs_get_related_subscription_orders_for_partner(partner)
         if not orders:
+            if getattr(partner, 'wgs_access_blocked', False):
+                profile['blocked'] = True
+                profile['block_reason'] = partner.wgs_access_block_reason or False
             return profile
 
         enabled = False
@@ -318,6 +323,10 @@ class SaleOrder(models.Model):
             profile['access_state'] = 'enabled'
         elif suspended:
             profile['access_state'] = 'suspended'
+        if getattr(partner, 'wgs_access_blocked', False):
+            profile['blocked'] = True
+            profile['block_reason'] = partner.wgs_access_block_reason or False
+            profile['access_state'] = 'suspended'
         return profile
 
     @api.model
@@ -330,6 +339,25 @@ class SaleOrder(models.Model):
         person = Person.search([('partner_id', '=', partner.id)], limit=1)
         access_state = profile['access_state']
         site_ids = profile['site_ids']
+
+        if profile.get('blocked'):
+            if person:
+                vals = {
+                    'managed_by_subscription': True,
+                    'access_state': 'suspended',
+                }
+                if person.active:
+                    vals['active'] = False
+                if person.active or person.access_state != 'suspended' or not person.managed_by_subscription:
+                    person.write(vals)
+            _logger.info(
+                'WGS ACCESS: person blocked partner=%s person=%s reason=%s orders=%s',
+                partner.id,
+                person.id if person else False,
+                profile.get('block_reason') or '',
+                profile['order_ids'],
+            )
+            return person
 
         if access_state == 'enabled' and not site_ids:
             _logger.warning(

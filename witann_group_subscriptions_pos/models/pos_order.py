@@ -359,6 +359,18 @@ class PosOrder(models.Model):
         return self.env['sale.order'].wgs_open_access_door_for_pos(device_id, options or {})
 
     @api.model
+    def wgs_block_partner_access_for_pos(self, partner_id, reason):
+        return self.env['sale.order'].wgs_block_partner_access_for_pos(partner_id, reason)
+
+    @api.model
+    def wgs_unblock_partner_access_for_pos(self, partner_id):
+        return self.env['sale.order'].wgs_unblock_partner_access_for_pos(partner_id)
+
+    @api.model
+    def wgs_grant_external_access_for_pos(self, partner_id, provider, options=False):
+        return self.env['sale.order'].wgs_grant_external_access_for_pos(partner_id, provider, options or {})
+
+    @api.model
     def wgs_get_product_record_for_pos(self, product_id, company_id=False):
         self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar productos desde Punto de Venta.'))
         product = self._wgs_browse_product_for_pos(product_id)
@@ -3426,17 +3438,19 @@ class PosOrder(models.Model):
         if not original_line and line.wgs_subscription_refund_origin_line_id:
             original_line = line.wgs_subscription_refund_origin_line_id
 
-        if not original_line or not original_line.wgs_sale_order_id:
+        sale_order = original_line.wgs_sale_order_id if original_line else line.wgs_sale_order_id
+        original_flow = original_line.wgs_subscription_flow if original_line else line.wgs_subscription_flow
+
+        if not sale_order:
             return
         if (
-            original_line.wgs_subscription_flow in ('renewal', 'pending_charge')
+            original_flow in ('renewal', 'pending_charge')
             and line.wgs_subscription_flow != 'cancellation_refund'
         ):
             # Renewal/pending-charge refunds should not cancel the underlying subscription contract.
-            line.wgs_sale_order_id = original_line.wgs_sale_order_id.id
+            line.wgs_sale_order_id = sale_order.id
             return
 
-        sale_order = original_line.wgs_sale_order_id
         if sale_order.state == 'cancel':
             line.wgs_sale_order_id = sale_order.id
             return

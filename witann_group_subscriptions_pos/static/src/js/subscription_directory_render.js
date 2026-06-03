@@ -33,7 +33,10 @@ function renderDirectoryRows({
 }) {
     const renderAccessStatusIcon = (row) => {
         const enabled = Boolean(row.access_enabled);
-        const label = row.access_label || (enabled ? _t("Acceso activo") : _t("Sin acceso"));
+        const blocked = Boolean(row.access_blocked);
+        const label = blocked
+            ? `${row.access_label || _t("Acceso bloqueado")}${row.access_block_reason ? `: ${row.access_block_reason}` : ""}`
+            : row.access_label || (enabled ? _t("Acceso activo") : _t("Sin acceso"));
         const state = row.access_state || "missing";
         return `
             <span
