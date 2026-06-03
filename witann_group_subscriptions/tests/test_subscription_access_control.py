@@ -124,7 +124,7 @@ class TestSubscriptionAccessControl(TransactionCase):
         self.assertTrue(owner_person.active)
         self.assertEqual(owner_person.access_state, 'enabled')
 
-    def test_manual_access_block_does_not_affect_other_participants(self):
+    def test_direct_partner_access_block_only_changes_that_partner(self):
         order = self._create_subscription_order()
         progress_state = self._find_subscription_state_value('progress', 'en progreso')
 
@@ -137,7 +137,7 @@ class TestSubscriptionAccessControl(TransactionCase):
         self.owner.write(
             {
                 'wgs_access_blocked': True,
-                'wgs_access_block_reason': 'Bloqueo solo titular',
+                'wgs_access_block_reason': 'Bloqueo directo solo titular',
                 'wgs_access_blocked_at': fields.Datetime.now(),
                 'wgs_access_blocked_by_id': self.env.user.id,
             }

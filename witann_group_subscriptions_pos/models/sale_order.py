@@ -507,17 +507,19 @@ class SaleOrder(models.Model):
                 'ok': False,
                 'error_message': _('Captura el motivo del bloqueo de acceso.'),
             }
-        partner.with_context(wgs_skip_access_block_sync=True).sudo().write({
+        target_partners = self._wgs_get_access_block_partners_for_pos(partner)
+        target_partners.with_context(wgs_skip_access_block_sync=True).sudo().write({
             'wgs_access_blocked': True,
             'wgs_access_block_reason': reason,
             'wgs_access_blocked_at': fields.Datetime.now(),
             'wgs_access_blocked_by_id': self.env.user.id,
         })
-        self.with_context(access_sync_priority=True)._wgs_sync_access_control_partner(partner)
+        self._wgs_sync_access_block_partners_for_pos(target_partners)
         return {
             'ok': True,
             'partner_id': partner.id,
-            'message': _('Acceso bloqueado para %s.') % partner.display_name,
+            'affected_partner_ids': target_partners.ids,
+            'message': _('Acceso bloqueado para %s persona(s) del paquete.') % len(target_partners),
         }
 
     @api.model
@@ -527,18 +529,78 @@ class SaleOrder(models.Model):
         partner = self._wgs_browse_partner_for_pos(partner_id)
         if not partner:
             raise AccessError(_('El cliente seleccionado no existe.'))
-        partner.with_context(wgs_skip_access_block_sync=True).sudo().write({
+        target_partners = self._wgs_get_access_block_partners_for_pos(partner)
+        target_partners.with_context(wgs_skip_access_block_sync=True).sudo().write({
             'wgs_access_blocked': False,
             'wgs_access_block_reason': False,
             'wgs_access_blocked_at': False,
             'wgs_access_blocked_by_id': False,
         })
-        self.with_context(access_sync_priority=True)._wgs_sync_access_control_partner(partner)
+        self._wgs_sync_access_block_partners_for_pos(target_partners)
         return {
             'ok': True,
             'partner_id': partner.id,
-            'message': _('Acceso desbloqueado para %s.') % partner.display_name,
+            'affected_partner_ids': target_partners.ids,
+            'message': _('Acceso desbloqueado para %s persona(s) del paquete.') % len(target_partners),
         }
+
+    @api.model
+    def _wgs_get_access_block_partners_for_pos(self, partner):
+        partner = partner.exists()
+        if not partner:
+            return self._wgs_partner_model_for_pos().browse()
+
+        subscription_partners = set()
+        for subscription in self._wgs_get_access_block_subscription_orders_for_pos(partner):
+            if hasattr(subscription, '_wgs_get_access_related_partner_ids'):
+                subscription_partners.update(subscription._wgs_get_access_related_partner_ids())
+                continue
+            if subscription.partner_id:
+                subscription_partners.add(subscription.partner_id.id)
+            if 'participant_ids' in subscription._fields:
+                subscription_partners.update(subscription.participant_ids.ids)
+
+        if not subscription_partners:
+            subscription_partners.add(partner.id)
+        return self._wgs_partner_model_for_pos().browse(sorted(subscription_partners)).exists()
+
+    @api.model
+    def _wgs_get_access_block_subscription_orders_for_pos(self, partner):
+        today = fields.Date.context_today(self)
+        subscriptions = self._get_pos_subscription_orders(partner)
+        if not subscriptions:
+            return self.browse()
+
+        visible_items = []
+        subscription_ids = set()
+        for subscription in subscriptions:
+            try:
+                item = subscription._build_pos_subscription_status_item(today)
+            except Exception as error:
+                self._wgs_raise_pos_data_error(
+                    _('No se pudo resolver el paquete para bloquear acceso desde Punto de Venta.'),
+                    error=error,
+                    subscription_id=subscription.id,
+                    partner_id=partner.id,
+                )
+            if item and self._should_display_subscription_item_in_pos_detail(item, today=today):
+                item['_wgs_creation_sort_key'] = self._get_subscription_detail_creation_sort_key_for_pos(subscription)
+                visible_items.append(item)
+                subscription_ids.add(subscription.id)
+
+        filtered_items = self._filter_partner_subscription_detail_items_for_pos(visible_items)
+        filtered_subscription_ids = [
+            item.get('subscription_id')
+            for item in filtered_items
+            if item.get('subscription_id') in subscription_ids
+        ]
+        return self.sudo().browse(filtered_subscription_ids).exists()
+
+    @api.model
+    def _wgs_sync_access_block_partners_for_pos(self, partners):
+        sync_model = self.with_context(access_sync_priority=True)
+        for partner in partners.exists():
+            sync_model._wgs_sync_access_control_partner(partner)
 
     @api.model
     def _wgs_access_log_timezone_for_pos(self, timezone_name=False):
