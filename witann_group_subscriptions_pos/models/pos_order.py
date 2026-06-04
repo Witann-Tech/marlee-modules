@@ -2048,7 +2048,7 @@ class PosOrder(models.Model):
         if flow == 'renewal':
             return order._wgs_process_subscription_renewal_line(line)
         if flow == 'reenroll':
-            return order._wgs_process_subscription_reenroll_line(line)
+            return order.with_context(wgs_allow_reenroll_repair_active_source=True)._wgs_process_subscription_reenroll_line(line)
         if flow == 'pending_charge':
             return order._wgs_process_subscription_pending_charge_line(line)
         if flow == 'upsale':
@@ -2304,7 +2304,12 @@ class PosOrder(models.Model):
             raise UserError(_('No se encontró la suscripción origen para aplicar la reinscripción en POS.'))
         if not self._wgs_order_has_subscription_signal(source_order):
             raise UserError(_('La orden origen no corresponde a una suscripción válida para reinscripción.'))
-        if not self._wgs_is_subscription_order_closed_for_reenroll(source_order):
+        allow_active_repair = bool(
+            self.env.context.get('wgs_allow_reenroll_repair_active_source')
+            and line.wgs_sale_order_id
+            and line.wgs_sale_order_id == source_order
+        )
+        if not self._wgs_is_subscription_order_closed_for_reenroll(source_order) and not allow_active_repair:
             raise UserError(_('La suscripción origen no está cerrada/cancelada para reinscripción.'))
 
         product = line.product_id
@@ -2751,6 +2756,15 @@ class PosOrder(models.Model):
                 recurring_plan_id = self._wgs_extract_plan_id_from_pricing(pricing_record)
         if not recurring_plan_id:
             recurring_plan_id = self._wgs_extract_plan_id_from_product(product)
+        if (
+            not recurring_plan_id
+            and line.wgs_subscription_flow in ('renewal', 'reenroll')
+            and source_order
+        ):
+            recurring_plan_id = self._wgs_extract_plan_id_from_subscription_source_line(
+                source_order,
+                product,
+            )
         if not recurring_plan_id:
             _logger.warning(
                 'WGS POS: No persisted recurring plan resolved for product %s (id=%s). flow=%s pricing_id=%s',
@@ -2776,6 +2790,21 @@ class PosOrder(models.Model):
             'subscription_end_date': persisted_subscription_end_date,
             'next_billing_date': persisted_next_billing_date,
         }
+
+    def _wgs_extract_plan_id_from_subscription_source_line(self, source_order, product):
+        source_order = source_order.exists()
+        product = product.exists()
+        if not source_order or not product:
+            return False
+        recurring_lines = source_order.order_line.filtered(lambda so_line: self._wgs_is_recurring_so_line(so_line))
+        matching_lines = recurring_lines.filtered(lambda so_line: so_line.product_id == product)
+        source_line = (matching_lines or recurring_lines)[:1]
+        if not source_line:
+            return False
+        for field_name in ('subscription_plan_id', 'plan_id', 'recurring_plan_id'):
+            if field_name in source_line._fields and source_line[field_name]:
+                return source_line[field_name].id
+        return False
 
     def _wgs_create_subscription_sale_order_from_line(self, line):
         self.ensure_one()
