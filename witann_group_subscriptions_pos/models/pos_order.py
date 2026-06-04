@@ -1937,6 +1937,151 @@ class PosOrder(models.Model):
         }
 
     @api.model
+    def wgs_repair_paid_subscription_pos_line_ids(self, line_ids, options_by_line=False, dry_run=True):
+        """Repair explicit POS subscription lines by id.
+
+        This is intentionally narrower than the broad audit repair. It only
+        touches caller-selected lines and requires a paid POS order, a positive
+        recurring product line and a POS customer.
+        """
+        options_by_line = options_by_line or {}
+        if not isinstance(options_by_line, dict):
+            options_by_line = {}
+        repaired = []
+        skipped = []
+        lines = self.env['pos.order.line'].sudo().browse([int(line_id) for line_id in (line_ids or [])]).exists()
+        for line in lines:
+            options = options_by_line.get(str(line.id)) or options_by_line.get(line.id) or {}
+            if not isinstance(options, dict):
+                options = {}
+            validation_error = self._wgs_validate_pos_line_for_targeted_subscription_repair(line)
+            if validation_error:
+                skipped.append(self._wgs_build_targeted_subscription_repair_result(line, 'skipped', validation_error))
+                continue
+            try:
+                if dry_run:
+                    repaired.append(
+                        self._wgs_build_targeted_subscription_repair_result(
+                            line,
+                            'dry_run',
+                            self._wgs_resolve_targeted_subscription_repair_action(line, options),
+                        )
+                    )
+                    continue
+                sale_order = self._wgs_repair_single_paid_subscription_pos_line(line, options)
+                repaired.append(
+                    self._wgs_build_targeted_subscription_repair_result(
+                        line,
+                        'repaired',
+                        'Línea reparada y ligada a suscripción.',
+                        sale_order=sale_order,
+                    )
+                )
+            except Exception as error:
+                skipped.append(self._wgs_build_targeted_subscription_repair_result(line, 'error', str(error)))
+        return {
+            'dry_run': bool(dry_run),
+            'repaired': repaired,
+            'skipped': skipped,
+        }
+
+    def _wgs_validate_pos_line_for_targeted_subscription_repair(self, line):
+        line.ensure_one()
+        order = line.order_id
+        if order.state not in ('paid', 'done', 'invoiced'):
+            return _('La orden POS no está pagada/finalizada.')
+        if not order.partner_id:
+            return _('La orden POS no tiene cliente.')
+        if line.qty <= 0:
+            return _('La línea POS no es una venta positiva.')
+        if not line.product_id or not line.product_id.product_tmpl_id.recurring_invoice:
+            return _('La línea POS no corresponde a un producto recurrente.')
+        return False
+
+    def _wgs_resolve_targeted_subscription_repair_action(self, line, options):
+        flow = self._wgs_resolve_targeted_subscription_repair_flow(line, options)
+        if flow == 'new' and line.wgs_sale_order_id:
+            return _('La línea ya está ligada a %(subscription)s.') % {'subscription': line.wgs_sale_order_id.name}
+        if flow in ('renewal', 'reenroll', 'pending_charge') and not self._wgs_resolve_targeted_subscription_repair_source(line, options):
+            return _('Falta source_subscription_id para reparar flujo %(flow)s.') % {'flow': flow}
+        return _('Repararía la línea como flujo %(flow)s.') % {'flow': flow}
+
+    def _wgs_build_targeted_subscription_repair_result(self, line, status, message, sale_order=False):
+        linked_order = sale_order or line.wgs_sale_order_id
+        return {
+            'status': status,
+            'message': str(message or ''),
+            'line_id': line.id,
+            'pos_order_id': line.order_id.id,
+            'pos_order_name': line.order_id.name,
+            'pos_reference': line.order_id.pos_reference or False,
+            'partner_id': line.order_id.partner_id.id or False,
+            'partner_name': line.order_id.partner_id.display_name or False,
+            'product_id': line.product_id.id or False,
+            'product': line.product_id.display_name or False,
+            'flow': line.wgs_subscription_flow or False,
+            'linked_order_id': linked_order.id or False,
+            'linked_order_name': linked_order.name or False,
+        }
+
+    def _wgs_repair_single_paid_subscription_pos_line(self, line, options):
+        line.ensure_one()
+        order = line.order_id
+        flow = self._wgs_resolve_targeted_subscription_repair_flow(line, options)
+        values = {}
+
+        source_order = self._wgs_resolve_targeted_subscription_repair_source(line, options)
+        if source_order:
+            values['wgs_subscription_source_id'] = source_order.id
+        if flow:
+            values['wgs_subscription_flow'] = flow
+
+        start_date = self._wgs_resolve_targeted_subscription_repair_date(line, options, 'start_date')
+        end_date = self._wgs_resolve_targeted_subscription_repair_date(line, options, 'end_date')
+        if start_date:
+            values['wgs_subscription_start_date'] = start_date
+        if end_date:
+            values['wgs_subscription_end_date'] = end_date
+        if values:
+            line.write(values)
+
+        if flow == 'renewal':
+            return order._wgs_process_subscription_renewal_line(line)
+        if flow == 'reenroll':
+            return order._wgs_process_subscription_reenroll_line(line)
+        if flow == 'pending_charge':
+            return order._wgs_process_subscription_pending_charge_line(line)
+        if flow == 'upsale':
+            raise UserError(_('La reparación dirigida de cambio de plan requiere revisión manual.'))
+        if line.wgs_sale_order_id:
+            return line.wgs_sale_order_id
+        sale_order = order._wgs_create_subscription_sale_order_from_line(line)
+        line.wgs_sale_order_id = sale_order.id
+        return sale_order
+
+    def _wgs_resolve_targeted_subscription_repair_flow(self, line, options):
+        flow = str(options.get('flow') or line.wgs_subscription_flow or 'new').strip().lower()
+        if flow not in ('new', 'renewal', 'reenroll', 'pending_charge', 'upsale'):
+            flow = 'new'
+        return flow
+
+    def _wgs_resolve_targeted_subscription_repair_source(self, line, options):
+        source_id = self._wgs_to_int(options.get('source_subscription_id') or options.get('source_order_id'))
+        if source_id > 0:
+            return self.env['sale.order'].sudo().browse(source_id).exists()
+        return line.wgs_subscription_source_id.exists()
+
+    def _wgs_resolve_targeted_subscription_repair_date(self, line, options, key):
+        raw_value = options.get(key)
+        if raw_value:
+            return fields.Date.to_date(raw_value)
+        if key == 'start_date':
+            return line.wgs_get_subscription_start_date() or fields.Date.to_date(line.order_id.date_order)
+        if key == 'end_date':
+            return line.wgs_get_subscription_end_date()
+        return False
+
+    @api.model
     def _wgs_find_paid_subscription_pos_lines_for_audit(self, date_from=False, date_to=False, limit=5000):
         domain = [
             ('order_id.state', 'in', ['paid', 'done', 'invoiced']),
