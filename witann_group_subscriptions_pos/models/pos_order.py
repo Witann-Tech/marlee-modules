@@ -1817,7 +1817,7 @@ class PosOrder(models.Model):
                     item.qty > 0
                     and item.product_id
                     and item.product_id.product_tmpl_id.recurring_invoice
-                    and item.wgs_has_subscription_configuration()
+                    and pos_order._wgs_is_positive_subscription_sync_line(item)
                 )
             ):
                 if line.wgs_subscription_flow == 'renewal':
@@ -1849,6 +1849,14 @@ class PosOrder(models.Model):
                 lambda item: item.qty < 0 and item.product_id and item.product_id.product_tmpl_id.recurring_invoice
             ):
                 pos_order._wgs_cancel_subscription_from_refund_line(line)
+
+    def _wgs_is_positive_subscription_sync_line(self, line):
+        self.ensure_one()
+        if not line or not line.product_id or not line.product_id.product_tmpl_id.recurring_invoice:
+            return False
+        if line.wgs_has_subscription_configuration():
+            return True
+        return self._wgs_should_reactivate_linked_subscription_from_paid_line(line)
 
     def _wgs_process_subscription_renewal_line(self, line):
         self.ensure_one()
