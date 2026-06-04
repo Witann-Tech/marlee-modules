@@ -402,6 +402,17 @@ class TestPosSubscriptionPricing(TransactionCase):
         self.assertEqual(charge['display_recurring_price'], 116.0)
         self.assertTrue(charge['is_reenroll'])
 
+    def test_reenroll_reactivation_resolves_progress_state(self):
+        order = self._create_subscription_like_order()
+
+        progress_state = self.PosOrder._wgs_find_subscription_progress_state_value(order)
+
+        self.assertTrue(progress_state)
+        if 'subscription_state' in order._fields:
+            order.write({'subscription_state': 'closed'})
+            self.PosOrder._wgs_reactivate_subscription_order_for_pos(order)
+            self.assertEqual(order.subscription_state, progress_state)
+
     def test_subscription_detail_prefers_active_card_over_renew_or_churned(self):
         items = [
             {

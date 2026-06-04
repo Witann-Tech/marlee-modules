@@ -1826,8 +1826,14 @@ class PosOrder(models.Model):
                     pos_order._wgs_process_subscription_renewal_line(line)
                     continue
                 if line.wgs_subscription_flow == 'reenroll':
-                    if line.wgs_sale_order_id:
+                    if (
+                        line.wgs_subscription_source_id
+                        and line.wgs_sale_order_id == line.wgs_subscription_source_id
+                        and not pos_order._wgs_is_subscription_order_closed_for_reenroll(line.wgs_subscription_source_id)
+                    ):
                         continue
+                    pos_order._wgs_process_subscription_reenroll_line(line)
+                    continue
                 if line.wgs_subscription_flow == 'pending_charge':
                     pos_order._wgs_process_subscription_pending_charge_line(line)
                     continue
@@ -1915,6 +1921,220 @@ class PosOrder(models.Model):
             amount_paid,
         )
         return source_order
+
+    def _wgs_process_subscription_reenroll_line(self, line):
+        self.ensure_one()
+
+        source_order = line.wgs_subscription_source_id or line.wgs_sale_order_id
+        source_order = source_order.exists() if source_order else self.env['sale.order']
+        if not source_order:
+            raise UserError(_('No se encontró la suscripción origen para aplicar la reinscripción en POS.'))
+        if not self._wgs_order_has_subscription_signal(source_order):
+            raise UserError(_('La orden origen no corresponde a una suscripción válida para reinscripción.'))
+        if not self._wgs_is_subscription_order_closed_for_reenroll(source_order):
+            raise UserError(_('La suscripción origen no está cerrada/cancelada para reinscripción.'))
+
+        product = line.product_id
+        qty = abs(line.qty or 0.0) or 1.0
+        max_total = int((product.max_participants_total or 1) * qty)
+        if max_total < 1:
+            max_total = 1
+
+        participant_ids = line.wgs_get_participant_ids()
+        holder_partner = source_order.partner_id or self.partner_id
+        if holder_partner and holder_partner.id not in participant_ids:
+            participant_ids.insert(0, holder_partner.id)
+        participant_ids = list(dict.fromkeys(participant_ids))
+        if len(participant_ids) > max_total:
+            raise UserError(
+                _(
+                    'No puedes asignar %(current)s participantes para %(product)s. El máximo permitido es %(max)s.'
+                )
+                % {
+                    'current': len(participant_ids),
+                    'product': product.display_name,
+                    'max': max_total,
+                }
+            )
+
+        pricing_state = self._wgs_get_persisted_subscription_pricing_from_pos_line(line)
+        recurring_price_unit = pricing_state['price_unit']
+        recurring_plan_id = pricing_state['plan_id']
+        recurring_pricing_id = pricing_state['pricing_id']
+        plan_record = pricing_state['plan_record']
+        today = fields.Date.context_today(self)
+        subscription_start_date = (
+            pricing_state.get('subscription_start_date')
+            or line.wgs_get_subscription_start_date()
+            or today
+        )
+        subscription_end_date = (
+            pricing_state.get('subscription_end_date')
+            or line.wgs_get_subscription_end_date()
+        )
+        next_billing_date = pricing_state.get('next_billing_date') or False
+        if plan_record and not subscription_end_date:
+            subscription_end_date = self._wgs_get_plan_period_end_date(plan_record, subscription_start_date)
+        if plan_record and not next_billing_date:
+            next_billing_date = self._wgs_get_plan_min_end_threshold(plan_record, subscription_start_date)
+        if self._wgs_product_has_single_day_term(product):
+            subscription_end_date = subscription_start_date
+            next_billing_date = False
+
+        source_line = source_order.order_line.filtered(lambda so_line: self._wgs_is_recurring_so_line(so_line))[:1]
+        if not source_line:
+            raise UserError(_('La suscripción origen no tiene líneas recurrentes para aplicar la reinscripción.'))
+        line_values = self._wgs_build_reenroll_source_line_values(
+            source_line=source_line,
+            pos_line=line,
+            product=product,
+            qty=qty,
+            recurring_price_unit=recurring_price_unit,
+            recurring_plan_id=recurring_plan_id,
+            recurring_pricing_id=recurring_pricing_id,
+        )
+        if line_values:
+            source_line.write(line_values)
+
+        self._wgs_sync_subscription_metadata(
+            sale_order=source_order,
+            participant_ids=participant_ids,
+            contract_date=today,
+            subscription_start_date=subscription_start_date,
+            subscription_end_date=subscription_end_date,
+            next_billing_date=next_billing_date,
+            clear_next_billing_date=self._wgs_product_has_single_day_term(product),
+        )
+        self._wgs_reactivate_subscription_order_for_pos(source_order)
+        if hasattr(source_order, '_wgs_sync_access_control_people'):
+            source_order.with_context(access_sync_priority=True)._wgs_sync_access_control_people()
+
+        self._wgs_link_pos_and_sale_records(
+            pos_line=line,
+            sale_order=source_order,
+            sale_order_line=source_line,
+        )
+        line.write({
+            'wgs_sale_order_id': source_order.id,
+            'wgs_subscription_flow': 'reenroll',
+            'wgs_subscription_source_id': source_order.id,
+        })
+
+        amount_paid = abs(float(line.qty or 0.0)) * float(line.price_unit or 0.0)
+        if hasattr(source_order, 'message_post'):
+            source_order.message_post(
+                body=_(
+                    'Reinscripción pagada en POS %(pos)s por %(amount).2f. Vigencia: %(start)s - %(end)s.'
+                ) % {
+                    'pos': self.pos_reference or self.name,
+                    'amount': amount_paid,
+                    'start': fields.Date.to_string(subscription_start_date),
+                    'end': fields.Date.to_string(subscription_end_date) if subscription_end_date else '-',
+                }
+            )
+
+        _logger.info(
+            'WGS POS: reenroll payment synced for subscription %s from POS %s line %s (start=%s, end=%s, next=%s, amount=%s)',
+            source_order.name,
+            self.pos_reference or self.name,
+            line.id,
+            subscription_start_date,
+            subscription_end_date,
+            next_billing_date,
+            amount_paid,
+        )
+        return source_order
+
+    def _wgs_build_reenroll_source_line_values(
+        self,
+        *,
+        source_line,
+        pos_line,
+        product,
+        qty,
+        recurring_price_unit,
+        recurring_plan_id=False,
+        recurring_pricing_id=False,
+    ):
+        line_fields = source_line._fields
+        values = {}
+        if 'product_id' in line_fields:
+            values['product_id'] = product.id
+        if 'name' in line_fields:
+            values['name'] = pos_line.full_product_name or product.display_name
+        qty_field_name = next(
+            (
+                field_name
+                for field_name in ('product_uom_qty', 'quantity', 'qty')
+                if field_name in line_fields
+            ),
+            False,
+        )
+        if qty_field_name:
+            values[qty_field_name] = qty
+        uom_field_name = next(
+            (
+                field_name
+                for field_name in ('product_uom_id', 'product_uom', 'uom_id')
+                if field_name in line_fields
+            ),
+            False,
+        )
+        if uom_field_name and product.uom_id:
+            values[uom_field_name] = product.uom_id.id
+        if 'price_unit' in line_fields:
+            values['price_unit'] = recurring_price_unit
+        if 'discount' in line_fields:
+            values['discount'] = pos_line.discount
+        if recurring_plan_id:
+            self._wgs_assign_many2one_value(
+                values=values,
+                fields_map=line_fields,
+                value_id=recurring_plan_id,
+                preferred_field_names=('subscription_plan_id', 'plan_id', 'recurring_plan_id'),
+                comodel_checker=self._wgs_is_plan_model_name,
+            )
+        if recurring_pricing_id:
+            self._wgs_assign_many2one_value(
+                values=values,
+                fields_map=line_fields,
+                value_id=recurring_pricing_id,
+                preferred_field_names=('subscription_pricing_id', 'pricing_id', 'recurring_pricing_id'),
+                comodel_checker=self._wgs_is_pricing_model_name,
+            )
+        return values
+
+    def _wgs_reactivate_subscription_order_for_pos(self, source_order):
+        source_order.ensure_one()
+        progress_state = self._wgs_find_subscription_progress_state_value(source_order)
+        if not progress_state:
+            raise UserError(_('No se pudo resolver el estado activo/en progreso para reactivar la suscripción.'))
+        source_order.write({'subscription_state': progress_state})
+        return True
+
+    def _wgs_find_subscription_progress_state_value(self, sale_order):
+        sale_order.ensure_one()
+        field = sale_order._fields.get('subscription_state')
+        if not field:
+            return False
+        selection = field.selection
+        if callable(selection):
+            try:
+                selection = selection(sale_order)
+            except TypeError:
+                selection = selection(self.env)
+        selection = selection or []
+        tokens = ('progress', 'in_progress', 'in progress', 'en progreso')
+        fallback = False
+        for value, label in selection:
+            value_text = str(value or '').strip().lower()
+            label_text = str(label or '').strip().lower()
+            haystack = ' '.join(filter(None, [value_text, label_text]))
+            if value_text == 'progress':
+                fallback = value
+            if any(token in haystack for token in tokens):
+                return value
+        return fallback
 
     def _wgs_process_subscription_pending_charge_line(self, line):
         self.ensure_one()
