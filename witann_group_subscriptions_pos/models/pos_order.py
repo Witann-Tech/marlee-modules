@@ -433,6 +433,20 @@ class PosOrder(models.Model):
                     'error_code': 'active_subscription_exists',
                     'error_message': self._wgs_get_blocking_subscription_for_new_flow_message(blocking_subscription),
                 }
+            reenroll_source = self._wgs_get_reenroll_source_for_new_same_product_flow(
+                partner,
+                product,
+                company=self.env.company,
+            )
+            if reenroll_source:
+                return {
+                    'ok': False,
+                    'error_code': 'reenroll_required_for_same_product',
+                    'error_message': self._wgs_get_reenroll_required_for_new_same_product_message(
+                        reenroll_source,
+                        product,
+                    ),
+                }
 
         sale_order_model = self.env['sale.order'].sudo()
         curp = sale_order_model._get_partner_curp_for_pos(partner)
@@ -854,6 +868,18 @@ class PosOrder(models.Model):
                 if blocking_subscription:
                     raise UserError(
                         self._wgs_get_blocking_subscription_for_new_flow_message(blocking_subscription)
+                    )
+                reenroll_source = self._wgs_get_reenroll_source_for_new_same_product_flow(
+                    partner,
+                    product,
+                    company=self.env.company,
+                )
+                if reenroll_source:
+                    raise UserError(
+                        self._wgs_get_reenroll_required_for_new_same_product_message(
+                            reenroll_source,
+                            product,
+                        )
                     )
 
         elif normalized_flow == 'upsale':
@@ -1817,7 +1843,7 @@ class PosOrder(models.Model):
                     item.qty > 0
                     and item.product_id
                     and item.product_id.product_tmpl_id.recurring_invoice
-                    and pos_order._wgs_is_positive_subscription_sync_line(item)
+                    and item.wgs_has_subscription_configuration()
                 )
             ):
                 if line.wgs_subscription_flow == 'renewal':
@@ -1838,8 +1864,6 @@ class PosOrder(models.Model):
                     pos_order._wgs_process_subscription_pending_charge_line(line)
                     continue
                 if line.wgs_sale_order_id:
-                    if pos_order._wgs_should_reactivate_linked_subscription_from_paid_line(line):
-                        pos_order._wgs_reactivate_linked_subscription_from_paid_line(line)
                     continue
                 sale_order = pos_order._wgs_create_subscription_sale_order_from_line(line)
                 line.wgs_sale_order_id = sale_order.id
@@ -1850,13 +1874,207 @@ class PosOrder(models.Model):
             ):
                 pos_order._wgs_cancel_subscription_from_refund_line(line)
 
-    def _wgs_is_positive_subscription_sync_line(self, line):
-        self.ensure_one()
-        if not line or not line.product_id or not line.product_id.product_tmpl_id.recurring_invoice:
-            return False
-        if line.wgs_has_subscription_configuration():
-            return True
-        return self._wgs_should_reactivate_linked_subscription_from_paid_line(line)
+    @api.model
+    def wgs_audit_paid_subscription_pos_sync_issues(self, date_from=False, date_to=False, limit=5000):
+        lines = self._wgs_find_paid_subscription_pos_lines_for_audit(
+            date_from=date_from,
+            date_to=date_to,
+            limit=limit,
+        )
+        issues = []
+        for line in lines:
+            issue = self._wgs_classify_paid_subscription_pos_line_sync_issue(line)
+            if issue:
+                issues.append(issue)
+        return issues
+
+    @api.model
+    def wgs_repair_paid_subscription_pos_sync_issues(self, date_from=False, date_to=False, limit=5000, dry_run=True):
+        issues = self.wgs_audit_paid_subscription_pos_sync_issues(
+            date_from=date_from,
+            date_to=date_to,
+            limit=limit,
+        )
+        if dry_run:
+            return issues
+
+        repaired = []
+        skipped = []
+        lines_by_id = {
+            line.id: line
+            for line in self._wgs_find_paid_subscription_pos_lines_for_audit(
+                date_from=date_from,
+                date_to=date_to,
+                limit=limit,
+            )
+        }
+        for issue in issues:
+            line = lines_by_id.get(issue.get('line_id'))
+            if not line:
+                skipped.append(dict(issue, repair_status='missing_line'))
+                continue
+            issue_type = issue.get('issue')
+            try:
+                if issue_type in ('explicit_flow_not_applied', 'configured_line_missing_sale_order'):
+                    sale_order = self._wgs_repair_paid_subscription_pos_line_sync_issue(line)
+                    repaired.append(
+                        dict(
+                            issue,
+                            repair_status='repaired_by_line_sync',
+                            repaired_sale_order_id=sale_order.id or False,
+                            repaired_sale_order_name=sale_order.name or False,
+                        )
+                    )
+                    continue
+            except Exception as error:
+                skipped.append(dict(issue, repair_status='error', error=str(error)))
+                continue
+            skipped.append(dict(issue, repair_status='not_safe'))
+
+        return {
+            'repaired': repaired,
+            'skipped': skipped,
+        }
+
+    @api.model
+    def _wgs_find_paid_subscription_pos_lines_for_audit(self, date_from=False, date_to=False, limit=5000):
+        domain = [
+            ('order_id.state', 'in', ['paid', 'done', 'invoiced']),
+            ('product_id.product_tmpl_id.recurring_invoice', '=', True),
+            ('qty', '>', 0),
+        ]
+        if date_from:
+            domain.append(('order_id.date_order', '>=', date_from))
+        if date_to:
+            domain.append(('order_id.date_order', '<=', date_to))
+        return self.env['pos.order.line'].sudo().search(domain, order='id asc', limit=int(limit or 5000))
+
+    def _wgs_repair_paid_subscription_pos_line_sync_issue(self, line):
+        line.ensure_one()
+        pos_order = line.order_id
+        pos_order.ensure_one()
+
+        flow = (line.wgs_subscription_flow or 'new').strip().lower()
+        if flow == 'renewal':
+            return pos_order._wgs_process_subscription_renewal_line(line)
+        if flow == 'reenroll':
+            return pos_order._wgs_process_subscription_reenroll_line(line)
+        if flow == 'pending_charge':
+            return pos_order._wgs_process_subscription_pending_charge_line(line)
+        if line.wgs_sale_order_id:
+            return line.wgs_sale_order_id
+
+        sale_order = pos_order._wgs_create_subscription_sale_order_from_line(line)
+        line.wgs_sale_order_id = sale_order.id
+        return sale_order
+
+    def _wgs_classify_paid_subscription_pos_line_sync_issue(self, line):
+        line.ensure_one()
+
+        flow = (line.wgs_subscription_flow or '').strip().lower()
+        source_order = line.wgs_subscription_source_id.exists()
+        linked_order = line.wgs_sale_order_id.exists()
+        base_issue = self._wgs_build_paid_subscription_pos_line_issue(line)
+
+        if flow in ('renewal', 'reenroll', 'pending_charge') and source_order:
+            source_closed = self._wgs_is_subscription_order_closed_for_reenroll(source_order)
+            if not linked_order or linked_order != source_order or source_closed:
+                return dict(
+                    base_issue,
+                    issue='explicit_flow_not_applied',
+                    safe_to_repair=True,
+                    reason='La línea tiene flujo explícito y suscripción origen, pero no quedó aplicada sobre esa suscripción.',
+                )
+
+        if flow == 'new' and line.wgs_has_subscription_configuration() and not linked_order:
+            reenroll_source = self._wgs_get_reenroll_source_for_new_same_product_flow(
+                line.order_id.partner_id,
+                line.product_id,
+                company=line.order_id.company_id,
+            )
+            if reenroll_source:
+                return dict(
+                    base_issue,
+                    issue='new_same_product_requires_reenroll',
+                    safe_to_repair=False,
+                    source_order_id=reenroll_source.id,
+                    source_order_name=reenroll_source.name,
+                    source_state=reenroll_source.subscription_state
+                    if 'subscription_state' in reenroll_source._fields
+                    else False,
+                    reason='La línea se vendió como nueva, pero existe una suscripción cerrada/cancelada del mismo paquete; debe revisarse como reinscripción.',
+                )
+
+        if line.wgs_has_subscription_configuration() and not linked_order:
+            return dict(
+                base_issue,
+                issue='configured_line_missing_sale_order',
+                safe_to_repair=True,
+                reason='La línea tiene metadata WGS pero no quedó ligada a una suscripción.',
+            )
+
+        if linked_order and self._wgs_is_subscription_order_closed_for_reenroll(linked_order):
+            later_line = self._wgs_find_later_paid_subscription_line_for_same_subscription_customer(line)
+            if later_line:
+                return dict(
+                    base_issue,
+                    issue='linked_closed_has_later_payment',
+                    safe_to_repair=False,
+                    reason='La línea está ligada a una suscripción cerrada, pero existe un pago posterior del mismo cliente.',
+                    later_pos_order_id=later_line.order_id.id,
+                    later_pos_order_name=later_line.order_id.name,
+                    later_pos_reference=later_line.order_id.pos_reference or False,
+                    later_line_id=later_line.id,
+                    later_linked_order=later_line.wgs_sale_order_id.name or False,
+                )
+            return dict(
+                base_issue,
+                issue='linked_closed_requires_manual_review',
+                safe_to_repair=False,
+                reason='La línea está ligada a una suscripción cerrada sin flujo explícito. Puede ser reinscripción o venta nueva diferente; requiere decisión manual.',
+            )
+
+        return False
+
+    def _wgs_build_paid_subscription_pos_line_issue(self, line):
+        linked_order = line.wgs_sale_order_id
+        source_order = line.wgs_subscription_source_id
+        return {
+            'pos_order_id': line.order_id.id,
+            'pos_order_name': line.order_id.name,
+            'pos_reference': line.order_id.pos_reference or False,
+            'pos_date_order': fields.Datetime.to_string(line.order_id.date_order) if line.order_id.date_order else False,
+            'line_id': line.id,
+            'product': line.product_id.display_name,
+            'partner_id': line.order_id.partner_id.id or False,
+            'partner_name': line.order_id.partner_id.display_name or False,
+            'flow': line.wgs_subscription_flow or False,
+            'source_order_id': source_order.id or False,
+            'source_order_name': source_order.name or False,
+            'source_state': source_order.subscription_state if source_order and 'subscription_state' in source_order._fields else False,
+            'linked_order_id': linked_order.id or False,
+            'linked_order_name': linked_order.name or False,
+            'linked_state': linked_order.subscription_state if linked_order and 'subscription_state' in linked_order._fields else False,
+            'line_start_date': fields.Date.to_string(line.wgs_subscription_start_date) if line.wgs_subscription_start_date else False,
+            'line_end_date': fields.Date.to_string(line.wgs_subscription_end_date) if line.wgs_subscription_end_date else False,
+        }
+
+    def _wgs_find_later_paid_subscription_line_for_same_subscription_customer(self, line):
+        line.ensure_one()
+        partner = (line.wgs_sale_order_id.partner_id or line.wgs_subscription_source_id.partner_id or line.order_id.partner_id).exists()
+        if not partner:
+            return self.env['pos.order.line']
+        line_date = line.order_id.date_order or False
+        domain = [
+            ('id', '!=', line.id),
+            ('order_id.state', 'in', ['paid', 'done', 'invoiced']),
+            ('order_id.partner_id', '=', partner.id),
+            ('product_id.product_tmpl_id.recurring_invoice', '=', True),
+            ('qty', '>', 0),
+        ]
+        if line_date:
+            domain.append(('order_id.date_order', '>', line_date))
+        return self.env['pos.order.line'].sudo().search(domain, order='order_id.date_order desc, id desc', limit=1)
 
     def _wgs_process_subscription_renewal_line(self, line):
         self.ensure_one()
@@ -1931,116 +2149,6 @@ class PosOrder(models.Model):
             amount_paid,
         )
         return source_order
-
-    def _wgs_should_reactivate_linked_subscription_from_paid_line(self, line):
-        self.ensure_one()
-
-        if not line or line.qty <= 0:
-            return False
-        if line.wgs_subscription_flow in ('renewal', 'reenroll', 'pending_charge', 'cancellation_refund'):
-            return False
-        sale_order = line.wgs_sale_order_id.exists()
-        if not sale_order:
-            return False
-        if not self._wgs_order_has_subscription_signal(sale_order):
-            return False
-        return self._wgs_is_subscription_order_closed_for_reenroll(sale_order)
-
-    def _wgs_reactivate_linked_subscription_from_paid_line(self, line):
-        self.ensure_one()
-
-        sale_order = line.wgs_sale_order_id.exists()
-        if not sale_order:
-            return self.env['sale.order']
-
-        product = line.product_id
-        qty = abs(line.qty or 0.0) or 1.0
-        participant_ids = line.wgs_get_participant_ids()
-        holder_partner = sale_order.partner_id or self.partner_id
-        if holder_partner and holder_partner.id not in participant_ids:
-            participant_ids.insert(0, holder_partner.id)
-        participant_ids = list(dict.fromkeys(participant_ids))
-
-        pricing_state = self._wgs_get_persisted_subscription_pricing_from_pos_line(line)
-        subscription_start_date = (
-            pricing_state.get('subscription_start_date')
-            or line.wgs_get_subscription_start_date()
-            or self._wgs_get_first_date_from_order(
-                sale_order,
-                ('wgs_effective_start_date', 'start_date', 'date_start', 'subscription_start_date', 'recurring_start_date', 'date_order'),
-            )
-            or fields.Date.context_today(self)
-        )
-        subscription_end_date = (
-            pricing_state.get('subscription_end_date')
-            or line.wgs_get_subscription_end_date()
-            or self._wgs_get_first_date_from_order(
-                sale_order,
-                ('end_date', 'date_end', 'subscription_end_date', 'recurring_end_date'),
-            )
-        )
-        next_billing_date = (
-            pricing_state.get('next_billing_date')
-            or self._wgs_get_first_date_from_order(sale_order, ('recurring_next_date', 'next_invoice_date'))
-        )
-        plan_record = pricing_state.get('plan_record')
-        if plan_record and not subscription_end_date:
-            subscription_end_date = self._wgs_get_plan_period_end_date(plan_record, subscription_start_date)
-        if plan_record and not next_billing_date:
-            next_billing_date = self._wgs_get_plan_min_end_threshold(plan_record, subscription_start_date)
-        if self._wgs_product_has_single_day_term(product):
-            subscription_end_date = subscription_start_date
-            next_billing_date = False
-
-        source_line = sale_order.order_line.filtered(lambda so_line: self._wgs_is_recurring_so_line(so_line))[:1]
-        if source_line:
-            line_values = self._wgs_build_reenroll_source_line_values(
-                source_line=source_line,
-                pos_line=line,
-                product=product,
-                qty=qty,
-                recurring_price_unit=pricing_state['price_unit'],
-                recurring_plan_id=pricing_state['plan_id'],
-                recurring_pricing_id=pricing_state['pricing_id'],
-            )
-            if line_values:
-                source_line.write(line_values)
-
-        self._wgs_sync_subscription_metadata(
-            sale_order=sale_order,
-            participant_ids=participant_ids,
-            contract_date=fields.Date.context_today(self),
-            subscription_start_date=subscription_start_date,
-            subscription_end_date=subscription_end_date,
-            next_billing_date=next_billing_date,
-            clear_next_billing_date=self._wgs_product_has_single_day_term(product),
-        )
-        self._wgs_reactivate_subscription_order_for_pos(sale_order)
-        if hasattr(sale_order, '_wgs_sync_access_control_people'):
-            sale_order.with_context(access_sync_priority=True)._wgs_sync_access_control_people()
-
-        if source_line:
-            self._wgs_link_pos_and_sale_records(
-                pos_line=line,
-                sale_order=sale_order,
-                sale_order_line=source_line,
-            )
-        if hasattr(sale_order, 'message_post'):
-            sale_order.message_post(
-                body=_(
-                    'Suscripción reactivada desde resync POS %(pos)s para corregir línea pagada ligada a una suscripción cerrada.'
-                ) % {
-                    'pos': self.pos_reference or self.name,
-                }
-            )
-        _logger.info(
-            'WGS POS: reactivated linked subscription %s from paid POS %s line %s (flow=%s)',
-            sale_order.name,
-            self.pos_reference or self.name,
-            line.id,
-            line.wgs_subscription_flow,
-        )
-        return sale_order
 
     def _wgs_process_subscription_reenroll_line(self, line):
         self.ensure_one()
@@ -2537,6 +2645,18 @@ class PosOrder(models.Model):
                 raise UserError(
                     self._wgs_get_blocking_subscription_for_new_flow_message(blocking_subscription)
                 )
+            reenroll_source = self._wgs_get_reenroll_source_for_new_same_product_flow(
+                self.partner_id,
+                product,
+                company=self.company_id,
+            )
+            if reenroll_source:
+                raise UserError(
+                    self._wgs_get_reenroll_required_for_new_same_product_message(
+                        reenroll_source,
+                        product,
+                    )
+                )
         qty = abs(line.qty)
         max_total = int((product.max_participants_total or 1) * qty)
         if max_total < 1:
@@ -2880,12 +3000,7 @@ class PosOrder(models.Model):
     def _wgs_find_active_subscription_for_partner(self, partner, company=False):
         partner.ensure_one()
         sale_order_model = self.env['sale.order']
-        partner_ids = {partner.id}
-        if 'commercial_partner_id' in partner._fields and partner.commercial_partner_id:
-            commercial_partner = partner.commercial_partner_id
-            partner_ids.add(commercial_partner.id)
-            if 'child_ids' in commercial_partner._fields:
-                partner_ids.update(commercial_partner.child_ids.ids)
+        partner_ids = self._wgs_get_subscription_partner_scope_ids_for_pos(partner)
 
         candidates = sale_order_model.browse()
         # Prefer shared helper used by vigencias flow.
@@ -2978,6 +3093,69 @@ class PosOrder(models.Model):
             'package': package_label,
         }
 
+    def _wgs_get_reenroll_source_for_new_same_product_flow(self, partner, product, company=False):
+        partner = partner.exists()
+        product = product.exists()
+        if not partner or not product:
+            return self.env['sale.order']
+
+        candidates = self._wgs_find_closed_subscription_candidates_for_partner(
+            partner,
+            company=company,
+        ).filtered(lambda order: self._wgs_subscription_order_has_product(order, product))
+        if not candidates:
+            return self.env['sale.order']
+
+        partner_scope_ids = self._wgs_get_subscription_partner_scope_ids_for_pos(partner)
+        direct_owner_candidates = candidates.filtered(lambda order: order.partner_id.id in partner_scope_ids)
+        return (direct_owner_candidates or candidates).sorted(key=lambda order: order.id, reverse=True)[:1]
+
+    def _wgs_get_reenroll_required_for_new_same_product_message(self, source_order, product):
+        source_order.ensure_one()
+        return _(
+            'El cliente ya tiene una suscripción cerrada/cancelada del mismo paquete '
+            '(%(package)s, %(subscription)s). Usa Reinscribir para reactivar ese paquete, '
+            'o elige un paquete diferente para una nueva inscripción.'
+        ) % {
+            'package': product.display_name,
+            'subscription': source_order.name or source_order.display_name,
+        }
+
+    def _wgs_find_closed_subscription_candidates_for_partner(self, partner, company=False):
+        partner.ensure_one()
+        sale_order_model = self.env['sale.order']
+        partner_scope_ids = self._wgs_get_subscription_partner_scope_ids_for_pos(partner)
+        if not partner_scope_ids:
+            return sale_order_model
+
+        domain = [('state', 'in', ['sale', 'done'])]
+        if 'participant_ids' in sale_order_model._fields:
+            domain.extend([
+                '|',
+                ('partner_id', 'in', list(partner_scope_ids)),
+                ('participant_ids', 'in', list(partner_scope_ids)),
+            ])
+        else:
+            domain.append(('partner_id', 'in', list(partner_scope_ids)))
+        if company and 'company_id' in sale_order_model._fields:
+            domain.append(('company_id', '=', company.id))
+
+        candidates = sale_order_model.search(domain, order='id desc', limit=500)
+        return candidates.filtered(
+            lambda order: self._wgs_order_has_subscription_signal(order)
+            and self._wgs_is_subscription_order_closed_for_reenroll(order)
+        )
+
+    def _wgs_get_subscription_partner_scope_ids_for_pos(self, partner):
+        partner.ensure_one()
+        partner_ids = {partner.id}
+        if 'commercial_partner_id' in partner._fields and partner.commercial_partner_id:
+            commercial_partner = partner.commercial_partner_id
+            partner_ids.add(commercial_partner.id)
+            if 'child_ids' in commercial_partner._fields:
+                partner_ids.update(commercial_partner.child_ids.ids)
+        return partner_ids
+
     def _wgs_find_partner_active_subscription_for_upsell(self):
         self.ensure_one()
         if not self.partner_id:
@@ -3053,6 +3231,22 @@ class PosOrder(models.Model):
         if not state_value:
             return False
         return any(token in state_value for token in ('cancel', 'canceled', 'cancelled', 'close', 'closed', 'churn', 'churned'))
+
+    def _wgs_subscription_order_has_product(self, sale_order, product):
+        sale_order.ensure_one()
+        product = product.exists()
+        if not product:
+            return False
+
+        product_tmpl = product.product_tmpl_id
+        recurring_lines = sale_order.order_line.filtered(lambda so_line: self._wgs_is_recurring_so_line(so_line))
+        for line in recurring_lines:
+            line_product = line.product_id
+            if line_product == product:
+                return True
+            if product_tmpl and line_product.product_tmpl_id == product_tmpl:
+                return True
+        return False
 
     def _wgs_build_subscription_recurring_charge_payload(
         self,
