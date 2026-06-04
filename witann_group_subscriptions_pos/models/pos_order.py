@@ -1959,24 +1959,25 @@ class PosOrder(models.Model):
                 skipped.append(self._wgs_build_targeted_subscription_repair_result(line, 'skipped', validation_error))
                 continue
             try:
-                if dry_run:
+                with self.env.cr.savepoint():
+                    if dry_run:
+                        repaired.append(
+                            self._wgs_build_targeted_subscription_repair_result(
+                                line,
+                                'dry_run',
+                                self._wgs_resolve_targeted_subscription_repair_action(line, options),
+                            )
+                        )
+                        continue
+                    sale_order = self._wgs_repair_single_paid_subscription_pos_line(line, options)
                     repaired.append(
                         self._wgs_build_targeted_subscription_repair_result(
                             line,
-                            'dry_run',
-                            self._wgs_resolve_targeted_subscription_repair_action(line, options),
+                            'repaired',
+                            'Línea reparada y ligada a suscripción.',
+                            sale_order=sale_order,
                         )
                     )
-                    continue
-                sale_order = self._wgs_repair_single_paid_subscription_pos_line(line, options)
-                repaired.append(
-                    self._wgs_build_targeted_subscription_repair_result(
-                        line,
-                        'repaired',
-                        'Línea reparada y ligada a suscripción.',
-                        sale_order=sale_order,
-                    )
-                )
             except Exception as error:
                 skipped.append(self._wgs_build_targeted_subscription_repair_result(line, 'error', str(error)))
         return {
