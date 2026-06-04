@@ -665,7 +665,9 @@ class PosOrder(models.Model):
             return False
         tmpl = product.product_tmpl_id if getattr(product, 'product_tmpl_id', False) else product
         return bool(
-            getattr(tmpl, 'wgs_single_day_access', False)
+            getattr(product, 'wgs_single_day_access', False)
+            or getattr(product, 'wgs_free_trial_day', False)
+            or getattr(tmpl, 'wgs_single_day_access', False)
             or getattr(tmpl, 'wgs_free_trial_day', False)
         )
 
