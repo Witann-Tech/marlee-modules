@@ -2074,7 +2074,7 @@ class PosOrder(models.Model):
         ]
         if line_date:
             domain.append(('order_id.date_order', '>', line_date))
-        return self.env['pos.order.line'].sudo().search(domain, order='order_id.date_order desc, id desc', limit=1)
+        return self.env['pos.order.line'].sudo().search(domain, order='id desc', limit=1)
 
     def _wgs_process_subscription_renewal_line(self, line):
         self.ensure_one()
