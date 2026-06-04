@@ -2358,7 +2358,8 @@ class PosOrder(models.Model):
             subscription_end_date = self._wgs_get_plan_period_end_date(plan_record, subscription_start_date)
         if plan_record and not next_billing_date:
             next_billing_date = self._wgs_get_plan_min_end_threshold(plan_record, subscription_start_date)
-        if self._wgs_product_has_single_day_term(product):
+        single_day_term = self._wgs_product_has_single_day_term(product)
+        if single_day_term:
             subscription_end_date = subscription_start_date
             next_billing_date = False
 
@@ -2384,9 +2385,11 @@ class PosOrder(models.Model):
             subscription_start_date=subscription_start_date,
             subscription_end_date=subscription_end_date,
             next_billing_date=next_billing_date,
-            clear_next_billing_date=self._wgs_product_has_single_day_term(product),
+            clear_next_billing_date=single_day_term,
         )
         self._wgs_reactivate_subscription_order_for_pos(source_order)
+        if single_day_term:
+            self._wgs_clear_subscription_next_billing_date(source_order)
         if hasattr(source_order, '_wgs_sync_access_control_people'):
             source_order.with_context(access_sync_priority=True)._wgs_sync_access_control_people()
 
@@ -3923,12 +3926,10 @@ class PosOrder(models.Model):
                         target_order._fields.get('date_order'),
                     )
             if subscription_start_date:
-                start_field = self._wgs_find_subscription_start_date_field(target_order)
-                if start_field:
+                for start_field in self._wgs_find_subscription_start_date_fields(target_order):
                     values[start_field] = subscription_start_date
             if subscription_end_date:
-                end_field = self._wgs_find_subscription_end_date_field(target_order)
-                if end_field:
+                for end_field in self._wgs_find_subscription_end_date_fields(target_order):
                     values[end_field] = subscription_end_date
             next_fields = self._wgs_find_subscription_next_invoice_date_fields(target_order)
             if next_billing_date:
@@ -3948,6 +3949,16 @@ class PosOrder(models.Model):
                     subscription_end_date or False,
                     next_billing_date or False,
                 )
+
+    def _wgs_clear_subscription_next_billing_date(self, sale_order):
+        target_orders = self._wgs_get_subscription_orders_from_base(sale_order)
+        for target_order in target_orders:
+            values = {
+                field_name: False
+                for field_name in self._wgs_find_subscription_next_invoice_date_fields(target_order)
+            }
+            if values:
+                target_order.write(values)
 
     def _wgs_get_subscription_orders_from_base(self, sale_order):
         orders = sale_order
@@ -3999,40 +4010,54 @@ class PosOrder(models.Model):
         return date_value
 
     def _wgs_find_subscription_end_date_field(self, sale_order):
+        fields = self._wgs_find_subscription_end_date_fields(sale_order)
+        return fields[0] if fields else False
+
+    def _wgs_find_subscription_end_date_fields(self, sale_order):
         fields_map = sale_order._fields
         preferred = ('end_date', 'date_end', 'subscription_end_date', 'recurring_end_date')
+        result = []
         for field_name in preferred:
             field = fields_map.get(field_name)
             if field and field.type in ('date', 'datetime'):
-                return field_name
+                result.append(field_name)
 
         for field_name, field in fields_map.items():
             if field.type not in ('date', 'datetime'):
+                continue
+            if field_name in result:
                 continue
             normalized_name = (field_name or '').lower()
             if any(token in normalized_name for token in ('end', 'until', 'close')) and any(
                 token in normalized_name for token in ('subscription', 'recurr', 'period')
             ):
-                return field_name
-        return False
+                result.append(field_name)
+        return tuple(result)
 
     def _wgs_find_subscription_start_date_field(self, sale_order):
+        fields = self._wgs_find_subscription_start_date_fields(sale_order)
+        return fields[0] if fields else False
+
+    def _wgs_find_subscription_start_date_fields(self, sale_order):
         fields_map = sale_order._fields
         preferred = ('wgs_effective_start_date', 'start_date', 'date_start', 'subscription_start_date', 'recurring_start_date')
+        result = []
         for field_name in preferred:
             field = fields_map.get(field_name)
             if field and field.type in ('date', 'datetime'):
-                return field_name
+                result.append(field_name)
 
         for field_name, field in fields_map.items():
             if field.type not in ('date', 'datetime'):
+                continue
+            if field_name in result:
                 continue
             normalized_name = (field_name or '').lower()
             if any(token in normalized_name for token in ('start', 'begin', 'from')) and any(
                 token in normalized_name for token in ('subscription', 'recurr', 'period')
             ):
-                return field_name
-        return False
+                result.append(field_name)
+        return tuple(result)
 
     def _wgs_find_subscription_contract_date_field(self, sale_order):
         fields_map = sale_order._fields
