@@ -3930,13 +3930,12 @@ class PosOrder(models.Model):
                 end_field = self._wgs_find_subscription_end_date_field(target_order)
                 if end_field:
                     values[end_field] = subscription_end_date
+            next_fields = self._wgs_find_subscription_next_invoice_date_fields(target_order)
             if next_billing_date:
-                next_field = self._wgs_find_subscription_next_invoice_date_field(target_order)
-                if next_field:
+                for next_field in next_fields:
                     values[next_field] = next_billing_date
             elif clear_next_billing_date:
-                next_field = self._wgs_find_subscription_next_invoice_date_field(target_order)
-                if next_field:
+                for next_field in next_fields:
                     values[next_field] = False
             if values:
                 target_order.write(values)
@@ -4052,22 +4051,29 @@ class PosOrder(models.Model):
         return False
 
     def _wgs_find_subscription_next_invoice_date_field(self, sale_order):
+        fields = self._wgs_find_subscription_next_invoice_date_fields(sale_order)
+        return fields[0] if fields else False
+
+    def _wgs_find_subscription_next_invoice_date_fields(self, sale_order):
         fields_map = sale_order._fields
         preferred = ('recurring_next_date', 'next_invoice_date', 'recurring_next_invoice_date')
+        result = []
         for field_name in preferred:
             field = fields_map.get(field_name)
             if field and field.type in ('date', 'datetime'):
-                return field_name
+                result.append(field_name)
 
         for field_name, field in fields_map.items():
             if field.type not in ('date', 'datetime'):
+                continue
+            if field_name in result:
                 continue
             normalized_name = (field_name or '').lower()
             if all(token in normalized_name for token in ('next', 'date')) and any(
                 token in normalized_name for token in ('invoice', 'recurr', 'subscription')
             ):
-                return field_name
-        return False
+                result.append(field_name)
+        return tuple(result)
 
     def _wgs_assign_many2one_value(self, values, fields_map, value_id, preferred_field_names=(), comodel_checker=None):
         value_id = int(value_id or 0)
