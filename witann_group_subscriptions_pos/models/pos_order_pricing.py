@@ -178,12 +178,12 @@ class PosOrderPricingMixin(models.Model):
                 return float(so_line[field_name] or 0.0)
         return 0.0
 
-    def _wgs_get_current_subscription_period_bounds(self, source_order, today=False):
+    def _wgs_get_current_subscription_period_bounds(self, source_order, today=False, preferred_line=False):
         source_order.ensure_one()
         today = fields.Date.to_date(today) or fields.Date.context_today(self)
 
         period_end = self._wgs_get_first_date_from_order(source_order, ('recurring_next_date', 'next_invoice_date'))
-        delta = self._wgs_get_order_recurrence_delta(source_order)
+        delta = self._wgs_get_order_recurrence_delta(source_order, preferred_line=preferred_line)
         if not period_end:
             start_date = self._wgs_get_first_date_from_order(
                 source_order,
@@ -208,18 +208,19 @@ class PosOrderPricingMixin(models.Model):
             return period_start, period_end
         return False, False
 
-    def _wgs_get_order_recurrence_delta(self, sale_order):
+    def _wgs_get_order_recurrence_delta(self, sale_order, preferred_line=False):
         sale_order.ensure_one()
 
         interval = 1
         unit = 'month'
-        if {'recurring_interval', 'recurring_rule_type'}.issubset(sale_order._fields):
+        plan = self._wgs_extract_plan_record_from_subscription_line(preferred_line)
+        if not plan:
+            plan = self._wgs_extract_plan_record_from_sale_order(sale_order)
+        if plan:
+            interval, unit = self._wgs_extract_interval_from_plan(plan)
+        elif {'recurring_interval', 'recurring_rule_type'}.issubset(sale_order._fields):
             interval = int(sale_order.recurring_interval or 1)
             unit = sale_order.recurring_rule_type or 'month'
-        else:
-            plan = self._wgs_extract_plan_record_from_sale_order(sale_order)
-            if plan:
-                interval, unit = self._wgs_extract_interval_from_plan(plan)
 
         interval = max(1, int(interval or 1))
         unit_value = (unit or 'month').lower()
@@ -231,10 +232,18 @@ class PosOrderPricingMixin(models.Model):
             return relativedelta(years=interval)
         return relativedelta(months=interval)
 
+    def _wgs_extract_plan_record_from_subscription_line(self, so_line):
+        so_line = so_line.exists() if so_line else self.env['sale.order.line']
+        if not so_line:
+            return False
+        so_line.ensure_one()
+        for field_name in self._WGS_PLAN_FIELD_NAMES:
+            if field_name in so_line._fields and so_line[field_name]:
+                return so_line[field_name]
+        return False
+
     def _wgs_extract_plan_record_from_sale_order(self, sale_order):
         sale_order.ensure_one()
-        if 'plan_id' in sale_order._fields and sale_order.plan_id:
-            return sale_order.plan_id
 
         recurring_lines = sale_order.order_line.filtered(
             lambda so_line: self._wgs_is_recurring_so_line(so_line)
@@ -244,6 +253,8 @@ class PosOrderPricingMixin(models.Model):
             for field_name in line_plan_fields:
                 if field_name in so_line._fields and so_line[field_name]:
                     return so_line[field_name]
+        if 'plan_id' in sale_order._fields and sale_order.plan_id:
+            return sale_order.plan_id
         return False
 
     def _wgs_get_first_date_from_order(self, sale_order, field_names):

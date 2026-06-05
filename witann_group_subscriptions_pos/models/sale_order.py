@@ -1942,7 +1942,7 @@ class SaleOrder(models.Model):
         hard_end_date = self._get_first_available_date(
             ('date_end', 'end_date', 'subscription_end_date', 'recurring_end_date')
         )
-        recurrence_delta = self._get_recurrence_delta()
+        recurrence_delta = self._get_recurrence_delta(primary_recurring_line=primary_recurring_line)
 
         if start_date and (not next_invoice_date or next_invoice_date <= start_date):
             next_invoice_date = start_date + recurrence_delta
@@ -2030,7 +2030,7 @@ class SaleOrder(models.Model):
         )
         has_replacement_subscription = self._wgs_has_replacement_subscription_for_pos()
 
-        recurrence_delta = self._get_recurrence_delta()
+        recurrence_delta = self._get_recurrence_delta(primary_recurring_line=primary_recurring_line)
         # POS flow treats the first period as paid at checkout. When Odoo still has
         # next invoice unset (or equal to start date), infer the next cycle boundary.
         if start_date and (not next_invoice_date or next_invoice_date <= start_date):
@@ -2417,26 +2417,20 @@ class SaleOrder(models.Model):
 
         return False
 
-    def _get_recurrence_delta(self):
+    def _get_recurrence_delta(self, primary_recurring_line=False):
         self.ensure_one()
 
         interval = 1
         unit = 'month'
 
-        if {'recurring_interval', 'recurring_rule_type'}.issubset(self._fields):
+        plan = self._get_subscription_plan_from_line_for_pos(primary_recurring_line)
+        if not plan and 'plan_id' in self._fields and self.plan_id:
+            plan = self.plan_id
+        if plan:
+            interval, unit = self._get_subscription_plan_interval_for_pos(plan)
+        elif {'recurring_interval', 'recurring_rule_type'}.issubset(self._fields):
             interval = self.recurring_interval or 1
             unit = self.recurring_rule_type or 'month'
-        elif 'plan_id' in self._fields and self.plan_id:
-            plan = self.plan_id
-            if 'wgs_single_day_plan' in plan._fields and plan.wgs_single_day_plan:
-                interval = 1
-                unit = 'day'
-            elif {'recurring_interval', 'recurring_rule_type'}.issubset(plan._fields):
-                interval = plan.recurring_interval or 1
-                unit = plan.recurring_rule_type or 'month'
-            elif {'billing_period_value', 'billing_period_unit'}.issubset(plan._fields):
-                interval = plan.billing_period_value or 1
-                unit = plan.billing_period_unit or 'month'
 
         interval = int(interval) if interval else 1
         if interval < 1:
@@ -2451,6 +2445,29 @@ class SaleOrder(models.Model):
         if 'year' in unit_value:
             return relativedelta(years=interval)
         return relativedelta(months=interval)
+
+    def _get_subscription_plan_from_line_for_pos(self, line):
+        line = line.exists() if line else self.env['sale.order.line']
+        if not line:
+            return False
+        line.ensure_one()
+        for field_name in ('subscription_plan_id', 'plan_id', 'recurring_plan_id'):
+            if field_name in line._fields and line[field_name]:
+                return line[field_name]
+        return False
+
+    def _get_subscription_plan_interval_for_pos(self, plan):
+        if 'wgs_single_day_plan' in plan._fields and plan.wgs_single_day_plan:
+            return 1, 'day'
+        if {'recurring_interval', 'recurring_rule_type'}.issubset(plan._fields):
+            return plan.recurring_interval or 1, plan.recurring_rule_type or 'month'
+        if {'billing_period_value', 'billing_period_unit'}.issubset(plan._fields):
+            return plan.billing_period_value or 1, plan.billing_period_unit or 'month'
+        if {'interval_number', 'interval_type'}.issubset(plan._fields):
+            return plan.interval_number or 1, plan.interval_type or 'month'
+        if {'duration', 'duration_unit'}.issubset(plan._fields):
+            return plan.duration or 1, plan.duration_unit or 'month'
+        return 1, 'month'
 
     def _get_partner_field_value_for_pos(self, partner, field_candidates):
         partner.ensure_one()

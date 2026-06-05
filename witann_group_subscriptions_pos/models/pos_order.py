@@ -2247,8 +2247,12 @@ class PosOrder(models.Model):
             source_line = recurring_lines.sorted(key=lambda so_line: so_line.id)[:1]
 
         today = fields.Date.context_today(self)
-        _period_start, period_end = self._wgs_get_current_subscription_period_bounds(source_order, today=today)
-        recurrence_delta = self._wgs_get_order_recurrence_delta(source_order)
+        _period_start, period_end = self._wgs_get_current_subscription_period_bounds(
+            source_order,
+            today=today,
+            preferred_line=source_line,
+        )
+        recurrence_delta = self._wgs_get_order_recurrence_delta(source_order, preferred_line=source_line)
         if period_end and today < period_end:
             renewal_anchor = period_end
         else:
