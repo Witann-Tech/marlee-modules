@@ -2241,17 +2241,13 @@ class PosOrder(models.Model):
             source_line = recurring_lines.sorted(key=lambda so_line: so_line.id)[:1]
 
         today = fields.Date.context_today(self)
-        _period_start, period_end = self._wgs_get_current_subscription_period_bounds(
+        renewal_schedule = self._wgs_get_subscription_renewal_schedule(
             source_order,
             today=today,
             preferred_line=source_line,
         )
-        recurrence_delta = self._wgs_get_order_recurrence_delta(source_order, preferred_line=source_line)
-        if period_end and today < period_end:
-            renewal_anchor = period_end
-        else:
-            renewal_anchor = today
-        next_billing_date = renewal_anchor + recurrence_delta
+        next_billing_date = renewal_schedule['next_billing_date']
+        subscription_end_date = renewal_schedule['subscription_end_date']
 
         values = {}
         next_field = self._wgs_find_subscription_next_invoice_date_field(source_order)
@@ -2259,7 +2255,7 @@ class PosOrder(models.Model):
             values[next_field] = next_billing_date
         end_field = self._wgs_find_subscription_end_date_field(source_order)
         if end_field:
-            values[end_field] = self._wgs_to_date(next_billing_date) - timedelta(days=1)
+            values[end_field] = subscription_end_date
         if values:
             source_order.write(values)
 

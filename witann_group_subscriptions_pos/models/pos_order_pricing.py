@@ -389,6 +389,41 @@ class PosOrderPricingMixin(models.Model):
             'proration_ratio': min(charge_days, period_days) / float(period_days),
         }
 
+    def _wgs_get_subscription_renewal_schedule(self, source_order, today=False, preferred_line=False):
+        source_order.ensure_one()
+        today = fields.Date.to_date(today) or fields.Date.context_today(self)
+        preferred_line = preferred_line.exists() if preferred_line else self.env['sale.order.line']
+        plan = self._wgs_extract_plan_record_from_subscription_line(preferred_line)
+        if not plan:
+            plan = self._wgs_extract_plan_record_from_sale_order(source_order)
+
+        _period_start, period_end = self._wgs_get_current_subscription_period_bounds(
+            source_order,
+            today=today,
+            preferred_line=preferred_line,
+        )
+        renewal_anchor = period_end if period_end and today < period_end else today
+
+        if self._wgs_should_align_plan_to_calendar_month(plan):
+            aligned_schedule = self._wgs_get_aligned_monthly_first_period_schedule(renewal_anchor)
+            return {
+                'renewal_anchor': renewal_anchor,
+                'subscription_end_date': aligned_schedule['subscription_end_date'],
+                'next_billing_date': aligned_schedule['next_billing_date'],
+                'period_aligned': True,
+            }
+
+        next_billing_date = renewal_anchor + self._wgs_get_order_recurrence_delta(
+            source_order,
+            preferred_line=preferred_line,
+        )
+        return {
+            'renewal_anchor': renewal_anchor,
+            'subscription_end_date': fields.Date.to_date(next_billing_date) - timedelta(days=1),
+            'next_billing_date': next_billing_date,
+            'period_aligned': False,
+        }
+
     def _wgs_extract_interval_from_plan(self, plan):
         interval_value = 1
         interval_unit = 'month'
@@ -630,6 +665,10 @@ class PosOrderPricingMixin(models.Model):
         resolved_pricing_id = preferred_pricing_id or pricing_id or False
         resolved_plan_record = self._wgs_find_plan_record_by_id(resolved_plan_id) if resolved_plan_id else self._wgs_extract_plan_record_from_sale_order(source_order)
         interval_value, interval_unit = self._wgs_extract_interval_from_plan(resolved_plan_record)
+        renewal_schedule = self._wgs_get_subscription_renewal_schedule(
+            source_order,
+            preferred_line=recurring_line,
+        )
         return {
             'mode': 'subscription',
             'flow': flow,
@@ -647,6 +686,10 @@ class PosOrderPricingMixin(models.Model):
             'charge_now': float(recurring_price),
             'display_charge_now': float(display_recurring_price),
             'ticket_charge_now': float(recurring_price),
+            'subscription_start_date': fields.Date.to_string(renewal_schedule['renewal_anchor']),
+            'subscription_end_date': fields.Date.to_string(renewal_schedule['subscription_end_date']),
+            'next_billing_date': fields.Date.to_string(renewal_schedule['next_billing_date']),
+            'first_period_alignment': bool(renewal_schedule.get('period_aligned')),
             'interval_value': int(interval_value or 1),
             'interval_unit': interval_unit or 'month',
             'interval_label': f'{int(interval_value or 1)} {interval_unit or "month"}',
