@@ -767,7 +767,7 @@ class PosOrder(models.Model):
             fallback=fallback,
             preferred_plan_id=preferred_plan_id,
             preferred_pricing_id=preferred_pricing_id,
-            include_credit=bool(source_order),
+            include_credit=flow == 'upsale' and bool(source_order),
             start_date=start_date,
         )
         candidates = list(snapshot.get('candidates') or [])
