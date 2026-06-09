@@ -881,7 +881,7 @@ function buildSubscriptionInlineActionHandlers({
                         participant_ids: Array.isArray(state.renewalForm.participantIds) ? state.renewalForm.participantIds : [],
                         plan_id: Number(pricingSnapshot.plan_id || 0) || false,
                         pricing_id: Number(pricingSnapshot.pricing_id || 0) || false,
-                        start_date: formatTodayISO(),
+                        start_date: pricingSnapshot.subscription_start_date || state.renewalForm.startDate || formatTodayISO(),
                         end_date: false,
                         product_id: Number(state.renewalForm.productId || 0) || false,
                         product_name: state.renewalForm.productName || false,
@@ -923,6 +923,8 @@ async function handleSubscriptionInlineFieldChange({ field, target }, {
     clearFeedback,
     applySelectedProduct,
     updateSelectedPlan,
+    applySelectedReenrollProduct,
+    updateSelectedReenrollPlan,
     applySelectedUpsaleProduct,
     updateSelectedUpsalePlan,
     toggleParticipant,
@@ -948,6 +950,17 @@ async function handleSubscriptionInlineFieldChange({ field, target }, {
         }
     } else if (state.formMode === "new" && field === "participant_toggle") {
         toggleParticipant(target.value, target.checked);
+    } else if (state.formMode === "reenroll" && field === "reenroll_product_id") {
+        await applySelectedReenrollProduct(target.value);
+    } else if (state.formMode === "reenroll" && field === "reenroll_plan_choice") {
+        await updateSelectedReenrollPlan(target.value);
+    } else if (state.formMode === "reenroll" && field === "reenroll_start_date") {
+        state.renewalForm.startDate = target.value || formatTodayISO();
+        const snapshot = state.renewalForm.pricingSnapshot || {};
+        const selectedChoice = `${Number(snapshot.plan_id || 0)}:${Number(snapshot.pricing_id || 0)}`;
+        if (Number(state.renewalForm.productId || 0) && selectedChoice !== "0:0") {
+            await updateSelectedReenrollPlan(selectedChoice);
+        }
     } else if ((state.formMode === "renewal" || state.formMode === "reenroll") && field === "renewal_discount_percent") {
         state.renewalForm.discountPercent = target.value || "";
         state.renewalForm.authorizedDiscount = null;

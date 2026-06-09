@@ -264,6 +264,7 @@ class SaleOrder(models.Model):
             ),
             'image_url': summary.get('image_url') or ('/web/image/res.partner/%s/image_128' % partner.id),
             'items': items,
+            'has_subscription_history': self._wgs_partner_has_subscription_history_for_pos(partner),
         }
 
     @api.model
@@ -1867,6 +1868,32 @@ class SaleOrder(models.Model):
 
         subscriptions = self.sudo().search(domain, order='id desc')
         return subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
+
+    @api.model
+    def _wgs_partner_has_subscription_history_for_pos(self, partner):
+        partner = partner.exists()
+        if not partner:
+            return False
+
+        partner_ids = {partner.id}
+        if 'commercial_partner_id' in partner._fields and partner.commercial_partner_id:
+            commercial_partner = partner.commercial_partner_id
+            partner_ids.add(commercial_partner.id)
+            if 'child_ids' in commercial_partner._fields:
+                partner_ids.update(commercial_partner.child_ids.ids)
+
+        partner_domain = [
+            '|',
+            ('participant_ids', 'in', list(partner_ids)),
+            ('partner_id', 'in', list(partner_ids)),
+        ]
+        base_domain = [('state', 'in', ['sale', 'done', 'cancel'])]
+        if 'company_id' in self._fields:
+            base_domain.append(('company_id', '=', self.env.company.id))
+        domain = self._wgs_and_domains_for_pos(base_domain, partner_domain)
+
+        candidates = self.sudo().search(domain, order='id desc', limit=200)
+        return bool(candidates.filtered(lambda order: order._is_subscription_record_for_pos()))
 
     @api.model
     def _get_pos_subscription_orders_by_partners(self, partners):

@@ -110,6 +110,9 @@ function canOpenNewSubscription(detail) {
     if (!detail || typeof detail !== "object") {
         return true;
     }
+    if (detail.has_subscription_history) {
+        return false;
+    }
     const summaryState = String(detail.state || "").trim().toLowerCase();
     if (summaryState === "progress" || summaryState === "renew") {
         return false;

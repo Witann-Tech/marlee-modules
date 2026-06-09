@@ -124,6 +124,7 @@ import {
 } from "./subscription_inline_form_handlers";
 import {
     applySelectedProduct as applySelectedProductFlow,
+    applySelectedReenrollProduct as applySelectedReenrollProductFlow,
     applySelectedUpsaleProduct as applySelectedUpsaleProductFlow,
     clampParticipantIds,
     filterParticipantRows as filterParticipantRowsFlow,
@@ -137,6 +138,7 @@ import {
     toggleParticipant as toggleParticipantFlow,
     toggleUpsaleParticipant as toggleUpsaleParticipantFlow,
     updateSelectedPlan as updateSelectedPlanFlow,
+    updateSelectedReenrollPlan as updateSelectedReenrollPlanFlow,
     updateSelectedUpsalePlan as updateSelectedUpsalePlanFlow,
 } from "./subscription_flow_controllers";
 import { ControlButtons } from "@point_of_sale/app/screens/product_screen/control_buttons/control_buttons";
@@ -1201,6 +1203,7 @@ patch(ControlButtons.prototype, {
                 stopPartnerCamera,
                 renderDetail,
                 fetchSubscriptionQuote: (...args) => this._fetchSubscriptionQuote(...args),
+                fetchSubscriptionProductCatalog: (searchTerm) => this._fetchSubscriptionProductCatalog(searchTerm),
                 _t,
             });
         };
@@ -1222,6 +1225,22 @@ patch(ControlButtons.prototype, {
             if (upsaleForm && Number(upsaleForm.maxParticipantsTotal || 1) > 1) {
                 void loadParticipantRows(upsaleForm.participantSearch || "");
             }
+        };
+
+        const applySelectedReenrollProduct = async (productId) => {
+            await applySelectedReenrollProductFlow(modalState, productId, {
+                renderDetail,
+                fetchSubscriptionQuote: (...args) => this._fetchSubscriptionQuote(...args),
+                _t,
+            });
+        };
+
+        const updateSelectedReenrollPlan = async (planChoice) => {
+            await updateSelectedReenrollPlanFlow(modalState, planChoice, {
+                renderDetail,
+                fetchSubscriptionQuote: (...args) => this._fetchSubscriptionQuote(...args),
+                _t,
+            });
         };
 
         const updateSelectedUpsalePlan = async (planChoice) => {
@@ -1568,8 +1587,10 @@ patch(ControlButtons.prototype, {
                 item,
                 formMode,
                 renewalForm,
+                productCatalog,
                 formError,
                 formNotice,
+                catalogLoading,
                 escapeHtml: (value) => this._escapeHtml(value),
                 formatDateDisplay: (value) => this._formatDateDisplay(value),
                 formatMoney: (value) => this._formatMoney(value),
@@ -2044,6 +2065,8 @@ patch(ControlButtons.prototype, {
                     clearFeedback,
                     applySelectedProduct,
                     updateSelectedPlan: updateSelectedPlanHandler,
+                    applySelectedReenrollProduct,
+                    updateSelectedReenrollPlan,
                     applySelectedUpsaleProduct,
                     updateSelectedUpsalePlan,
                     toggleParticipant: toggleParticipantHandler,

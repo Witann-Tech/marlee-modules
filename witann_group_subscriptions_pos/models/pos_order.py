@@ -423,28 +423,16 @@ class PosOrder(models.Model):
             normalized_flow = 'new'
 
         if normalized_flow == 'new':
-            blocking_subscription = self._wgs_get_blocking_subscription_for_new_flow(
+            historical_subscription = self._wgs_get_any_subscription_history_for_partner(
                 partner,
                 company=self.env.company,
             )
-            if blocking_subscription:
+            if historical_subscription:
                 return {
                     'ok': False,
-                    'error_code': 'active_subscription_exists',
-                    'error_message': self._wgs_get_blocking_subscription_for_new_flow_message(blocking_subscription),
-                }
-            reenroll_source = self._wgs_get_reenroll_source_for_new_same_product_flow(
-                partner,
-                product,
-                company=self.env.company,
-            )
-            if reenroll_source:
-                return {
-                    'ok': False,
-                    'error_code': 'reenroll_required_for_same_product',
-                    'error_message': self._wgs_get_reenroll_required_for_new_same_product_message(
-                        reenroll_source,
-                        product,
+                    'error_code': 'subscription_history_exists',
+                    'error_message': self._wgs_get_subscription_history_blocks_new_flow_message(
+                        historical_subscription,
                     ),
                 }
 
@@ -863,25 +851,13 @@ class PosOrder(models.Model):
             if not product:
                 raise UserError(_('El producto seleccionado no existe o no está disponible.'))
             if partner:
-                blocking_subscription = self._wgs_get_blocking_subscription_for_new_flow(
+                historical_subscription = self._wgs_get_any_subscription_history_for_partner(
                     partner,
                     company=self.env.company,
                 )
-                if blocking_subscription:
+                if historical_subscription:
                     raise UserError(
-                        self._wgs_get_blocking_subscription_for_new_flow_message(blocking_subscription)
-                    )
-                reenroll_source = self._wgs_get_reenroll_source_for_new_same_product_flow(
-                    partner,
-                    product,
-                    company=self.env.company,
-                )
-                if reenroll_source:
-                    raise UserError(
-                        self._wgs_get_reenroll_required_for_new_same_product_message(
-                            reenroll_source,
-                            product,
-                        )
+                        self._wgs_get_subscription_history_blocks_new_flow_message(historical_subscription)
                     )
 
         elif normalized_flow == 'upsale':
@@ -914,6 +890,10 @@ class PosOrder(models.Model):
                 raise UserError(_('La orden origen no corresponde a una suscripción válida.'))
             if not self._wgs_is_subscription_order_closed_for_reenroll(source_order):
                 raise UserError(_('La suscripción origen no está cerrada ni cancelada para reinscripción.'))
+            if not product:
+                raise UserError(_('Selecciona el paquete para la reinscripción.'))
+            if not partner and 'partner_id' in source_order._fields:
+                partner = source_order.partner_id
 
         return {
             'flow': normalized_flow,
@@ -963,16 +943,31 @@ class PosOrder(models.Model):
             pricing['flow'] = normalized_flow
             pricing['is_upgrade'] = bool(source_order) if normalized_flow == 'upsale' else False
             pricing['is_renewal'] = False
-        elif normalized_flow in ('renewal', 'reenroll'):
+        elif normalized_flow == 'renewal':
             pricing = self._wgs_build_subscription_recurring_charge_payload(
                 source_order,
                 product_id=product.id if product else False,
                 preferred_plan_id=preferred_plan_id,
                 preferred_pricing_id=preferred_pricing_id,
                 is_renewal=normalized_flow == 'renewal',
-                is_reenroll=normalized_flow == 'reenroll',
+                is_reenroll=False,
             )
             pricing['flow'] = normalized_flow
+        elif normalized_flow == 'reenroll':
+            pricing = self._wgs_build_product_pricing_payload_for_pos(
+                product=product,
+                flow=normalized_flow,
+                partner=partner if partner else False,
+                source_order=source_order,
+                fallback=fallback,
+                preferred_plan_id=preferred_plan_id,
+                preferred_pricing_id=preferred_pricing_id,
+                start_date=start_date,
+            )
+            pricing['flow'] = normalized_flow
+            pricing['is_upgrade'] = False
+            pricing['is_renewal'] = False
+            pricing['is_reenroll'] = True
         else:
             raise UserError(_('No se pudo resolver el flujo de pricing solicitado.'))
 
@@ -2135,22 +2130,21 @@ class PosOrder(models.Model):
                 )
 
         if flow == 'new' and line.wgs_has_subscription_configuration() and not linked_order:
-            reenroll_source = self._wgs_get_reenroll_source_for_new_same_product_flow(
+            historical_subscription = self._wgs_get_any_subscription_history_for_partner(
                 line.order_id.partner_id,
-                line.product_id,
                 company=line.order_id.company_id,
             )
-            if reenroll_source:
+            if historical_subscription:
                 return dict(
                     base_issue,
-                    issue='new_same_product_requires_reenroll',
+                    issue='new_with_subscription_history_not_allowed',
                     safe_to_repair=False,
-                    source_order_id=reenroll_source.id,
-                    source_order_name=reenroll_source.name,
-                    source_state=reenroll_source.subscription_state
-                    if 'subscription_state' in reenroll_source._fields
+                    source_order_id=historical_subscription.id,
+                    source_order_name=historical_subscription.name,
+                    source_state=historical_subscription.subscription_state
+                    if 'subscription_state' in historical_subscription._fields
                     else False,
-                    reason='La línea se vendió como nueva, pero existe una suscripción cerrada/cancelada del mismo paquete; debe revisarse como reinscripción.',
+                    reason='La línea se vendió como nueva, pero el cliente ya tiene historial de membresía; debe revisarse como renovación, reinscripción o cambio de paquete.',
                 )
 
         if line.wgs_has_subscription_configuration() and not linked_order:
@@ -2821,25 +2815,13 @@ class PosOrder(models.Model):
 
         product = line.product_id
         if line.wgs_subscription_flow == 'new':
-            blocking_subscription = self._wgs_get_blocking_subscription_for_new_flow(
+            historical_subscription = self._wgs_get_any_subscription_history_for_partner(
                 self.partner_id,
                 company=self.company_id,
             )
-            if blocking_subscription:
+            if historical_subscription:
                 raise UserError(
-                    self._wgs_get_blocking_subscription_for_new_flow_message(blocking_subscription)
-                )
-            reenroll_source = self._wgs_get_reenroll_source_for_new_same_product_flow(
-                self.partner_id,
-                product,
-                company=self.company_id,
-            )
-            if reenroll_source:
-                raise UserError(
-                    self._wgs_get_reenroll_required_for_new_same_product_message(
-                        reenroll_source,
-                        product,
-                    )
+                    self._wgs_get_subscription_history_blocks_new_flow_message(historical_subscription)
                 )
         qty = abs(line.qty)
         max_total = int((product.max_participants_total or 1) * qty)
@@ -3259,6 +3241,41 @@ class PosOrder(models.Model):
         partner.ensure_one()
         candidate = self._wgs_find_active_subscription_for_partner(partner, company=company)[:1]
         return candidate.exists() if candidate else self.env['sale.order']
+
+    def _wgs_get_any_subscription_history_for_partner(self, partner, company=False):
+        partner.ensure_one()
+        return self._wgs_find_subscription_history_for_partner(partner, company=company)[:1]
+
+    def _wgs_find_subscription_history_for_partner(self, partner, company=False):
+        partner.ensure_one()
+        sale_order_model = self.env['sale.order']
+        partner_ids = self._wgs_get_subscription_partner_scope_ids_for_pos(partner)
+        if not partner_ids:
+            return sale_order_model
+
+        domain = [('state', 'in', ['sale', 'done', 'cancel'])]
+        if 'participant_ids' in sale_order_model._fields:
+            domain.extend([
+                '|',
+                ('partner_id', 'in', list(partner_ids)),
+                ('participant_ids', 'in', list(partner_ids)),
+            ])
+        else:
+            domain.append(('partner_id', 'in', list(partner_ids)))
+        if company and 'company_id' in sale_order_model._fields:
+            domain.append(('company_id', '=', company.id))
+
+        candidates = sale_order_model.search(domain, order='id desc', limit=500)
+        return candidates.filtered(lambda order: self._wgs_order_has_subscription_signal(order))
+
+    def _wgs_get_subscription_history_blocks_new_flow_message(self, source_order):
+        source_order.ensure_one()
+        return _(
+            'Este cliente ya tuvo una membresía (%(subscription)s). '
+            'Nueva suscripción solo aplica para personas sin historial; usa Renovar, Reinscribir o Cambiar paquete.'
+        ) % {
+            'subscription': source_order.name or source_order.display_name,
+        }
 
     def _wgs_get_blocking_subscription_for_new_flow_message(self, source_order):
         source_order.ensure_one()
