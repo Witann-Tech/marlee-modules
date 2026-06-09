@@ -7,8 +7,10 @@ function renderSubscriptionCards(detail, {
     renderParticipantEditForm,
     renderRenewalForm,
     renderUpsaleForm,
+    renderNewSubscriptionForm,
     getStateClass,
     getResyncAccessState,
+    allowNewSubscription,
     escapeHtml,
     formatDateDisplay,
     formatMoney,
@@ -17,9 +19,23 @@ function renderSubscriptionCards(detail, {
     const subscriptions = Array.isArray(detail.items) ? detail.items : [];
     if (!subscriptions.length) {
         return `
-            <div class="wgs-detail-empty wgs-detail-empty-inline">
-                <strong>${escapeHtml(_t("Sin suscripciones relacionadas"))}</strong>
-                <p>${escapeHtml(_t("Este cliente no tiene suscripciones nativas vigentes o historicas visibles para POS."))}</p>
+            <div class="wgs-subscription-card wgs-subscription-card-empty">
+                <div class="wgs-subscription-card-header">
+                    <div>
+                        <strong>${escapeHtml(_t("Sin suscripciones relacionadas"))}</strong>
+                        <div class="wgs-subscription-card-meta">${escapeHtml(_t("Sin historial visible para POS"))}</div>
+                    </div>
+                </div>
+                <div class="wgs-detail-empty wgs-detail-empty-inline">
+                    <p>${escapeHtml(_t("Este cliente no tiene suscripciones nativas vigentes o historicas visibles para POS."))}</p>
+                </div>
+                <div class="wgs-subscription-actions">
+                    ${allowNewSubscription
+                        ? `<button type="button" class="wgs-action-btn wgs-primary-action-btn" data-action="open-new">${escapeHtml(_t("Nueva suscripcion"))}</button>`
+                        : ""
+                    }
+                </div>
+                ${renderNewSubscriptionForm()}
             </div>
         `;
     }
@@ -93,19 +109,21 @@ function renderDetailContent(detail, {
         escapeHtml,
         _t,
     });
+    const allowNewSubscription = canOpenNewSubscription(detail);
     const subscriptionsHtml = renderSubscriptionCards(detail, {
         renderSubscriptionCard,
         renderParticipantEditForm,
         renderRenewalForm,
         renderUpsaleForm,
+        renderNewSubscriptionForm,
         getStateClass,
         getResyncAccessState,
+        allowNewSubscription,
         escapeHtml,
         formatDateDisplay,
         formatMoney,
         _t,
     });
-    const allowNewSubscription = canOpenNewSubscription(detail);
     const feedbackHtml = `
         ${formError ? `<div class="wgs-inline-error wgs-inline-error-compact">${escapeHtml(formError)}</div>` : ""}
         ${formNotice ? `<div class="wgs-inline-notice wgs-inline-notice-compact">${escapeHtml(formNotice)}</div>` : ""}
@@ -127,13 +145,6 @@ function renderDetailContent(detail, {
             _t,
         })}
         ${feedbackHtml}
-        <div class="wgs-detail-actions-bar">
-            ${allowNewSubscription
-                ? `<button type="button" class="wgs-primary-action-btn" data-action="open-new">${escapeHtml(_t("Nueva suscripcion"))}</button>`
-                : ""
-            }
-        </div>
-        ${renderNewSubscriptionForm()}
         <div class="wgs-detail-note">${escapeHtml(_t("Renovación, upsale, cobro pendiente y participantes se operan desde cada tarjeta de suscripción."))}</div>
         <div class="wgs-detail-section">
             <div class="wgs-detail-section-title">${escapeHtml(_t("Suscripciones del cliente"))}</div>
