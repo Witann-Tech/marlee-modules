@@ -2232,7 +2232,12 @@ class PosOrder(models.Model):
         if not self._wgs_is_subscription_order_active_for_upsell(source_order):
             raise UserError(_('La suscripción origen no está activa para renovación.'))
 
-        recurring_lines = source_order.order_line.filtered(lambda so_line: self._wgs_is_recurring_so_line(so_line))
+        recurring_lines = source_order.order_line.filtered(
+            lambda so_line: (
+                self._wgs_is_recurring_so_line(so_line)
+                and self._wgs_sale_order_line_has_positive_qty_for_pos(so_line)
+            )
+        )
         if not recurring_lines:
             raise UserError(_('La suscripción origen no tiene líneas recurrentes configuradas.'))
 
@@ -2357,10 +2362,14 @@ class PosOrder(models.Model):
             subscription_end_date = subscription_start_date
             next_billing_date = False
 
-        source_line = source_order.order_line.filtered(lambda so_line: self._wgs_is_recurring_so_line(so_line))[:1]
+        source_lines = source_order.order_line.filtered(lambda so_line: self._wgs_is_recurring_so_line(so_line))
+        source_line = source_lines.filtered(lambda so_line: self._wgs_sale_order_line_has_positive_qty_for_pos(so_line))[:1]
+        if not source_line:
+            source_line = source_lines[:1]
         if not source_line:
             raise UserError(_('La suscripción origen no tiene líneas recurrentes para aplicar la reinscripción.'))
-        line_values = self._wgs_build_reenroll_source_line_values(
+        source_line = self._wgs_apply_reenroll_source_line_values(
+            source_order=source_order,
             source_line=source_line,
             pos_line=line,
             product=product,
@@ -2369,8 +2378,6 @@ class PosOrder(models.Model):
             recurring_plan_id=recurring_plan_id,
             recurring_pricing_id=recurring_pricing_id,
         )
-        if line_values:
-            source_line.write(line_values)
 
         self._wgs_sync_subscription_metadata(
             sale_order=source_order,
@@ -2423,6 +2430,82 @@ class PosOrder(models.Model):
         )
         return source_order
 
+    def _wgs_get_sale_line_qty_field_name_for_pos(self, line_fields):
+        return next(
+            (
+                field_name
+                for field_name in ('product_uom_qty', 'quantity', 'qty')
+                if field_name in line_fields
+            ),
+            False,
+        )
+
+    def _wgs_get_sale_line_qty_for_pos(self, line):
+        qty_field_name = self._wgs_get_sale_line_qty_field_name_for_pos(line._fields)
+        if qty_field_name:
+            return float(line[qty_field_name] or 0.0)
+        return 1.0
+
+    def _wgs_sale_order_line_has_positive_qty_for_pos(self, line):
+        return self._wgs_get_sale_line_qty_for_pos(line) > 0
+
+    def _wgs_apply_reenroll_source_line_values(
+        self,
+        *,
+        source_order,
+        source_line,
+        pos_line,
+        product,
+        qty,
+        recurring_price_unit,
+        recurring_plan_id=False,
+        recurring_pricing_id=False,
+    ):
+        source_order.ensure_one()
+        source_line.ensure_one()
+        line_values = self._wgs_build_reenroll_source_line_values(
+            source_line=source_line,
+            pos_line=pos_line,
+            product=product,
+            qty=qty,
+            recurring_price_unit=recurring_price_unit,
+            recurring_plan_id=recurring_plan_id,
+            recurring_pricing_id=recurring_pricing_id,
+        )
+        if not line_values:
+            return source_line
+
+        if source_line.product_id == product:
+            line_values.pop('product_id', None)
+            if line_values:
+                source_line.write(line_values)
+            return source_line
+
+        old_line_values = {}
+        qty_field_name = self._wgs_get_sale_line_qty_field_name_for_pos(source_line._fields)
+        if qty_field_name:
+            old_line_values[qty_field_name] = 0
+        if 'price_unit' in source_line._fields:
+            old_line_values['price_unit'] = 0
+        if 'discount' in source_line._fields:
+            old_line_values['discount'] = 0
+        if old_line_values:
+            source_line.write(old_line_values)
+
+        new_line = self.env['sale.order.line'].sudo().create({
+            **line_values,
+            'order_id': source_order.id,
+        })
+        _logger.info(
+            'WGS POS: reenroll replaced recurring line %s with %s on subscription %s (%s -> %s)',
+            source_line.id,
+            new_line.id,
+            source_order.name,
+            source_line.product_id.display_name,
+            product.display_name,
+        )
+        return new_line
+
     def _wgs_build_reenroll_source_line_values(
         self,
         *,
@@ -2440,14 +2523,7 @@ class PosOrder(models.Model):
             values['product_id'] = product.id
         if 'name' in line_fields:
             values['name'] = pos_line.full_product_name or product.display_name
-        qty_field_name = next(
-            (
-                field_name
-                for field_name in ('product_uom_qty', 'quantity', 'qty')
-                if field_name in line_fields
-            ),
-            False,
-        )
+        qty_field_name = self._wgs_get_sale_line_qty_field_name_for_pos(line_fields)
         if qty_field_name:
             values[qty_field_name] = qty
         uom_field_name = next(
@@ -2796,7 +2872,12 @@ class PosOrder(models.Model):
         product = product.exists()
         if not source_order or not product:
             return False
-        recurring_lines = source_order.order_line.filtered(lambda so_line: self._wgs_is_recurring_so_line(so_line))
+        recurring_lines = source_order.order_line.filtered(
+            lambda so_line: (
+                self._wgs_is_recurring_so_line(so_line)
+                and self._wgs_sale_order_line_has_positive_qty_for_pos(so_line)
+            )
+        )
         matching_lines = recurring_lines.filtered(lambda so_line: so_line.product_id == product)
         source_line = (matching_lines or recurring_lines)[:1]
         if not source_line:
@@ -3436,7 +3517,12 @@ class PosOrder(models.Model):
             return False
 
         product_tmpl = product.product_tmpl_id
-        recurring_lines = sale_order.order_line.filtered(lambda so_line: self._wgs_is_recurring_so_line(so_line))
+        recurring_lines = sale_order.order_line.filtered(
+            lambda so_line: (
+                self._wgs_is_recurring_so_line(so_line)
+                and self._wgs_sale_order_line_has_positive_qty_for_pos(so_line)
+            )
+        )
         for line in recurring_lines:
             line_product = line.product_id
             if line_product == product:

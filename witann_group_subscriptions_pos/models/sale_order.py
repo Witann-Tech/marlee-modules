@@ -2393,8 +2393,18 @@ class SaleOrder(models.Model):
     def _get_recurring_lines(self):
         self.ensure_one()
         return self.order_line.filtered(
-            lambda line: line.product_id and line.product_id.product_tmpl_id.recurring_invoice
+            lambda line: (
+                line.product_id
+                and line.product_id.product_tmpl_id.recurring_invoice
+                and self._wgs_get_sale_order_line_qty_for_pos(line) > 0
+            )
         )
+
+    def _wgs_get_sale_order_line_qty_for_pos(self, line):
+        for field_name in ('product_uom_qty', 'quantity', 'qty'):
+            if field_name in line._fields:
+                return float(line[field_name] or 0.0)
+        return 1.0
 
     def _get_subscription_plan_name_for_pos(self, recurring_lines):
         self.ensure_one()
