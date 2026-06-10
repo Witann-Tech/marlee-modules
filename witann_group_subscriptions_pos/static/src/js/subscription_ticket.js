@@ -346,6 +346,20 @@ function getLineDiscount(line) {
     return toFiniteNumber(line && line.discount !== undefined ? line.discount : 0);
 }
 
+function areAmountsEquivalent(left, right) {
+    return Math.abs(toFiniteNumber(left) - toFiniteNumber(right)) < 0.000001;
+}
+
+function hasLinePricingDrift(line, lock) {
+    if (!line || !lock) {
+        return false;
+    }
+    return (
+        !areAmountsEquivalent(getLinePriceUnit(line), lock.priceUnit)
+        || !areAmountsEquivalent(getLineDiscount(line), lock.discount)
+    );
+}
+
 function getProtectedLinePriceLock(line) {
     if (!line) {
         return null;
@@ -389,6 +403,16 @@ function getSubscriptionLinePriceLock(line) {
         return null;
     }
     return getProtectedLinePriceLock(line);
+}
+
+function suspendOrderLinePricingLocks(order) {
+    if (!order) {
+        return () => {};
+    }
+    order.__wgsSuspendLinePricingLocks = Number(order.__wgsSuspendLinePricingLocks || 0) + 1;
+    return () => {
+        order.__wgsSuspendLinePricingLocks = Math.max(0, Number(order.__wgsSuspendLinePricingLocks || 0) - 1);
+    };
 }
 
 function callOriginalLineSetter(line, methodName, value) {
@@ -490,7 +514,9 @@ function lockPosOrderLinePricing(line, priceUnit = null, discount = 0) {
         discount: toFiniteNumber(discount),
     };
     patchSubscriptionLinePricingPrototype(line);
-    restoreSubscriptionLinePricing(line);
+    if (hasLinePricingDrift(line, line.wgsPosPriceLock)) {
+        restoreSubscriptionLinePricing(line);
+    }
 }
 
 function lockSubscriptionLinePricing(line, metadata, priceUnit, discount) {
@@ -509,27 +535,39 @@ function lockSubscriptionLinePricing(line, metadata, priceUnit, discount) {
     line.wgsSubscriptionPriceLock = lock;
     line.wgsPosPriceLock = lock;
     patchSubscriptionLinePricingPrototype(line);
-    restoreSubscriptionLinePricing(line);
+    if (hasLinePricingDrift(line, lock)) {
+        restoreSubscriptionLinePricing(line);
+    }
 }
 
 export function enforceOrderLinePricingLocks(order) {
+    if (!order || Number(order.__wgsSuspendLinePricingLocks || 0) > 0) {
+        return;
+    }
     for (const line of getOrderLines(order)) {
         if (!line) {
             continue;
         }
+        if (!getProductIdFromLine(line)) {
+            continue;
+        }
         if (line.wgsSubscriptionConfig) {
             const lock = getSubscriptionLinePriceLock(line) || {};
-            lockSubscriptionLinePricing(
-                line,
-                line.wgsSubscriptionConfig,
-                lock.priceUnit !== undefined ? lock.priceUnit : getLinePriceUnit(line),
-                lock.discount !== undefined ? lock.discount : getLineDiscount(line)
-            );
+            if (hasLinePricingDrift(line, lock)) {
+                lockSubscriptionLinePricing(
+                    line,
+                    line.wgsSubscriptionConfig,
+                    lock.priceUnit !== undefined ? lock.priceUnit : getLinePriceUnit(line),
+                    lock.discount !== undefined ? lock.discount : getLineDiscount(line)
+                );
+            } else {
+                patchSubscriptionLinePricingPrototype(line);
+            }
             continue;
         }
         if (!line.wgsPosPriceLock) {
             lockPosOrderLinePricing(line, getLinePriceUnit(line), 0);
-        } else {
+        } else if (hasLinePricingDrift(line, line.wgsPosPriceLock)) {
             restoreSubscriptionLinePricing(line);
         }
     }
@@ -817,45 +855,50 @@ export async function addConfiguredProductLineToOrder(source, order, product, op
 
     const normalizedProduct = normalizeProductTaxesForCurrentCompany(source, product);
 
-    const addResult = await addProductToOrder(source, order, normalizedProduct, {
-        quantity,
-        merge,
-        price: resolvedLineUnitPrice,
-    });
-    await waitForNextTick();
-    await waitForNextTick();
+    const resumePricingLocks = suspendOrderLinePricingLocks(order);
+    try {
+        const addResult = await addProductToOrder(source, order, normalizedProduct, {
+            quantity,
+            merge,
+            price: resolvedLineUnitPrice,
+        });
+        await waitForNextTick();
+        await waitForNextTick();
 
-    const afterLines = getOrderLines(order);
-    let targetLine = afterLines.find((line) => !beforeSet.has(line)) || null;
-    if (!targetLine && addResult && typeof addResult === "object") {
-        targetLine = addResult;
-    }
-    if (!targetLine) {
-        const selectedAfter = getSelectedOrderLine(source, order);
-        if (selectedAfter && selectedAfter !== beforeSelectedLine) {
-            targetLine = selectedAfter;
+        const afterLines = getOrderLines(order);
+        let targetLine = afterLines.find((line) => !beforeSet.has(line)) || null;
+        if (!targetLine && addResult && typeof addResult === "object") {
+            targetLine = addResult;
         }
-    }
-    if (!targetLine && afterLines.length <= beforeCount) {
-        return { line: null, reason: "not_added" };
-    }
-    if (!targetLine) {
-        return { line: null, reason: "not_identified" };
-    }
+        if (!targetLine) {
+            const selectedAfter = getSelectedOrderLine(source, order);
+            if (selectedAfter && selectedAfter !== beforeSelectedLine) {
+                targetLine = selectedAfter;
+            }
+        }
+        if (!targetLine && afterLines.length <= beforeCount) {
+            return { line: null, reason: "not_added" };
+        }
+        if (!targetLine) {
+            return { line: null, reason: "not_identified" };
+        }
 
-    setLineUnitPrice(targetLine, Number(resolvedLineUnitPrice || 0));
-    if (Number(discount || 0)) {
-        setLineDiscount(targetLine, Number(discount || 0));
+        setLineUnitPrice(targetLine, Number(resolvedLineUnitPrice || 0));
+        if (Number(discount || 0)) {
+            setLineDiscount(targetLine, Number(discount || 0));
+        }
+        if (metadata) {
+            lockSubscriptionLinePricing(
+                targetLine,
+                metadata,
+                Number(resolvedLineUnitPrice || 0),
+                Number(discount || 0)
+            );
+        }
+        return { line: targetLine, reason: null };
+    } finally {
+        resumePricingLocks();
     }
-    if (metadata) {
-        lockSubscriptionLinePricing(
-            targetLine,
-            metadata,
-            Number(resolvedLineUnitPrice || 0),
-            Number(discount || 0)
-        );
-    }
-    return { line: targetLine, reason: null };
 }
 
 export function findProductInPos(source, productId) {
