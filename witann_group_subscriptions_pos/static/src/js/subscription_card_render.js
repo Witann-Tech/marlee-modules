@@ -59,7 +59,7 @@ function renderSubscriptionCard({
             <div class="wgs-subscription-actions">
                 <button
                     type="button"
-                    class="wgs-action-btn"
+                    class="wgs-action-btn wgs-primary-action-btn"
                     data-action="${escapeHtml(item.can_reenroll ? "open-reenroll" : "open-renewal")}"
                     data-subscription-id="${escapeHtml(String(item.subscription_id || 0))}"
                     ${(item.can_renew || item.can_reenroll) ? "" : "disabled"}
