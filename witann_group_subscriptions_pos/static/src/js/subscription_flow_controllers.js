@@ -29,6 +29,11 @@ function clampParticipantIds(participantIds, ownerId, maxTotal) {
     return result;
 }
 
+function getOwnerOnlyParticipantIds(ownerId) {
+    const numericOwnerId = Number(ownerId || 0) || false;
+    return numericOwnerId ? [numericOwnerId] : [];
+}
+
 function filterParticipantRows(rows, searchTerm = "") {
     const query = String(searchTerm || "").trim().toLowerCase();
     const sourceRows = rows
@@ -360,6 +365,11 @@ function applyPricingPayloadToUpsaleForm(state, payload, preferredPlan, {
         sourceSubscriptionName: state.upsaleForm.subscriptionName,
     });
     state.upsaleForm.maxParticipantsTotal = Number(payload && payload.max_participants_total ? payload.max_participants_total : 1) || 1;
+    state.upsaleForm.participantIds = clampParticipantIds(
+        state.upsaleForm.participantIds,
+        state.upsaleForm.holderPartnerId,
+        state.upsaleForm.maxParticipantsTotal
+    );
     state.upsaleForm.plans = mergeResolvedPlanChoice(
         payload && Array.isArray(payload.plans) ? payload.plans : [],
         snapshot,
@@ -622,11 +632,7 @@ async function applySelectedUpsaleProduct(state, productId, {
     state.upsaleForm.plans = [];
     state.upsaleForm.pricingSnapshot = null;
     resetDiscountAuthorization(state.upsaleForm);
-    state.upsaleForm.participantIds = clampParticipantIds(
-        state.upsaleForm.participantIds,
-        state.upsaleForm.holderPartnerId,
-        state.upsaleForm.maxParticipantsTotal
-    );
+    state.upsaleForm.participantIds = getOwnerOnlyParticipantIds(state.upsaleForm.holderPartnerId);
     if (!product) {
         renderDetail(state.currentDetail);
         return;
@@ -721,7 +727,7 @@ function toggleUpsaleParticipant(state, partnerId, checked) {
     let values = [...(state.upsaleForm.participantIds || [])].map((item) => Number(item));
     values = values.filter((item) => item > 0 && item !== holderPartnerId && item !== numericPartnerId);
     if (checked && numericPartnerId > 0 && numericPartnerId !== holderPartnerId) {
-        values.push(numericPartnerId);
+        values.unshift(numericPartnerId);
     }
     state.upsaleForm.participantIds = clampParticipantIds(
         holderPartnerId ? [holderPartnerId, ...new Set(values)] : [...new Set(values)],
