@@ -65,6 +65,12 @@ import {
     renderAccessLogToolbar,
 } from "./subscription_access_log_render";
 import {
+    getTodaySalesHistoryRange,
+    localDateTimeInputToUtcString as salesHistoryLocalDateTimeInputToUtcString,
+    renderSalesHistoryContent,
+    renderSalesHistoryToolbar,
+} from "./subscription_sales_history_render";
+import {
     countDirectoryRows,
     filterDirectoryRows,
     sortDirectoryRows,
@@ -523,6 +529,7 @@ patch(ControlButtons.prototype, {
         tabs.innerHTML = `
             <button type="button" class="wgs-status-tab wgs-status-tab-active" data-tab="directory">${this._escapeHtml(_t("Directorio"))}</button>
             <button type="button" class="wgs-status-tab" data-tab="access_log">${this._escapeHtml(_t("Bitacora de accesos"))}</button>
+            <button type="button" class="wgs-status-tab" data-tab="sales_history">${this._escapeHtml(_t("Ventas POS"))}</button>
         `;
 
         const toolbar = document.createElement("div");
@@ -558,6 +565,8 @@ patch(ControlButtons.prototype, {
 
         const accessLogToolbar = document.createElement("div");
         accessLogToolbar.className = "wgs-access-log-toolbar-shell";
+        const salesHistoryToolbar = document.createElement("div");
+        salesHistoryToolbar.className = "wgs-sales-history-toolbar-shell";
 
         const summary = document.createElement("div");
         summary.className = "wgs-status-summary";
@@ -623,6 +632,8 @@ patch(ControlButtons.prototype, {
 
         const accessLogBody = document.createElement("div");
         accessLogBody.className = "wgs-access-log-body";
+        const salesHistoryBody = document.createElement("div");
+        salesHistoryBody.className = "wgs-sales-history-body";
 
         let activeCameraStream = null;
         const stopPartnerCamera = () => {
@@ -713,9 +724,11 @@ patch(ControlButtons.prototype, {
         modal.appendChild(tabs);
         modal.appendChild(toolbar);
         modal.appendChild(accessLogToolbar);
+        modal.appendChild(salesHistoryToolbar);
         modal.appendChild(summary);
         modal.appendChild(body);
         modal.appendChild(accessLogBody);
+        modal.appendChild(salesHistoryBody);
         modal.appendChild(footer);
         overlay.appendChild(modal);
 
@@ -789,6 +802,20 @@ patch(ControlButtons.prototype, {
         let accessLogNotice = "";
         let accessLogOpeningDoorId = 0;
         let accessLogLoaded = false;
+        let salesHistoryFilters = {
+            ...getTodaySalesHistoryRange(),
+            seller: "",
+            sessionId: "",
+        };
+        let salesHistoryRows = [];
+        let salesHistorySellers = [];
+        let salesHistorySessions = [];
+        let salesHistoryTotalCount = 0;
+        let salesHistoryTotalAmount = 0;
+        let salesHistoryLimited = false;
+        let salesHistoryLoading = false;
+        let salesHistoryError = "";
+        let salesHistoryLoaded = false;
         let partnerAccessActionKey = "";
         let resyncAccessCooldownTimer = null;
         const resyncAccessLoadingIds = new Set();
@@ -915,18 +942,46 @@ patch(ControlButtons.prototype, {
             });
         };
 
+        const renderSalesHistory = () => {
+            salesHistoryToolbar.innerHTML = renderSalesHistoryToolbar({
+                filters: salesHistoryFilters,
+                sellers: salesHistorySellers,
+                sessions: salesHistorySessions,
+                escapeHtml: (value) => this._escapeHtml(value),
+                _t,
+            });
+            salesHistoryBody.innerHTML = renderSalesHistoryContent({
+                rows: salesHistoryRows,
+                loading: salesHistoryLoading,
+                error: salesHistoryError,
+                totalCount: salesHistoryTotalCount,
+                totalAmount: salesHistoryTotalAmount,
+                limited: salesHistoryLimited,
+                escapeHtml: (value) => this._escapeHtml(value),
+                formatDateTimeDisplay: (value) => this._formatDateTimeDisplay(value),
+                formatMoney: (value) => this._formatMoney(value),
+                _t,
+            });
+        };
+
         const renderActiveTabChrome = () => {
             const showDirectory = activeTab === "directory";
+            const showAccessLog = activeTab === "access_log";
+            const showSalesHistory = activeTab === "sales_history";
             toolbar.style.display = showDirectory ? "" : "none";
             summary.style.display = showDirectory ? "" : "none";
             body.style.display = showDirectory ? "" : "none";
-            accessLogToolbar.style.display = showDirectory ? "none" : "";
-            accessLogBody.style.display = showDirectory ? "none" : "";
+            accessLogToolbar.style.display = showAccessLog ? "" : "none";
+            accessLogBody.style.display = showAccessLog ? "" : "none";
+            salesHistoryToolbar.style.display = showSalesHistory ? "" : "none";
+            salesHistoryBody.style.display = showSalesHistory ? "" : "none";
             for (const button of tabs.querySelectorAll("[data-tab]")) {
                 button.classList.toggle("wgs-status-tab-active", button.dataset.tab === activeTab);
             }
-            if (!showDirectory) {
+            if (showAccessLog) {
                 renderAccessLog();
+            } else if (showSalesHistory) {
+                renderSalesHistory();
             }
         };
 
@@ -1062,6 +1117,37 @@ patch(ControlButtons.prototype, {
                 accessLogError = (error && error.message) ? error.message : _t("No se pudo consultar la bitacora de accesos.");
             } finally {
                 accessLogLoading = false;
+                renderActiveTabChrome();
+            }
+        };
+
+        const loadSalesHistory = async () => {
+            salesHistoryLoading = true;
+            salesHistoryError = "";
+            renderActiveTabChrome();
+            try {
+                const result = await this.subscriptionPosApi.fetchPosSalesHistory({
+                    company_id: getCurrentCompanyId(this) || false,
+                    from: salesHistoryLocalDateTimeInputToUtcString(salesHistoryFilters.from),
+                    to: salesHistoryLocalDateTimeInputToUtcString(salesHistoryFilters.to),
+                    timezone: WGS_POS_ACCESS_LOG_TIME_ZONE,
+                    seller: salesHistoryFilters.seller || false,
+                    session_id: salesHistoryFilters.sessionId || false,
+                    limit: 150,
+                });
+                salesHistoryRows = Array.isArray(result && result.rows) ? result.rows : [];
+                salesHistorySellers = Array.isArray(result && result.sellers) ? result.sellers : [];
+                salesHistorySessions = Array.isArray(result && result.sessions) ? result.sessions : [];
+                salesHistoryTotalCount = Number(result && result.total_count ? result.total_count : salesHistoryRows.length);
+                salesHistoryTotalAmount = Number(result && result.total_amount ? result.total_amount : 0);
+                salesHistoryLimited = Boolean(result && result.limited);
+                salesHistoryLoaded = true;
+            } catch (error) {
+                console.error("Error al consultar historial de ventas POS", error);
+                salesHistoryRows = [];
+                salesHistoryError = (error && error.message) ? error.message : _t("No se pudo consultar el historial de ventas POS.");
+            } finally {
+                salesHistoryLoading = false;
                 renderActiveTabChrome();
             }
         };
@@ -1825,6 +1911,8 @@ patch(ControlButtons.prototype, {
             render();
             if (activeTab === "access_log" && !accessLogLoaded) {
                 loadAccessLog();
+            } else if (activeTab === "sales_history" && !salesHistoryLoaded) {
+                loadSalesHistory();
             }
         });
 
@@ -1854,6 +1942,25 @@ patch(ControlButtons.prototype, {
                 return;
             }
             openAccessDoor(openDoorButton.dataset.deviceId || false);
+        });
+
+        salesHistoryToolbar.addEventListener("change", (event) => {
+            if (event.target.classList.contains("wgs-sales-history-from")) {
+                salesHistoryFilters.from = event.target.value || "";
+            } else if (event.target.classList.contains("wgs-sales-history-to")) {
+                salesHistoryFilters.to = event.target.value || "";
+            } else if (event.target.classList.contains("wgs-sales-history-seller")) {
+                salesHistoryFilters.seller = event.target.value || "";
+            } else if (event.target.classList.contains("wgs-sales-history-session")) {
+                salesHistoryFilters.sessionId = event.target.value || "";
+            }
+        });
+
+        salesHistoryToolbar.addEventListener("click", (event) => {
+            const refreshButton = event.target.closest(".wgs-sales-history-refresh");
+            if (refreshButton) {
+                loadSalesHistory();
+            }
         });
 
         const listPaneActions = {
@@ -2370,6 +2477,9 @@ patch(ControlButtons.prototype, {
             .wgs-access-log-toolbar input,
             .wgs-access-log-toolbar select,
             .wgs-access-log-toolbar button,
+            .wgs-sales-history-toolbar input,
+            .wgs-sales-history-toolbar select,
+            .wgs-sales-history-toolbar button,
             .wgs-inline-form-grid input,
             .wgs-inline-form-grid select {
                 width: 100%;
@@ -2380,17 +2490,20 @@ patch(ControlButtons.prototype, {
                 background: #fff;
                 color: #111827;
             }
-            .wgs-access-log-toolbar-shell {
+            .wgs-access-log-toolbar-shell,
+            .wgs-sales-history-toolbar-shell {
                 padding: 0.8rem 1.2rem;
                 border-bottom: 1px solid #e5e7eb;
             }
-            .wgs-access-log-toolbar {
+            .wgs-access-log-toolbar,
+            .wgs-sales-history-toolbar {
                 display: grid;
                 grid-template-columns: repeat(4, minmax(150px, 1fr)) minmax(130px, 0.6fr);
                 gap: 0.6rem;
                 align-items: end;
             }
-            .wgs-access-log-toolbar label {
+            .wgs-access-log-toolbar label,
+            .wgs-sales-history-toolbar label {
                 display: grid;
                 gap: 0.25rem;
                 margin: 0;
@@ -2400,12 +2513,14 @@ patch(ControlButtons.prototype, {
                 text-transform: uppercase;
                 color: #64748b;
             }
-            .wgs-access-log-body {
+            .wgs-access-log-body,
+            .wgs-sales-history-body {
                 min-height: 0;
                 overflow: auto;
                 padding: 0.9rem 1.2rem 1.2rem;
             }
-            .wgs-access-log-summary {
+            .wgs-access-log-summary,
+            .wgs-sales-history-summary {
                 display: flex;
                 flex-wrap: wrap;
                 gap: 0.5rem;
@@ -2449,7 +2564,8 @@ patch(ControlButtons.prototype, {
                 font-size: 0.78rem;
                 margin-top: 0.12rem;
             }
-            .wgs-access-log-table-wrap {
+            .wgs-access-log-table-wrap,
+            .wgs-sales-history-table-wrap {
                 border: 1px solid #e5e7eb;
                 border-radius: 0.75rem;
                 overflow: auto;
@@ -3121,6 +3237,7 @@ patch(ControlButtons.prototype, {
 	            @media (max-width: 900px) {
 	                .wgs-status-toolbar,
 	                .wgs-access-log-toolbar,
+	                .wgs-sales-history-toolbar,
 	                .wgs-access-door-row,
 	                .wgs-detail-contact-grid,
 	                .wgs-subscription-grid,

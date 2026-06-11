@@ -1,7 +1,8 @@
 import json
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 
+import pytz
 from odoo import _, api, fields, models
 from odoo.fields import Command
 from odoo.exceptions import UserError
@@ -353,6 +354,181 @@ class PosOrder(models.Model):
     @api.model
     def wgs_get_access_event_log_for_pos(self, options=False):
         return self.env['sale.order'].wgs_get_access_event_log_for_pos(options or {})
+
+    @api.model
+    def _wgs_sales_history_timezone_for_pos(self, timezone_name=False):
+        timezone_name = timezone_name or self.env.context.get('tz') or self.env.user.tz or 'UTC'
+        try:
+            return pytz.timezone(timezone_name)
+        except pytz.UnknownTimeZoneError:
+            return pytz.UTC
+
+    @api.model
+    def _wgs_parse_sales_history_datetime_for_pos(self, value, fallback, timezone_name=False):
+        if not value:
+            return fallback
+        text = str(value or '').strip().replace('T', ' ')
+        if not text:
+            return fallback
+        try:
+            parsed = fields.Datetime.to_datetime(text)
+        except Exception:
+            return fallback
+        if not parsed:
+            return fallback
+        if parsed.tzinfo:
+            return parsed.astimezone(pytz.UTC).replace(tzinfo=None)
+        tz = self._wgs_sales_history_timezone_for_pos(timezone_name)
+        return tz.localize(parsed).astimezone(pytz.UTC).replace(tzinfo=None)
+
+    @api.model
+    def _wgs_sales_history_default_local_range_for_pos(self, timezone_name=False):
+        tz = self._wgs_sales_history_timezone_for_pos(timezone_name)
+        now = fields.Datetime.now().replace(tzinfo=pytz.UTC).astimezone(tz)
+        start = tz.localize(datetime.combine(now.date(), time.min)).astimezone(pytz.UTC).replace(tzinfo=None)
+        end = tz.localize(datetime.combine(now.date(), time(23, 59, 59))).astimezone(pytz.UTC).replace(tzinfo=None)
+        return start, end
+
+    @api.model
+    def _wgs_pos_sales_history_seller_key_for_pos(self, order):
+        if 'employee_id' in order._fields and order.employee_id:
+            return 'employee:%s' % order.employee_id.id, order.employee_id.display_name
+        if order.user_id:
+            return 'user:%s' % order.user_id.id, order.user_id.display_name
+        return 'none:0', _('Sin vendedor')
+
+    @api.model
+    def _wgs_pos_sales_history_state_label_for_pos(self, state):
+        return {
+            'paid': _('Pagado'),
+            'done': _('Hecho'),
+            'invoiced': _('Facturado'),
+        }.get(state or '', state or '-')
+
+    @api.model
+    def _wgs_pos_sales_history_line_summary_for_pos(self, order, max_items=3):
+        names = []
+        for line in order.lines:
+            if not line.product_id:
+                continue
+            qty = abs(float(line.qty or 0.0))
+            label = line.product_id.display_name or line.full_product_name or '-'
+            if qty and qty != 1:
+                label = '%s x %s' % (label, int(qty) if qty.is_integer() else round(qty, 2))
+            names.append(label)
+            if len(names) >= max_items:
+                break
+        extra = len(order.lines) - len(names)
+        if extra > 0:
+            names.append(_('+%s líneas') % extra)
+        return ', '.join(names) if names else '-'
+
+    @api.model
+    def wgs_get_pos_sales_history_for_pos(self, options=False):
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar ventas POS.'))
+
+        data = dict(options or {})
+        try:
+            company_id = int(data.get('company_id') or 0)
+        except (TypeError, ValueError):
+            company_id = 0
+        requested_company = self.env['res.company'].browse(company_id).exists() if company_id else self.env.company
+        company = requested_company if requested_company and requested_company.id in self.env.companies.ids else self.env.company
+
+        try:
+            limit = int(data.get('limit') or 100)
+        except (TypeError, ValueError):
+            limit = 100
+        limit = min(max(limit, 1), 500)
+
+        timezone_name = data.get('timezone') or data.get('time_zone') or False
+        default_from, default_to = self._wgs_sales_history_default_local_range_for_pos(timezone_name)
+        from_dt = self._wgs_parse_sales_history_datetime_for_pos(data.get('from'), default_from, timezone_name)
+        to_dt = self._wgs_parse_sales_history_datetime_for_pos(data.get('to'), default_to, timezone_name)
+        if to_dt <= from_dt:
+            to_dt = from_dt + timedelta(days=1)
+
+        base_domain = [
+            ('state', 'in', ['paid', 'done', 'invoiced']),
+            ('date_order', '>=', fields.Datetime.to_string(from_dt)),
+            ('date_order', '<=', fields.Datetime.to_string(to_dt)),
+        ]
+        if company:
+            base_domain.append(('company_id', '=', company.id))
+
+        domain = list(base_domain)
+        seller_key = str(data.get('seller') or data.get('seller_key') or '').strip()
+        if seller_key and ':' in seller_key:
+            seller_type, seller_id = seller_key.split(':', 1)
+            try:
+                seller_id = int(seller_id or 0)
+            except (TypeError, ValueError):
+                seller_id = 0
+            if seller_id > 0 and seller_type == 'employee' and 'employee_id' in self._fields:
+                domain.append(('employee_id', '=', seller_id))
+            elif seller_id > 0 and seller_type == 'user':
+                domain.append(('user_id', '=', seller_id))
+
+        try:
+            session_id = int(data.get('session_id') or 0)
+        except (TypeError, ValueError):
+            session_id = 0
+        if session_id > 0:
+            domain.append(('session_id', '=', session_id))
+
+        orders = self.sudo().search(domain, order='date_order desc, id desc', limit=limit)
+        total_count = self.sudo().search_count(domain)
+        totals = self.sudo().read_group(domain, ['amount_total:sum'], [])
+        total_amount = totals[0].get('amount_total') if totals else 0.0
+        option_orders = self.sudo().search(base_domain, order='date_order desc, id desc', limit=5000)
+
+        seller_options = {}
+        session_options = {}
+        for order in option_orders:
+            option_seller_key, option_seller_name = self._wgs_pos_sales_history_seller_key_for_pos(order)
+            if option_seller_key != 'none:0':
+                seller_options[option_seller_key] = option_seller_name
+            if order.session_id:
+                session_options[order.session_id.id] = order.session_id.display_name
+
+        rows = []
+        for order in orders:
+            row_seller_key, row_seller_name = self._wgs_pos_sales_history_seller_key_for_pos(order)
+            rows.append({
+                'id': order.id,
+                'name': order.name or False,
+                'pos_reference': order.pos_reference or order.name or False,
+                'date_order': fields.Datetime.to_string(order.date_order) if order.date_order else False,
+                'seller_key': row_seller_key,
+                'seller_name': row_seller_name,
+                'session_id': order.session_id.id if order.session_id else False,
+                'session_name': order.session_id.display_name if order.session_id else False,
+                'partner_id': order.partner_id.id if order.partner_id else False,
+                'partner_name': order.partner_id.display_name if order.partner_id else _('Sin cliente'),
+                'amount_total': float(order.amount_total or 0.0),
+                'amount_paid': float(order.amount_paid or 0.0) if 'amount_paid' in order._fields else float(order.amount_total or 0.0),
+                'state': order.state or False,
+                'state_label': self._wgs_pos_sales_history_state_label_for_pos(order.state),
+                'line_count': len(order.lines),
+                'line_summary': self._wgs_pos_sales_history_line_summary_for_pos(order),
+            })
+
+        return {
+            'ok': True,
+            'company_id': company.id if company else False,
+            'rows': rows,
+            'total_count': total_count,
+            'total_amount': round(float(total_amount or 0.0), 2),
+            'limited': total_count > limit,
+            'sellers': [
+                {'key': key, 'name': seller_options[key]}
+                for key in sorted(seller_options, key=lambda item: seller_options[item].lower())
+            ],
+            'sessions': [
+                {'id': session_id, 'name': session_options[session_id]}
+                for session_id in sorted(session_options, key=lambda item: session_options[item].lower())
+            ],
+        }
 
     @api.model
     def wgs_open_access_door_for_pos(self, device_id, options=False):
