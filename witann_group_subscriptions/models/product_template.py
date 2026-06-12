@@ -36,6 +36,14 @@ class ProductTemplate(models.Model):
         default=False,
         help='Disponible una sola vez por CURP. Al venderlo desde POS se crea una vigencia de un solo día.',
     )
+    wgs_direct_debit_membership = fields.Boolean(
+        string='Domiciliado WGS',
+        default=False,
+        help=(
+            'Activa reglas de domiciliación WGS en POS: plazo forzoso según el plan recurrente, '
+            'primer mes proporcional, último mes anticipado y renovaciones mensuales acumulables.'
+        ),
+    )
     wgs_access_site_ids = fields.Many2many(
         'access_control.site',
         'product_template_wgs_access_site_rel',

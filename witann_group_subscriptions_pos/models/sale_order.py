@@ -2095,6 +2095,60 @@ class SaleOrder(models.Model):
         if hard_end_date and (not valid_until or hard_end_date < valid_until):
             valid_until = hard_end_date
 
+        direct_debit_payload = {}
+        if getattr(self, 'wgs_direct_debit_subscription', False):
+            paid_until = fields.Date.to_date(self.wgs_direct_debit_paid_until_date or False)
+            term_end = fields.Date.to_date(self.wgs_direct_debit_term_end_date or hard_end_date or False)
+            last_start = fields.Date.to_date(self.wgs_direct_debit_last_month_start_date or False)
+            last_end = fields.Date.to_date(self.wgs_direct_debit_last_month_end_date or term_end or False)
+            current_month_end = today + relativedelta(day=31)
+            due_month_count = 0
+            if paid_until and paid_until < current_month_end:
+                billable_end = current_month_end
+                if term_end and billable_end > term_end:
+                    billable_end = term_end
+                if last_start and billable_end >= last_start:
+                    billable_end = last_start - relativedelta(days=1)
+                cursor = paid_until + relativedelta(days=1)
+                if cursor.day != 1:
+                    cursor = cursor.replace(day=1)
+                while billable_end and cursor <= billable_end:
+                    due_month_count += 1
+                    cursor = cursor + relativedelta(months=1)
+            is_direct_debit_current = bool(
+                (paid_until and paid_until >= current_month_end)
+                or (
+                    last_start
+                    and last_end
+                    and last_start <= today <= last_end
+                    and paid_until
+                    and paid_until >= (last_start - relativedelta(days=1))
+                )
+            )
+            if paid_until:
+                valid_until = paid_until
+            if is_direct_debit_current and last_start and last_end and last_start <= today <= last_end:
+                valid_until = last_end
+            direct_debit_payload = {
+                'direct_debit': True,
+                'direct_debit_monthly_amount': float(self.wgs_direct_debit_monthly_amount or 0.0),
+                'direct_debit_term_start_date': self.wgs_direct_debit_term_start_date.isoformat() if self.wgs_direct_debit_term_start_date else False,
+                'direct_debit_term_end_date': term_end.isoformat() if term_end else False,
+                'direct_debit_paid_until_date': paid_until.isoformat() if paid_until else False,
+                'direct_debit_last_month_start_date': last_start.isoformat() if last_start else False,
+                'direct_debit_last_month_end_date': last_end.isoformat() if last_end else False,
+                'direct_debit_due_month_count': due_month_count,
+                'direct_debit_current': is_direct_debit_current,
+                'direct_debit_can_cancel': bool(
+                    is_direct_debit_current
+                    and native_state_key not in ('cancel', 'closed')
+                    and not self.wgs_direct_debit_cancel_requested
+                ),
+                'direct_debit_cancel_requested': bool(self.wgs_direct_debit_cancel_requested),
+                'direct_debit_cancel_at_date': self.wgs_direct_debit_cancel_at_date.isoformat() if self.wgs_direct_debit_cancel_at_date else False,
+                'direct_debit_cancellation_fee': float(self.wgs_direct_debit_cancellation_fee or 0.0),
+            }
+
         should_mark_for_renewal = bool(next_invoice_date and next_invoice_date <= today)
         close_deadline = self._wgs_get_subscription_auto_close_deadline_for_pos(
             next_invoice_date=next_invoice_date,
@@ -2172,6 +2226,7 @@ class SaleOrder(models.Model):
             'has_replacement_subscription': bool(has_replacement_subscription),
             'can_renew': bool(can_renew),
             'can_reenroll': bool(can_reenroll),
+            **direct_debit_payload,
         }
 
     def _wgs_has_replacement_subscription_for_pos(self):

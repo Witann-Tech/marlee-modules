@@ -7,6 +7,7 @@ function renderSubscriptionCards(detail, {
     renderParticipantEditForm,
     renderRenewalForm,
     renderUpsaleForm,
+    renderDirectDebitCancelForm,
     renderNewSubscriptionForm,
     getStateClass,
     getResyncAccessState,
@@ -53,6 +54,7 @@ function renderSubscriptionCards(detail, {
             renderParticipantEditForm(item),
             renderRenewalForm(item),
             renderUpsaleForm(item),
+            typeof renderDirectDebitCancelForm === "function" ? renderDirectDebitCancelForm(item) : "",
         ].join("");
         return renderSubscriptionCard({
             item,
@@ -79,6 +81,7 @@ function renderDetailContent(detail, {
     renderParticipantEditForm,
     renderRenewalForm,
     renderUpsaleForm,
+    renderDirectDebitCancelForm,
     renderNewSubscriptionForm,
     getStateClass,
     getResyncAccessState,
@@ -115,6 +118,7 @@ function renderDetailContent(detail, {
         renderParticipantEditForm,
         renderRenewalForm,
         renderUpsaleForm,
+        renderDirectDebitCancelForm,
         renderNewSubscriptionForm,
         getStateClass,
         getResyncAccessState,

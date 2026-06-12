@@ -9,6 +9,7 @@ function resetListPartnerFormState(state, { stopPartnerCamera }) {
     clearModalFeedback(state);
     stopPartnerCamera();
     state.formMode = null;
+    state.directDebitCancelForm = null;
     state.newPartnerForm = null;
     state.partnerEditForm = null;
 }
@@ -23,6 +24,7 @@ function resetDetailInlineForms(state, {
     state.formMode = null;
     state.renewalForm = null;
     state.upsaleForm = null;
+    state.directDebitCancelForm = null;
     state.participantEditForm = null;
     state.newPartnerForm = null;
     state.partnerPhotoForm = null;
@@ -52,6 +54,7 @@ function clearDirectorySelectionState(state, {
     state.formMode = null;
     state.renewalForm = null;
     state.upsaleForm = null;
+    state.directDebitCancelForm = null;
     state.participantEditForm = null;
     state.newPartnerForm = null;
     state.partnerPhotoForm = null;

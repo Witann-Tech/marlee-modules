@@ -321,6 +321,20 @@ function setLineDiscount(line, discount) {
     line.discount = discount;
 }
 
+function setLineDisplayName(line, displayName) {
+    const label = String(displayName || "").trim();
+    if (!line || !label) {
+        return;
+    }
+    if (typeof line.set_full_product_name === "function") {
+        line.set_full_product_name(label);
+    } else if (typeof line.setFullProductName === "function") {
+        line.setFullProductName(label);
+    }
+    line.full_product_name = label;
+    line.name = label;
+}
+
 function toFiniteNumber(value, fallback = 0) {
     const numberValue = Number(value);
     return Number.isFinite(numberValue) ? numberValue : fallback;
@@ -833,6 +847,7 @@ export async function addConfiguredProductLineToOrder(source, order, product, op
         merge = false,
         metadata = null,
         charge = null,
+        lineDisplayName = "",
     } = options;
     if (!order || !product) {
         return null;
@@ -887,6 +902,7 @@ export async function addConfiguredProductLineToOrder(source, order, product, op
         if (Number(discount || 0)) {
             setLineDiscount(targetLine, Number(discount || 0));
         }
+        setLineDisplayName(targetLine, lineDisplayName);
         if (metadata) {
             lockSubscriptionLinePricing(
                 targetLine,

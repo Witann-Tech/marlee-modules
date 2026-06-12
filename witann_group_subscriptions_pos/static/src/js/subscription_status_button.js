@@ -784,6 +784,7 @@ patch(ControlButtons.prototype, {
         let participantRowsSearchTimer = null;
         let renewalForm = null;
         let upsaleForm = null;
+        let directDebitCancelForm = null;
         let participantEditForm = null;
         let newPartnerForm = null;
         let partnerPhotoForm = null;
@@ -860,6 +861,8 @@ patch(ControlButtons.prototype, {
             set renewalForm(value) { renewalForm = value; },
             get upsaleForm() { return upsaleForm; },
             set upsaleForm(value) { upsaleForm = value; },
+            get directDebitCancelForm() { return directDebitCancelForm; },
+            set directDebitCancelForm(value) { directDebitCancelForm = value; },
             get participantEditForm() { return participantEditForm; },
             set participantEditForm(value) { participantEditForm = value; },
             get newPartnerForm() { return newPartnerForm; },
@@ -1731,6 +1734,58 @@ patch(ControlButtons.prototype, {
             });
         };
 
+        const renderDirectDebitCancelForm = (item) => {
+            if (
+                formMode !== "direct_debit_cancel"
+                || !directDebitCancelForm
+                || Number(directDebitCancelForm.subscriptionId || 0) !== Number(item.subscription_id || 0)
+            ) {
+                return "";
+            }
+            const feeValue = directDebitCancelForm.cancellationFee !== undefined
+                ? directDebitCancelForm.cancellationFee
+                : "";
+            const cancelAtLabel = this._formatDateDisplay(directDebitCancelForm.cancelAtDate || item.direct_debit_cancel_at_date || item.valid_until);
+            const finalMonthLabel = this._formatDateDisplay(item.direct_debit_last_month_start_date);
+            const termEndLabel = this._formatDateDisplay(item.direct_debit_term_end_date);
+            return `
+                <div class="wgs-inline-form-card">
+                    <div class="wgs-inline-form-header">
+                        <strong>${this._escapeHtml(_t("Cancelar domiciliado"))}</strong>
+                        <button type="button" class="wgs-inline-close-btn" data-action="cancel-direct-debit-cancel">${this._escapeHtml(_t("Cancelar"))}</button>
+                    </div>
+                    ${formError ? `<div class="wgs-inline-error">${this._escapeHtml(formError)}</div>` : ""}
+                    ${formNotice ? `<div class="wgs-inline-notice">${this._escapeHtml(formNotice)}</div>` : ""}
+                    <div class="wgs-inline-form-grid">
+                        <div>
+                            <span>${this._escapeHtml(_t("Suscripción"))}</span>
+                            <strong class="wgs-inline-static-value">${this._escapeHtml(item.subscription_name || "-")}</strong>
+                        </div>
+                        <div>
+                            <span>${this._escapeHtml(_t("Cancelar al"))}</span>
+                            <strong class="wgs-inline-static-value">${this._escapeHtml(cancelAtLabel || "-")}</strong>
+                        </div>
+                        <label>
+                            <span>${this._escapeHtml(_t("Cargo por cancelación"))}</span>
+                            <input type="number" min="0" step="0.01" data-field="direct_debit_cancellation_fee" value="${this._escapeHtml(String(feeValue || ""))}" />
+                        </label>
+                        <div>
+                            <span>${this._escapeHtml(_t("Plazo forzoso"))}</span>
+                            <strong class="wgs-inline-static-value">${this._escapeHtml(termEndLabel || "-")}</strong>
+                        </div>
+                    </div>
+                    <div class="wgs-inline-notice">
+                        ${this._escapeHtml(_t("Se agrega al ticket como cargo por cancelación domiciliado. La suscripción se programa para cancelar al final del mes corriente cuando el ticket quede pagado."))}
+                        ${finalMonthLabel ? ` ${this._escapeHtml(_t("Último mes prepagado desde"))} ${this._escapeHtml(finalMonthLabel)}.` : ""}
+                    </div>
+                    <div class="wgs-inline-actions">
+                        <button type="button" class="wgs-primary-action-btn" data-action="save-direct-debit-cancel">${this._escapeHtml(_t("Agregar cancelación al ticket"))}</button>
+                        <button type="button" class="wgs-secondary-action-btn" data-action="cancel-direct-debit-cancel">${this._escapeHtml(_t("Cancelar"))}</button>
+                    </div>
+                </div>
+            `;
+        };
+
         const renderDetail = (detail) => {
             currentDetail = detail || null;
             if (!detail || !detail.partner_id) {
@@ -1747,6 +1802,7 @@ patch(ControlButtons.prototype, {
                 renderParticipantEditForm,
                 renderRenewalForm,
                 renderUpsaleForm,
+                renderDirectDebitCancelForm,
                 renderNewSubscriptionForm,
                 getStateClass: (state) => this._getStateClass(state),
                 getResyncAccessState,

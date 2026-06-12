@@ -73,6 +73,36 @@ function getPendingAuthorizationMessage(form, _t) {
     return _t("Debes autorizar el descuento capturado antes de agregarla al ticket.");
 }
 
+function applyDirectDebitMonthsToRenewalForm(form, monthsToPay) {
+    if (!form || !form.pricingSnapshot || !form.pricingSnapshot.direct_debit) {
+        return;
+    }
+    const snapshot = form.pricingSnapshot;
+    const duePeriods = Array.isArray(snapshot.direct_debit_due_periods) ? snapshot.direct_debit_due_periods : [];
+    const maxMonths = Number(snapshot.direct_debit_due_month_count || duePeriods.length || 0) || 0;
+    const selectedMonths = Math.min(Math.max(Number(monthsToPay || 0) || 0, 0), maxMonths);
+    const selectedPeriods = duePeriods.slice(0, selectedMonths);
+    const amount = selectedPeriods.reduce((total, period) => total + (Number(period.amount || 0) || 0), 0);
+    const recurringBase = Number(snapshot.recurring_price || snapshot.ticket_recurring_price || 0) || 0;
+    const recurringDisplay = Number(snapshot.display_recurring_price || recurringBase || 0) || recurringBase;
+    const displayRatio = recurringBase > 0 ? recurringDisplay / recurringBase : 1;
+    const resultingPaidUntil = selectedPeriods.length
+        ? selectedPeriods[selectedPeriods.length - 1].end_date || false
+        : snapshot.direct_debit_paid_until_date || false;
+    snapshot.direct_debit_months_to_pay = selectedMonths;
+    snapshot.direct_debit_resulting_paid_until_date = resultingPaidUntil;
+    snapshot.direct_debit_access_restored = Boolean(
+        resultingPaidUntil
+        && snapshot.direct_debit_current_month_end_date
+        && String(resultingPaidUntil) >= String(snapshot.direct_debit_current_month_end_date)
+    );
+    snapshot.charge_now = amount;
+    snapshot.ticket_charge_now = amount;
+    snapshot.display_charge_now = Math.round((amount * displayRatio) * 100) / 100;
+    form.directDebitMonthsToPay = selectedMonths;
+    form.authorizedDiscount = null;
+}
+
 async function authorizeDiscountForForm(state, form, { partnerId, productId, flow, sourceSubscriptionId = false }, {
     authorizeSubscriptionDiscount,
     renderDetail,
@@ -232,6 +262,29 @@ function buildSubscriptionInlineActionHandlers({
         "open-participants": async ({ actionButton }) => {
             await openParticipantEditForm(getCurrentSubscriptionItem(actionButton));
         },
+        "open-direct-debit-cancel": async ({ actionButton }) => {
+            const item = getCurrentSubscriptionItem(actionButton);
+            clearFeedback();
+            if (!item || !item.subscription_id || !item.direct_debit_can_cancel) {
+                state.formError = _t("Solo puedes cancelar un domiciliado cuando está al corriente con el mes vigente.");
+                renderDetail(state.currentDetail);
+                return;
+            }
+            state.formMode = "direct_debit_cancel";
+            state.renewalForm = null;
+            state.upsaleForm = null;
+            state.participantEditForm = null;
+            state.directDebitCancelForm = {
+                subscriptionId: Number(item.subscription_id || 0) || false,
+                productId: Number(item.renewal_product_id || 0) || false,
+                productName: item.renewal_product_name || "",
+                holderPartnerId: Number(item.holder_partner_id || 0) || false,
+                holderPartnerName: item.holder_partner_name || "",
+                cancellationFee: "",
+                cancelAtDate: item.valid_until || item.direct_debit_cancel_at_date || false,
+            };
+            renderDetail(state.currentDetail);
+        },
         "resync-access": async ({ actionButton }) => {
             const subscriptionId = Number(actionButton.dataset.subscriptionId || 0);
             if (!subscriptionId) {
@@ -283,6 +336,10 @@ function buildSubscriptionInlineActionHandlers({
             renderDetail(state.currentDetail);
         },
         "cancel-participants": async () => {
+            resetInlineForms();
+            renderDetail(state.currentDetail);
+        },
+        "cancel-direct-debit-cancel": async () => {
             resetInlineForms();
             renderDetail(state.currentDetail);
         },
@@ -814,6 +871,105 @@ function buildSubscriptionInlineActionHandlers({
             state.participantEditForm = null;
             renderDetail(state.currentDetail);
         },
+        "save-direct-debit-cancel": async () => {
+            state.formError = "";
+            state.formNotice = "";
+            const form = state.directDebitCancelForm;
+            if (!form || !form.subscriptionId || !form.productId) {
+                state.formError = _t("La cancelación domiciliada no tiene datos suficientes para agregarse al ticket.");
+                renderDetail(state.currentDetail);
+                return;
+            }
+            const feeAmount = Math.max(Number(form.cancellationFee || 0) || 0, 0);
+            const holderPartnerId = Number(form.holderPartnerId || 0) || false;
+            const order = getCurrentOrder();
+            if (!order) {
+                state.formError = _t("No hay una orden POS activa para agregar la cancelación domiciliada.");
+                renderDetail(state.currentDetail);
+                return;
+            }
+            const existingSubscriptionPartnerIds = getSubscriptionPartnerIdsFromOrder(order);
+            if (existingSubscriptionPartnerIds.length && !existingSubscriptionPartnerIds.includes(holderPartnerId)) {
+                state.formError = _t("La orden actual ya contiene suscripciones configuradas para otro cliente. Usa un solo titular por ticket.");
+                renderDetail(state.currentDetail);
+                return;
+            }
+            if (!(await ensurePartnerAssignedToOrder(order, holderPartnerId, {
+                partnerName: String(form.holderPartnerName || "").trim(),
+                state,
+                renderDetail,
+                getPartnerIdFromOrder,
+                getOrderLines,
+                getSubscriptionPartnerIdsFromOrder,
+                ensurePartnerLoadedInPos,
+                setPartnerOnCurrentOrder,
+                _t,
+            }))) {
+                return;
+            }
+            const productRecord = await ensureProductLoadedInPos(form.productId);
+            if (!productRecord) {
+                state.formError = _t("El producto de la suscripción domiciliada no está cargado en la sesión actual del POS.");
+                renderDetail(state.currentDetail);
+                return;
+            }
+            let targetLine = null;
+            try {
+                const lineResult = await addConfiguredProductLineToOrder(order, productRecord, {
+                    quantity: 1,
+                    merge: false,
+                    charge: {
+                        baseAmount: feeAmount,
+                        displayAmount: feeAmount,
+                        ticketUnitPrice: feeAmount,
+                    },
+                    lineDisplayName: _t("Cargo por cancelación domiciliado"),
+                    metadata: {
+                        flow: "direct_debit_cancellation",
+                        partner_id: holderPartnerId || false,
+                        participant_ids: [],
+                        plan_id: false,
+                        pricing_id: false,
+                        start_date: false,
+                        end_date: false,
+                        product_id: Number(form.productId || 0) || false,
+                        product_name: _t("Cargo por cancelación domiciliado"),
+                        source_subscription_id: Number(form.subscriptionId || 0) || false,
+                        pricing_snapshot: {
+                            direct_debit_cancellation: true,
+                            source_subscription_id: Number(form.subscriptionId || 0) || false,
+                            charge_now: feeAmount,
+                            ticket_charge_now: feeAmount,
+                            display_charge_now: feeAmount,
+                        },
+                    },
+                });
+                targetLine = lineResult && lineResult.line ? lineResult.line : null;
+                if (!targetLine && lineResult && lineResult.reason === "not_added") {
+                    state.formError = _t("No se pudo agregar la cancelación domiciliada al ticket actual.");
+                    renderDetail(state.currentDetail);
+                    return;
+                }
+            } catch (error) {
+                console.error("Error al agregar cancelación domiciliada al ticket POS", error);
+                state.formError = _t("No se pudo agregar la cancelación domiciliada al ticket actual.");
+                renderDetail(state.currentDetail);
+                return;
+            }
+            if (!targetLine) {
+                state.formError = _t("No se pudo identificar la línea de cancelación domiciliada agregada al ticket.");
+                renderDetail(state.currentDetail);
+                return;
+            }
+            state.formMode = null;
+            state.formError = "";
+            state.formNotice = _t("Cancelación domiciliada agregada al ticket. Se aplicará al pagar el POS.");
+            state.directDebitCancelForm = null;
+            state.renewalForm = null;
+            state.upsaleForm = null;
+            state.participantEditForm = null;
+            renderDetail(state.currentDetail);
+        },
         "save-reenroll": async () => {
             state.formError = "";
             state.formNotice = "";
@@ -964,6 +1120,8 @@ async function handleSubscriptionInlineFieldChange({ field, target }, {
     } else if ((state.formMode === "renewal" || state.formMode === "reenroll") && field === "renewal_discount_percent") {
         state.renewalForm.discountPercent = target.value || "";
         state.renewalForm.authorizedDiscount = null;
+    } else if (state.formMode === "renewal" && field === "renewal_direct_debit_months_to_pay") {
+        applyDirectDebitMonthsToRenewalForm(state.renewalForm, target.value);
     } else if (state.formMode === "upsale" && field === "upsale_product_id") {
         await applySelectedUpsaleProduct(target.value);
     } else if (state.formMode === "upsale" && field === "upsale_plan_choice") {
@@ -1026,6 +1184,10 @@ function handleSubscriptionInlineFieldInput({ field, target }, {
     }
     if (state.formMode === "participants" && field === "edit_participant_search") {
         state.participantEditForm.participantSearch = target.value || "";
+        return true;
+    }
+    if (state.formMode === "direct_debit_cancel" && field === "direct_debit_cancellation_fee" && state.directDebitCancelForm) {
+        state.directDebitCancelForm.cancellationFee = target.value || "";
         return true;
     }
     return false;
