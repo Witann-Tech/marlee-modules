@@ -16,7 +16,6 @@
                         <field name="wgs_requires_family_authorization"/>
                         <field name="wgs_single_day_access"/>
                         <field name="wgs_free_trial_day"/>
-                        <field name="wgs_direct_debit_membership"/>
                     </group>
                 </page>
             </xpath>
