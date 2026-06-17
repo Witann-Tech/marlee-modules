@@ -3,7 +3,7 @@
     <record id="view_product_template_form_wgs_direct_debit_pos" model="ir.ui.view">
         <field name="name">product.template.form.wgs.direct.debit.pos</field>
         <field name="model">product.template</field>
-        <field name="inherit_id" ref="witann_group_subscriptions.view_product_template_form_witann_group_subscriptions"/>
+        <field name="inherit_id" ref="witann_group_subscriptions.view_product_template_form_subscription_participants"/>
         <field name="arch" type="xml">
             <xpath expr="//field[@name='wgs_free_trial_day']" position="after">
                 <field name="wgs_direct_debit_membership"/>
