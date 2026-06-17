@@ -70,7 +70,6 @@ class PosOrderLine(models.Model):
             ('upsale', 'Upsale inmediato'),
             ('pending_charge', 'Cobro pendiente'),
             ('cancellation_refund', 'Cancelación con devolución'),
-            ('direct_debit_cancellation', 'Cancelación domiciliado'),
         ],
         string='Flujo suscripción (POS)',
         default='new',
@@ -901,7 +900,6 @@ class PosOrder(models.Model):
         family_authorization = bool(getattr(product.product_tmpl_id, 'wgs_requires_family_authorization', False))
         single_day_access = bool(getattr(product.product_tmpl_id, 'wgs_single_day_access', False))
         free_trial_day = bool(getattr(product.product_tmpl_id, 'wgs_free_trial_day', False))
-        direct_debit = bool(getattr(product.product_tmpl_id, 'wgs_direct_debit_membership', False))
         requires_curp = bool(
             getattr(product.product_tmpl_id, 'wgs_requires_curp', False)
             or student_age_lock
@@ -917,7 +915,6 @@ class PosOrder(models.Model):
             'family_authorization': family_authorization,
             'single_day_access': single_day_access,
             'free_trial_day': free_trial_day,
-            'direct_debit': direct_debit,
         }
 
     def _wgs_build_product_pricing_payload_for_pos(
@@ -1332,7 +1329,7 @@ class PosOrder(models.Model):
                 values['wgs_subscription_start_date'] = start_date
 
         flow_value = str(config_payload.get('flow') or 'new').strip().lower()
-        values['wgs_subscription_flow'] = flow_value if flow_value in ('renewal', 'reenroll', 'upsale', 'pending_charge', 'cancellation_refund', 'direct_debit_cancellation') else 'new'
+        values['wgs_subscription_flow'] = flow_value if flow_value in ('renewal', 'reenroll', 'upsale', 'pending_charge', 'cancellation_refund') else 'new'
 
         source_subscription_id = self._wgs_to_int(config_payload.get('source_subscription_id'))
         if source_subscription_id > 0:
@@ -1794,7 +1791,7 @@ class PosOrder(models.Model):
                     write_values['wgs_subscription_start_date'] = start_date
 
             flow_value = str(config.get('flow') or 'new').strip().lower()
-            write_values['wgs_subscription_flow'] = flow_value if flow_value in ('renewal', 'reenroll', 'upsale', 'pending_charge', 'cancellation_refund', 'direct_debit_cancellation') else 'new'
+            write_values['wgs_subscription_flow'] = flow_value if flow_value in ('renewal', 'reenroll', 'upsale', 'pending_charge', 'cancellation_refund') else 'new'
 
             source_subscription_id = self._wgs_to_int(config.get('source_subscription_id'))
             if source_subscription_id > 0:
@@ -1906,7 +1903,7 @@ class PosOrder(models.Model):
                 continue
             config = self._wgs_extract_subscription_config_payload(payload)
             has_renewal_metadata = (
-                str(config.get('flow') or '').strip().lower() in ('renewal', 'reenroll', 'pending_charge', 'direct_debit_cancellation')
+                str(config.get('flow') or '').strip().lower() in ('renewal', 'reenroll', 'pending_charge')
                 or self._wgs_to_int(config.get('source_subscription_id')) > 0
                 or self._wgs_to_int(config.get('pending_move_id')) > 0
             )
@@ -2022,9 +2019,6 @@ class PosOrder(models.Model):
                     and item.wgs_has_subscription_configuration()
                 )
             ):
-                if line.wgs_subscription_flow == 'direct_debit_cancellation':
-                    pos_order._wgs_process_direct_debit_cancellation_line(line)
-                    continue
                 if line.wgs_subscription_flow == 'renewal':
                     if line.wgs_subscription_source_id and line.wgs_sale_order_id == line.wgs_subscription_source_id:
                         continue
@@ -2182,7 +2176,7 @@ class PosOrder(models.Model):
         flow = self._wgs_resolve_targeted_subscription_repair_flow(line, options)
         if flow == 'new' and line.wgs_sale_order_id:
             return _('La línea ya está ligada a %(subscription)s.') % {'subscription': line.wgs_sale_order_id.name}
-        if flow in ('renewal', 'reenroll', 'pending_charge', 'direct_debit_cancellation') and not self._wgs_resolve_targeted_subscription_repair_source(line, options):
+        if flow in ('renewal', 'reenroll', 'pending_charge') and not self._wgs_resolve_targeted_subscription_repair_source(line, options):
             return _('Falta source_subscription_id para reparar flujo %(flow)s.') % {'flow': flow}
         return _('Repararía la línea como flujo %(flow)s.') % {'flow': flow}
 
@@ -2231,8 +2225,6 @@ class PosOrder(models.Model):
             return order.with_context(wgs_allow_reenroll_repair_active_source=True)._wgs_process_subscription_reenroll_line(line)
         if flow == 'pending_charge':
             return order._wgs_process_subscription_pending_charge_line(line)
-        if flow == 'direct_debit_cancellation':
-            return order._wgs_process_direct_debit_cancellation_line(line)
         if flow == 'upsale':
             raise UserError(_('La reparación dirigida de cambio de plan requiere revisión manual.'))
         if line.wgs_sale_order_id:
@@ -2243,7 +2235,7 @@ class PosOrder(models.Model):
 
     def _wgs_resolve_targeted_subscription_repair_flow(self, line, options):
         flow = str(options.get('flow') or line.wgs_subscription_flow or 'new').strip().lower()
-        if flow not in ('new', 'renewal', 'reenroll', 'pending_charge', 'upsale', 'direct_debit_cancellation'):
+        if flow not in ('new', 'renewal', 'reenroll', 'pending_charge', 'upsale'):
             flow = 'new'
         return flow
 
@@ -2288,8 +2280,6 @@ class PosOrder(models.Model):
             return pos_order._wgs_process_subscription_reenroll_line(line)
         if flow == 'pending_charge':
             return pos_order._wgs_process_subscription_pending_charge_line(line)
-        if flow == 'direct_debit_cancellation':
-            return pos_order._wgs_process_direct_debit_cancellation_line(line)
         if line.wgs_sale_order_id:
             return line.wgs_sale_order_id
 
@@ -2431,69 +2421,6 @@ class PosOrder(models.Model):
         if not source_line:
             source_line = recurring_lines.sorted(key=lambda so_line: so_line.id)[:1]
 
-        if getattr(source_order, 'wgs_direct_debit_subscription', False):
-            renewal_schedule = self._wgs_get_direct_debit_months_to_pay_from_line(line, source_order)
-            next_billing_date = renewal_schedule.get('next_billing_date') or False
-            subscription_end_date = renewal_schedule.get('term_end_date') or False
-            direct_values = {
-                'wgs_direct_debit_paid_until_date': renewal_schedule.get('resulting_paid_until_date'),
-            }
-            if subscription_end_date:
-                direct_values['wgs_direct_debit_term_end_date'] = subscription_end_date
-
-            values = {
-                key: value
-                for key, value in direct_values.items()
-                if key in source_order._fields and value
-            }
-            next_fields = self._wgs_find_subscription_next_invoice_date_fields(source_order)
-            for next_field in next_fields:
-                values[next_field] = next_billing_date or False
-            end_field = self._wgs_find_subscription_end_date_field(source_order)
-            if end_field and subscription_end_date:
-                values[end_field] = subscription_end_date
-            if values:
-                source_order.write(values)
-            if renewal_schedule.get('access_restored'):
-                self._wgs_reactivate_subscription_order_for_pos(source_order)
-            if hasattr(source_order, '_wgs_sync_access_control_people'):
-                source_order.with_context(access_sync_priority=True)._wgs_sync_access_control_people()
-
-            self._wgs_link_pos_and_sale_records(
-                pos_line=line,
-                sale_order=source_order,
-                sale_order_line=source_line,
-            )
-            line.write({
-                'wgs_sale_order_id': source_order.id,
-                'wgs_subscription_flow': 'renewal',
-                'wgs_subscription_source_id': source_order.id,
-            })
-
-            amount_paid = abs(float(line.qty or 0.0)) * float(line.price_unit or 0.0)
-            if hasattr(source_order, 'message_post'):
-                source_order.message_post(
-                    body=_(
-                        'Pago domiciliado recibido en POS %(pos)s por %(amount).2f. Meses pagados: %(months)s. Pagado hasta: %(paid_until)s.'
-                    ) % {
-                        'pos': self.pos_reference or self.name,
-                        'amount': amount_paid,
-                        'months': int(renewal_schedule.get('selected_month_count') or 0),
-                        'paid_until': fields.Date.to_string(renewal_schedule.get('resulting_paid_until_date')) or '-',
-                    }
-                )
-            _logger.info(
-                'WGS POS: direct debit renewal synced subscription=%s pos=%s line=%s months=%s paid_until=%s restored=%s amount=%s',
-                source_order.name,
-                self.pos_reference or self.name,
-                line.id,
-                renewal_schedule.get('selected_month_count'),
-                renewal_schedule.get('resulting_paid_until_date'),
-                renewal_schedule.get('access_restored'),
-                amount_paid,
-            )
-            return source_order
-
         today = fields.Date.context_today(self)
         renewal_schedule = self._wgs_get_subscription_renewal_schedule(
             source_order,
@@ -2591,7 +2518,6 @@ class PosOrder(models.Model):
         recurring_plan_id = pricing_state['plan_id']
         recurring_pricing_id = pricing_state['pricing_id']
         plan_record = pricing_state['plan_record']
-        direct_debit_values = self._wgs_get_direct_debit_values_from_pricing_state(pricing_state)
         today = fields.Date.context_today(self)
         subscription_start_date = (
             pricing_state.get('subscription_start_date')
@@ -2637,7 +2563,6 @@ class PosOrder(models.Model):
             subscription_end_date=subscription_end_date,
             next_billing_date=next_billing_date,
             clear_next_billing_date=single_day_term,
-            direct_debit_values=direct_debit_values,
         )
         self._wgs_reactivate_subscription_order_for_pos(source_order)
         if single_day_term:
@@ -2892,75 +2817,6 @@ class PosOrder(models.Model):
         )
         return source_order
 
-    def _wgs_is_direct_debit_subscription_current_for_cancellation(self, source_order, today=False):
-        source_order.ensure_one()
-        today = fields.Date.to_date(today) or fields.Date.context_today(self)
-        current_month_end = self._wgs_month_end(today)
-        paid_until = fields.Date.to_date(getattr(source_order, 'wgs_direct_debit_paid_until_date', False))
-        if paid_until and paid_until >= current_month_end:
-            return True
-        last_start = fields.Date.to_date(getattr(source_order, 'wgs_direct_debit_last_month_start_date', False))
-        last_end = fields.Date.to_date(getattr(source_order, 'wgs_direct_debit_last_month_end_date', False))
-        if last_start and last_end and last_start <= today <= last_end:
-            return bool(paid_until and paid_until >= (last_start - timedelta(days=1)))
-        return False
-
-    def _wgs_process_direct_debit_cancellation_line(self, line):
-        self.ensure_one()
-        source_order = (line.wgs_subscription_source_id or line.wgs_sale_order_id).exists()
-        if not source_order:
-            raise UserError(_('No se encontró la suscripción domiciliada para cancelar.'))
-        if not getattr(source_order, 'wgs_direct_debit_subscription', False):
-            raise UserError(_('La suscripción seleccionada no está marcada como domiciliada WGS.'))
-        today = fields.Date.context_today(self)
-        if not self._wgs_is_direct_debit_subscription_current_for_cancellation(source_order, today=today):
-            raise UserError(_('Para cancelar un domiciliado, la suscripción debe estar al corriente con el mes vigente.'))
-
-        cancel_at = self._wgs_month_end(today)
-        term_end = fields.Date.to_date(getattr(source_order, 'wgs_direct_debit_term_end_date', False))
-        if term_end and cancel_at > term_end:
-            cancel_at = term_end
-        fee_amount = round(max(abs(float(line.qty or 0.0)) * float(line.price_unit or 0.0), 0.0), 2)
-
-        values = {
-            'wgs_direct_debit_cancel_requested': True,
-            'wgs_direct_debit_cancel_at_date': cancel_at,
-            'wgs_direct_debit_cancellation_fee': fee_amount,
-        }
-        for end_field in self._wgs_find_subscription_end_date_fields(source_order):
-            values[end_field] = cancel_at
-        for next_field in self._wgs_find_subscription_next_invoice_date_fields(source_order):
-            values[next_field] = False
-        source_order.write({key: value for key, value in values.items() if key in source_order._fields})
-        if hasattr(source_order, '_wgs_sync_access_control_people'):
-            source_order.with_context(access_sync_priority=True)._wgs_sync_access_control_people()
-
-        self._wgs_link_pos_and_sale_records(pos_line=line, sale_order=source_order)
-        line.write({
-            'wgs_sale_order_id': source_order.id,
-            'wgs_subscription_flow': 'direct_debit_cancellation',
-            'wgs_subscription_source_id': source_order.id,
-        })
-        if hasattr(source_order, 'message_post'):
-            source_order.message_post(
-                body=_(
-                    'Cancelación domiciliada registrada desde POS %(pos)s. Cargo: %(amount).2f. Cancelar al: %(cancel_at)s.'
-                ) % {
-                    'pos': self.pos_reference or self.name,
-                    'amount': fee_amount,
-                    'cancel_at': fields.Date.to_string(cancel_at),
-                }
-            )
-        _logger.info(
-            'WGS POS: direct debit cancellation synced subscription=%s pos=%s line=%s fee=%s cancel_at=%s',
-            source_order.name,
-            self.pos_reference or self.name,
-            line.id,
-            fee_amount,
-            cancel_at,
-        )
-        return source_order
-
     def _wgs_get_pending_invoice_from_subscription(self, source_order, pending_move_id=False):
         self.ensure_one()
         invoice_model = self.env['account.move'].sudo()
@@ -3185,46 +3041,7 @@ class PosOrder(models.Model):
             'subscription_start_date': persisted_subscription_start_date,
             'subscription_end_date': persisted_subscription_end_date,
             'next_billing_date': persisted_next_billing_date,
-            'snapshot': snapshot,
         }
-
-    def _wgs_get_direct_debit_values_from_pricing_state(self, pricing_state):
-        snapshot = pricing_state.get('snapshot') if isinstance(pricing_state, dict) else {}
-        if not isinstance(snapshot, dict) or not snapshot.get('direct_debit'):
-            return {}
-        values = {
-            'wgs_direct_debit_subscription': True,
-            'wgs_direct_debit_monthly_amount': round(max(float(snapshot.get('direct_debit_monthly_amount') or pricing_state.get('price_unit') or 0.0), 0.0), 2),
-        }
-        date_fields = {
-            'wgs_direct_debit_term_start_date': 'direct_debit_term_start_date',
-            'wgs_direct_debit_term_end_date': 'direct_debit_term_end_date',
-            'wgs_direct_debit_paid_until_date': 'direct_debit_paid_until_date',
-            'wgs_direct_debit_last_month_start_date': 'direct_debit_last_month_start_date',
-            'wgs_direct_debit_last_month_end_date': 'direct_debit_last_month_end_date',
-        }
-        for field_name, snapshot_key in date_fields.items():
-            date_value = fields.Date.to_date(snapshot.get(snapshot_key) or False)
-            if date_value:
-                values[field_name] = date_value
-        return values
-
-    def _wgs_get_direct_debit_months_to_pay_from_line(self, line, source_order):
-        line.ensure_one()
-        snapshot = {}
-        if line.wgs_pricing_snapshot_json:
-            try:
-                snapshot = json.loads(line.wgs_pricing_snapshot_json)
-            except (TypeError, ValueError):
-                snapshot = {}
-        if not isinstance(snapshot, dict):
-            snapshot = {}
-        months_to_pay = self._wgs_to_int(snapshot.get('direct_debit_months_to_pay'))
-        schedule = self._wgs_get_direct_debit_renewal_schedule(
-            source_order,
-            months_to_pay=months_to_pay or False,
-        )
-        return schedule
 
     def _wgs_extract_plan_id_from_subscription_source_line(self, source_order, product):
         source_order = source_order.exists()
@@ -3286,7 +3103,6 @@ class PosOrder(models.Model):
         recurring_plan_id = pricing_state['plan_id']
         recurring_pricing_id = pricing_state['pricing_id']
         plan_record = pricing_state['plan_record']
-        direct_debit_values = self._wgs_get_direct_debit_values_from_pricing_state(pricing_state)
         today = fields.Date.context_today(self)
         subscription_start_date = (
             pricing_state.get('subscription_start_date')
@@ -3524,11 +3340,6 @@ class PosOrder(models.Model):
             'company_id': self.company_id.id,
             'order_line': [Command.create(line_values)],
         }
-        sale_order_values.update({
-            key: value
-            for key, value in direct_debit_values.items()
-            if key in sale_order_fields
-        })
         if 'date_order' in sale_order_fields:
             sale_order_values['date_order'] = self._wgs_convert_date_for_field_value(
                 contract_date,
@@ -3595,7 +3406,6 @@ class PosOrder(models.Model):
             subscription_end_date=subscription_end_date,
             next_billing_date=next_billing_date,
             clear_next_billing_date=self._wgs_product_has_single_day_term(product),
-            direct_debit_values=direct_debit_values,
         )
 
         _logger.info(
@@ -4375,7 +4185,6 @@ class PosOrder(models.Model):
         subscription_end_date=False,
         next_billing_date=False,
         clear_next_billing_date=False,
-        direct_debit_values=False,
     ):
         target_orders = self._wgs_get_subscription_orders_from_base(sale_order)
         for target_order in target_orders:
@@ -4408,10 +4217,6 @@ class PosOrder(models.Model):
             elif clear_next_billing_date:
                 for next_field in next_fields:
                     values[next_field] = False
-            if isinstance(direct_debit_values, dict):
-                for field_name, field_value in direct_debit_values.items():
-                    if field_name in target_order._fields:
-                        values[field_name] = field_value
             if values:
                 target_order.write(values)
                 _logger.info(

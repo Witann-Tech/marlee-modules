@@ -31,23 +31,6 @@ function renderSubscriptionCard({
                     data-subscription-id="${escapeHtml(String(item.subscription_id || 0))}"
                 >${escapeHtml(_t("Editar participantes"))}</button>
     ` : "";
-    const directDebitCancelHtml = item.direct_debit_can_cancel ? `
-                <button
-                    type="button"
-                    class="wgs-action-btn"
-                    data-action="open-direct-debit-cancel"
-                    data-subscription-id="${escapeHtml(String(item.subscription_id || 0))}"
-                >${escapeHtml(_t("Cancelar domiciliado"))}</button>
-    ` : "";
-    const directDebitCancelNotice = item.direct_debit_cancel_requested ? `
-            <div class="wgs-inline-notice wgs-inline-notice-compact">
-                ${escapeHtml(_t("Cancelación domiciliada programada para"))}: ${escapeHtml(formatDateDisplay(item.direct_debit_cancel_at_date) || "-")}
-                ${Number(item.direct_debit_cancellation_fee || 0) > 0
-                    ? ` · ${escapeHtml(_t("Cargo"))}: ${escapeHtml(formatMoney(item.direct_debit_cancellation_fee))}`
-                    : ""
-                }
-            </div>
-    ` : "";
     return `
         <div class="wgs-subscription-card">
             <div class="wgs-subscription-card-header">
@@ -89,7 +72,6 @@ function renderSubscriptionCard({
                     ${item.can_renew ? "" : "disabled"}
                 >${escapeHtml(_t("Cambiar Plan"))}</button>
                 ${participantActionHtml}
-                ${directDebitCancelHtml}
                 <button
                     type="button"
                     class="wgs-action-btn${resyncClass}"
@@ -98,7 +80,6 @@ function renderSubscriptionCard({
                     ${resyncDisabled ? "disabled" : ""}
                 >${escapeHtml(resyncLabel)}</button>
             </div>
-            ${directDebitCancelNotice}
             ${inlineFormsHtml || ""}
         </div>
     `;

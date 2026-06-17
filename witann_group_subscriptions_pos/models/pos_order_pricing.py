@@ -371,154 +371,6 @@ class PosOrderPricingMixin(models.Model):
         interval_value, interval_unit = self._wgs_extract_interval_from_plan(plan)
         return int(interval_value or 1) == 1 and (interval_unit or 'month') == 'month'
 
-    def _wgs_product_is_direct_debit_membership(self, product):
-        product = product.exists() if product else self.env['product.product']
-        if not product:
-            return False
-        tmpl = product.product_tmpl_id if getattr(product, 'product_tmpl_id', False) else product
-        return bool(getattr(product, 'wgs_direct_debit_membership', False) or getattr(tmpl, 'wgs_direct_debit_membership', False))
-
-    def _wgs_month_start(self, value):
-        value = fields.Date.to_date(value) or fields.Date.context_today(self)
-        return value.replace(day=1)
-
-    def _wgs_month_end(self, value):
-        value = fields.Date.to_date(value) or fields.Date.context_today(self)
-        return value + relativedelta(day=31)
-
-    def _wgs_get_direct_debit_term_months(self, plan):
-        interval_value, interval_unit = self._wgs_extract_interval_from_plan(plan)
-        interval_value = max(1, int(interval_value or 1))
-        if interval_unit == 'year':
-            return interval_value * 12
-        if interval_unit == 'month':
-            return interval_value
-        if interval_unit == 'week':
-            return max(1, int(round((interval_value * 7) / 30.0)))
-        return 1
-
-    def _wgs_get_direct_debit_initial_schedule(self, plan, access_start_date, monthly_amount):
-        access_start_date = fields.Date.to_date(access_start_date) or fields.Date.context_today(self)
-        term_months = self._wgs_get_direct_debit_term_months(plan)
-        term_start = self._wgs_month_start(access_start_date)
-        first_month_end = self._wgs_month_end(access_start_date)
-        term_end = term_start + relativedelta(months=term_months, days=-1)
-        last_month_start = self._wgs_month_start(term_end)
-        last_month_end = term_end
-
-        period_days = max(1, (first_month_end - term_start).days + 1)
-        charge_days = max(1, (first_month_end - access_start_date).days + 1)
-        proration_ratio = min(charge_days, period_days) / float(period_days)
-        first_month_charge = round(max(float(monthly_amount or 0.0) * proration_ratio, 0.0), 2)
-        last_month_charge = 0.0 if last_month_start <= term_start else round(max(float(monthly_amount or 0.0), 0.0), 2)
-        charge_now = round(first_month_charge + last_month_charge, 2)
-
-        return {
-            'direct_debit': True,
-            'term_months': term_months,
-            'term_start_date': term_start,
-            'term_end_date': term_end,
-            'paid_until_date': first_month_end,
-            'last_month_start_date': last_month_start,
-            'last_month_end_date': last_month_end,
-            'subscription_start_date': term_start,
-            'subscription_end_date': term_end,
-            'next_billing_date': first_month_end + timedelta(days=1) if first_month_end < last_month_start else False,
-            'access_start_date': access_start_date,
-            'first_month_charge': first_month_charge,
-            'last_month_charge': last_month_charge,
-            'charge_now': charge_now,
-            'period_days': period_days,
-            'charge_days': min(charge_days, period_days),
-            'proration_ratio': proration_ratio,
-        }
-
-    def _wgs_get_direct_debit_paid_until(self, source_order):
-        source_order.ensure_one()
-        paid_until = getattr(source_order, 'wgs_direct_debit_paid_until_date', False)
-        if paid_until:
-            return fields.Date.to_date(paid_until)
-        next_date = self._wgs_get_first_date_from_order(source_order, ('recurring_next_date', 'next_invoice_date'))
-        if next_date:
-            return fields.Date.to_date(next_date) - timedelta(days=1)
-        return False
-
-    def _wgs_get_direct_debit_renewal_schedule(self, source_order, today=False, months_to_pay=False):
-        source_order.ensure_one()
-        today = fields.Date.to_date(today) or fields.Date.context_today(self)
-        monthly_amount = round(max(float(getattr(source_order, 'wgs_direct_debit_monthly_amount', 0.0) or 0.0), 0.0), 2)
-        term_end = fields.Date.to_date(getattr(source_order, 'wgs_direct_debit_term_end_date', False)) or self._wgs_get_first_date_from_order(
-            source_order,
-            ('end_date', 'date_end', 'subscription_end_date', 'recurring_end_date'),
-        )
-        last_start = fields.Date.to_date(getattr(source_order, 'wgs_direct_debit_last_month_start_date', False))
-        paid_until = self._wgs_get_direct_debit_paid_until(source_order)
-        if not paid_until:
-            term_start = fields.Date.to_date(getattr(source_order, 'wgs_direct_debit_term_start_date', False)) or self._wgs_get_first_date_from_order(
-                source_order,
-                ('wgs_effective_start_date', 'start_date', 'date_start', 'subscription_start_date', 'date_order'),
-            ) or today
-            paid_until = self._wgs_month_start(term_start) - timedelta(days=1)
-
-        current_month_end = self._wgs_month_end(today)
-        billable_end = current_month_end
-        if term_end and billable_end > term_end:
-            billable_end = term_end
-        if last_start:
-            last_prepaid_previous_day = last_start - timedelta(days=1)
-            if billable_end > last_prepaid_previous_day:
-                billable_end = last_prepaid_previous_day
-
-        due_periods = []
-        next_start = paid_until + timedelta(days=1)
-        if next_start.day != 1:
-            next_start = self._wgs_month_start(next_start)
-        while billable_end and next_start <= billable_end:
-            period_end = self._wgs_month_end(next_start)
-            if period_end > billable_end:
-                period_end = billable_end
-            due_periods.append({
-                'start_date': next_start,
-                'end_date': period_end,
-                'amount': monthly_amount,
-            })
-            next_start = period_end + timedelta(days=1)
-
-        due_count = len(due_periods)
-        try:
-            selected_count = int(months_to_pay or due_count)
-        except (TypeError, ValueError):
-            selected_count = due_count
-        selected_count = min(max(selected_count, 0), due_count)
-        selected_periods = due_periods[:selected_count]
-        resulting_paid_until = selected_periods[-1]['end_date'] if selected_periods else paid_until
-        access_restored = False
-        if resulting_paid_until >= current_month_end:
-            access_restored = True
-        elif last_start and term_end and last_start <= today <= term_end:
-            access_restored = resulting_paid_until >= (last_start - timedelta(days=1))
-
-        next_billing_date = resulting_paid_until + timedelta(days=1) if selected_periods else paid_until + timedelta(days=1)
-        if last_start and next_billing_date >= last_start:
-            next_billing_date = False
-
-        return {
-            'direct_debit': True,
-            'monthly_amount': monthly_amount,
-            'due_periods': due_periods,
-            'due_month_count': due_count,
-            'selected_month_count': selected_count,
-            'amount_due_total': round(sum(period['amount'] for period in due_periods), 2),
-            'amount_to_pay': round(sum(period['amount'] for period in selected_periods), 2),
-            'paid_until_date': paid_until,
-            'resulting_paid_until_date': resulting_paid_until,
-            'current_month_end_date': current_month_end,
-            'next_billing_date': next_billing_date,
-            'access_restored': access_restored,
-            'term_end_date': term_end,
-            'last_month_start_date': last_start,
-        }
-
     def _wgs_get_aligned_monthly_first_period_schedule(self, start_date):
         access_start_date = fields.Date.to_date(start_date) or fields.Date.context_today(self)
         period_start = access_start_date.replace(day=1)
@@ -658,11 +510,6 @@ class PosOrderPricingMixin(models.Model):
             company=company or False,
             fiscal_position=fiscal_position or False,
         )
-        resolved_plan = self._wgs_resolve_plan_record(
-            product,
-            plan_id=choice.get('plan_id') or preferred_plan_id,
-            pricing_id=choice.get('pricing_id') or preferred_pricing_id,
-        )
         source_order = source_order.exists() if source_order else self.env['sale.order']
         credit_amount = 0.0
         display_credit_amount = 0.0
@@ -670,7 +517,6 @@ class PosOrderPricingMixin(models.Model):
         subscription_end_date = False
         next_billing_date = False
         first_period_alignment = {}
-        direct_debit_schedule = {}
         if include_credit and source_order:
             credit_amount = self._wgs_get_upsale_source_recurring_amount(source_order)
             display_credit_amount = self._wgs_get_upsale_source_recurring_amount(
@@ -685,23 +531,12 @@ class PosOrderPricingMixin(models.Model):
         if include_credit and source_order:
             display_charge_now = round(max(display_recurring_price - display_credit_amount, 0.0), 2)
         else:
-            if flow in ('new', 'reenroll') and self._wgs_product_is_direct_debit_membership(product):
-                direct_debit_schedule = self._wgs_get_direct_debit_initial_schedule(
-                    resolved_plan,
-                    start_date or fields.Date.context_today(self),
-                    recurring_price,
-                )
-                subscription_start_date = direct_debit_schedule['subscription_start_date']
-                subscription_end_date = direct_debit_schedule['subscription_end_date']
-                next_billing_date = direct_debit_schedule['next_billing_date']
-                charge_now = direct_debit_schedule['charge_now']
-                first_period_alignment = {
-                    'period_start_date': direct_debit_schedule['term_start_date'],
-                    'access_start_date': direct_debit_schedule['access_start_date'],
-                    'period_days': direct_debit_schedule['period_days'],
-                    'charge_days': direct_debit_schedule['charge_days'],
-                }
-            elif flow in ('new', 'reenroll') and self._wgs_should_align_plan_to_calendar_month(resolved_plan):
+            resolved_plan = self._wgs_resolve_plan_record(
+                product,
+                plan_id=choice.get('plan_id') or preferred_plan_id,
+                pricing_id=choice.get('pricing_id') or preferred_pricing_id,
+            )
+            if flow in ('new', 'reenroll') and self._wgs_should_align_plan_to_calendar_month(resolved_plan):
                 first_period_alignment = self._wgs_get_aligned_monthly_first_period_schedule(
                     start_date or fields.Date.context_today(self)
                 )
@@ -747,31 +582,6 @@ class PosOrderPricingMixin(models.Model):
             ),
             'first_period_days': int(first_period_alignment.get('period_days') or 0) if first_period_alignment else 0,
             'first_period_charge_days': int(first_period_alignment.get('charge_days') or 0) if first_period_alignment else 0,
-            'direct_debit': bool(direct_debit_schedule),
-            'direct_debit_term_months': int(direct_debit_schedule.get('term_months') or 0),
-            'direct_debit_monthly_amount': float(recurring_price) if direct_debit_schedule else 0.0,
-            'direct_debit_first_month_charge': float(direct_debit_schedule.get('first_month_charge') or 0.0),
-            'direct_debit_last_month_charge': float(direct_debit_schedule.get('last_month_charge') or 0.0),
-            'direct_debit_paid_until_date': (
-                fields.Date.to_string(direct_debit_schedule['paid_until_date'])
-                if direct_debit_schedule else False
-            ),
-            'direct_debit_term_start_date': (
-                fields.Date.to_string(direct_debit_schedule['term_start_date'])
-                if direct_debit_schedule else False
-            ),
-            'direct_debit_term_end_date': (
-                fields.Date.to_string(direct_debit_schedule['term_end_date'])
-                if direct_debit_schedule else False
-            ),
-            'direct_debit_last_month_start_date': (
-                fields.Date.to_string(direct_debit_schedule['last_month_start_date'])
-                if direct_debit_schedule else False
-            ),
-            'direct_debit_last_month_end_date': (
-                fields.Date.to_string(direct_debit_schedule['last_month_end_date'])
-                if direct_debit_schedule else False
-            ),
             'source_recurring_price': float(credit_amount),
             'source_display_recurring_price': float(display_credit_amount),
             'interval_value': int(choice.get('interval_value') or 1),
@@ -859,28 +669,6 @@ class PosOrderPricingMixin(models.Model):
             source_order,
             preferred_line=recurring_line,
         )
-        direct_debit_schedule = {}
-        if getattr(source_order, 'wgs_direct_debit_subscription', False):
-            direct_debit_schedule = self._wgs_get_direct_debit_renewal_schedule(source_order)
-            renewal_schedule = {
-                'renewal_anchor': direct_debit_schedule.get('paid_until_date') or fields.Date.context_today(self),
-                'subscription_end_date': direct_debit_schedule.get('term_end_date') or renewal_schedule['subscription_end_date'],
-                'next_billing_date': direct_debit_schedule.get('next_billing_date') or False,
-                'period_aligned': True,
-            }
-            recurring_price = float(direct_debit_schedule.get('monthly_amount') or recurring_price)
-            display_recurring_price = self._wgs_get_sale_order_line_total_with_tax(recurring_line, qty_override=qty)
-            direct_debit_charge = float(direct_debit_schedule.get('amount_due_total') or 0.0)
-            direct_debit_display_charge = self._wgs_get_price_with_taxes_for_pos(
-                recurring_line.product_id,
-                direct_debit_charge,
-                partner=source_order.partner_id,
-                company=source_order.company_id if 'company_id' in source_order._fields else False,
-                fiscal_position=source_order.fiscal_position_id if 'fiscal_position_id' in source_order._fields else False,
-            )
-        else:
-            direct_debit_charge = recurring_price
-            direct_debit_display_charge = display_recurring_price
         return {
             'mode': 'subscription',
             'flow': flow,
@@ -895,39 +683,13 @@ class PosOrderPricingMixin(models.Model):
             'credit_amount': 0.0,
             'display_credit_amount': 0.0,
             'ticket_credit_amount': 0.0,
-            'charge_now': float(direct_debit_charge),
-            'display_charge_now': float(direct_debit_display_charge),
-            'ticket_charge_now': float(direct_debit_charge),
+            'charge_now': float(recurring_price),
+            'display_charge_now': float(display_recurring_price),
+            'ticket_charge_now': float(recurring_price),
             'subscription_start_date': fields.Date.to_string(renewal_schedule['renewal_anchor']),
             'subscription_end_date': fields.Date.to_string(renewal_schedule['subscription_end_date']),
-            'next_billing_date': fields.Date.to_string(renewal_schedule['next_billing_date']) if renewal_schedule.get('next_billing_date') else False,
+            'next_billing_date': fields.Date.to_string(renewal_schedule['next_billing_date']),
             'first_period_alignment': bool(renewal_schedule.get('period_aligned')),
-            'direct_debit': bool(direct_debit_schedule),
-            'direct_debit_monthly_amount': float(direct_debit_schedule.get('monthly_amount') or 0.0),
-            'direct_debit_due_month_count': int(direct_debit_schedule.get('due_month_count') or 0),
-            'direct_debit_months_to_pay': int(direct_debit_schedule.get('due_month_count') or 0),
-            'direct_debit_amount_due_total': float(direct_debit_schedule.get('amount_due_total') or 0.0),
-            'direct_debit_paid_until_date': (
-                fields.Date.to_string(direct_debit_schedule['paid_until_date'])
-                if direct_debit_schedule and direct_debit_schedule.get('paid_until_date') else False
-            ),
-            'direct_debit_resulting_paid_until_date': (
-                fields.Date.to_string(direct_debit_schedule['resulting_paid_until_date'])
-                if direct_debit_schedule and direct_debit_schedule.get('resulting_paid_until_date') else False
-            ),
-            'direct_debit_current_month_end_date': (
-                fields.Date.to_string(direct_debit_schedule['current_month_end_date'])
-                if direct_debit_schedule and direct_debit_schedule.get('current_month_end_date') else False
-            ),
-            'direct_debit_access_restored': bool(direct_debit_schedule.get('access_restored')) if direct_debit_schedule else False,
-            'direct_debit_due_periods': [
-                {
-                    'start_date': fields.Date.to_string(period['start_date']),
-                    'end_date': fields.Date.to_string(period['end_date']),
-                    'amount': float(period.get('amount') or 0.0),
-                }
-                for period in direct_debit_schedule.get('due_periods', [])
-            ] if direct_debit_schedule else [],
             'interval_value': int(interval_value or 1),
             'interval_unit': interval_unit or 'month',
             'interval_label': f'{int(interval_value or 1)} {interval_unit or "month"}',

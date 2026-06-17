@@ -51,27 +51,6 @@ function renderRenewalForm({
         buildChargeFromSnapshot(renewalForm, "charge_now"),
         renewalForm
     );
-    const pricingSnapshot = renewalForm.pricingSnapshot || {};
-    const isDirectDebitRenewal = !isReenroll && Boolean(pricingSnapshot.direct_debit);
-    const dueMonthCount = Number(pricingSnapshot.direct_debit_due_month_count || 0);
-    const monthsToPay = Number(renewalForm.directDebitMonthsToPay || pricingSnapshot.direct_debit_months_to_pay || dueMonthCount || 0);
-    const directDebitMonthOptions = Array.from({ length: Math.max(dueMonthCount, 0) }, (_value, index) => {
-        const value = index + 1;
-        const selected = value === monthsToPay ? "selected" : "";
-        const label = value === dueMonthCount
-            ? _t("%s meses (total)").replace("%s", String(value))
-            : _t("%s mes(es)").replace("%s", String(value));
-        return `<option value="${escapeHtml(String(value))}" ${selected}>${escapeHtml(label)}</option>`;
-    }).join("");
-    const directDebitNotice = isDirectDebitRenewal
-        ? (
-            dueMonthCount <= 0
-                ? _t("Este domiciliado no tiene meses vencidos por cobrar.")
-                : monthsToPay < dueMonthCount
-                    ? _t("Pago parcial: el acceso no se restaurará hasta cubrir todos los meses vencidos y el vigente.")
-                    : _t("Pago total: al pagar se restaurará acceso si cubre el mes vigente.")
-        )
-        : "";
     return `
         <div class="wgs-inline-form-card">
             <div class="wgs-inline-form-header">
@@ -115,29 +94,6 @@ function renderRenewalForm({
                     <div><span>${escapeHtml(dateLabel)}</span><strong>${escapeHtml(dateValue || "-")}</strong></div>
                     <div><span>${escapeHtml(_t("Importe a cobrar"))}</span><strong>${escapeHtml(formatMoney(chargeDisplayAmount))}</strong></div>
                 </div>
-                ${isDirectDebitRenewal ? `
-                    <div class="wgs-inline-form-grid">
-                        <label>
-                            <span>${escapeHtml(_t("Meses a pagar"))}</span>
-                            <select data-field="renewal_direct_debit_months_to_pay" ${dueMonthCount > 0 ? "" : "disabled"}>
-                                ${directDebitMonthOptions || `<option value="0">${escapeHtml(_t("Sin adeudo"))}</option>`}
-                            </select>
-                        </label>
-                        <div>
-                            <span>${escapeHtml(_t("Pagado hasta"))}</span>
-                            <strong class="wgs-inline-static-value">${escapeHtml(formatDateDisplay(pricingSnapshot.direct_debit_paid_until_date) || "-")}</strong>
-                        </div>
-                        <div>
-                            <span>${escapeHtml(_t("Adeudo total"))}</span>
-                            <strong class="wgs-inline-static-value">${escapeHtml(formatMoney(pricingSnapshot.direct_debit_amount_due_total || 0))}</strong>
-                        </div>
-                        <div>
-                            <span>${escapeHtml(_t("Plazo forzoso"))}</span>
-                            <strong class="wgs-inline-static-value">${escapeHtml(formatDateDisplay(pricingSnapshot.direct_debit_term_end_date) || "-")}</strong>
-                        </div>
-                    </div>
-                    <div class="wgs-inline-notice">${escapeHtml(directDebitNotice)}</div>
-                ` : ""}
             `}
             ${renderDiscountAuthorizationSection({
                 form: renewalForm,

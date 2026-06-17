@@ -97,23 +97,6 @@ function buildPricingSnapshotFromCharge(charge, {
                 ? charge.source_display_recurring_price
                 : (charge && charge.source_recurring_price ? charge.source_recurring_price : 0)
         ) || 0,
-        direct_debit: Boolean(charge && charge.direct_debit),
-        direct_debit_monthly_amount: Number(charge && charge.direct_debit_monthly_amount ? charge.direct_debit_monthly_amount : 0) || 0,
-        direct_debit_term_months: Number(charge && charge.direct_debit_term_months ? charge.direct_debit_term_months : 0) || 0,
-        direct_debit_first_month_charge: Number(charge && charge.direct_debit_first_month_charge ? charge.direct_debit_first_month_charge : 0) || 0,
-        direct_debit_last_month_charge: Number(charge && charge.direct_debit_last_month_charge ? charge.direct_debit_last_month_charge : 0) || 0,
-        direct_debit_due_month_count: Number(charge && charge.direct_debit_due_month_count ? charge.direct_debit_due_month_count : 0) || 0,
-        direct_debit_months_to_pay: Number(charge && charge.direct_debit_months_to_pay ? charge.direct_debit_months_to_pay : 0) || 0,
-        direct_debit_amount_due_total: Number(charge && charge.direct_debit_amount_due_total ? charge.direct_debit_amount_due_total : 0) || 0,
-        direct_debit_access_restored: Boolean(charge && charge.direct_debit_access_restored),
-        direct_debit_paid_until_date: charge && charge.direct_debit_paid_until_date ? charge.direct_debit_paid_until_date : false,
-        direct_debit_resulting_paid_until_date: charge && charge.direct_debit_resulting_paid_until_date ? charge.direct_debit_resulting_paid_until_date : false,
-        direct_debit_current_month_end_date: charge && charge.direct_debit_current_month_end_date ? charge.direct_debit_current_month_end_date : false,
-        direct_debit_term_start_date: charge && charge.direct_debit_term_start_date ? charge.direct_debit_term_start_date : false,
-        direct_debit_term_end_date: charge && charge.direct_debit_term_end_date ? charge.direct_debit_term_end_date : false,
-        direct_debit_last_month_start_date: charge && charge.direct_debit_last_month_start_date ? charge.direct_debit_last_month_start_date : false,
-        direct_debit_last_month_end_date: charge && charge.direct_debit_last_month_end_date ? charge.direct_debit_last_month_end_date : false,
-        direct_debit_due_periods: Array.isArray(charge && charge.direct_debit_due_periods) ? charge.direct_debit_due_periods : [],
     };
 }
 
