@@ -71,6 +71,51 @@ class SaleOrder(models.Model):
         help='Si se deja vacío, se usa el horario configurado en el paquete. '
              'Acceso general equivale a timezone_id=1.',
     )
+    wgs_direct_debit_subscription = fields.Boolean(
+        string='Domiciliado WGS',
+        copy=False,
+        help='Suscripción operada con reglas WGS de domiciliación desde POS.',
+    )
+    wgs_direct_debit_monthly_amount = fields.Monetary(
+        string='Mensualidad domiciliada WGS',
+        currency_field='currency_id',
+        copy=False,
+    )
+    wgs_direct_debit_term_start_date = fields.Date(
+        string='Inicio plazo forzoso WGS',
+        copy=False,
+    )
+    wgs_direct_debit_term_end_date = fields.Date(
+        string='Fin plazo forzoso WGS',
+        copy=False,
+    )
+    wgs_direct_debit_paid_until_date = fields.Date(
+        string='Pagado hasta WGS',
+        copy=False,
+        help='Último día cubierto por pagos mensuales ordinarios. No incluye el último mes anticipado.',
+    )
+    wgs_direct_debit_last_month_start_date = fields.Date(
+        string='Inicio último mes anticipado WGS',
+        copy=False,
+    )
+    wgs_direct_debit_last_month_end_date = fields.Date(
+        string='Fin último mes anticipado WGS',
+        copy=False,
+    )
+    wgs_direct_debit_cancel_requested = fields.Boolean(
+        string='Cancelación domiciliada solicitada WGS',
+        copy=False,
+    )
+    wgs_direct_debit_cancel_at_date = fields.Date(
+        string='Cancelar domiciliado al WGS',
+        copy=False,
+    )
+    wgs_direct_debit_cancellation_fee = fields.Monetary(
+        string='Cargo cancelación domiciliado WGS',
+        currency_field='currency_id',
+        copy=False,
+    )
+
     @api.depends(
         'order_line',
         'order_line.product_id',
@@ -252,7 +297,7 @@ class SaleOrder(models.Model):
             return False
 
         today = fields.Date.context_today(self)
-        if self._wgs_get_optional_field_value('wgs_direct_debit_subscription'):
+        if self.wgs_direct_debit_subscription:
             return self._wgs_classify_direct_debit_access_state(today)
 
         start_date = self._wgs_get_first_access_date_value(
@@ -275,33 +320,29 @@ class SaleOrder(models.Model):
 
         return 'enabled'
 
-    def _wgs_get_optional_field_value(self, field_name, default=False):
-        self.ensure_one()
-        return self[field_name] if field_name in self._fields else default
-
     def _wgs_classify_direct_debit_access_state(self, today):
         self.ensure_one()
         today = fields.Date.to_date(today) or fields.Date.context_today(self)
 
-        start_date = self._wgs_get_optional_field_value('wgs_direct_debit_term_start_date') or self._wgs_get_first_access_date_value(
+        start_date = self.wgs_direct_debit_term_start_date or self._wgs_get_first_access_date_value(
             ('wgs_effective_start_date', 'start_date', 'date_start', 'subscription_start_date', 'date_order')
         )
         if start_date and start_date > today:
             return False
 
-        term_end = self._wgs_get_optional_field_value('wgs_direct_debit_term_end_date') or self._wgs_get_first_access_date_value(
+        term_end = self.wgs_direct_debit_term_end_date or self._wgs_get_first_access_date_value(
             ('date_end', 'end_date', 'subscription_end_date', 'recurring_end_date')
         )
         if term_end and term_end < today:
             return False
 
-        paid_until = self._wgs_get_optional_field_value('wgs_direct_debit_paid_until_date')
+        paid_until = self.wgs_direct_debit_paid_until_date
         current_month_end = today + relativedelta(day=31)
         if paid_until and paid_until >= current_month_end:
             return 'enabled'
 
-        last_start = self._wgs_get_optional_field_value('wgs_direct_debit_last_month_start_date')
-        last_end = self._wgs_get_optional_field_value('wgs_direct_debit_last_month_end_date') or term_end
+        last_start = self.wgs_direct_debit_last_month_start_date
+        last_end = self.wgs_direct_debit_last_month_end_date or term_end
         if last_start and last_end and last_start <= today <= last_end:
             previous_month_end = last_start - relativedelta(days=1)
             if not paid_until or paid_until < previous_month_end:

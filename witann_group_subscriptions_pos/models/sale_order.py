@@ -15,52 +15,6 @@ _logger = logging.getLogger(__name__)
 
 class SaleOrder(models.Model):
     _inherit = 'sale.order'
-
-    wgs_direct_debit_subscription = fields.Boolean(
-        string='Domiciliado WGS',
-        copy=False,
-        help='Suscripción operada con reglas WGS de domiciliación desde POS.',
-    )
-    wgs_direct_debit_monthly_amount = fields.Monetary(
-        string='Mensualidad domiciliada WGS',
-        currency_field='currency_id',
-        copy=False,
-    )
-    wgs_direct_debit_term_start_date = fields.Date(
-        string='Inicio plazo forzoso WGS',
-        copy=False,
-    )
-    wgs_direct_debit_term_end_date = fields.Date(
-        string='Fin plazo forzoso WGS',
-        copy=False,
-    )
-    wgs_direct_debit_paid_until_date = fields.Date(
-        string='Pagado hasta WGS',
-        copy=False,
-        help='Último día cubierto por pagos mensuales ordinarios. No incluye el último mes anticipado.',
-    )
-    wgs_direct_debit_last_month_start_date = fields.Date(
-        string='Inicio último mes anticipado WGS',
-        copy=False,
-    )
-    wgs_direct_debit_last_month_end_date = fields.Date(
-        string='Fin último mes anticipado WGS',
-        copy=False,
-    )
-    wgs_direct_debit_cancel_requested = fields.Boolean(
-        string='Cancelación domiciliada solicitada WGS',
-        copy=False,
-    )
-    wgs_direct_debit_cancel_at_date = fields.Date(
-        string='Cancelar domiciliado al WGS',
-        copy=False,
-    )
-    wgs_direct_debit_cancellation_fee = fields.Monetary(
-        string='Cargo cancelación domiciliado WGS',
-        currency_field='currency_id',
-        copy=False,
-    )
-
     _WGS_POS_ACCESS_RESYNC_COOLDOWN_SECONDS = 60
     _WGS_POS_SUBSCRIPTION_STATE_PRIORITY = {
         'progress': 0,
