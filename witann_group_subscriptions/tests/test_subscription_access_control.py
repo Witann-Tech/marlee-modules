@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from odoo import fields
 from odoo.fields import Command
 from odoo.tests.common import TransactionCase
@@ -71,6 +73,41 @@ class TestSubscriptionAccessControl(TransactionCase):
         )
         order.write({'participant_ids': [Command.set([self.owner.id, self.participant.id])]})
         return order
+
+    def _set_auto_close_plan(self, order, days=3):
+        Plan = self.env['sale.subscription.plan']
+        plan = Plan.search([], limit=1)
+        if not plan:
+            plan = Plan.create({'name': 'Plan cierre WGS'})
+
+        auto_close_field = next(
+            (
+                field_name
+                for field_name in self.env['sale.order']._WGS_SUBSCRIPTION_PLAN_AUTO_CLOSE_DAY_FIELDS
+                if field_name in plan._fields
+            ),
+            False,
+        )
+        if not auto_close_field:
+            self.skipTest('El runtime no expone campo de cierre automático en planes recurrentes.')
+        plan.write({auto_close_field: days})
+
+        line = order._get_subscription_recurring_lines()[:1]
+        line_plan_field = next(
+            (
+                field_name
+                for field_name in ('subscription_plan_id', 'plan_id', 'recurring_plan_id')
+                if field_name in line._fields
+            ),
+            False,
+        )
+        if line_plan_field:
+            line.write({line_plan_field: plan.id})
+            return plan
+        if 'plan_id' in order._fields:
+            order.write({'plan_id': plan.id})
+            return plan
+        self.skipTest('No se encontró campo de plan recurrente en línea ni suscripción.')
 
     def test_active_subscription_creates_access_people(self):
         order = self._create_subscription_order()
@@ -333,6 +370,40 @@ class TestSubscriptionAccessControl(TransactionCase):
         self.assertTrue(owner_person)
         self.assertTrue(owner_person.active)
         self.assertTrue(owner_person.managed_by_subscription)
+
+    def test_overdue_subscription_cron_closes_by_plan_grace_and_deactivates_access(self):
+        order = self._create_subscription_order()
+        progress_state = self._find_subscription_state_value('progress', 'en progreso')
+        renew_state = self._find_subscription_state_value('renew', 'to renew', 'por renovar')
+        self._set_auto_close_plan(order, days=3)
+        next_field = next(
+            (
+                field_name
+                for field_name in ('recurring_next_date', 'next_invoice_date', 'recurring_next_invoice_date')
+                if field_name in order._fields
+            ),
+            False,
+        )
+        if not next_field:
+            self.skipTest('No existe campo de próxima fecha de cobro en este runtime.')
+
+        order.write({'subscription_state': progress_state})
+        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
+        self.assertTrue(owner_person.active)
+
+        order.write({
+            'subscription_state': renew_state,
+            next_field: fields.Date.context_today(order) - timedelta(days=3),
+        })
+
+        closed_count = self.env['sale.order']._cron_wgs_close_overdue_subscriptions()
+
+        self.assertGreaterEqual(closed_count, 1)
+        order.invalidate_recordset(['subscription_state'])
+        self.assertIn(order._wgs_get_subscription_state_category(), ('cancel', 'closed'))
+        owner_person.invalidate_recordset(['active', 'access_state'])
+        self.assertFalse(owner_person.active)
+        self.assertEqual(owner_person.access_state, 'suspended')
 
     def test_access_is_aggregated_across_multiple_subscriptions(self):
         progress_state = self._find_subscription_state_value('progress', 'en progreso')

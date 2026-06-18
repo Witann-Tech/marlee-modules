@@ -63,18 +63,6 @@ class SaleOrder(models.Model):
         'actionable': ('progress', 'renew'),
         'cancel': ('cancel', 'closed'),
     }
-    _WGS_SUBSCRIPTION_PLAN_AUTO_CLOSE_DAY_FIELDS = (
-        'auto_close_limit',
-        'auto_close_days',
-        'automatic_closing',
-        'automatic_closing_days',
-        'close_after_days',
-        'close_days',
-        'closing_days',
-        'days_to_close',
-        'renewal_grace_period',
-        'grace_period_days',
-    )
     _PARTNER_GENDER_FIELD_CANDIDATES = (
         'gender',
         'x_gender',
@@ -2366,7 +2354,7 @@ class SaleOrder(models.Model):
         if hard_end_date and (not valid_until or hard_end_date < valid_until):
             valid_until = hard_end_date
 
-        close_deadline = self._wgs_get_subscription_auto_close_deadline_for_pos(
+        close_deadline = self._wgs_get_subscription_auto_close_deadline(
             next_invoice_date=next_invoice_date,
             primary_recurring_line=primary_recurring_line,
         )
@@ -2468,7 +2456,7 @@ class SaleOrder(models.Model):
             valid_until = hard_end_date
 
         should_mark_for_renewal = bool(next_invoice_date and next_invoice_date <= today)
-        close_deadline = self._wgs_get_subscription_auto_close_deadline_for_pos(
+        close_deadline = self._wgs_get_subscription_auto_close_deadline(
             next_invoice_date=next_invoice_date,
             primary_recurring_line=primary_recurring_line,
         )
@@ -2915,162 +2903,6 @@ class SaleOrder(models.Model):
         if {'duration', 'duration_unit'}.issubset(plan._fields):
             return plan.duration or 1, plan.duration_unit or 'month'
         return 1, 'month'
-
-    def _wgs_get_subscription_plan_auto_close_days_for_pos(self, plan):
-        plan = plan.exists() if plan else False
-        if not plan:
-            return 0
-
-        for field_name in self._WGS_SUBSCRIPTION_PLAN_AUTO_CLOSE_DAY_FIELDS:
-            field = plan._fields.get(field_name)
-            if not field:
-                continue
-            try:
-                value = plan[field_name]
-            except Exception:
-                continue
-            if value in (False, None, ''):
-                continue
-            try:
-                days = int(value)
-            except (TypeError, ValueError):
-                continue
-            return max(days, 0)
-
-        for field_name, field in plan._fields.items():
-            if field.type not in ('integer', 'float'):
-                continue
-            normalized_name = (field_name or '').lower()
-            normalized_label = (getattr(field, 'string', '') or '').lower()
-            searchable = f'{normalized_name} {normalized_label}'
-            if not any(token in searchable for token in ('close', 'closing', 'cerrar', 'cierre', 'grace', 'gracia')):
-                continue
-            if not any(token in searchable for token in ('day', 'days', 'dia', 'dias', 'días', 'limit')):
-                continue
-            try:
-                value = plan[field_name]
-                days = int(value or 0)
-            except (TypeError, ValueError):
-                continue
-            return max(days, 0)
-        return 0
-
-    def _wgs_get_subscription_auto_close_deadline_for_pos(self, next_invoice_date=False, primary_recurring_line=False):
-        due_date = fields.Date.to_date(next_invoice_date)
-        if not due_date:
-            return False
-
-        plan = self._get_subscription_plan_from_line_for_pos(primary_recurring_line)
-        if not plan and 'plan_id' in self._fields and self.plan_id:
-            plan = self.plan_id
-        auto_close_days = self._wgs_get_subscription_plan_auto_close_days_for_pos(plan)
-        if auto_close_days <= 0:
-            return False
-        return due_date + timedelta(days=auto_close_days)
-
-    def _wgs_get_subscription_auto_close_deadline_from_order_for_pos(self, today=False):
-        self.ensure_one()
-        today = fields.Date.to_date(today) or fields.Date.context_today(self)
-        recurring_lines = self._get_recurring_lines()
-        if not recurring_lines:
-            return False
-        primary_recurring_line = recurring_lines.sorted(key=lambda line: line.id)[:1]
-        start_date = self._get_first_available_date(
-            ('wgs_effective_start_date', 'start_date', 'date_start', 'subscription_start_date', 'date_order')
-        )
-        next_invoice_date = self._get_first_available_date(
-            ('recurring_next_date', 'next_invoice_date', 'recurring_next_invoice_date')
-        )
-        if start_date and (not next_invoice_date or next_invoice_date <= start_date):
-            next_invoice_date = start_date + self._get_recurrence_delta(primary_recurring_line=primary_recurring_line)
-        return self._wgs_get_subscription_auto_close_deadline_for_pos(
-            next_invoice_date=next_invoice_date,
-            primary_recurring_line=primary_recurring_line,
-        )
-
-    def _wgs_is_due_for_subscription_auto_close_for_pos(self, today=False):
-        self.ensure_one()
-        native_state_key, _native_state_label = self._get_native_subscription_state_info_for_pos()
-        if native_state_key in ('cancel', 'closed', 'draft', 'upsell'):
-            return False
-        close_deadline = self._wgs_get_subscription_auto_close_deadline_from_order_for_pos(today=today)
-        return bool(close_deadline and (fields.Date.to_date(today) or fields.Date.context_today(self)) >= close_deadline)
-
-    def _wgs_find_subscription_closed_state_value_for_pos(self):
-        self.ensure_one()
-        field = self._fields.get('subscription_state')
-        if not field or not getattr(field, 'selection', False):
-            return False
-
-        selection = field.selection
-        if isinstance(selection, str):
-            selection = getattr(self, selection, lambda: [])()
-        if callable(selection):
-            selection = selection(self.env[self._name])
-        normalized_selection = [(value, (label or '').lower()) for value, label in (selection or [])]
-        for preferred_token in ('churn', 'closed', 'close', 'cancel'):
-            for value, label in normalized_selection:
-                value_text = str(value or '').lower()
-                if preferred_token in value_text or preferred_token in label:
-                    return value
-        return False
-
-    def _wgs_close_subscription_for_auto_close_for_pos(self, today=False):
-        self.ensure_one()
-        if not self._wgs_is_due_for_subscription_auto_close_for_pos(today=today):
-            return False
-
-        for method_name in ('action_close', 'action_subscription_close', 'set_close'):
-            method = getattr(self, method_name, None)
-            if not callable(method):
-                continue
-            try:
-                method()
-                native_state_key, _native_state_label = self._get_native_subscription_state_info_for_pos()
-                if native_state_key in ('cancel', 'closed'):
-                    _logger.info('WGS POS: subscription %s auto-closed with %s', self.name, method_name)
-                    return True
-                _logger.warning(
-                    'WGS POS: %s on subscription %s did not close the subscription; falling back to state write',
-                    method_name,
-                    self.name,
-                )
-            except Exception as error:
-                _logger.warning(
-                    'WGS POS: could not execute %s on auto-close subscription %s (%s)',
-                    method_name,
-                    self.name,
-                    error,
-                )
-
-        closed_state = self._wgs_find_subscription_closed_state_value_for_pos()
-        if closed_state and 'subscription_state' in self._fields:
-            self.write({'subscription_state': closed_state})
-            _logger.info('WGS POS: subscription %s auto-closed by subscription_state=%s', self.name, closed_state)
-            return True
-        return False
-
-    @api.model
-    def _cron_wgs_close_overdue_subscriptions(self, limit=0):
-        today = fields.Date.context_today(self)
-        domain = [('state', 'in', ['sale', 'done'])]
-        if 'subscription_state' in self._fields:
-            domain.append(('subscription_state', '!=', False))
-        search_limit = max(0, int(limit or 0))
-        subscriptions = self.sudo().search(domain, order='id asc', limit=search_limit)
-        subscriptions = subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
-
-        closed = self.browse()
-        for subscription in subscriptions:
-            if subscription._wgs_close_subscription_for_auto_close_for_pos(today=today):
-                closed |= subscription
-
-        if closed:
-            for subscription in closed:
-                if hasattr(subscription, '_wgs_sync_access_control_people'):
-                    subscription.with_context(access_sync_priority=True)._wgs_sync_access_control_people()
-            _logger.info('WGS POS: auto-closed %s overdue subscriptions by plan grace period', len(closed))
-        return len(closed)
 
     def _get_partner_field_value_for_pos(self, partner, field_candidates):
         partner.ensure_one()
