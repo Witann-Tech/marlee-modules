@@ -26,6 +26,7 @@ class SaleOrder(models.Model):
         'upsell': 6,
         'other': 7,
         'none': 8,
+        'external_access': 9,
     }
     _WGS_ACCESS_ENABLED_STATE_TOKENS = (
         'progress',
@@ -280,6 +281,11 @@ class SaleOrder(models.Model):
             'state': summary.get('state') or 'none',
             'state_label': summary.get('state_label') or _('Sin suscripción'),
             'package_label': summary.get('package_label') or False,
+            'access_origin_label': summary.get('access_origin_label') or False,
+            'access_origin_message': summary.get('access_origin_message') or False,
+            'access_origin_company_name': summary.get('access_origin_company_name') or False,
+            'access_origin_subscription_id': summary.get('access_origin_subscription_id') or False,
+            'access_origin_subscription_name': summary.get('access_origin_subscription_name') or False,
             'plan_name': summary.get('plan_name') or False,
             'start_date': summary.get('start_date') or False,
             'valid_until': summary.get('valid_until') or False,
@@ -295,7 +301,10 @@ class SaleOrder(models.Model):
             ),
             'image_url': summary.get('image_url') or ('/web/image/res.partner/%s/image_128' % partner.id),
             'items': items,
-            'has_subscription_history': self._wgs_partner_has_subscription_history_for_pos(partner, company=company),
+            'has_subscription_history': bool(
+                summary.get('access_origin_subscription_id')
+                or self._wgs_partner_has_subscription_history_for_pos(partner, company=company)
+            ),
         }
 
     @api.model
@@ -1281,6 +1290,7 @@ class SaleOrder(models.Model):
 
         today = fields.Date.context_today(self)
         subscriptions_by_partner = self._get_pos_subscription_orders_by_partners(partners, company=company)
+        access_origin_items_by_partner = self._get_partner_access_origin_items_for_pos(partners, company=company)
         try:
             access_last_map = self._get_access_person_last_access_map_for_pos(partners)
             access_status_map = self._get_access_person_status_map_for_pos(partners, company=company)
@@ -1309,6 +1319,11 @@ class SaleOrder(models.Model):
                     items.append(item)
 
             summary = self._summarize_partner_subscription_items_for_pos(items)
+            origin_summary = self._summarize_partner_access_origin_items_for_pos(
+                access_origin_items_by_partner.get(partner.id, [])
+            )
+            if summary.get('state') == 'none' and origin_summary:
+                summary.update(origin_summary)
             try:
                 birthday_value = self._get_partner_field_value_for_pos(
                     partner,
@@ -1353,6 +1368,11 @@ class SaleOrder(models.Model):
                 'subscription_id': summary.get('subscription_id') or False,
                 'package_label': summary.get('package_label') or False,
                 'package_names': summary.get('package_names') or [],
+                'access_origin_label': summary.get('access_origin_label') or False,
+                'access_origin_message': summary.get('access_origin_message') or False,
+                'access_origin_company_name': summary.get('access_origin_company_name') or False,
+                'access_origin_subscription_id': summary.get('access_origin_subscription_id') or False,
+                'access_origin_subscription_name': summary.get('access_origin_subscription_name') or False,
                 'plan_name': summary.get('plan_name') or False,
                 'reason': summary.get('reason') or False,
                 'subscription_name': summary.get('subscription_name') or False,
@@ -1381,6 +1401,7 @@ class SaleOrder(models.Model):
         subscriptions_by_partner = self._get_pos_subscription_orders_by_partners(partners, company=company)
         access_last_map = {}
         access_status_map = {}
+        access_origin_items_by_partner = self._get_partner_access_origin_items_for_pos(partners, company=company)
         if include_profile_fields:
             try:
                 access_last_map = self._get_access_person_last_access_map_for_pos(partners)
@@ -1410,6 +1431,9 @@ class SaleOrder(models.Model):
                     items.append(item)
 
             summary = self._summarize_partner_subscription_items_for_pos(items)
+            origin_summary = self._summarize_partner_access_origin_items_for_pos(
+                access_origin_items_by_partner.get(partner.id, [])
+            )
             values = {
                 'state': summary.get('state') or 'none',
                 'state_label': summary.get('state_label') or _('Sin suscripción'),
@@ -1424,6 +1448,9 @@ class SaleOrder(models.Model):
                 'subscription_name': summary.get('subscription_name') or False,
                 'partner_name': partner.display_name,
             }
+
+            if summary.get('state') == 'none' and origin_summary:
+                values.update(origin_summary)
 
             if include_profile_fields:
                 phone_value = self._get_partner_field_value_for_pos(partner, ('phone', 'mobile'))
@@ -1643,6 +1670,11 @@ class SaleOrder(models.Model):
             'state': status.get('state') or 'none',
             'state_label': status.get('state_label') or _('Sin suscripción'),
             'package_label': status.get('package_label') or False,
+            'access_origin_label': status.get('access_origin_label') or False,
+            'access_origin_message': status.get('access_origin_message') or False,
+            'access_origin_company_name': status.get('access_origin_company_name') or False,
+            'access_origin_subscription_id': status.get('access_origin_subscription_id') or False,
+            'access_origin_subscription_name': status.get('access_origin_subscription_name') or False,
             'plan_name': status.get('plan_name') or False,
             'start_date': status.get('start_date') or False,
             'valid_until': status.get('valid_until') or False,
@@ -1914,6 +1946,56 @@ class SaleOrder(models.Model):
         }
 
     @api.model
+    def _summarize_partner_access_origin_items_for_pos(self, items):
+        items = [item for item in (items or []) if item]
+        if not items:
+            return {}
+
+        prioritized = sorted(items, key=self._sort_subscription_status_item_key_for_pos)
+        primary = prioritized[0]
+        package_names = sorted({
+            package_name
+            for item in prioritized
+            for package_name in (item.get('package_names') or [])
+            if package_name
+        })
+        package_label = ', '.join(package_names) if package_names else False
+        origin_company_name = primary.get('access_origin_company_name') or _('otra sede')
+        origin_subscription_name = primary.get('subscription_name') or False
+        access_origin_label = _('Acceso multisede')
+        access_origin_message = _(
+            'Acceso habilitado por una membresía vendida en %(company)s. '
+            'La renovación y cambios de paquete se operan en la sede de origen.'
+        ) % {'company': origin_company_name}
+        if package_label:
+            access_origin_message = _(
+                'Acceso habilitado por %(package)s vendido en %(company)s. '
+                'La renovación y cambios de paquete se operan en la sede de origen.'
+            ) % {'package': package_label, 'company': origin_company_name}
+
+        return {
+            'state': 'external_access',
+            'state_label': access_origin_label,
+            'short_label': _('Acceso multisede'),
+            'valid_until': primary.get('valid_until') or False,
+            'start_date': primary.get('start_date') or primary.get('period_start') or False,
+            'subscription_id': False,
+            'package_label': (_('%(package)s (origen: %(company)s)') % {
+                'package': package_label,
+                'company': origin_company_name,
+            }) if package_label else (_('Origen: %(company)s') % {'company': origin_company_name}),
+            'package_names': package_names,
+            'plan_name': primary.get('plan_name') or False,
+            'reason': primary.get('reason') or access_origin_message,
+            'subscription_name': False,
+            'access_origin_label': access_origin_label,
+            'access_origin_message': access_origin_message,
+            'access_origin_company_name': origin_company_name,
+            'access_origin_subscription_id': primary.get('subscription_id') or False,
+            'access_origin_subscription_name': origin_subscription_name,
+        }
+
+    @api.model
     def _get_pos_subscription_orders(self, partner, company=False):
         partner_domain = [
             '|',
@@ -1990,11 +2072,15 @@ class SaleOrder(models.Model):
     def _get_subscription_action_domain_for_pos(self, company=False):
         base_domain = [('state', 'in', ['sale', 'done'])]
         company = company or self.env.company
-        visibility_domains = []
         if 'company_id' in self._fields:
-            visibility_domains.append([('company_id', '=', company.id)])
+            base_domain.append(('company_id', '=', company.id))
+        return base_domain
 
+    @api.model
+    def _get_subscription_access_site_domain_for_pos(self, company=False):
+        company = company or self.env.company
         pos_site_ids = self._wgs_get_pos_access_sites_for_pos(company).ids
+        visibility_domains = []
         if pos_site_ids and 'wgs_access_site_ids' in self._fields:
             visibility_domains.append([('wgs_access_site_ids', 'in', pos_site_ids)])
 
@@ -2012,11 +2098,61 @@ class SaleOrder(models.Model):
             ])
 
         if not visibility_domains:
-            return base_domain
-        return fields.Domain.AND([
-            base_domain,
-            fields.Domain.OR(visibility_domains),
-        ])
+            return []
+        return fields.Domain.OR(visibility_domains)
+
+    @api.model
+    def _get_subscription_access_origin_domain_for_pos(self, company=False):
+        company = company or self.env.company
+        site_domain = self._get_subscription_access_site_domain_for_pos(company=company)
+        if not site_domain:
+            return []
+
+        domain_parts = [[('state', 'in', ['sale', 'done'])], site_domain]
+        if 'company_id' in self._fields:
+            domain_parts.append([('company_id', '!=', company.id)])
+        return fields.Domain.AND(domain_parts)
+
+    @api.model
+    def _get_partner_access_origin_items_for_pos(self, partners, company=False):
+        if not partners:
+            return {}
+
+        company = company or self.env.company
+        origin_domain = self._get_subscription_access_origin_domain_for_pos(company=company)
+        result = {partner.id: [] for partner in partners}
+        if not origin_domain:
+            return result
+
+        partner_ids = partners.ids
+        partner_domain = [
+            '|',
+            ('participant_ids', 'in', partner_ids),
+            ('partner_id', 'in', partner_ids),
+        ]
+        domain = fields.Domain.AND([origin_domain, partner_domain])
+        today = fields.Date.context_today(self)
+        subscriptions = self.sudo().search(domain, order='id desc')
+        subscriptions = subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
+        partner_id_set = set(partner_ids)
+
+        for subscription in subscriptions:
+            item = subscription._build_pos_subscription_directory_status_item(today)
+            if not item or item.get('access_state') != 'enabled':
+                continue
+            item = dict(item)
+            item['access_origin_company_name'] = (
+                subscription.company_id.display_name
+                if 'company_id' in subscription._fields and subscription.company_id
+                else _('otra sede')
+            )
+            shared_partner_ids = set(partner_id_set.intersection(subscription.participant_ids.ids))
+            if subscription.partner_id and subscription.partner_id.id in partner_id_set:
+                shared_partner_ids.add(subscription.partner_id.id)
+            for partner_id in shared_partner_ids:
+                result.setdefault(partner_id, []).append(item)
+
+        return result
 
     def _is_subscription_record_for_pos(self):
         self.ensure_one()

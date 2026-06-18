@@ -55,6 +55,12 @@ function renderDetailHeader({
             ${detail.access_blocked_by ? `<small>${escapeHtml(_t("Bloqueado por"))}: ${escapeHtml(detail.access_blocked_by)}</small>` : ""}
         </div>
     ` : "";
+    const accessOriginNoticeHtml = detail.access_origin_message ? `
+        <div class="wgs-access-origin-notice">
+            <strong>${escapeHtml(detail.access_origin_label || _t("Acceso multisede"))}</strong>
+            <span>${escapeHtml(detail.access_origin_message)}</span>
+        </div>
+    ` : "";
     const accessActionsHtml = !isEditingPartnerInfo && !isEditingPartnerPhoto ? `
         <div class="wgs-partner-access-actions">
             <button
@@ -138,6 +144,7 @@ function renderDetailHeader({
                 <div><span>${escapeHtml(_t("Ultimo acceso"))}</span><strong>${escapeHtml(formatDateTimeDisplay(detail.last_access) || "-")}</strong></div>
                 <div><span>${escapeHtml(_t("Resumen"))}</span><strong>${escapeHtml(detail.package_label || _t("Sin suscripcion"))}</strong></div>
             </div>
+            ${accessOriginNoticeHtml}
             ${accessBlockNoticeHtml}
             ${accessActionsHtml}
         `;

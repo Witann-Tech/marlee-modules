@@ -10,6 +10,7 @@ const STATE_SORT_RANK = {
     upsell: 6,
     other: 7,
     none: 8,
+    external_access: 9,
 };
 
 function parseISODate(value) {
@@ -114,6 +115,9 @@ function canOpenNewSubscription(detail) {
         return false;
     }
     const summaryState = String(detail.state || "").trim().toLowerCase();
+    if (summaryState === "external_access" || detail.access_origin_subscription_id) {
+        return false;
+    }
     if (summaryState === "progress" || summaryState === "renew") {
         return false;
     }

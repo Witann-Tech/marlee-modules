@@ -171,7 +171,7 @@ class TestPosAccessBlock(TransactionCase):
             {other_order.id},
         )
 
-    def test_partner_detail_includes_cross_company_subscription_with_pos_access_site(self):
+    def test_partner_detail_explains_cross_company_access_without_operable_card(self):
         if 'wgs_access_site_ids' not in self.product.product_tmpl_id._fields:
             self.skipTest('El runtime no expone sitios de acceso en producto.')
 
@@ -187,7 +187,16 @@ class TestPosAccessBlock(TransactionCase):
             company_id=self.other_company.id,
         )
 
-        self.assertIn(
-            current_order.id,
-            {item['subscription_id'] for item in other_detail['items']},
+        self.assertNotIn(current_order.id, {item['subscription_id'] for item in other_detail['items']})
+        self.assertEqual(other_detail['state'], 'external_access')
+        self.assertEqual(other_detail['state_label'], 'Acceso multisede')
+        self.assertEqual(other_detail['access_origin_subscription_id'], current_order.id)
+        self.assertIn(self.env.company.display_name, other_detail['access_origin_message'])
+        self.assertTrue(other_detail['has_subscription_history'])
+
+        row = self.env['sale.order'].get_partner_directory_row_for_pos(
+            self.owner.id,
+            company_id=self.other_company.id,
         )
+        self.assertEqual(row['state'], 'external_access')
+        self.assertIn('origen', row['package_label'].lower())

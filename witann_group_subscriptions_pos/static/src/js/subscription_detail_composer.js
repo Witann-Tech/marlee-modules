@@ -18,17 +18,28 @@ function renderSubscriptionCards(detail, {
 }) {
     const subscriptions = Array.isArray(detail.items) ? detail.items : [];
     if (!subscriptions.length) {
+        const hasAccessOrigin = Boolean(detail.access_origin_message);
+        const accessOriginNoticeHtml = detail.access_origin_message ? `
+                <div class="wgs-access-origin-notice">
+                    <strong>${escapeHtml(detail.access_origin_label || _t("Acceso multisede"))}</strong>
+                    <span>${escapeHtml(detail.access_origin_message)}</span>
+                </div>
+        ` : "";
         return `
             <div class="wgs-subscription-card wgs-subscription-card-empty">
                 <div class="wgs-subscription-card-header">
                     <div>
-                        <strong>${escapeHtml(_t("Sin suscripciones relacionadas"))}</strong>
-                        <div class="wgs-subscription-card-meta">${escapeHtml(_t("Sin historial visible para POS"))}</div>
+                        <strong>${escapeHtml(hasAccessOrigin ? _t("Acceso por otra sede") : _t("Sin suscripciones relacionadas"))}</strong>
+                        <div class="wgs-subscription-card-meta">${escapeHtml(hasAccessOrigin ? _t("Membresia administrada en la sede de origen") : _t("Sin historial visible para POS"))}</div>
                     </div>
                 </div>
                 <div class="wgs-detail-empty wgs-detail-empty-inline">
-                    <p>${escapeHtml(_t("Este cliente no tiene suscripciones nativas vigentes o historicas visibles para POS."))}</p>
+                    <p>${escapeHtml(hasAccessOrigin
+                        ? _t("Este POS solo muestra el origen del acceso; renovaciones y cambios se operan en la sede que vendio la membresia.")
+                        : _t("Este cliente no tiene suscripciones nativas vigentes o historicas visibles para POS.")
+                    )}</p>
                 </div>
+                ${accessOriginNoticeHtml}
                 <div class="wgs-subscription-actions">
                     ${allowNewSubscription
                         ? `<button type="button" class="wgs-action-btn wgs-primary-action-btn" data-action="open-new">${escapeHtml(_t("Nueva suscripcion"))}</button>`

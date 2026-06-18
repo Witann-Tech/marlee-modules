@@ -2907,6 +2907,25 @@ patch(ControlButtons.prototype, {
                 color: #be123c;
                 font-size: 0.8rem;
             }
+            .wgs-access-origin-notice {
+                margin-top: 0.85rem;
+                padding: 0.75rem 0.85rem;
+                border: 1px solid #bfdbfe;
+                border-radius: 0.75rem;
+                background: #eff6ff;
+                color: #1e40af;
+                display: flex;
+                flex-direction: column;
+                gap: 0.25rem;
+            }
+            .wgs-access-origin-notice strong {
+                color: #1d4ed8;
+                font-size: 0.86rem;
+            }
+            .wgs-access-origin-notice span {
+                color: #1e3a8a;
+                font-size: 0.8rem;
+            }
             .wgs-detail-section {
                 display: flex;
                 flex-direction: column;
