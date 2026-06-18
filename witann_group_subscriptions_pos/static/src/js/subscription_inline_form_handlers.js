@@ -193,10 +193,6 @@ function buildSubscriptionInlineActionHandlers({
     openReenrollForm,
     openUpsaleForm,
     openParticipantEditForm,
-    fetchResyncAccess,
-    getResyncAccessState,
-    setResyncAccessLoading,
-    startResyncAccessCooldown,
     loadDetail,
     detailCache,
     getCurrentSubscriptionItem,
@@ -231,44 +227,6 @@ function buildSubscriptionInlineActionHandlers({
         },
         "open-participants": async ({ actionButton }) => {
             await openParticipantEditForm(getCurrentSubscriptionItem(actionButton));
-        },
-        "resync-access": async ({ actionButton }) => {
-            const subscriptionId = Number(actionButton.dataset.subscriptionId || 0);
-            if (!subscriptionId) {
-                return;
-            }
-            clearFeedback();
-            const resyncState = typeof getResyncAccessState === "function" ? getResyncAccessState(subscriptionId) : {};
-            if (resyncState.loading || Number(resyncState.remainingSeconds || 0) > 0) {
-                return;
-            }
-            if (typeof setResyncAccessLoading === "function") {
-                setResyncAccessLoading(subscriptionId, true);
-            }
-            renderDetail(state.currentDetail);
-            try {
-                const result = await fetchResyncAccess(subscriptionId);
-                const summary = result && result.access_summary ? result.access_summary : {};
-                if (typeof startResyncAccessCooldown === "function") {
-                    startResyncAccessCooldown(subscriptionId, Number(result && result.cooldown_seconds ? result.cooldown_seconds : 60));
-                }
-                state.formNotice = _t("Acceso resincronizado. Personas activas: %s. Personas sin registro: %s.")
-                    .replace("%s", String(summary.active_count || 0))
-                    .replace("%s", String(summary.missing_count || 0));
-                if (state.currentDetail && state.currentDetail.partner_id) {
-                    detailCache.delete(Number(state.currentDetail.partner_id || 0));
-                }
-                await loadDetail(state.selectedPartnerId, { force: true });
-            } catch (error) {
-                console.error("Error al resincronizar acceso desde POS", error);
-                state.formError = (error && error.message) ? error.message : _t("No se pudo resincronizar el acceso de esta suscripción.");
-                renderDetail(state.currentDetail);
-            } finally {
-                if (typeof setResyncAccessLoading === "function") {
-                    setResyncAccessLoading(subscriptionId, false);
-                }
-                renderDetail(state.currentDetail);
-            }
         },
         "cancel-renewal": async () => {
             resetInlineForms();

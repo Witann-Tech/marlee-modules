@@ -406,19 +406,6 @@ class TestPosPartnerCurp(TransactionCase):
         self.assertFalse(result['ok'])
         self.assertEqual(result['error_code'], 'free_trial_invalid_flow')
 
-    def test_subscription_discount_offers_are_no_longer_condition_based(self):
-        partner = self.Partner.create({'name': 'Cliente regreso POS'})
-        self._create_subscription_like_order(partner, end_date='2026-03-01')
-
-        offers = self.PosOrder.sudo().wgs_get_subscription_discount_offers_for_pos(
-            partner.id,
-            self.product.id,
-            'new',
-            False,
-        )
-
-        self.assertEqual(offers, [])
-
     def test_authorize_subscription_discount_for_pos_validates_pin_and_percent(self):
         partner = self.Partner.create({'name': 'Cliente autorización POS'})
         employee = self.Employee.create(
@@ -548,18 +535,6 @@ class TestPosPartnerCurp(TransactionCase):
 
         self.assertIn(credential, due)
 
-    def test_family_product_does_not_create_conditional_discount_offer(self):
-        partner = self.Partner.create({'name': 'Cliente familiar POS'})
-
-        offers = self.PosOrder.sudo().wgs_get_subscription_discount_offers_for_pos(
-            partner.id,
-            self.family_product.id,
-            'new',
-            False,
-        )
-
-        self.assertEqual(offers, [])
-
     def test_day_pass_is_allowed_in_reenroll_flow(self):
         partner = self.Partner.create({'name': 'Cliente day pass reinscripción'})
 
@@ -572,7 +547,7 @@ class TestPosPartnerCurp(TransactionCase):
 
         self.assertTrue(result['ok'])
 
-    def test_day_pass_and_trial_do_not_require_supervisor_authorization(self):
+    def test_day_pass_and_trial_use_product_eligibility_without_discount_offer_api(self):
         partner = self.Partner.create(
             {
                 'name': 'Cliente day pass POS',
@@ -580,18 +555,18 @@ class TestPosPartnerCurp(TransactionCase):
             }
         )
 
-        day_pass_offers = self.PosOrder.sudo().wgs_get_subscription_discount_offers_for_pos(
+        day_pass_result = self.PosOrder.sudo().wgs_validate_subscription_product_eligibility_for_pos(
             partner.id,
             self.day_pass_product.id,
             'new',
             False,
         )
-        trial_offers = self.PosOrder.sudo().wgs_get_subscription_discount_offers_for_pos(
+        trial_result = self.PosOrder.sudo().wgs_validate_subscription_product_eligibility_for_pos(
             partner.id,
             self.trial_product.id,
             'new',
             False,
         )
 
-        self.assertFalse(any(offer['code'] == 'single_day_authorization' for offer in day_pass_offers))
-        self.assertFalse(any(offer['code'] == 'free_trial_authorization' for offer in trial_offers))
+        self.assertTrue(day_pass_result['ok'])
+        self.assertTrue(trial_result['ok'])

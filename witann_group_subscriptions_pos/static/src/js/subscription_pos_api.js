@@ -45,25 +45,6 @@ export function createSubscriptionPosApi(orm) {
         async fetchPosSalesHistory(options = {}) {
             return orm.call("pos.order", "wgs_get_pos_sales_history_for_pos", [options || {}]);
         },
-        async openAccessDoor(deviceId, options = {}) {
-            return orm.call("pos.order", "wgs_open_access_door_for_pos", [deviceId || false, options || {}]);
-        },
-        async blockPartnerAccess(partnerId, reason, options = {}) {
-            return orm.call("pos.order", "wgs_block_partner_access_for_pos", [
-                partnerId || false,
-                reason || "",
-                options.companyId || options.company_id || false,
-            ]);
-        },
-        async unblockPartnerAccess(partnerId, options = {}) {
-            return orm.call("pos.order", "wgs_unblock_partner_access_for_pos", [
-                partnerId || false,
-                options.companyId || options.company_id || false,
-            ]);
-        },
-        async grantExternalAccess(partnerId, provider, options = {}) {
-            return orm.call("pos.order", "wgs_grant_external_access_for_pos", [partnerId || false, provider || "", options || {}]);
-        },
         async fetchPartnerRecord(partnerId) {
             return orm.call("pos.order", "wgs_get_partner_record_for_pos", [partnerId || false]);
         },
@@ -118,13 +99,6 @@ export function createSubscriptionPosApi(orm) {
                 "pos.order",
                 "wgs_update_subscription_participants_for_pos",
                 [subscriptionId, participantIds || []]
-            );
-        },
-        async resyncSubscriptionAccess(subscriptionId) {
-            return orm.call(
-                "pos.order",
-                "wgs_resync_subscription_access_for_pos",
-                [subscriptionId]
             );
         },
     };

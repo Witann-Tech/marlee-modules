@@ -526,7 +526,7 @@ class SaleOrder(models.Model):
         }
 
     @api.model
-    def wgs_block_partner_access_for_pos(self, partner_id, reason, company_id=False):
+    def _wgs_block_partner_access_from_service(self, partner_id, reason, company_id=False):
         self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para bloquear acceso desde Punto de Venta.'))
 
         company = self._wgs_resolve_pos_company_for_pos(company_id)
@@ -555,7 +555,7 @@ class SaleOrder(models.Model):
         }
 
     @api.model
-    def wgs_unblock_partner_access_for_pos(self, partner_id, company_id=False):
+    def _wgs_unblock_partner_access_from_service(self, partner_id, company_id=False):
         self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para desbloquear acceso desde Punto de Venta.'))
 
         company = self._wgs_resolve_pos_company_for_pos(company_id)
@@ -804,7 +804,7 @@ class SaleOrder(models.Model):
         ], order='name asc, id asc')
 
     @api.model
-    def wgs_open_access_door_for_pos(self, device_id, options=False):
+    def _wgs_open_access_door_from_service(self, device_id, options=False):
         self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para abrir puertas desde Punto de Venta.'))
 
         try:
@@ -926,7 +926,7 @@ class SaleOrder(models.Model):
         return event
 
     @api.model
-    def wgs_grant_external_access_for_pos(self, partner_id, provider, options=False):
+    def _wgs_grant_external_access_from_service(self, partner_id, provider, options=False):
         self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para registrar accesos externos desde Punto de Venta.'))
 
         provider = (provider or '').strip().lower()
@@ -1121,7 +1121,7 @@ class SaleOrder(models.Model):
         }
 
     @api.model
-    def wgs_resync_subscription_access_for_pos(self, subscription_id):
+    def _wgs_resync_subscription_access_from_service(self, subscription_id):
         self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para resincronizar acceso desde Punto de Venta.'))
 
         subscription = self._wgs_browse_subscription_for_pos(subscription_id)
@@ -2853,56 +2853,7 @@ class SaleOrder(models.Model):
         return False
 
     def _get_recurrence_delta(self, primary_recurring_line=False):
-        self.ensure_one()
-
-        interval = 1
-        unit = 'month'
-
-        plan = self._get_subscription_plan_from_line_for_pos(primary_recurring_line)
-        if not plan and 'plan_id' in self._fields and self.plan_id:
-            plan = self.plan_id
-        if plan:
-            interval, unit = self._get_subscription_plan_interval_for_pos(plan)
-        elif {'recurring_interval', 'recurring_rule_type'}.issubset(self._fields):
-            interval = self.recurring_interval or 1
-            unit = self.recurring_rule_type or 'month'
-
-        interval = int(interval) if interval else 1
-        if interval < 1:
-            interval = 1
-
-        unit_value = (unit or 'month').lower()
-
-        if 'day' in unit_value:
-            return relativedelta(days=interval)
-        if 'week' in unit_value:
-            return relativedelta(weeks=interval)
-        if 'year' in unit_value:
-            return relativedelta(years=interval)
-        return relativedelta(months=interval)
-
-    def _get_subscription_plan_from_line_for_pos(self, line):
-        line = line.exists() if line else self.env['sale.order.line']
-        if not line:
-            return False
-        line.ensure_one()
-        for field_name in ('subscription_plan_id', 'plan_id', 'recurring_plan_id'):
-            if field_name in line._fields and line[field_name]:
-                return line[field_name]
-        return False
-
-    def _get_subscription_plan_interval_for_pos(self, plan):
-        if 'wgs_single_day_plan' in plan._fields and plan.wgs_single_day_plan:
-            return 1, 'day'
-        if {'recurring_interval', 'recurring_rule_type'}.issubset(plan._fields):
-            return plan.recurring_interval or 1, plan.recurring_rule_type or 'month'
-        if {'billing_period_value', 'billing_period_unit'}.issubset(plan._fields):
-            return plan.billing_period_value or 1, plan.billing_period_unit or 'month'
-        if {'interval_number', 'interval_type'}.issubset(plan._fields):
-            return plan.interval_number or 1, plan.interval_type or 'month'
-        if {'duration', 'duration_unit'}.issubset(plan._fields):
-            return plan.duration or 1, plan.duration_unit or 'month'
-        return 1, 'month'
+        return self._wgs_get_subscription_recurrence_delta(primary_recurring_line=primary_recurring_line)
 
     def _get_partner_field_value_for_pos(self, partner, field_candidates):
         partner.ensure_one()

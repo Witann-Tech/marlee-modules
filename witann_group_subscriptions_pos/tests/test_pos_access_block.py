@@ -113,7 +113,7 @@ class TestPosAccessBlock(TransactionCase):
         self.assertTrue(owner_person.active)
         self.assertTrue(participant_person.active)
 
-        result = self.env['sale.order'].wgs_block_partner_access_for_pos(
+        result = self.env['wgs.subscription.access.service']._block_partner_access(
             self.participant.id,
             'Bloqueo de paquete desde participante',
         )
@@ -131,7 +131,7 @@ class TestPosAccessBlock(TransactionCase):
         self.assertEqual(owner_person.access_state, 'suspended')
         self.assertEqual(participant_person.access_state, 'suspended')
 
-        result = self.env['sale.order'].wgs_unblock_partner_access_for_pos(self.owner.id)
+        result = self.env['wgs.subscription.access.service']._unblock_partner_access(self.owner.id)
         self.assertTrue(result['ok'])
         self.assertEqual(set(result['affected_partner_ids']), {self.owner.id, self.participant.id})
 

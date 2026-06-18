@@ -7,22 +7,12 @@ function renderSubscriptionCard({
     accessSummary,
     accessSiteLabel,
     inlineFormsHtml,
-    resyncAccessState = {},
     escapeHtml,
     formatDateDisplay,
     formatMoney,
     _t,
 }) {
     const canEditParticipants = Number(item.max_participants_total || 1) > 1;
-    const resyncRemaining = Math.max(0, Number(resyncAccessState.remainingSeconds || 0));
-    const resyncLoading = Boolean(resyncAccessState.loading);
-    const resyncDisabled = resyncLoading || resyncRemaining > 0;
-    const resyncLabel = resyncLoading
-        ? _t("Sincronizando...")
-        : resyncRemaining > 0
-        ? _t("Espera %ss").replace("%s", String(resyncRemaining))
-        : _t("Resincronizar acceso");
-    const resyncClass = resyncLoading ? " wgs-action-loading" : "";
     const participantActionHtml = canEditParticipants ? `
                 <button
                     type="button"
@@ -72,13 +62,6 @@ function renderSubscriptionCard({
                     ${item.can_renew ? "" : "disabled"}
                 >${escapeHtml(_t("Cambiar Plan"))}</button>
                 ${participantActionHtml}
-                <button
-                    type="button"
-                    class="wgs-action-btn${resyncClass}"
-                    data-action="resync-access"
-                    data-subscription-id="${escapeHtml(String(item.subscription_id || 0))}"
-                    ${resyncDisabled ? "disabled" : ""}
-                >${escapeHtml(resyncLabel)}</button>
             </div>
             ${inlineFormsHtml || ""}
         </div>

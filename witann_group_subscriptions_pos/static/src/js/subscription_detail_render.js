@@ -26,7 +26,6 @@ function renderDetailHeader({
     detailAvatarHtml,
     formError,
     formNotice,
-    accessActionState = {},
     escapeHtml,
     formatDateDisplay,
     formatDateTimeDisplay,
@@ -36,8 +35,6 @@ function renderDetailHeader({
     const accessBlocked = Boolean(detail.access_blocked);
     const accessLabel = detail.access_label || (accessEnabled ? _t("Acceso activo") : _t("Sin acceso"));
     const accessState = detail.access_state || "missing";
-    const actionKey = accessActionState.loadingKey || "";
-    const isAccessActionBusy = Boolean(actionKey);
     const accessStatusHtml = `
         <span class="wgs-access-status-chip ${accessEnabled ? "wgs-access-status-chip-on" : "wgs-access-status-chip-off"}${accessBlocked ? " wgs-access-status-chip-blocked" : ""}" title="${escapeHtml(accessLabel)}">
             <span
@@ -59,39 +56,6 @@ function renderDetailHeader({
         <div class="wgs-access-origin-notice">
             <strong>${escapeHtml(detail.access_origin_label || _t("Acceso multisede"))}</strong>
             <span>${escapeHtml(detail.access_origin_message)}</span>
-        </div>
-    ` : "";
-    const accessActionsHtml = !isEditingPartnerInfo && !isEditingPartnerPhoto ? `
-        <div class="wgs-partner-access-actions">
-            <button
-                type="button"
-                class="wgs-secondary-action-btn${actionKey === "wellhub" ? " wgs-action-loading" : ""}"
-                data-action="grant-external-access"
-                data-provider="wellhub"
-                ${isAccessActionBusy ? "disabled" : ""}
-            >${escapeHtml(actionKey === "wellhub" ? _t("Registrando...") : _t("Acceso WellHub"))}</button>
-            <button
-                type="button"
-                class="wgs-secondary-action-btn${actionKey === "totalpass" ? " wgs-action-loading" : ""}"
-                data-action="grant-external-access"
-                data-provider="totalpass"
-                ${isAccessActionBusy ? "disabled" : ""}
-            >${escapeHtml(actionKey === "totalpass" ? _t("Registrando...") : _t("Acceso TotalPass"))}</button>
-            ${accessBlocked ? `
-                <button
-                    type="button"
-                    class="wgs-secondary-action-btn${actionKey === "unblock" ? " wgs-action-loading" : ""}"
-                    data-action="unblock-access"
-                    ${isAccessActionBusy ? "disabled" : ""}
-                >${escapeHtml(actionKey === "unblock" ? _t("Desbloqueando...") : _t("Desbloquear acceso"))}</button>
-            ` : `
-                <button
-                    type="button"
-                    class="wgs-danger-action-btn${actionKey === "block" ? " wgs-action-loading" : ""}"
-                    data-action="block-access"
-                    ${isAccessActionBusy ? "disabled" : ""}
-                >${escapeHtml(actionKey === "block" ? _t("Bloqueando...") : _t("Bloquear acceso"))}</button>
-            `}
         </div>
     ` : "";
     const detailBodyHtml = isEditingPartnerInfo
@@ -146,7 +110,6 @@ function renderDetailHeader({
             </div>
             ${accessOriginNoticeHtml}
             ${accessBlockNoticeHtml}
-            ${accessActionsHtml}
         `;
     return `
         <div class="wgs-detail-header-card ${isEditingPartnerPhoto ? "wgs-detail-header-card-editing" : ""}">
