@@ -400,6 +400,7 @@ patch(ControlButtons.prototype, {
             const batch = await this.subscriptionPosApi.fetchPartnerDirectoryBatch(offset, batchSize, {
                 stateFilter: "all",
                 searchTerm: "",
+                companyId: getCurrentCompanyId(this) || false,
             });
             if (!Array.isArray(batch) || !batch.length) {
                 break;
@@ -415,7 +416,9 @@ patch(ControlButtons.prototype, {
     },
 
     async _fetchPartnerDirectorySummary() {
-        return this.subscriptionPosApi.fetchPartnerDirectorySummary();
+        return this.subscriptionPosApi.fetchPartnerDirectorySummary({
+            companyId: getCurrentCompanyId(this) || false,
+        });
     },
 
     async _fetchPartnerSubscriptionDetail(partnerId) {
@@ -1045,6 +1048,7 @@ patch(ControlButtons.prototype, {
         const getDirectoryCriteria = () => ({
             stateFilter: (searchInput.value || "").trim() ? "all" : (stateSelect.value || "actionable"),
             searchTerm: searchInput.value || "",
+            companyId: getCurrentCompanyId(this) || false,
         });
 
         const loadDirectoryRowsInBackground = async ({
@@ -1189,7 +1193,9 @@ patch(ControlButtons.prototype, {
             if (!numericPartnerId) {
                 return;
             }
-            const row = await this.subscriptionPosApi.fetchPartnerDirectoryRow(numericPartnerId);
+            const row = await this.subscriptionPosApi.fetchPartnerDirectoryRow(numericPartnerId, {
+                companyId: getCurrentCompanyId(this) || false,
+            });
             if (!row || !row.id) {
                 await reloadDirectoryRows(numericPartnerId);
                 await loadDetail(numericPartnerId, { force: true });

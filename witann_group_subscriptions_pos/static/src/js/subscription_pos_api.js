@@ -2,8 +2,10 @@
 
 export function createSubscriptionPosApi(orm) {
     return {
-        async fetchPartnerDirectorySummary() {
-            return orm.call("pos.order", "wgs_get_partner_directory_summary_for_pos", []);
+        async fetchPartnerDirectorySummary(options = {}) {
+            return orm.call("pos.order", "wgs_get_partner_directory_summary_for_pos", [{
+                company_id: options.companyId || options.company_id || false,
+            }]);
         },
         async fetchPartnerDirectoryBatch(offset = 0, limit = 500, options = {}) {
             return orm.call(
@@ -14,11 +16,15 @@ export function createSubscriptionPosApi(orm) {
                     limit,
                     options.stateFilter || "actionable",
                     options.searchTerm || "",
+                    options.companyId || options.company_id || false,
                 ]
             );
         },
-        async fetchPartnerDirectoryRow(partnerId) {
-            return orm.call("pos.order", "wgs_get_partner_directory_row_for_pos", [partnerId || false]);
+        async fetchPartnerDirectoryRow(partnerId, options = {}) {
+            return orm.call("pos.order", "wgs_get_partner_directory_row_for_pos", [
+                partnerId || false,
+                options.companyId || options.company_id || false,
+            ]);
         },
         async searchSubscriptionParticipants(searchTerm = "", limit = 120) {
             return orm.call(

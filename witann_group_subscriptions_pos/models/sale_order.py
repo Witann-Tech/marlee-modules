@@ -114,6 +114,15 @@ class SaleOrder(models.Model):
         return self.env['access_control.person'].sudo()
 
     @api.model
+    def _wgs_resolve_pos_company_for_pos(self, company_id=False):
+        try:
+            company_id = int(company_id or 0)
+        except (TypeError, ValueError):
+            company_id = 0
+        company = self.env['res.company'].sudo().browse(company_id).exists() if company_id else self.env.company
+        return company or self.env.company
+
+    @api.model
     def _wgs_account_move_model_for_pos(self):
         return self.env['account.move'].sudo()
 
@@ -1348,18 +1357,19 @@ class SaleOrder(models.Model):
         return result
 
     @api.model
-    def _get_partner_subscription_directory_status_map_for_pos(self, partners, include_profile_fields=True):
+    def _get_partner_subscription_directory_status_map_for_pos(self, partners, include_profile_fields=True, company=False):
         if not partners:
             return {}
 
+        company = company or self.env.company
         today = fields.Date.context_today(self)
-        subscriptions_by_partner = self._get_pos_subscription_orders_by_partners(partners)
+        subscriptions_by_partner = self._get_pos_subscription_orders_by_partners(partners, company=company)
         access_last_map = {}
         access_status_map = {}
         if include_profile_fields:
             try:
                 access_last_map = self._get_access_person_last_access_map_for_pos(partners)
-                access_status_map = self._get_access_person_status_map_for_pos(partners)
+                access_status_map = self._get_access_person_status_map_for_pos(partners, company=company)
             except Exception as error:
                 self._wgs_raise_pos_data_error(
                     _('No se pudo consultar la información de acceso para construir el directorio de suscripciones.'),
@@ -1448,15 +1458,17 @@ class SaleOrder(models.Model):
         return result
 
     @api.model
-    def get_partner_directory_summary_for_pos(self):
+    def get_partner_directory_summary_for_pos(self, options=False):
         self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar vigencia desde Punto de Venta.'))
 
+        data = dict(options or {})
+        company = self._wgs_resolve_pos_company_for_pos(data.get('company_id') or data.get('companyId'))
         Partner = self._wgs_partner_model_for_pos()
         total = Partner.search_count([])
         birthday_field = self._get_partner_directory_birthday_field_for_pos()
         birthday_count = Partner.search_count([(birthday_field, '!=', False)]) if birthday_field else 0
 
-        subscriptions = self.sudo().search(self._get_subscription_action_domain_for_pos(), order='id desc')
+        subscriptions = self.sudo().search(self._get_subscription_action_domain_for_pos(company=company), order='id desc')
         subscriptions = subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
         today = fields.Date.context_today(self)
         items_by_partner_id = {}
@@ -1506,9 +1518,10 @@ class SaleOrder(models.Model):
         return counts
 
     @api.model
-    def get_partner_directory_rows_for_pos(self, offset=0, limit=500, state_filter=False, search_term=False):
+    def get_partner_directory_rows_for_pos(self, offset=0, limit=500, state_filter=False, search_term=False, company_id=False):
         self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar vigencia desde Punto de Venta.'))
 
+        company = self._wgs_resolve_pos_company_for_pos(company_id)
         try:
             offset = int(offset or 0)
         except (TypeError, ValueError):
@@ -1525,12 +1538,13 @@ class SaleOrder(models.Model):
             limit=limit,
             state_filter=state_filter,
             search_term=search_term,
+            company=company,
         )
         if not partners:
             return []
 
         try:
-            status_map = self._get_partner_subscription_directory_status_map_for_pos(partners)
+            status_map = self._get_partner_subscription_directory_status_map_for_pos(partners, company=company)
         except Exception as error:
             self._wgs_raise_pos_data_error(
                 _('No se pudo construir el directorio de suscripciones en este momento.'),
@@ -1545,15 +1559,16 @@ class SaleOrder(models.Model):
         return rows
 
     @api.model
-    def get_partner_directory_row_for_pos(self, partner_id):
+    def get_partner_directory_row_for_pos(self, partner_id, company_id=False):
         self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar vigencia desde Punto de Venta.'))
 
+        company = self._wgs_resolve_pos_company_for_pos(company_id)
         partner = self._wgs_browse_partner_for_pos(partner_id)
         if not partner:
             return {}
 
         try:
-            status_map = self._get_partner_subscription_directory_status_map_for_pos(partner)
+            status_map = self._get_partner_subscription_directory_status_map_for_pos(partner, company=company)
         except Exception as error:
             self._wgs_raise_pos_data_error(
                 _('No se pudo construir la fila del directorio de suscripciones.'),
@@ -1628,10 +1643,11 @@ class SaleOrder(models.Model):
         }
 
     @api.model
-    def _get_partner_directory_partners_for_pos(self, offset=0, limit=500, state_filter=False, search_term=False):
+    def _get_partner_directory_partners_for_pos(self, offset=0, limit=500, state_filter=False, search_term=False, company=False):
         Partner = self._wgs_partner_model_for_pos()
+        company = company or self.env.company
         state_filter = self._normalize_partner_directory_state_filter_for_pos(state_filter)
-        search_partner_ids = self._get_partner_ids_matching_directory_search_for_pos(search_term)
+        search_partner_ids = self._get_partner_ids_matching_directory_search_for_pos(search_term, company=company)
         partner_domain = []
         if search_partner_ids is not False:
             if not search_partner_ids:
@@ -1647,13 +1663,13 @@ class SaleOrder(models.Model):
             )
 
         if state_filter == 'none':
-            related_partner_ids = self._get_partner_ids_with_pos_subscriptions_for_pos()
+            related_partner_ids = self._get_partner_ids_with_pos_subscriptions_for_pos(company=company)
             domain = list(partner_domain)
             if related_partner_ids:
                 domain.append(('id', 'not in', related_partner_ids))
             return Partner.search(domain, order='name asc, id asc', offset=offset, limit=limit)
 
-        candidate_partner_ids = self._get_partner_ids_for_directory_state_fast_path_for_pos(state_filter)
+        candidate_partner_ids = self._get_partner_ids_for_directory_state_fast_path_for_pos(state_filter, company=company)
         if candidate_partner_ids:
             domain = list(partner_domain) + [('id', 'in', candidate_partner_ids)]
             return self._search_partner_directory_candidate_state_page_for_pos(
@@ -1661,6 +1677,7 @@ class SaleOrder(models.Model):
                 state_filter=state_filter,
                 offset=offset,
                 limit=limit,
+                company=company,
             )
 
         return Partner
@@ -1694,15 +1711,16 @@ class SaleOrder(models.Model):
         return self._wgs_or_leaves_for_pos(leaves)
 
     @api.model
-    def _get_partner_ids_matching_directory_search_for_pos(self, search_term=False):
+    def _get_partner_ids_matching_directory_search_for_pos(self, search_term=False, company=False):
         search_term = (search_term or '').strip()
         if not search_term:
             return False
 
+        company = company or self.env.company
         Partner = self._wgs_partner_model_for_pos()
         partner_ids = set(Partner.search(self._get_partner_directory_search_domain_for_pos(search_term)).ids)
 
-        subscriptions = self.sudo().search(self._get_subscription_action_domain_for_pos())
+        subscriptions = self.sudo().search(self._get_subscription_action_domain_for_pos(company=company))
         subscriptions = subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
         if subscriptions:
             recurring_lines = subscriptions.order_line.filtered(
@@ -1729,8 +1747,8 @@ class SaleOrder(models.Model):
         return False
 
     @api.model
-    def _get_partner_ids_with_pos_subscriptions_for_pos(self):
-        subscriptions = self.sudo().search(self._get_subscription_action_domain_for_pos())
+    def _get_partner_ids_with_pos_subscriptions_for_pos(self, company=False):
+        subscriptions = self.sudo().search(self._get_subscription_action_domain_for_pos(company=company))
         subscriptions = subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
         partner_ids = set()
         for subscription in subscriptions:
@@ -1740,13 +1758,13 @@ class SaleOrder(models.Model):
         return sorted(partner_ids)
 
     @api.model
-    def _get_partner_ids_for_directory_state_fast_path_for_pos(self, state_filter):
+    def _get_partner_ids_for_directory_state_fast_path_for_pos(self, state_filter, company=False):
         subscription_state_domain = self._get_subscription_state_domain_for_directory_filter_for_pos(state_filter)
         if subscription_state_domain is False:
             return []
 
         domain = fields.Domain.AND([
-            self._get_subscription_action_domain_for_pos(),
+            self._get_subscription_action_domain_for_pos(company=company),
             subscription_state_domain,
         ])
         subscriptions = self.sudo().search(domain, order='id desc')
@@ -1776,8 +1794,9 @@ class SaleOrder(models.Model):
         return self._wgs_or_leaves_for_pos([('subscription_state', 'ilike', token) for token in tokens])
 
     @api.model
-    def _search_partner_directory_candidate_state_page_for_pos(self, partner_domain, state_filter, offset=0, limit=500):
+    def _search_partner_directory_candidate_state_page_for_pos(self, partner_domain, state_filter, offset=0, limit=500, company=False):
         Partner = self._wgs_partner_model_for_pos()
+        company = company or self.env.company
         partner_domain = list(partner_domain or [])
         offset = max(int(offset or 0), 0)
         limit = max(int(limit or 500), 1)
@@ -1799,6 +1818,7 @@ class SaleOrder(models.Model):
             status_map = self._get_partner_subscription_directory_status_map_for_pos(
                 partners,
                 include_profile_fields=False,
+                company=company,
             )
             for partner in partners:
                 state = status_map.get(partner.id, {}).get('state') or 'none'
@@ -1867,14 +1887,14 @@ class SaleOrder(models.Model):
         }
 
     @api.model
-    def _get_pos_subscription_orders(self, partner):
+    def _get_pos_subscription_orders(self, partner, company=False):
         partner_domain = [
             '|',
             ('participant_ids', 'in', partner.id),
             ('partner_id', '=', partner.id),
         ]
         domain = self._wgs_and_domains_for_pos(
-            self._get_subscription_action_domain_for_pos(),
+            self._get_subscription_action_domain_for_pos(company=company),
             partner_domain,
         )
 
@@ -1882,10 +1902,11 @@ class SaleOrder(models.Model):
         return subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
 
     @api.model
-    def _wgs_partner_has_subscription_history_for_pos(self, partner):
+    def _wgs_partner_has_subscription_history_for_pos(self, partner, company=False):
         partner = partner.exists()
         if not partner:
             return False
+        company = company or self.env.company
 
         partner_ids = {partner.id}
         if 'commercial_partner_id' in partner._fields and partner.commercial_partner_id:
@@ -1901,14 +1922,14 @@ class SaleOrder(models.Model):
         ]
         base_domain = [('state', 'in', ['sale', 'done', 'cancel'])]
         if 'company_id' in self._fields:
-            base_domain.append(('company_id', '=', self.env.company.id))
+            base_domain.append(('company_id', '=', company.id))
         domain = self._wgs_and_domains_for_pos(base_domain, partner_domain)
 
         candidates = self.sudo().search(domain, order='id desc', limit=200)
         return bool(candidates.filtered(lambda order: order._is_subscription_record_for_pos()))
 
     @api.model
-    def _get_pos_subscription_orders_by_partners(self, partners):
+    def _get_pos_subscription_orders_by_partners(self, partners, company=False):
         if not partners:
             return {}
 
@@ -1919,7 +1940,7 @@ class SaleOrder(models.Model):
             ('partner_id', 'in', partner_ids),
         ]
         domain = self._wgs_and_domains_for_pos(
-            self._get_subscription_action_domain_for_pos(),
+            self._get_subscription_action_domain_for_pos(company=company),
             partner_domain,
         )
 
@@ -1939,10 +1960,11 @@ class SaleOrder(models.Model):
         return subscriptions_by_partner
 
     @api.model
-    def _get_subscription_action_domain_for_pos(self):
+    def _get_subscription_action_domain_for_pos(self, company=False):
         base_domain = [('state', 'in', ['sale', 'done'])]
+        company = company or self.env.company
         if 'company_id' in self._fields:
-            base_domain.append(('company_id', '=', self.env.company.id))
+            base_domain.append(('company_id', '=', company.id))
         return base_domain
 
     def _is_subscription_record_for_pos(self):
@@ -2898,7 +2920,7 @@ class SaleOrder(models.Model):
         payload.update(block_payload)
         return payload
 
-    def _get_access_person_status_map_for_pos(self, partners):
+    def _get_access_person_status_map_for_pos(self, partners, company=False):
         model_name = 'access_control.person'
         if model_name not in self.env.registry or not partners:
             return {}
@@ -2907,6 +2929,8 @@ class SaleOrder(models.Model):
         if 'partner_id' not in person_model._fields:
             return {}
 
+        company = company or self.env.company
+        pos_site_ids = set(self._wgs_get_pos_access_sites_for_pos(company).ids)
         records = person_model.search([('partner_id', 'in', partners.ids)], order='id desc')
         result = {}
         for record in records:
@@ -2914,13 +2938,18 @@ class SaleOrder(models.Model):
             if not partner_id or partner_id in result:
                 continue
 
-            access_enabled = bool(record.active and record.access_state == 'enabled')
+            person_site_ids = set(record.site_ids.ids)
+            site_matches_pos = bool(person_site_ids.intersection(pos_site_ids))
+            access_enabled = bool(record.active and record.access_state == 'enabled' and site_matches_pos)
             if access_enabled:
                 access_state = 'enabled'
                 access_label = _('Acceso activo')
             elif record.access_state == 'suspended':
                 access_state = 'suspended'
                 access_label = _('Acceso suspendido')
+            elif record.active and record.access_state == 'enabled' and not site_matches_pos:
+                access_state = 'inactive'
+                access_label = _('Sin acceso en esta sede')
             else:
                 access_state = 'inactive'
                 access_label = _('Acceso inactivo')
