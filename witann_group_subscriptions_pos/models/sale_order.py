@@ -1290,7 +1290,6 @@ class SaleOrder(models.Model):
 
         today = fields.Date.context_today(self)
         subscriptions_by_partner = self._get_pos_subscription_orders_by_partners(partners, company=company)
-        access_origin_items_by_partner = self._get_partner_access_origin_items_for_pos(partners, company=company)
         try:
             access_last_map = self._get_access_person_last_access_map_for_pos(partners)
             access_status_map = self._get_access_person_status_map_for_pos(partners, company=company)
@@ -1300,6 +1299,15 @@ class SaleOrder(models.Model):
                 error=error,
                 partner_ids=partner_ids,
             )
+        access_origin_items_by_partner = self._get_partner_access_origin_items_for_pos(
+            partners,
+            company=company,
+            access_enabled_partner_ids=[
+                partner_id
+                for partner_id, access_status in access_status_map.items()
+                if access_status.get('access_enabled')
+            ],
+        )
 
         result = {}
         for partner in partners:
@@ -1401,7 +1409,6 @@ class SaleOrder(models.Model):
         subscriptions_by_partner = self._get_pos_subscription_orders_by_partners(partners, company=company)
         access_last_map = {}
         access_status_map = {}
-        access_origin_items_by_partner = self._get_partner_access_origin_items_for_pos(partners, company=company)
         if include_profile_fields:
             try:
                 access_last_map = self._get_access_person_last_access_map_for_pos(partners)
@@ -1412,6 +1419,15 @@ class SaleOrder(models.Model):
                     error=error,
                     partner_ids=partners.ids,
                 )
+        access_origin_items_by_partner = self._get_partner_access_origin_items_for_pos(
+            partners,
+            company=company,
+            access_enabled_partner_ids=[
+                partner_id
+                for partner_id, access_status in access_status_map.items()
+                if access_status.get('access_enabled')
+            ],
+        )
 
         result = {}
         for partner in partners:
@@ -2114,15 +2130,13 @@ class SaleOrder(models.Model):
         return fields.Domain.AND(domain_parts)
 
     @api.model
-    def _get_partner_access_origin_items_for_pos(self, partners, company=False):
+    def _get_partner_access_origin_items_for_pos(self, partners, company=False, access_enabled_partner_ids=False):
         if not partners:
             return {}
 
         company = company or self.env.company
-        origin_domain = self._get_subscription_access_origin_domain_for_pos(company=company)
         result = {partner.id: [] for partner in partners}
-        if not origin_domain:
-            return result
+        access_enabled_partner_ids = set(access_enabled_partner_ids or [])
 
         partner_ids = partners.ids
         partner_domain = [
@@ -2130,16 +2144,18 @@ class SaleOrder(models.Model):
             ('participant_ids', 'in', partner_ids),
             ('partner_id', 'in', partner_ids),
         ]
-        domain = fields.Domain.AND([origin_domain, partner_domain])
+        base_domain = [('state', 'in', ['sale', 'done'])]
+        if 'company_id' in self._fields:
+            base_domain.append(('company_id', '!=', company.id))
+
+        origin_domain = self._get_subscription_access_origin_domain_for_pos(company=company)
         today = fields.Date.context_today(self)
-        subscriptions = self.sudo().search(domain, order='id desc')
-        subscriptions = subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
         partner_id_set = set(partner_ids)
 
-        for subscription in subscriptions:
+        def add_subscription_origin(subscription, candidate_partner_ids=False):
             item = subscription._build_pos_subscription_directory_status_item(today)
             if not item or item.get('access_state') != 'enabled':
-                continue
+                return
             item = dict(item)
             item['access_origin_company_name'] = (
                 subscription.company_id.display_name
@@ -2149,8 +2165,34 @@ class SaleOrder(models.Model):
             shared_partner_ids = set(partner_id_set.intersection(subscription.participant_ids.ids))
             if subscription.partner_id and subscription.partner_id.id in partner_id_set:
                 shared_partner_ids.add(subscription.partner_id.id)
+            if candidate_partner_ids is not False:
+                shared_partner_ids.intersection_update(candidate_partner_ids)
             for partner_id in shared_partner_ids:
                 result.setdefault(partner_id, []).append(item)
+
+        if origin_domain:
+            domain = fields.Domain.AND([origin_domain, partner_domain])
+            subscriptions = self.sudo().search(domain, order='id desc')
+            subscriptions = subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
+            for subscription in subscriptions:
+                add_subscription_origin(subscription)
+
+        fallback_partner_ids = {
+            partner_id
+            for partner_id in access_enabled_partner_ids
+            if partner_id in result and not result[partner_id]
+        }
+        if fallback_partner_ids:
+            fallback_partner_domain = [
+                '|',
+                ('participant_ids', 'in', list(fallback_partner_ids)),
+                ('partner_id', 'in', list(fallback_partner_ids)),
+            ]
+            fallback_domain = self._wgs_and_domains_for_pos(base_domain, fallback_partner_domain)
+            fallback_subscriptions = self.sudo().search(fallback_domain, order='id desc')
+            fallback_subscriptions = fallback_subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
+            for subscription in fallback_subscriptions:
+                add_subscription_origin(subscription, candidate_partner_ids=fallback_partner_ids)
 
         return result
 

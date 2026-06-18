@@ -200,3 +200,22 @@ class TestPosAccessBlock(TransactionCase):
         )
         self.assertEqual(row['state'], 'external_access')
         self.assertIn('origen', row['package_label'].lower())
+
+    def test_partner_detail_explains_cross_company_access_from_person_sites_fallback(self):
+        progress_state = self._find_subscription_state_value('progress', 'en progreso')
+        current_order = self._create_subscription_order()
+        current_order.write({'subscription_state': progress_state})
+
+        person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
+        self.assertTrue(person)
+        person.write({'site_ids': [Command.set([self.site.id, self.other_site.id])]})
+
+        other_detail = self.env['sale.order'].get_partner_subscription_detail_for_pos(
+            self.owner.id,
+            company_id=self.other_company.id,
+        )
+
+        self.assertNotIn(current_order.id, {item['subscription_id'] for item in other_detail['items']})
+        self.assertEqual(other_detail['state'], 'external_access')
+        self.assertEqual(other_detail['access_origin_subscription_id'], current_order.id)
+        self.assertFalse(other_detail.get('subscription_id'))
