@@ -23,6 +23,19 @@ class TestPosAccessBlock(TransactionCase):
                 'max_participants_total': 2,
             }
         )
+        self.other_company = self.env['res.company'].create({'name': 'Otra empresa POS acceso'})
+        self.other_site = self.env['access_control.site'].create(
+            {
+                'name': 'Centro POS acceso otra empresa',
+                'code': 'MX-POS-ACC-OTHER',
+                'company_id': self.other_company.id,
+            }
+        )
+        self.other_product = self.product.copy({'name': 'Plan POS acceso otra empresa'})
+        if 'company_id' in self.other_product.product_tmpl_id._fields:
+            self.other_product.product_tmpl_id.write({'company_id': self.other_company.id})
+        elif 'company_id' in self.other_product._fields:
+            self.other_product.write({'company_id': self.other_company.id})
         self.env.user.write(
             {
                 'groups_id': [
@@ -61,6 +74,27 @@ class TestPosAccessBlock(TransactionCase):
                             'product_uom_qty': 1,
                             'product_uom': self.product.uom_id.id,
                             'price_unit': self.product.list_price,
+                        }
+                    )
+                ],
+            }
+        )
+        order.write({'participant_ids': [Command.set([self.owner.id, self.participant.id])]})
+        return order
+
+    def _create_other_company_subscription_order(self):
+        order = self.env['sale.order'].with_company(self.other_company).sudo().create(
+            {
+                'partner_id': self.owner.id,
+                'company_id': self.other_company.id,
+                'order_line': [
+                    Command.create(
+                        {
+                            'product_id': self.other_product.id,
+                            'name': self.other_product.name,
+                            'product_uom_qty': 1,
+                            'product_uom': self.other_product.uom_id.id,
+                            'price_unit': self.other_product.list_price,
                         }
                     )
                 ],
@@ -111,3 +145,28 @@ class TestPosAccessBlock(TransactionCase):
         self.assertTrue(participant_person.active)
         self.assertEqual(owner_person.access_state, 'enabled')
         self.assertEqual(participant_person.access_state, 'enabled')
+
+    def test_partner_detail_is_scoped_to_requested_pos_company(self):
+        progress_state = self._find_subscription_state_value('progress', 'en progreso')
+        current_order = self._create_subscription_order()
+        current_order.write({'subscription_state': progress_state})
+        other_order = self._create_other_company_subscription_order()
+        other_order.write({'subscription_state': progress_state})
+
+        current_detail = self.env['sale.order'].get_partner_subscription_detail_for_pos(
+            self.owner.id,
+            company_id=self.env.company.id,
+        )
+        other_detail = self.env['sale.order'].get_partner_subscription_detail_for_pos(
+            self.owner.id,
+            company_id=self.other_company.id,
+        )
+
+        self.assertEqual(
+            {item['subscription_id'] for item in current_detail['items']},
+            {current_order.id},
+        )
+        self.assertEqual(
+            {item['subscription_id'] for item in other_detail['items']},
+            {other_order.id},
+        )

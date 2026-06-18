@@ -69,6 +69,21 @@ class SaleOrder(models.Model):
         help='Si se deja vacío, se usa el horario configurado en el paquete. '
              'Acceso general equivale a timezone_id=1.',
     )
+    wgs_access_site_ids = fields.Many2many(
+        'access_control.site',
+        'sale_order_wgs_access_site_rel',
+        'order_id',
+        'site_id',
+        string='Sitios de acceso WGS',
+        copy=True,
+        help='Snapshot de los sitios de acceso definidos al momento de vender o cambiar el paquete.',
+    )
+    wgs_access_timezone_snapshot_id = fields.Many2one(
+        'access_control.timezone',
+        string='Horario de acceso WGS (snapshot)',
+        copy=True,
+        help='Snapshot del horario de acceso definido al momento de vender o cambiar el paquete.',
+    )
 
     @api.depends(
         'order_line',
@@ -183,7 +198,7 @@ class SaleOrder(models.Model):
             company_ids.add(self.company_id.id)
         return sorted(company_ids)
 
-    def _wgs_get_access_site_ids(self):
+    def _wgs_resolve_access_site_ids_from_config(self):
         self.ensure_one()
         explicit_site_ids = set()
         company_ids = set()
@@ -213,7 +228,7 @@ class SaleOrder(models.Model):
             order='id asc',
         ).ids
 
-    def _wgs_get_access_timezone(self):
+    def _wgs_resolve_access_timezone_from_config(self):
         self.ensure_one()
         if self.wgs_access_timezone_id:
             return self.wgs_access_timezone_id
@@ -221,6 +236,67 @@ class SaleOrder(models.Model):
             product_tmpl = line.product_id.product_tmpl_id if line.product_id else False
             if product_tmpl and product_tmpl.wgs_access_timezone_id:
                 return product_tmpl.wgs_access_timezone_id
+        return self.env.ref('access_control_api.access_timezone_general', raise_if_not_found=False)
+
+    def _wgs_access_snapshot_signature(self):
+        self.ensure_one()
+        recurring_lines = self._get_subscription_recurring_lines()
+        line_signature = tuple(
+            sorted(
+                (
+                    line.product_id.id,
+                    self._get_subscription_line_qty(line),
+                )
+                for line in recurring_lines
+            )
+        )
+        return (
+            line_signature,
+            self.company_id.id if 'company_id' in self._fields and self.company_id else False,
+            self.wgs_access_timezone_id.id if self.wgs_access_timezone_id else False,
+        )
+
+    def _wgs_update_access_snapshot(self, force=False):
+        for order in self:
+            if not order._get_subscription_recurring_lines():
+                continue
+
+            values = {}
+            if force or not order.wgs_access_site_ids:
+                values['wgs_access_site_ids'] = [Command.set(order._wgs_resolve_access_site_ids_from_config())]
+            if force or not order.wgs_access_timezone_snapshot_id:
+                timezone = order._wgs_resolve_access_timezone_from_config()
+                values['wgs_access_timezone_snapshot_id'] = timezone.id if timezone else False
+
+            if not values:
+                continue
+            super(SaleOrder, order.with_context(wgs_skip_access_snapshot_refresh=True)).write(values)
+            order.invalidate_recordset(['wgs_access_site_ids', 'wgs_access_timezone_snapshot_id'])
+            # Ensure invalid/archived site rows never leak into the physical sync source.
+            if order.wgs_access_site_ids:
+                active_sites = order.wgs_access_site_ids.filtered(lambda site: getattr(site, 'active', True))
+                if len(active_sites) != len(order.wgs_access_site_ids):
+                    super(SaleOrder, order.with_context(wgs_skip_access_snapshot_refresh=True)).write(
+                        {'wgs_access_site_ids': [Command.set(active_sites.ids)]}
+                    )
+        return True
+
+    def _wgs_get_access_site_ids(self):
+        self.ensure_one()
+        if self.wgs_access_site_ids:
+            return self.wgs_access_site_ids.filtered(lambda site: getattr(site, 'active', True)).ids
+        self._wgs_update_access_snapshot(force=False)
+        return self.wgs_access_site_ids.filtered(lambda site: getattr(site, 'active', True)).ids
+
+    def _wgs_get_access_timezone(self):
+        self.ensure_one()
+        if self.wgs_access_timezone_id:
+            return self.wgs_access_timezone_id
+        if self.wgs_access_timezone_snapshot_id:
+            return self.wgs_access_timezone_snapshot_id
+        self._wgs_update_access_snapshot(force=False)
+        if self.wgs_access_timezone_snapshot_id:
+            return self.wgs_access_timezone_snapshot_id
         return self.env.ref('access_control_api.access_timezone_general', raise_if_not_found=False)
 
     def _wgs_get_first_access_date_value(self, field_names):
@@ -460,6 +536,18 @@ class SaleOrder(models.Model):
         partner_ids = set()
         for order in orders:
             partner_ids.update(order._wgs_get_access_related_partner_ids())
+        if 'access_control.person' in self.env.registry:
+            Person = self.env['access_control.person'].sudo()
+            stale_people = Person.search(
+                [
+                    ('managed_by_subscription', '=', True),
+                    ('partner_id', '!=', False),
+                    '|',
+                    ('active', '=', True),
+                    ('access_state', '=', 'enabled'),
+                ]
+            )
+            partner_ids.update(stale_people.mapped('partner_id').ids)
         if partner_ids:
             self.browse()._wgs_sync_access_control_people(extra_partner_ids=partner_ids)
         _logger.info(
@@ -473,14 +561,31 @@ class SaleOrder(models.Model):
     def create(self, vals_list):
         orders = super().create(vals_list)
         orders._ensure_subscription_owner_is_participant()
+        orders._wgs_update_access_snapshot(force=True)
         orders._wgs_sync_access_control_people()
         return orders
 
     def write(self, vals):
         before_partner_ids = self._wgs_get_access_related_partner_ids()
+        before_snapshot_signatures = {
+            order.id: order._wgs_access_snapshot_signature()
+            for order in self
+            if order.id
+        }
         res = super().write(vals)
         if not self.env.context.get('skip_owner_participant_sync'):
             self._ensure_subscription_owner_is_participant()
+        if not self.env.context.get('wgs_skip_access_snapshot_refresh'):
+            changed_orders = self.browse()
+            for order in self:
+                if not order.id:
+                    continue
+                if before_snapshot_signatures.get(order.id) != order._wgs_access_snapshot_signature():
+                    changed_orders |= order
+            if changed_orders:
+                changed_orders._wgs_update_access_snapshot(force=True)
+            else:
+                self._wgs_update_access_snapshot(force=False)
         sync_orders = self.with_context(access_sync_priority=True) if 'wgs_access_timezone_id' in vals else self
         sync_orders._wgs_sync_access_control_people(extra_partner_ids=before_partner_ids)
         return res
@@ -516,4 +621,61 @@ class SaleOrder(models.Model):
             return False
         res = super_method()
         self._wgs_sync_access_control_people()
+        return res
+
+
+class SaleOrderLine(models.Model):
+    _inherit = 'sale.order.line'
+
+    _WGS_ACCESS_LINE_REFRESH_FIELDS = {
+        'product_id',
+        'product_uom_qty',
+        'quantity',
+        'qty',
+        'display_type',
+    }
+
+    def _wgs_access_impacted_orders(self):
+        return self.mapped('order_id').filtered(
+            lambda order: hasattr(order, '_wgs_update_access_snapshot')
+            and hasattr(order, '_wgs_sync_access_control_people')
+        )
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        lines = super().create(vals_list)
+        orders = lines._wgs_access_impacted_orders()
+        if orders:
+            orders._wgs_update_access_snapshot(force=True)
+            orders._wgs_sync_access_control_people()
+        return lines
+
+    def write(self, vals):
+        should_refresh = bool(self._WGS_ACCESS_LINE_REFRESH_FIELDS.intersection(vals))
+        before_orders = self._wgs_access_impacted_orders() if should_refresh else self.env['sale.order']
+        before_partner_ids = set()
+        for order in before_orders:
+            before_partner_ids.update(order._wgs_get_access_related_partner_ids())
+
+        res = super().write(vals)
+
+        if should_refresh:
+            orders = (before_orders | self._wgs_access_impacted_orders()).exists()
+            if orders:
+                orders._wgs_update_access_snapshot(force=True)
+                orders._wgs_sync_access_control_people(extra_partner_ids=before_partner_ids)
+        return res
+
+    def unlink(self):
+        orders = self._wgs_access_impacted_orders()
+        before_partner_ids = set()
+        for order in orders:
+            before_partner_ids.update(order._wgs_get_access_related_partner_ids())
+
+        res = super().unlink()
+
+        orders = orders.exists()
+        if orders:
+            orders._wgs_update_access_snapshot(force=True)
+            orders._wgs_sync_access_control_people(extra_partner_ids=before_partner_ids)
         return res

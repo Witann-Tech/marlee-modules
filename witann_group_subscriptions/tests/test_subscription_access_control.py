@@ -256,6 +256,23 @@ class TestSubscriptionAccessControl(TransactionCase):
         self.assertFalse(owner_person.active)
         self.assertFalse(participant_person.active)
 
+    def test_cron_deactivates_stale_managed_person_without_valid_subscription(self):
+        person = self.env['access_control.person'].create(
+            {
+                'partner_id': self.owner.id,
+                'active': True,
+                'access_state': 'enabled',
+                'site_ids': [Command.set([self.site.id])],
+                'managed_by_subscription': True,
+            }
+        )
+
+        self.env['sale.order']._cron_wgs_sync_subscription_access_control()
+
+        person.invalidate_recordset(['active', 'access_state'])
+        self.assertFalse(person.active)
+        self.assertEqual(person.access_state, 'suspended')
+
     def test_access_is_aggregated_across_multiple_subscriptions(self):
         progress_state = self._find_subscription_state_value('progress', 'en progreso')
         pause_state = self._find_subscription_state_value('pause', 'pausa', 'hold', 'suspend')
@@ -273,9 +290,9 @@ class TestSubscriptionAccessControl(TransactionCase):
         self.assertEqual(participant_person.access_state, 'enabled')
 
     def test_configured_access_sites_override_company_wide_sites(self):
+        self.product.product_tmpl_id.write({'wgs_access_site_ids': [Command.set([self.site_b.id])]})
         order = self._create_subscription_order()
         progress_state = self._find_subscription_state_value('progress', 'en progreso')
-        self.product.product_tmpl_id.write({'wgs_access_site_ids': [Command.set([self.site_b.id])]})
 
         order.write({'subscription_state': progress_state})
 
@@ -285,7 +302,7 @@ class TestSubscriptionAccessControl(TransactionCase):
         self.assertEqual(set(owner_person.site_ids.ids), {self.site_b.id})
         self.assertEqual(set(participant_person.site_ids.ids), {self.site_b.id})
 
-    def test_changing_product_access_sites_resyncs_existing_subscribers(self):
+    def test_changing_product_access_sites_does_not_move_existing_subscribers(self):
         order = self._create_subscription_order()
         progress_state = self._find_subscription_state_value('progress', 'en progreso')
         order.write({'subscription_state': progress_state})
@@ -298,20 +315,41 @@ class TestSubscriptionAccessControl(TransactionCase):
         self.product.product_tmpl_id.write({'wgs_access_site_ids': [Command.set([self.site.id, self.site_b.id])]})
         owner_person.invalidate_recordset(['site_ids'])
         participant_person.invalidate_recordset(['site_ids'])
-        changes = self.env['access_control.sync_change'].search(
-            [
-                ('person_id', 'in', [owner_person.id, participant_person.id]),
-                ('site_id', '=', self.site_b.id),
-                ('action', '=', 'upsert'),
-            ]
+
+        changes = self.env['access_control.sync_change'].search([
+            ('person_id', 'in', [owner_person.id, participant_person.id]),
+            ('site_id', '=', self.site_b.id),
+            ('action', '=', 'upsert'),
+        ])
+
+        self.assertEqual(set(order.wgs_access_site_ids.ids), {self.site.id})
+        self.assertEqual(set(owner_person.site_ids.ids), {self.site.id})
+        self.assertEqual(set(participant_person.site_ids.ids), {self.site.id})
+        self.assertFalse(changes)
+
+        new_owner = self.env['res.partner'].create({'name': 'Titular nuevo sitio'})
+        future_order = self.env['sale.order'].create(
+            {
+                'partner_id': new_owner.id,
+                'company_id': self.env.company.id,
+                'state': 'sale',
+                'order_line': [
+                    Command.create(
+                        {
+                            'product_id': self.product.id,
+                            'name': self.product.name,
+                            'product_uom_qty': 1,
+                            'product_uom': self.product.uom_id.id,
+                            'price_unit': self.product.list_price,
+                        }
+                    )
+                ],
+            }
         )
+        future_order.write({'subscription_state': progress_state})
+        self.assertEqual(set(future_order.wgs_access_site_ids.ids), {self.site.id, self.site_b.id})
 
-        self.assertEqual(set(owner_person.site_ids.ids), {self.site.id, self.site_b.id})
-        self.assertEqual(set(participant_person.site_ids.ids), {self.site.id, self.site_b.id})
-        self.assertEqual(len(changes), 2)
-        self.assertTrue(all(changes.mapped('priority')))
-
-    def test_changing_product_access_timezone_resyncs_existing_subscribers(self):
+    def test_changing_product_access_timezone_does_not_move_existing_subscribers(self):
         order = self._create_subscription_order()
         progress_state = self._find_subscription_state_value('progress', 'en progreso')
         order.write({'subscription_state': progress_state})
@@ -330,25 +368,46 @@ class TestSubscriptionAccessControl(TransactionCase):
         self.product.product_tmpl_id.write({'wgs_access_timezone_id': restricted_timezone.id})
         owner_person.invalidate_recordset(['access_timezone_id'])
         participant_person.invalidate_recordset(['access_timezone_id'])
-        changes = self.env['access_control.sync_change'].search(
-            [
-                ('person_id', 'in', [owner_person.id, participant_person.id]),
-                ('site_id', '=', self.site.id),
-                ('action', '=', 'upsert'),
-            ]
+
+        changes = self.env['access_control.sync_change'].search([
+            ('person_id', 'in', [owner_person.id, participant_person.id]),
+            ('action', '=', 'upsert'),
+        ])
+
+        self.assertEqual(order.wgs_access_timezone_snapshot_id, general_timezone)
+        self.assertEqual(owner_person.access_timezone_id, general_timezone)
+        self.assertEqual(participant_person.access_timezone_id, general_timezone)
+        self.assertFalse(changes)
+
+        new_owner = self.env['res.partner'].create({'name': 'Titular nuevo horario'})
+        future_order = self.env['sale.order'].create(
+            {
+                'partner_id': new_owner.id,
+                'company_id': self.env.company.id,
+                'state': 'sale',
+                'order_line': [
+                    Command.create(
+                        {
+                            'product_id': self.product.id,
+                            'name': self.product.name,
+                            'product_uom_qty': 1,
+                            'product_uom': self.product.uom_id.id,
+                            'price_unit': self.product.list_price,
+                        }
+                    )
+                ],
+            }
         )
+        future_order.write({'subscription_state': progress_state})
+        self.assertEqual(future_order.wgs_access_timezone_snapshot_id, restricted_timezone)
 
-        self.assertEqual(owner_person.access_timezone_id, restricted_timezone)
-        self.assertEqual(participant_person.access_timezone_id, restricted_timezone)
-        self.assertEqual(len(changes), 2)
-        self.assertTrue(all(changes.mapped('priority')))
-
-    def test_changing_variant_access_timezone_resyncs_existing_subscribers(self):
+    def test_changing_variant_access_timezone_does_not_move_existing_subscribers(self):
         order = self._create_subscription_order()
         progress_state = self._find_subscription_state_value('progress', 'en progreso')
         order.write({'subscription_state': progress_state})
         owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
         participant_person = self.env['access_control.person'].search([('partner_id', '=', self.participant.id)], limit=1)
+        original_timezone = owner_person.access_timezone_id
         restricted_timezone = self.env['access_control.timezone'].create(
             {
                 'name': 'Vespertino prueba',
@@ -359,18 +418,14 @@ class TestSubscriptionAccessControl(TransactionCase):
         self.product.write({'wgs_access_timezone_id': restricted_timezone.id})
         owner_person.invalidate_recordset(['access_timezone_id'])
         participant_person.invalidate_recordset(['access_timezone_id'])
-        changes = self.env['access_control.sync_change'].search(
-            [
-                ('person_id', 'in', [owner_person.id, participant_person.id]),
-                ('site_id', '=', self.site.id),
-                ('action', '=', 'upsert'),
-            ]
-        )
+        changes = self.env['access_control.sync_change'].search([
+            ('person_id', 'in', [owner_person.id, participant_person.id]),
+            ('action', '=', 'upsert'),
+        ])
 
-        self.assertEqual(owner_person.access_timezone_id, restricted_timezone)
-        self.assertEqual(participant_person.access_timezone_id, restricted_timezone)
-        self.assertEqual(len(changes), 2)
-        self.assertTrue(all(changes.mapped('priority')))
+        self.assertEqual(owner_person.access_timezone_id, original_timezone)
+        self.assertEqual(participant_person.access_timezone_id, original_timezone)
+        self.assertFalse(changes)
 
     def test_access_sites_are_aggregated_across_multisite_subscriptions(self):
         progress_state = self._find_subscription_state_value('progress', 'en progreso')
@@ -410,3 +465,30 @@ class TestSubscriptionAccessControl(TransactionCase):
 
         self.assertEqual(set(owner_person.site_ids.ids), {self.site.id, self.site_b.id})
         self.assertEqual(set(participant_person.site_ids.ids), {self.site.id, self.site_b.id})
+
+    def test_changing_recurring_line_product_refreshes_subscription_access_snapshot(self):
+        progress_state = self._find_subscription_state_value('progress', 'en progreso')
+        self.product.product_tmpl_id.write({'wgs_access_site_ids': [Command.set([self.site.id])]})
+        second_product = self.product.copy({
+            'name': 'Plan acceso cambio sede',
+            'max_participants_total': 3,
+        })
+        second_product.product_tmpl_id.write({'wgs_access_site_ids': [Command.set([self.site_b.id])]})
+
+        order = self._create_subscription_order()
+        order.write({'subscription_state': progress_state})
+        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
+        participant_person = self.env['access_control.person'].search([('partner_id', '=', self.participant.id)], limit=1)
+        self.assertEqual(set(order.wgs_access_site_ids.ids), {self.site.id})
+        self.assertEqual(set(owner_person.site_ids.ids), {self.site.id})
+        self.assertEqual(set(participant_person.site_ids.ids), {self.site.id})
+
+        recurring_line = order._get_subscription_recurring_lines()[:1]
+        recurring_line.write({'product_id': second_product.id})
+
+        owner_person.invalidate_recordset(['site_ids'])
+        participant_person.invalidate_recordset(['site_ids'])
+        order.invalidate_recordset(['wgs_access_site_ids'])
+        self.assertEqual(set(order.wgs_access_site_ids.ids), {self.site_b.id})
+        self.assertEqual(set(owner_person.site_ids.ids), {self.site_b.id})
+        self.assertEqual(set(participant_person.site_ids.ids), {self.site_b.id})

@@ -116,6 +116,21 @@ class AccessControlDevice(models.Model):
                 order="global_user_id asc",
             )
             for person in people:
+                if person.managed_by_subscription and "sale.order" in self.env.registry:
+                    sale_order_model = self.env["sale.order"].sudo()
+                    profile_getter = getattr(sale_order_model, "_wgs_get_access_profile_for_partner", None)
+                    if callable(profile_getter):
+                        profile = profile_getter(person.partner_id)
+                        profile_site_ids = set(profile.get("site_ids") or [])
+                        if profile.get("access_state") != "enabled" or site_id not in profile_site_ids:
+                            Change.with_context(access_sync_priority=True).queue_delete(
+                                person.global_user_id,
+                                [site_id],
+                                person=person,
+                                reason="device_clean_resync_stale_managed_user",
+                                priority=True,
+                            )
+                            continue
                 if Change.with_context(access_sync_priority=True).queue_upsert_for_person(
                     person,
                     site_ids=[site_id],

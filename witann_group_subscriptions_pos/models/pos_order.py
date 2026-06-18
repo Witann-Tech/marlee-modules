@@ -286,15 +286,16 @@ class PosOrder(models.Model):
         return self.env['sale.order'].get_partner_directory_row_for_pos(partner_id, company_id=company_id)
 
     @api.model
-    def wgs_search_subscription_participants_for_pos(self, search_term=False, limit=120):
+    def wgs_search_subscription_participants_for_pos(self, search_term=False, limit=120, company_id=False):
         return self.env['sale.order'].search_subscription_participants_for_pos(
             search_term=search_term,
             limit=limit,
+            company_id=company_id,
         )
 
     @api.model
-    def wgs_get_partner_subscription_detail_for_pos(self, partner_id):
-        return self.env['sale.order'].get_partner_subscription_detail_for_pos(partner_id)
+    def wgs_get_partner_subscription_detail_for_pos(self, partner_id, company_id=False):
+        return self.env['sale.order'].get_partner_subscription_detail_for_pos(partner_id, company_id=company_id)
 
     @api.model
     def wgs_update_subscription_participants_for_pos(self, subscription_id, participant_ids):
@@ -536,12 +537,12 @@ class PosOrder(models.Model):
         return self.env['sale.order'].wgs_open_access_door_for_pos(device_id, options or {})
 
     @api.model
-    def wgs_block_partner_access_for_pos(self, partner_id, reason):
-        return self.env['sale.order'].wgs_block_partner_access_for_pos(partner_id, reason)
+    def wgs_block_partner_access_for_pos(self, partner_id, reason, company_id=False):
+        return self.env['sale.order'].wgs_block_partner_access_for_pos(partner_id, reason, company_id=company_id)
 
     @api.model
-    def wgs_unblock_partner_access_for_pos(self, partner_id):
-        return self.env['sale.order'].wgs_unblock_partner_access_for_pos(partner_id)
+    def wgs_unblock_partner_access_for_pos(self, partner_id, company_id=False):
+        return self.env['sale.order'].wgs_unblock_partner_access_for_pos(partner_id, company_id=company_id)
 
     @api.model
     def wgs_grant_external_access_for_pos(self, partner_id, provider, options=False):

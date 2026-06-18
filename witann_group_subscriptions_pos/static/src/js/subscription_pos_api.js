@@ -26,15 +26,18 @@ export function createSubscriptionPosApi(orm) {
                 options.companyId || options.company_id || false,
             ]);
         },
-        async searchSubscriptionParticipants(searchTerm = "", limit = 120) {
+        async searchSubscriptionParticipants(searchTerm = "", limit = 120, options = {}) {
             return orm.call(
                 "pos.order",
                 "wgs_search_subscription_participants_for_pos",
-                [searchTerm || "", limit || 120]
+                [searchTerm || "", limit || 120, options.companyId || options.company_id || false]
             );
         },
-        async fetchPartnerSubscriptionDetail(partnerId) {
-            return orm.call("pos.order", "wgs_get_partner_subscription_detail_for_pos", [partnerId]);
+        async fetchPartnerSubscriptionDetail(partnerId, options = {}) {
+            return orm.call("pos.order", "wgs_get_partner_subscription_detail_for_pos", [
+                partnerId,
+                options.companyId || options.company_id || false,
+            ]);
         },
         async fetchAccessEventLog(options = {}) {
             return orm.call("pos.order", "wgs_get_access_event_log_for_pos", [options || {}]);
@@ -45,11 +48,18 @@ export function createSubscriptionPosApi(orm) {
         async openAccessDoor(deviceId, options = {}) {
             return orm.call("pos.order", "wgs_open_access_door_for_pos", [deviceId || false, options || {}]);
         },
-        async blockPartnerAccess(partnerId, reason) {
-            return orm.call("pos.order", "wgs_block_partner_access_for_pos", [partnerId || false, reason || ""]);
+        async blockPartnerAccess(partnerId, reason, options = {}) {
+            return orm.call("pos.order", "wgs_block_partner_access_for_pos", [
+                partnerId || false,
+                reason || "",
+                options.companyId || options.company_id || false,
+            ]);
         },
-        async unblockPartnerAccess(partnerId) {
-            return orm.call("pos.order", "wgs_unblock_partner_access_for_pos", [partnerId || false]);
+        async unblockPartnerAccess(partnerId, options = {}) {
+            return orm.call("pos.order", "wgs_unblock_partner_access_for_pos", [
+                partnerId || false,
+                options.companyId || options.company_id || false,
+            ]);
         },
         async grantExternalAccess(partnerId, provider, options = {}) {
             return orm.call("pos.order", "wgs_grant_external_access_for_pos", [partnerId || false, provider || "", options || {}]);

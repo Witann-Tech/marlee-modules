@@ -422,7 +422,9 @@ patch(ControlButtons.prototype, {
     },
 
     async _fetchPartnerSubscriptionDetail(partnerId) {
-        return this.subscriptionPosApi.fetchPartnerSubscriptionDetail(partnerId);
+        return this.subscriptionPosApi.fetchPartnerSubscriptionDetail(partnerId, {
+            companyId: getCurrentCompanyId(this) || false,
+        });
     },
 
     async _createPartnerForPos(values) {
@@ -1431,7 +1433,8 @@ patch(ControlButtons.prototype, {
                 const normalizedSearch = String(searchTerm || "").trim();
                 const result = await this.subscriptionPosApi.searchSubscriptionParticipants(
                     normalizedSearch,
-                    normalizedSearch ? 300 : 3000
+                    normalizedSearch ? 300 : 3000,
+                    { companyId: getCurrentCompanyId(this) || false }
                 );
                 if (participantRowsLoadToken !== requestToken) {
                     return;
@@ -2016,7 +2019,9 @@ patch(ControlButtons.prototype, {
                 partnerAccessActionKey = "block";
                 renderDetail(currentDetail);
                 try {
-                    const result = await this.subscriptionPosApi.blockPartnerAccess(partnerId, reason);
+                    const result = await this.subscriptionPosApi.blockPartnerAccess(partnerId, reason, {
+                        companyId: getCurrentCompanyId(this) || false,
+                    });
                     if (!result || result.ok === false) {
                         formError = result && result.error_message
                             ? result.error_message
@@ -2044,7 +2049,9 @@ patch(ControlButtons.prototype, {
                 partnerAccessActionKey = "unblock";
                 renderDetail(currentDetail);
                 try {
-                    const result = await this.subscriptionPosApi.unblockPartnerAccess(partnerId);
+                    const result = await this.subscriptionPosApi.unblockPartnerAccess(partnerId, {
+                        companyId: getCurrentCompanyId(this) || false,
+                    });
                     formNotice = result && result.message ? result.message : _t("Acceso desbloqueado correctamente.");
                     detailCache.delete(partnerId);
                     await reloadDirectoryRows(partnerId);

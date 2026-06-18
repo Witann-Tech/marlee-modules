@@ -90,13 +90,13 @@ class ProductTemplate(models.Model):
                         % {'product': product.display_name}
                     )
 
-        res = super().write(vals)
         changed_access_fields = {'wgs_access_timezone_id', 'wgs_access_site_ids'}.intersection(vals)
-        if changed_access_fields and not self.env.context.get('wgs_skip_product_template_access_resync'):
-            self._wgs_resync_access_for_access_config_change(changed_access_fields=changed_access_fields)
+        if changed_access_fields and not self.env.context.get('wgs_skip_product_template_access_snapshot_freeze'):
+            self._wgs_freeze_existing_subscription_access_snapshot(changed_access_fields=changed_access_fields)
+        res = super().write(vals)
         return res
 
-    def _wgs_resync_access_for_access_config_change(self, changed_access_fields=None):
+    def _wgs_freeze_existing_subscription_access_snapshot(self, changed_access_fields=None):
         if 'sale.order.line' not in self.env.registry:
             return False
         variant_ids = self.mapped('product_variant_ids').ids
@@ -107,9 +107,9 @@ class ProductTemplate(models.Model):
         if 'display_type' in SaleLine._fields:
             domain.append(('display_type', '=', False))
         lines = SaleLine.search(domain)
-        orders = lines.mapped('order_id').filtered(lambda order: hasattr(order, '_wgs_sync_access_control_people'))
+        orders = lines.mapped('order_id').filtered(lambda order: hasattr(order, '_wgs_update_access_snapshot'))
         _logger.info(
-            'WGS ACCESS: product access config changed templates=%s fields=%s variants=%s lines=%s orders=%s',
+            'WGS ACCESS: product access config changed; froze existing subscription snapshots templates=%s fields=%s variants=%s lines=%s orders=%s',
             self.ids,
             sorted(changed_access_fields or []),
             variant_ids,
@@ -117,7 +117,7 @@ class ProductTemplate(models.Model):
             orders.ids,
         )
         if orders:
-            orders.with_context(access_sync_priority=True)._wgs_sync_access_control_people()
+            orders._wgs_update_access_snapshot(force=False)
         return bool(orders)
 
     def _wgs_has_any_sales_history(self):
@@ -158,7 +158,7 @@ class ProductProduct(models.Model):
         changed_access_fields = {'wgs_access_timezone_id', 'wgs_access_site_ids'}.intersection(vals)
         templates = self.mapped('product_tmpl_id') if changed_access_fields else self.env['product.template']
         if changed_access_fields:
-            res = super(ProductProduct, self.with_context(wgs_skip_product_template_access_resync=True)).write(vals)
-            templates.exists()._wgs_resync_access_for_access_config_change(changed_access_fields=changed_access_fields)
+            templates.exists()._wgs_freeze_existing_subscription_access_snapshot(changed_access_fields=changed_access_fields)
+            res = super(ProductProduct, self.with_context(wgs_skip_product_template_access_snapshot_freeze=True)).write(vals)
             return res
         return super().write(vals)
