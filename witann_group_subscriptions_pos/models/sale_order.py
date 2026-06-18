@@ -1538,28 +1538,6 @@ class SaleOrder(models.Model):
             list(partner_company_domain) + [(birthday_field, '!=', False)]
         ) if birthday_field else 0
 
-        subscriptions = self.sudo().search(self._get_subscription_action_domain_for_pos(company=company), order='id desc')
-        subscriptions = subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
-        today = fields.Date.context_today(self)
-        items_by_partner_id = {}
-
-        for subscription in subscriptions:
-            try:
-                item = subscription._build_pos_subscription_directory_status_item(today)
-            except Exception as error:
-                self._wgs_raise_pos_data_error(
-                    _('No se pudo construir el resumen del directorio de suscripciones.'),
-                    error=error,
-                    subscription_id=subscription.id,
-                )
-            if not item:
-                continue
-            partner_ids = set(subscription.participant_ids.ids)
-            if subscription.partner_id:
-                partner_ids.add(subscription.partner_id.id)
-            for partner_id in partner_ids:
-                items_by_partner_id.setdefault(partner_id, []).append(item)
-
         counts = {
             'total': total,
             'birthday': birthday_count,
@@ -1572,10 +1550,11 @@ class SaleOrder(models.Model):
             'upsell': 0,
             'other': 0,
             'none': 0,
+            'external_access': 0,
+            'manual_access': 0,
         }
-        for items in items_by_partner_id.values():
-            summary = self._summarize_partner_subscription_items_for_pos(items)
-            state = summary.get('state') or 'none'
+
+        for state in self._get_partner_directory_summary_state_counts_for_pos(company=company).values():
             if state == 'closed':
                 counts['closed'] += 1
                 counts['cancel'] += 1
@@ -1584,7 +1563,6 @@ class SaleOrder(models.Model):
             else:
                 counts['other'] += 1
 
-        counts['none'] = max(total - len(items_by_partner_id), 0)
         return counts
 
     @api.model
@@ -1739,11 +1717,20 @@ class SaleOrder(models.Model):
             )
 
         if state_filter == 'none':
-            related_partner_ids = self._get_partner_ids_with_pos_subscriptions_for_pos(company=company)
+            related_partner_ids = self._get_partner_ids_with_visible_pos_subscription_state_for_pos(company=company)
             domain = list(partner_domain)
             if related_partner_ids:
                 domain.append(('id', 'not in', related_partner_ids))
             return Partner.search(domain, order='name asc, id asc', offset=offset, limit=limit)
+
+        if state_filter in ('external_access', 'manual_access'):
+            return self._search_partner_directory_candidate_state_page_for_pos(
+                partner_domain=partner_domain,
+                state_filter=state_filter,
+                offset=offset,
+                limit=limit,
+                company=company,
+            )
 
         candidate_partner_ids = self._get_partner_ids_for_directory_state_fast_path_for_pos(state_filter, company=company)
         if candidate_partner_ids:
@@ -1836,6 +1823,55 @@ class SaleOrder(models.Model):
             if subscription.partner_id:
                 partner_ids.add(subscription.partner_id.id)
         return sorted(partner_ids)
+
+    @api.model
+    def _get_partner_ids_with_visible_pos_subscription_state_for_pos(self, company=False):
+        Partner = self._wgs_partner_model_for_pos()
+        partner_domain = self._wgs_get_partner_company_domain_for_pos(company or self.env.company)
+        partner_ids = []
+        batch_size = 500
+        offset = 0
+        while True:
+            partners = Partner.search(partner_domain, order='id asc', offset=offset, limit=batch_size)
+            if not partners:
+                break
+            status_map = self._get_partner_subscription_directory_status_map_for_pos(
+                partners,
+                include_profile_fields=False,
+                company=company,
+            )
+            partner_ids.extend(
+                partner_id
+                for partner_id, status in status_map.items()
+                if (status.get('state') or 'none') != 'none'
+            )
+            if len(partners) < batch_size:
+                break
+            offset += len(partners)
+        return sorted(set(partner_ids))
+
+    @api.model
+    def _get_partner_directory_summary_state_counts_for_pos(self, company=False):
+        Partner = self._wgs_partner_model_for_pos()
+        partner_domain = self._wgs_get_partner_company_domain_for_pos(company or self.env.company)
+        states_by_partner = {}
+        batch_size = 500
+        offset = 0
+        while True:
+            partners = Partner.search(partner_domain, order='id asc', offset=offset, limit=batch_size)
+            if not partners:
+                break
+            status_map = self._get_partner_subscription_directory_status_map_for_pos(
+                partners,
+                include_profile_fields=False,
+                company=company,
+            )
+            for partner_id, status in status_map.items():
+                states_by_partner[partner_id] = status.get('state') or 'none'
+            if len(partners) < batch_size:
+                break
+            offset += len(partners)
+        return states_by_partner
 
     @api.model
     def _get_partner_ids_for_directory_state_fast_path_for_pos(self, state_filter, company=False):

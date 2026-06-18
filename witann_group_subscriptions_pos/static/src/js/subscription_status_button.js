@@ -547,6 +547,8 @@ patch(ControlButtons.prototype, {
                 <option value="progress">${_t("Estado: En progreso")}</option>
                 <option value="renew">${_t("Estado: Por renovar")}</option>
                 <option value="cancel">${_t("Estado: Cancelada / churned")}</option>
+                <option value="external_access">${_t("Estado: Acceso multisede")}</option>
+                <option value="manual_access">${_t("Estado: Acceso manual")}</option>
                 <option value="none">${_t("Estado: Sin suscripcion")}</option>
             </select>
             <select class="wgs-filter-birthday">

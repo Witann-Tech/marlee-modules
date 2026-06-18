@@ -15,6 +15,8 @@ function renderDirectorySummary({
         <button type="button" class="wgs-summary-pill wgs-summary-action wgs-summary-warning${activeClass("renew")}" data-state-filter="renew">${_t("Por renovar")}: ${counts.renew || 0}</button>
         ${counts.paused ? `<span class="wgs-summary-pill wgs-summary-warning">${_t("Pausadas")}: ${counts.paused || 0}</span>` : ""}
         <button type="button" class="wgs-summary-pill wgs-summary-action wgs-summary-negative${activeClass("cancel")}" data-state-filter="cancel">${_t("Canceladas")}: ${counts.cancel || 0}</button>
+        <button type="button" class="wgs-summary-pill wgs-summary-action wgs-summary-none${activeClass("external_access")}" data-state-filter="external_access">${_t("Multisede")}: ${counts.external_access || 0}</button>
+        <button type="button" class="wgs-summary-pill wgs-summary-action wgs-summary-none${activeClass("manual_access")}" data-state-filter="manual_access">${_t("Manual")}: ${counts.manual_access || 0}</button>
         <button type="button" class="wgs-summary-pill wgs-summary-action wgs-summary-none${activeClass("none")}" data-state-filter="none">${_t("Sin suscripcion")}: ${counts.none || 0}</button>
         <span class="wgs-summary-pill">${_t("Con cumpleanos")}: ${counts.birthday || 0}</span>
         ${directoryLoading ? `<span class="wgs-summary-pill">${_t("Cargando directorio...")}</span>` : ""}

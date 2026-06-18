@@ -201,6 +201,12 @@ class TestPosAccessBlock(TransactionCase):
         self.assertEqual(row['state'], 'external_access')
         self.assertIn('origen', row['package_label'].lower())
 
+        rows = self.env['sale.order'].get_partner_directory_rows_for_pos(
+            state_filter='external_access',
+            company_id=self.other_company.id,
+        )
+        self.assertIn(self.owner.id, {row['id'] for row in rows})
+
     def test_partner_detail_explains_cross_company_access_from_person_sites_fallback(self):
         progress_state = self._find_subscription_state_value('progress', 'en progreso')
         current_order = self._create_subscription_order()
@@ -252,3 +258,9 @@ class TestPosAccessBlock(TransactionCase):
         )
         self.assertEqual(row['state'], 'manual_access')
         self.assertEqual(row['package_label'], 'Acceso manual')
+
+        rows = self.env['sale.order'].get_partner_directory_rows_for_pos(
+            state_filter='manual_access',
+            company_id=self.other_company.id,
+        )
+        self.assertIn(self.owner.id, {row['id'] for row in rows})
