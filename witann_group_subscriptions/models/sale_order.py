@@ -837,20 +837,27 @@ class SaleOrder(models.Model):
                 self._wgs_sync_access_control_partner(partner)
                 repaired_partner_ids.append(partner.id)
 
+        issue_counts = {}
+        for line in lines:
+            issue = line.get('issue') or 'unknown'
+            issue_counts[issue] = issue_counts.get(issue, 0) + 1
+
         summary = {
             'checked_partners': len(partners),
             'checked_orders': order_count,
             'issues': len(lines),
+            'issue_counts': issue_counts,
             'repaired': len(repaired_partner_ids),
             'repaired_partner_ids': repaired_partner_ids,
             'lines': lines,
         }
         _logger.info(
-            'WGS ACCESS: audit repair=%s checked_partners=%s checked_orders=%s issues=%s repaired=%s',
+            'WGS ACCESS: audit repair=%s checked_partners=%s checked_orders=%s issues=%s issue_counts=%s repaired=%s',
             bool(repair),
             summary['checked_partners'],
             summary['checked_orders'],
             summary['issues'],
+            summary['issue_counts'],
             summary['repaired'],
         )
         return summary
@@ -877,7 +884,17 @@ class SaleOrder(models.Model):
 
     @api.model
     def _cron_wgs_sync_subscription_access_control(self, batch_limit=5000):
-        return self.wgs_audit_subscription_access_control(repair=True, batch_limit=batch_limit)
+        repair_summary = self.wgs_audit_subscription_access_control(repair=True, batch_limit=batch_limit)
+        verification_summary = self.wgs_audit_subscription_access_control(repair=False, batch_limit=batch_limit)
+        _logger.info(
+            'WGS ACCESS: post-sync verification checked_partners=%s remaining_issues=%s issue_counts=%s',
+            verification_summary.get('checked_partners'),
+            verification_summary.get('issues'),
+            verification_summary.get('issue_counts'),
+        )
+        repair_summary['post_sync_issues'] = verification_summary.get('issues', 0)
+        repair_summary['post_sync_issue_counts'] = verification_summary.get('issue_counts', {})
+        return repair_summary
 
     @api.model_create_multi
     def create(self, vals_list):

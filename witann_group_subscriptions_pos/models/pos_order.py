@@ -272,6 +272,10 @@ class PosOrder(models.Model):
         return self.env['sale.order'].get_partner_directory_summary_for_pos(options or {})
 
     @api.model
+    def wgs_audit_pos_access_consistency_for_pos(self, options=False):
+        return self.env['sale.order'].wgs_audit_pos_access_consistency_for_pos(options or {})
+
+    @api.model
     def wgs_get_partner_directory_rows_for_pos(self, offset=0, limit=500, state_filter=False, search_term=False, company_id=False):
         return self.env['sale.order'].get_partner_directory_rows_for_pos(
             offset=offset,

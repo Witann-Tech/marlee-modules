@@ -1316,18 +1316,11 @@ class SaleOrder(models.Model):
                 if item:
                     items.append(item)
 
-            summary = self._summarize_partner_subscription_items_for_pos(items)
-            origin_summary = self._summarize_partner_access_origin_items_for_pos(
-                access_origin_items_by_partner.get(partner.id, [])
+            summary = self._wgs_classify_partner_access_directory_state_for_pos(
+                self._summarize_partner_subscription_items_for_pos(items),
+                access_origin_items=access_origin_items_by_partner.get(partner.id, []),
+                access_status=access_status_map.get(partner.id),
             )
-            if self._should_explain_access_origin_over_subscription_summary_for_pos(summary) and origin_summary:
-                summary.update(origin_summary)
-            elif self._should_explain_access_origin_over_subscription_summary_for_pos(summary):
-                access_status = access_status_map.get(partner.id)
-                summary.update(
-                    self._summarize_partner_manual_access_for_pos(access_status)
-                    or self._summarize_partner_stale_subscription_access_for_pos(access_status)
-                )
             try:
                 birthday_value = self._get_partner_field_value_for_pos(
                     partner,
@@ -1448,9 +1441,10 @@ class SaleOrder(models.Model):
                 if item:
                     items.append(item)
 
-            summary = self._summarize_partner_subscription_items_for_pos(items)
-            origin_summary = self._summarize_partner_access_origin_items_for_pos(
-                access_origin_items_by_partner.get(partner.id, [])
+            summary = self._wgs_classify_partner_access_directory_state_for_pos(
+                self._summarize_partner_subscription_items_for_pos(items),
+                access_origin_items=access_origin_items_by_partner.get(partner.id, []),
+                access_status=access_status_map.get(partner.id),
             )
             values = {
                 'state': summary.get('state') or 'none',
@@ -1466,15 +1460,6 @@ class SaleOrder(models.Model):
                 'subscription_name': summary.get('subscription_name') or False,
                 'partner_name': partner.display_name,
             }
-
-            if self._should_explain_access_origin_over_subscription_summary_for_pos(summary) and origin_summary:
-                values.update(origin_summary)
-            elif self._should_explain_access_origin_over_subscription_summary_for_pos(summary):
-                access_status = access_status_map.get(partner.id)
-                values.update(
-                    self._summarize_partner_manual_access_for_pos(access_status)
-                    or self._summarize_partner_stale_subscription_access_for_pos(access_status)
-                )
 
             if include_profile_fields:
                 phone_value = self._get_partner_field_value_for_pos(partner, ('phone', 'mobile'))
@@ -1564,6 +1549,136 @@ class SaleOrder(models.Model):
                 counts['other'] += 1
 
         return counts
+
+    @api.model
+    def wgs_audit_pos_access_consistency_for_pos(self, options=False):
+        """Audit active SpeedFace access against the POS directory classifier.
+
+        The directory pill is useful for operators, but this method checks the
+        direct access-person records for the POS company/site and reports any
+        subscription-managed access that is active without a valid local or
+        multisite subscription explanation.
+        """
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para auditar acceso desde Punto de Venta.'))
+
+        data = dict(options or {})
+        company = self._wgs_resolve_pos_company_for_pos(data.get('company_id') or data.get('companyId'))
+        Person = self.env['access_control.person'].sudo() if 'access_control.person' in self.env.registry else False
+        if not Person:
+            return {
+                'company_id': company.id if company else False,
+                'company_name': company.display_name if company else False,
+                'checked_access_people': 0,
+                'checked_partners': 0,
+                'active_managed': 0,
+                'active_manual': 0,
+                'active_multisite': 0,
+                'stale_managed_access': 0,
+                'rows': [],
+            }
+
+        pos_sites = self._wgs_get_pos_access_sites_for_pos(company)
+        if not pos_sites:
+            summary = {
+                'company_id': company.id if company else False,
+                'company_name': company.display_name if company else False,
+                'site_ids': [],
+                'site_names': [],
+                'checked_access_people': 0,
+                'checked_partners': 0,
+                'active_managed': 0,
+                'active_manual': 0,
+                'active_multisite': 0,
+                'stale_managed_access': 0,
+                'configuration_warning': _('El POS no tiene sitios de acceso configurados; no se puede auditar acceso por sede.'),
+                'rows': [],
+            }
+            _logger.warning(
+                'WGS POS ACCESS AUDIT company=%s skipped: no access sites configured',
+                summary['company_id'],
+            )
+            return summary
+
+        person_domain = [
+            ('partner_id', '!=', False),
+            ('active', '=', True),
+            ('access_state', '=', 'enabled'),
+            ('site_ids', 'in', pos_sites.ids),
+        ]
+
+        people = Person.search(person_domain, order='partner_id asc, id desc')
+        Partner = self._wgs_partner_model_for_pos()
+        partner_domain = self._wgs_get_partner_company_domain_for_pos(company)
+        partners = Partner.search(
+            self._wgs_and_domains_for_pos(partner_domain, [('id', 'in', people.mapped('partner_id').ids)])
+        ) if people else Partner
+        partner_ids = set(partners.ids)
+        status_map = self._get_partner_subscription_directory_status_map_for_pos(
+            partners,
+            include_profile_fields=False,
+            company=company,
+        ) if partners else {}
+
+        rows = []
+        active_managed = 0
+        active_manual = 0
+        active_multisite = 0
+        seen_partner_ids = set()
+        for person in people:
+            partner = person.partner_id
+            if not partner or partner.id not in partner_ids:
+                continue
+            if partner.id in seen_partner_ids:
+                continue
+            seen_partner_ids.add(partner.id)
+            status = status_map.get(partner.id, {})
+            state = status.get('state') or 'none'
+            managed = bool(person.managed_by_subscription)
+            if managed:
+                active_managed += 1
+            else:
+                active_manual += 1
+            if state == 'external_access':
+                active_multisite += 1
+
+            if managed and state not in ('progress', 'external_access'):
+                rows.append({
+                    'partner_id': partner.id,
+                    'partner_name': partner.display_name,
+                    'person_id': person.id,
+                    'access_state': person.access_state or False,
+                    'site_ids': person.site_ids.ids,
+                    'site_names': person.site_ids.mapped('name'),
+                    'managed_by_subscription': managed,
+                    'directory_state': state,
+                    'directory_state_label': status.get('state_label') or _('Sin suscripción'),
+                    'subscription_id': status.get('subscription_id') or False,
+                    'subscription_name': status.get('subscription_name') or False,
+                    'reason': status.get('reason') or False,
+                })
+
+        summary = {
+            'company_id': company.id if company else False,
+            'company_name': company.display_name if company else False,
+            'site_ids': pos_sites.ids,
+            'site_names': pos_sites.mapped('name'),
+            'checked_access_people': len(people),
+            'checked_partners': len(seen_partner_ids),
+            'active_managed': active_managed,
+            'active_manual': active_manual,
+            'active_multisite': active_multisite,
+            'stale_managed_access': len(rows),
+            'rows': rows,
+        }
+        _logger.info(
+            'WGS POS ACCESS AUDIT company=%s sites=%s checked_people=%s checked_partners=%s stale_managed=%s',
+            summary['company_id'],
+            summary['site_ids'],
+            summary['checked_access_people'],
+            summary['checked_partners'],
+            summary['stale_managed_access'],
+        )
+        return summary
 
     @api.model
     def get_partner_directory_rows_for_pos(self, offset=0, limit=500, state_filter=False, search_term=False, company_id=False):
@@ -2005,6 +2120,30 @@ class SaleOrder(models.Model):
             'reason': primary.get('reason') or False,
             'subscription_name': primary.get('subscription_name') or False,
         }
+
+    @api.model
+    def _wgs_classify_partner_access_directory_state_for_pos(
+        self,
+        subscription_summary=False,
+        access_origin_items=False,
+        access_status=False,
+    ):
+        """Return the single POS directory state for a partner.
+
+        This is the canonical POS-facing access classifier. It keeps the
+        business distinction between a local subscription, multisite access,
+        manual access and stale subscription-managed access in one place.
+        """
+        summary = dict(subscription_summary or {})
+        origin_summary = self._summarize_partner_access_origin_items_for_pos(access_origin_items or [])
+        if self._should_explain_access_origin_over_subscription_summary_for_pos(summary) and origin_summary:
+            summary.update(origin_summary)
+        elif self._should_explain_access_origin_over_subscription_summary_for_pos(summary):
+            summary.update(
+                self._summarize_partner_manual_access_for_pos(access_status)
+                or self._summarize_partner_stale_subscription_access_for_pos(access_status)
+            )
+        return summary
 
     @api.model
     def _summarize_partner_access_origin_items_for_pos(self, items):
