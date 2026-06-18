@@ -219,3 +219,36 @@ class TestPosAccessBlock(TransactionCase):
         self.assertEqual(other_detail['state'], 'external_access')
         self.assertEqual(other_detail['access_origin_subscription_id'], current_order.id)
         self.assertFalse(other_detail.get('subscription_id'))
+
+    def test_partner_detail_explains_manual_access_without_subscription_card(self):
+        Person = self.env['access_control.person']
+        person = Person.search([('partner_id', '=', self.owner.id)], limit=1)
+        values = {
+            'active': True,
+            'access_state': 'enabled',
+            'managed_by_subscription': False,
+            'site_ids': [Command.set([self.other_site.id])],
+        }
+        if person:
+            person.write(values)
+        else:
+            values['partner_id'] = self.owner.id
+            Person.create(values)
+
+        other_detail = self.env['sale.order'].get_partner_subscription_detail_for_pos(
+            self.owner.id,
+            company_id=self.other_company.id,
+        )
+
+        self.assertEqual(other_detail['items'], [])
+        self.assertEqual(other_detail['state'], 'manual_access')
+        self.assertEqual(other_detail['state_label'], 'Acceso manual')
+        self.assertEqual(other_detail['package_label'], 'Acceso manual')
+        self.assertFalse(other_detail.get('subscription_id'))
+
+        row = self.env['sale.order'].get_partner_directory_row_for_pos(
+            self.owner.id,
+            company_id=self.other_company.id,
+        )
+        self.assertEqual(row['state'], 'manual_access')
+        self.assertEqual(row['package_label'], 'Acceso manual')

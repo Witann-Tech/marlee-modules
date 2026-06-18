@@ -27,6 +27,7 @@ class SaleOrder(models.Model):
         'other': 7,
         'none': 8,
         'external_access': 9,
+        'manual_access': 10,
     }
     _WGS_ACCESS_ENABLED_STATE_TOKENS = (
         'progress',
@@ -1332,6 +1333,10 @@ class SaleOrder(models.Model):
             )
             if summary.get('state') == 'none' and origin_summary:
                 summary.update(origin_summary)
+            elif summary.get('state') == 'none':
+                summary.update(
+                    self._summarize_partner_manual_access_for_pos(access_status_map.get(partner.id))
+                )
             try:
                 birthday_value = self._get_partner_field_value_for_pos(
                     partner,
@@ -1467,6 +1472,10 @@ class SaleOrder(models.Model):
 
             if summary.get('state') == 'none' and origin_summary:
                 values.update(origin_summary)
+            elif summary.get('state') == 'none':
+                values.update(
+                    self._summarize_partner_manual_access_for_pos(access_status_map.get(partner.id))
+                )
 
             if include_profile_fields:
                 phone_value = self._get_partner_field_value_for_pos(partner, ('phone', 'mobile'))
@@ -2009,6 +2018,35 @@ class SaleOrder(models.Model):
             'access_origin_company_name': origin_company_name,
             'access_origin_subscription_id': primary.get('subscription_id') or False,
             'access_origin_subscription_name': origin_subscription_name,
+        }
+
+    @api.model
+    def _summarize_partner_manual_access_for_pos(self, access_status=False):
+        access_status = dict(access_status or {})
+        if not access_status.get('access_enabled') or access_status.get('managed_by_subscription'):
+            return {}
+
+        label = _('Acceso manual')
+        message = _(
+            'Acceso habilitado manualmente en esta sede. No está ligado a una membresía operable desde este POS.'
+        )
+        return {
+            'state': 'manual_access',
+            'state_label': label,
+            'short_label': label,
+            'valid_until': False,
+            'start_date': False,
+            'subscription_id': False,
+            'package_label': label,
+            'package_names': [],
+            'plan_name': False,
+            'reason': message,
+            'subscription_name': False,
+            'access_origin_label': label,
+            'access_origin_message': message,
+            'access_origin_company_name': False,
+            'access_origin_subscription_id': False,
+            'access_origin_subscription_name': False,
         }
 
     @api.model
@@ -3193,6 +3231,8 @@ class SaleOrder(models.Model):
                 'access_label': access_label,
                 'access_person_id': record.id,
                 'access_global_user_id': record.global_user_id or False,
+                'managed_by_subscription': bool(record.managed_by_subscription),
+                'access_origin': record.access_origin or False,
             }
         return result
 
