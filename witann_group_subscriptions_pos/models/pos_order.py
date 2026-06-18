@@ -533,6 +533,22 @@ class PosOrder(models.Model):
         }
 
     @api.model
+    def wgs_open_access_door_for_pos(self, device_id, options=False):
+        return self.env['sale.order'].wgs_open_access_door_for_pos(device_id, options or {})
+
+    @api.model
+    def wgs_block_partner_access_for_pos(self, partner_id, reason, company_id=False):
+        return self.env['sale.order'].wgs_block_partner_access_for_pos(partner_id, reason, company_id=company_id)
+
+    @api.model
+    def wgs_unblock_partner_access_for_pos(self, partner_id, company_id=False):
+        return self.env['sale.order'].wgs_unblock_partner_access_for_pos(partner_id, company_id=company_id)
+
+    @api.model
+    def wgs_grant_external_access_for_pos(self, partner_id, provider, options=False):
+        return self.env['sale.order'].wgs_grant_external_access_for_pos(partner_id, provider, options or {})
+
+    @api.model
     def wgs_get_product_record_for_pos(self, product_id, company_id=False):
         self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar productos desde Punto de Venta.'))
         product = self._wgs_browse_product_for_pos(product_id)
@@ -667,6 +683,11 @@ class PosOrder(models.Model):
         }
 
     @api.model
+    def wgs_get_subscription_discount_offers_for_pos(self, partner_id, product_id, flow='new', source_subscription_id=False):
+        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar descuentos de suscripción desde Punto de Venta.'))
+        return []
+
+    @api.model
     def wgs_authorize_subscription_discount_for_pos(
         self,
         partner_id,
@@ -729,6 +750,10 @@ class PosOrder(models.Model):
     @api.model
     def wgs_update_partner_photo_for_pos(self, partner_id, image_1920):
         return self.env['sale.order'].wgs_update_partner_photo_for_pos(partner_id, image_1920)
+
+    @api.model
+    def wgs_resync_subscription_access_for_pos(self, subscription_id):
+        return self.env['sale.order'].wgs_resync_subscription_access_for_pos(subscription_id)
 
     @api.model
     def _wgs_get_birthdate_from_curp_for_pos(self, curp):
@@ -1066,6 +1091,7 @@ class PosOrder(models.Model):
         fallback=0.0,
         preferred_plan_id=False,
         preferred_pricing_id=False,
+        include_offers=False,
         start_date=False,
     ):
         request_data = self._wgs_prepare_subscription_pricing_request_for_pos(
@@ -1079,6 +1105,8 @@ class PosOrder(models.Model):
         partner = request_data['partner']
         product = request_data['product']
         source_order = request_data['source_order']
+        offers = []
+
         if normalized_flow in ('new', 'upsale'):
             pricing = self._wgs_build_product_pricing_payload_for_pos(
                 product=product,
@@ -1124,6 +1152,7 @@ class PosOrder(models.Model):
         return {
             'flow': normalized_flow,
             'pricing': pricing,
+            'offers': offers,
         }
 
     @api.model
@@ -1149,6 +1178,7 @@ class PosOrder(models.Model):
             fallback=fallback,
             preferred_plan_id=preferred_plan_id,
             preferred_pricing_id=preferred_pricing_id,
+            include_offers=False,
             start_date=start_date,
         )['pricing']
 
@@ -1175,6 +1205,7 @@ class PosOrder(models.Model):
             fallback=fallback,
             preferred_plan_id=preferred_plan_id,
             preferred_pricing_id=preferred_pricing_id,
+            include_offers=True,
             start_date=start_date,
         )
 
@@ -2019,7 +2050,7 @@ class PosOrder(models.Model):
                 pos_order._wgs_cancel_subscription_from_refund_line(line)
 
     @api.model
-    def _wgs_audit_paid_subscription_pos_sync_issues(self, date_from=False, date_to=False, limit=5000):
+    def wgs_audit_paid_subscription_pos_sync_issues(self, date_from=False, date_to=False, limit=5000):
         lines = self._wgs_find_paid_subscription_pos_lines_for_audit(
             date_from=date_from,
             date_to=date_to,
@@ -2033,8 +2064,8 @@ class PosOrder(models.Model):
         return issues
 
     @api.model
-    def _wgs_repair_paid_subscription_pos_sync_issues(self, date_from=False, date_to=False, limit=5000, dry_run=True):
-        issues = self._wgs_audit_paid_subscription_pos_sync_issues(
+    def wgs_repair_paid_subscription_pos_sync_issues(self, date_from=False, date_to=False, limit=5000, dry_run=True):
+        issues = self.wgs_audit_paid_subscription_pos_sync_issues(
             date_from=date_from,
             date_to=date_to,
             limit=limit,
@@ -2081,7 +2112,7 @@ class PosOrder(models.Model):
         }
 
     @api.model
-    def _wgs_repair_paid_subscription_pos_line_ids(self, line_ids, options_by_line=False, dry_run=True):
+    def wgs_repair_paid_subscription_pos_line_ids(self, line_ids, options_by_line=False, dry_run=True):
         """Repair explicit POS subscription lines by id.
 
         This is intentionally narrower than the broad audit repair. It only

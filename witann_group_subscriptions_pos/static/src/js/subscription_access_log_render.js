@@ -88,6 +88,44 @@ function renderAccessLogToolbar({
     `;
 }
 
+function renderAccessDoorControls({
+    devices,
+    openingDoorId,
+    escapeHtml,
+    _t,
+}) {
+    const deviceRows = (devices || []).map((device) => {
+        const deviceId = Number(device.id || 0);
+        const isOpening = Number(openingDoorId || 0) === deviceId;
+        const isBusy = Number(openingDoorId || 0) > 0;
+        const label = device.name || device.serial || "-";
+        const meta = [
+            device.serial ? `${_t("Serial")}: ${device.serial}` : "",
+            device.site_name ? `${_t("Sitio")}: ${device.site_name}` : "",
+        ].filter(Boolean).join(" · ");
+        return `
+            <div class="wgs-access-door-row">
+                <div>
+                    <strong>${escapeHtml(label)}</strong>
+                    <span>${escapeHtml(meta || _t("Sin detalle"))}</span>
+                </div>
+                <button
+                    type="button"
+                    class="wgs-secondary-action-btn wgs-access-door-open-btn${isOpening ? " wgs-action-loading" : ""}"
+                    data-device-id="${escapeHtml(String(deviceId))}"
+                    ${isBusy ? "disabled" : ""}
+                >${escapeHtml(isOpening ? _t("Abriendo...") : _t("Abrir"))}</button>
+            </div>
+        `;
+    }).join("");
+    return `
+        <div class="wgs-access-door-panel">
+            <div class="wgs-access-door-panel-title">${escapeHtml(_t("Abrir puerta"))}</div>
+            ${deviceRows || `<div class="wgs-access-door-empty">${escapeHtml(_t("No hay SpeedFace activos para este sitio."))}</div>`}
+        </div>
+    `;
+}
+
 function renderAccessLogRows({
     rows,
     loading,
@@ -117,6 +155,8 @@ function renderAccessLogContent({
     loading,
     error,
     notice,
+    devices,
+    openingDoorId,
     total,
     siteNames,
     escapeHtml,
@@ -132,6 +172,7 @@ function renderAccessLogContent({
             <span class="wgs-summary-pill">${escapeHtml(totalLabel)}</span>
             <span class="wgs-summary-pill">${escapeHtml(_t("Sitio"))}: ${escapeHtml(sitesLabel)}</span>
         </div>
+        ${renderAccessDoorControls({ devices, openingDoorId, escapeHtml, _t })}
         ${notice ? `<div class="wgs-access-log-notice">${escapeHtml(notice)}</div>` : ""}
         ${error ? `<div class="wgs-access-log-error">${escapeHtml(error)}</div>` : ""}
         <div class="wgs-access-log-table-wrap">

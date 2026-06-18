@@ -504,6 +504,10 @@ patch(ControlButtons.prototype, {
         return this.subscriptionPosApi.saveSubscriptionParticipants(subscriptionId, participantIds || []);
     },
 
+    async _resyncSubscriptionAccess(subscriptionId) {
+        return this.subscriptionPosApi.resyncSubscriptionAccess(subscriptionId);
+    },
+
     _showSubscriptionsModal(rows) {
         rows = Array.isArray(rows) ? [...rows] : [];
         const previous = document.getElementById(MODAL_ID);
@@ -715,6 +719,10 @@ patch(ControlButtons.prototype, {
         closeButton.textContent = _t("Cerrar");
         const closeModal = () => {
             stopPartnerCamera();
+            if (resyncAccessCooldownTimer) {
+                window.clearInterval(resyncAccessCooldownTimer);
+                resyncAccessCooldownTimer = null;
+            }
             overlay.remove();
         };
         closeButton.addEventListener("click", closeModal);
@@ -800,6 +808,7 @@ patch(ControlButtons.prototype, {
         let accessLogLoading = false;
         let accessLogError = "";
         let accessLogNotice = "";
+        let accessLogOpeningDoorId = 0;
         let accessLogLoaded = false;
         let salesHistoryFilters = {
             ...getTodaySalesHistoryRange(),
@@ -815,6 +824,10 @@ patch(ControlButtons.prototype, {
         let salesHistoryLoading = false;
         let salesHistoryError = "";
         let salesHistoryLoaded = false;
+        let partnerAccessActionKey = "";
+        let resyncAccessCooldownTimer = null;
+        const resyncAccessLoadingIds = new Set();
+        const resyncAccessCooldowns = new Map();
         const detailCache = new Map();
         let newSubscriptionForm = this._getDefaultNewSubscriptionForm(selectedPartnerId);
         const modalState = {
@@ -927,6 +940,8 @@ patch(ControlButtons.prototype, {
                 loading: accessLogLoading,
                 error: accessLogError,
                 notice: accessLogNotice,
+                devices: accessLogDevices,
+                openingDoorId: accessLogOpeningDoorId,
                 total: accessLogTotal,
                 siteNames: accessLogSiteNames,
                 escapeHtml: (value) => this._escapeHtml(value),
@@ -976,6 +991,63 @@ patch(ControlButtons.prototype, {
             } else if (showSalesHistory) {
                 renderSalesHistory();
             }
+        };
+
+        const cleanupResyncAccessCooldowns = () => {
+            const now = Date.now();
+            for (const [subscriptionId, expiresAt] of resyncAccessCooldowns.entries()) {
+                if (!expiresAt || expiresAt <= now) {
+                    resyncAccessCooldowns.delete(subscriptionId);
+                }
+            }
+        };
+
+        const getResyncAccessState = (subscriptionId) => {
+            const numericId = Number(subscriptionId || 0);
+            cleanupResyncAccessCooldowns();
+            const expiresAt = resyncAccessCooldowns.get(numericId) || 0;
+            return {
+                loading: resyncAccessLoadingIds.has(numericId),
+                remainingSeconds: expiresAt > Date.now() ? Math.ceil((expiresAt - Date.now()) / 1000) : 0,
+            };
+        };
+
+        const ensureResyncAccessCooldownTicker = () => {
+            if (resyncAccessCooldownTimer) {
+                return;
+            }
+            resyncAccessCooldownTimer = window.setInterval(() => {
+                cleanupResyncAccessCooldowns();
+                if (!resyncAccessCooldowns.size) {
+                    window.clearInterval(resyncAccessCooldownTimer);
+                    resyncAccessCooldownTimer = null;
+                }
+                if (currentDetail && activeTab === "directory") {
+                    renderDetailPreservingFocus(currentDetail);
+                }
+            }, 1000);
+        };
+
+        const setResyncAccessLoading = (subscriptionId, loading) => {
+            const numericId = Number(subscriptionId || 0);
+            if (!numericId) {
+                return;
+            }
+            if (loading) {
+                resyncAccessLoadingIds.add(numericId);
+            } else {
+                resyncAccessLoadingIds.delete(numericId);
+            }
+        };
+
+        const startResyncAccessCooldown = (subscriptionId, cooldownSeconds) => {
+            const numericId = Number(subscriptionId || 0);
+            const seconds = Math.max(1, Number(cooldownSeconds || 60));
+            if (!numericId) {
+                return;
+            }
+            resyncAccessCooldowns.set(numericId, Date.now() + seconds * 1000);
+            ensureResyncAccessCooldownTicker();
         };
 
         const getDirectoryCriteria = () => ({
@@ -1086,6 +1158,38 @@ patch(ControlButtons.prototype, {
             } finally {
                 salesHistoryLoading = false;
                 renderActiveTabChrome();
+            }
+        };
+
+        const openAccessDoor = async (deviceId) => {
+            const numericDeviceId = Number(deviceId || 0);
+            if (!numericDeviceId || accessLogOpeningDoorId) {
+                return;
+            }
+            accessLogOpeningDoorId = numericDeviceId;
+            accessLogError = "";
+            accessLogNotice = "";
+            renderAccessLog();
+            try {
+                const result = await this.subscriptionPosApi.openAccessDoor(numericDeviceId, {
+                    company_id: getCurrentCompanyId(this) || false,
+                    door_id: 1,
+                    open_time_seconds: 5,
+                    reason: "subscription_access_log_button",
+                });
+                const doorNotice = result && result.queued
+                    ? _t("Comando enviado al equipo.")
+                    : _t("Comando enviado.");
+                await loadAccessLog();
+                accessLogNotice = doorNotice;
+            } catch (error) {
+                console.error("Error al abrir puerta desde POS", error);
+                accessLogError = (
+                    error && error.data && (error.data.message || error.data.debug)
+                ) || (error && error.message) || _t("No se pudo abrir la puerta.");
+            } finally {
+                accessLogOpeningDoorId = 0;
+                renderAccessLog();
             }
         };
 
@@ -1657,9 +1761,13 @@ patch(ControlButtons.prototype, {
                 renderUpsaleForm,
                 renderNewSubscriptionForm,
                 getStateClass: (state) => this._getStateClass(state),
+                getResyncAccessState,
                 formMode,
                 partnerPhotoForm,
                 partnerEditForm,
+                accessActionState: {
+                    loadingKey: partnerAccessActionKey,
+                },
                 formError,
                 formNotice,
                 escapeHtml: (value) => this._escapeHtml(value),
@@ -1840,6 +1948,14 @@ patch(ControlButtons.prototype, {
             }
         });
 
+        accessLogBody.addEventListener("click", (event) => {
+            const openDoorButton = event.target.closest(".wgs-access-door-open-btn");
+            if (!openDoorButton) {
+                return;
+            }
+            openAccessDoor(openDoorButton.dataset.deviceId || false);
+        });
+
         salesHistoryToolbar.addEventListener("change", (event) => {
             if (event.target.classList.contains("wgs-sales-history-from")) {
                 salesHistoryFilters.from = event.target.value || "";
@@ -1893,6 +2009,97 @@ patch(ControlButtons.prototype, {
                 resetInlineForms();
                 renderDetail(currentDetail);
             },
+            "block-access": async () => {
+                if (!currentDetail || !currentDetail.partner_id || partnerAccessActionKey) {
+                    return;
+                }
+                const partnerId = Number(currentDetail.partner_id || 0);
+                const reason = window.prompt(_t("Motivo del bloqueo de acceso"));
+                if (!reason || !String(reason).trim()) {
+                    return;
+                }
+                clearFeedback();
+                partnerAccessActionKey = "block";
+                renderDetail(currentDetail);
+                try {
+                    const result = await this.subscriptionPosApi.blockPartnerAccess(partnerId, reason, {
+                        companyId: getCurrentCompanyId(this) || false,
+                    });
+                    if (!result || result.ok === false) {
+                        formError = result && result.error_message
+                            ? result.error_message
+                            : _t("No se pudo bloquear el acceso.");
+                    } else {
+                        formNotice = result.message || _t("Acceso bloqueado correctamente.");
+                        detailCache.delete(partnerId);
+                        await reloadDirectoryRows(partnerId);
+                        await loadDetail(partnerId, { force: true });
+                    }
+                } catch (error) {
+                    console.error("Error al bloquear acceso desde POS", error);
+                    formError = (error && error.message) ? error.message : _t("No se pudo bloquear el acceso.");
+                } finally {
+                    partnerAccessActionKey = "";
+                    renderDetail(currentDetail);
+                }
+            },
+            "unblock-access": async () => {
+                if (!currentDetail || !currentDetail.partner_id || partnerAccessActionKey) {
+                    return;
+                }
+                const partnerId = Number(currentDetail.partner_id || 0);
+                clearFeedback();
+                partnerAccessActionKey = "unblock";
+                renderDetail(currentDetail);
+                try {
+                    const result = await this.subscriptionPosApi.unblockPartnerAccess(partnerId, {
+                        companyId: getCurrentCompanyId(this) || false,
+                    });
+                    formNotice = result && result.message ? result.message : _t("Acceso desbloqueado correctamente.");
+                    detailCache.delete(partnerId);
+                    await reloadDirectoryRows(partnerId);
+                    await loadDetail(partnerId, { force: true });
+                } catch (error) {
+                    console.error("Error al desbloquear acceso desde POS", error);
+                    formError = (error && error.message) ? error.message : _t("No se pudo desbloquear el acceso.");
+                } finally {
+                    partnerAccessActionKey = "";
+                    renderDetail(currentDetail);
+                }
+            },
+            "grant-external-access": async ({ actionButton }) => {
+                if (!currentDetail || !currentDetail.partner_id || partnerAccessActionKey) {
+                    return;
+                }
+                const partnerId = Number(currentDetail.partner_id || 0);
+                const provider = actionButton.dataset.provider || "";
+                if (!provider) {
+                    return;
+                }
+                clearFeedback();
+                partnerAccessActionKey = provider;
+                renderDetail(currentDetail);
+                try {
+                    const result = await this.subscriptionPosApi.grantExternalAccess(partnerId, provider, {
+                        company_id: getCurrentCompanyId(this) || false,
+                        door_id: 1,
+                        open_time_seconds: 5,
+                    });
+                    formNotice = result && result.message ? result.message : _t("Acceso registrado correctamente.");
+                    if (accessLogLoaded) {
+                        await loadAccessLog();
+                    }
+                    detailCache.delete(partnerId);
+                    await reloadDirectoryRows(partnerId);
+                    await loadDetail(partnerId, { force: true });
+                } catch (error) {
+                    console.error("Error al registrar acceso externo desde POS", error);
+                    formError = (error && error.message) ? error.message : _t("No se pudo registrar el acceso externo.");
+                } finally {
+                    partnerAccessActionKey = "";
+                    renderDetail(currentDetail);
+                }
+            },
             ...buildDetailPartnerActionHandlers({
                 state: modalState,
                 clearFeedback,
@@ -1928,6 +2135,10 @@ patch(ControlButtons.prototype, {
                 openReenrollForm,
                 openUpsaleForm,
                 openParticipantEditForm,
+                fetchResyncAccess: (subscriptionId) => this._resyncSubscriptionAccess(subscriptionId),
+                getResyncAccessState,
+                setResyncAccessLoading,
+                startResyncAccessCooldown,
                 loadDetail,
                 detailCache,
                 getCurrentSubscriptionItem,
