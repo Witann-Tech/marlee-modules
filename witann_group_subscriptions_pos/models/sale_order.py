@@ -1735,7 +1735,7 @@ class SaleOrder(models.Model):
                 domain.append(('id', 'not in', related_partner_ids))
             return Partner.search(domain, order='name asc, id asc', offset=offset, limit=limit)
 
-        if state_filter in ('external_access', 'manual_access'):
+        if state_filter in ('external_access', 'manual_access', 'stale_access'):
             return self._search_partner_directory_candidate_state_page_for_pos(
                 partner_domain=partner_domain,
                 state_filter=state_filter,

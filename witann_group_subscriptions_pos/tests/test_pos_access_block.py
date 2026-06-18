@@ -325,3 +325,9 @@ class TestPosAccessBlock(TransactionCase):
             'company_id': self.env.company.id,
         })
         self.assertGreaterEqual(counts['stale_access'], 1)
+
+        rows = self.env['sale.order'].get_partner_directory_rows_for_pos(
+            state_filter='stale_access',
+            company_id=self.env.company.id,
+        )
+        self.assertIn(self.owner.id, {row['id'] for row in rows})
