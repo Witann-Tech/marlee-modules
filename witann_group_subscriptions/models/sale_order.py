@@ -527,7 +527,7 @@ class SaleOrder(models.Model):
             self._wgs_sync_access_control_partner(partner)
 
     @api.model
-    def _cron_wgs_sync_subscription_access_control(self, batch_limit=5000):
+    def _wgs_get_subscription_access_audit_partner_ids(self, batch_limit=5000):
         domain = [('state', 'in', ['sale', 'done'])]
         if 'order_line' in self._fields:
             domain.append(('order_line.product_id.product_tmpl_id.recurring_invoice', '=', True))
@@ -536,26 +536,113 @@ class SaleOrder(models.Model):
         partner_ids = set()
         for order in orders:
             partner_ids.update(order._wgs_get_access_related_partner_ids())
-        if 'access_control.person' in self.env.registry:
-            Person = self.env['access_control.person'].sudo()
-            stale_people = Person.search(
-                [
-                    ('managed_by_subscription', '=', True),
-                    ('partner_id', '!=', False),
-                    '|',
-                    ('active', '=', True),
-                    ('access_state', '=', 'enabled'),
-                ]
-            )
-            partner_ids.update(stale_people.mapped('partner_id').ids)
-        if partner_ids:
-            self.browse()._wgs_sync_access_control_people(extra_partner_ids=partner_ids)
+
+        Person = self.env['access_control.person'].sudo()
+        managed_people = Person.search([
+            ('managed_by_subscription', '=', True),
+            ('partner_id', '!=', False),
+        ])
+        partner_ids.update(managed_people.mapped('partner_id').ids)
+        return sorted(partner_ids), len(orders)
+
+    @api.model
+    def _wgs_build_subscription_access_audit_line(self, partner):
+        profile = self._wgs_get_access_profile_for_partner(partner)
+        Person = self.env['access_control.person'].sudo()
+        person = Person.search([('partner_id', '=', partner.id)], limit=1)
+        expected_state = profile.get('access_state') or False
+        expected_site_ids = set(profile.get('site_ids') or [])
+        expected_active = expected_state == 'enabled' and bool(expected_site_ids)
+
+        if expected_active:
+            if not person:
+                return {
+                    'issue': 'missing_person',
+                    'partner_id': partner.id,
+                    'person_id': False,
+                    'expected_active': True,
+                    'expected_state': expected_state,
+                    'expected_site_ids': sorted(expected_site_ids),
+                    'current_active': False,
+                    'current_state': False,
+                    'current_site_ids': [],
+                    'order_ids': profile.get('order_ids') or [],
+                }
+            current_site_ids = set(person.site_ids.ids)
+            if (
+                not person.active
+                or person.access_state != 'enabled'
+                or current_site_ids != expected_site_ids
+                or not person.managed_by_subscription
+            ):
+                return {
+                    'issue': 'person_mismatch',
+                    'partner_id': partner.id,
+                    'person_id': person.id,
+                    'expected_active': True,
+                    'expected_state': expected_state,
+                    'expected_site_ids': sorted(expected_site_ids),
+                    'current_active': bool(person.active),
+                    'current_state': person.access_state or False,
+                    'current_site_ids': sorted(current_site_ids),
+                    'current_managed_by_subscription': bool(person.managed_by_subscription),
+                    'order_ids': profile.get('order_ids') or [],
+                }
+            return False
+
+        if person and person.managed_by_subscription and (person.active or person.access_state == 'enabled'):
+            return {
+                'issue': 'stale_managed_access',
+                'partner_id': partner.id,
+                'person_id': person.id,
+                'expected_active': False,
+                'expected_state': expected_state,
+                'expected_site_ids': sorted(expected_site_ids),
+                'current_active': bool(person.active),
+                'current_state': person.access_state or False,
+                'current_site_ids': sorted(person.site_ids.ids),
+                'current_managed_by_subscription': True,
+                'order_ids': profile.get('order_ids') or [],
+            }
+        return False
+
+    @api.model
+    def wgs_audit_subscription_access_control(self, repair=False, batch_limit=5000):
+        partner_ids, order_count = self._wgs_get_subscription_access_audit_partner_ids(batch_limit=batch_limit)
+        partners = self.env['res.partner'].sudo().browse(partner_ids).exists()
+        lines = []
+        repaired_partner_ids = []
+
+        for partner in partners:
+            line = self._wgs_build_subscription_access_audit_line(partner)
+            if not line:
+                continue
+            lines.append(line)
+            if repair:
+                self._wgs_sync_access_control_partner(partner)
+                repaired_partner_ids.append(partner.id)
+
+        summary = {
+            'checked_partners': len(partners),
+            'checked_orders': order_count,
+            'issues': len(lines),
+            'repaired': len(repaired_partner_ids),
+            'repaired_partner_ids': repaired_partner_ids,
+            'lines': lines,
+        }
         _logger.info(
-            'WGS ACCESS: cron resynced subscription access orders=%s partners=%s',
-            len(orders),
-            len(partner_ids),
+            'WGS ACCESS: audit repair=%s checked_partners=%s checked_orders=%s issues=%s repaired=%s',
+            bool(repair),
+            summary['checked_partners'],
+            summary['checked_orders'],
+            summary['issues'],
+            summary['repaired'],
         )
-        return True
+        return summary
+
+    @api.model
+    def _cron_wgs_sync_subscription_access_control(self, batch_limit=5000):
+        return self.wgs_audit_subscription_access_control(repair=True, batch_limit=batch_limit)
 
     @api.model_create_multi
     def create(self, vals_list):

@@ -272,3 +272,56 @@ class TestPosAccessBlock(TransactionCase):
             'company_id': self.other_company.id,
         })
         self.assertGreaterEqual(counts['manual_access'], 1)
+
+    def test_closed_subscription_with_manual_access_is_reported_as_manual_origin(self):
+        closed_state = self._find_subscription_state_value('closed', 'churn', 'cerrada')
+        order = self._create_subscription_order()
+        order.write({'subscription_state': closed_state})
+        person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
+        if person:
+            person.write({
+                'active': True,
+                'access_state': 'enabled',
+                'managed_by_subscription': False,
+                'site_ids': [Command.set([self.site.id])],
+            })
+        else:
+            self.env['access_control.person'].create({
+                'partner_id': self.owner.id,
+                'active': True,
+                'access_state': 'enabled',
+                'managed_by_subscription': False,
+                'site_ids': [Command.set([self.site.id])],
+            })
+
+        detail = self.env['sale.order'].get_partner_subscription_detail_for_pos(
+            self.owner.id,
+            company_id=self.env.company.id,
+        )
+
+        self.assertEqual(detail['state'], 'manual_access')
+        self.assertTrue(detail['access_enabled'])
+        self.assertEqual(detail['access_origin_label'], 'Acceso manual')
+
+    def test_subscription_managed_access_without_visible_subscription_is_reported_as_inconsistent(self):
+        self.env['access_control.person'].create({
+            'partner_id': self.owner.id,
+            'active': True,
+            'access_state': 'enabled',
+            'managed_by_subscription': True,
+            'site_ids': [Command.set([self.site.id])],
+        })
+
+        detail = self.env['sale.order'].get_partner_subscription_detail_for_pos(
+            self.owner.id,
+            company_id=self.env.company.id,
+        )
+
+        self.assertEqual(detail['state'], 'stale_access')
+        self.assertTrue(detail['access_enabled'])
+        self.assertEqual(detail['access_origin_label'], 'Acceso inconsistente')
+
+        counts = self.env['sale.order'].get_partner_directory_summary_for_pos({
+            'company_id': self.env.company.id,
+        })
+        self.assertGreaterEqual(counts['stale_access'], 1)

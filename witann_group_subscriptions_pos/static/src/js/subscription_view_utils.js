@@ -12,6 +12,7 @@ const STATE_SORT_RANK = {
     none: 8,
     external_access: 9,
     manual_access: 10,
+    stale_access: 11,
 };
 
 function parseISODate(value) {
@@ -45,7 +46,7 @@ function getStateClass(state) {
     if (value === "renew" || value === "paused" || value === "draft" || value === "upsell") {
         return "wgs-state-warning";
     }
-    if (value === "cancel" || value === "closed") {
+    if (value === "cancel" || value === "closed" || value === "stale_access") {
         return "wgs-state-negative";
     }
     return "wgs-state-neutral";
@@ -116,7 +117,12 @@ function canOpenNewSubscription(detail) {
         return false;
     }
     const summaryState = String(detail.state || "").trim().toLowerCase();
-    if (summaryState === "external_access" || summaryState === "manual_access" || detail.access_origin_message) {
+    if (
+        summaryState === "external_access"
+        || summaryState === "manual_access"
+        || summaryState === "stale_access"
+        || detail.access_origin_message
+    ) {
         return false;
     }
     if (summaryState === "progress" || summaryState === "renew") {

@@ -273,6 +273,67 @@ class TestSubscriptionAccessControl(TransactionCase):
         self.assertFalse(person.active)
         self.assertEqual(person.access_state, 'suspended')
 
+    def test_audit_reports_and_repairs_stale_managed_person_without_valid_subscription(self):
+        person = self.env['access_control.person'].create(
+            {
+                'partner_id': self.owner.id,
+                'active': True,
+                'access_state': 'enabled',
+                'site_ids': [Command.set([self.site.id])],
+                'managed_by_subscription': True,
+            }
+        )
+
+        audit = self.env['sale.order'].wgs_audit_subscription_access_control(repair=False)
+
+        self.assertEqual(audit['issues'], 1)
+        self.assertEqual(audit['lines'][0]['issue'], 'stale_managed_access')
+        person.invalidate_recordset(['active', 'access_state'])
+        self.assertTrue(person.active)
+
+        repaired = self.env['sale.order'].wgs_audit_subscription_access_control(repair=True)
+
+        self.assertEqual(repaired['repaired'], 1)
+        person.invalidate_recordset(['active', 'access_state'])
+        self.assertFalse(person.active)
+        self.assertEqual(person.access_state, 'suspended')
+
+    def test_audit_does_not_repair_manual_access_without_subscription(self):
+        person = self.env['access_control.person'].create(
+            {
+                'partner_id': self.owner.id,
+                'active': True,
+                'access_state': 'enabled',
+                'site_ids': [Command.set([self.site.id])],
+                'managed_by_subscription': False,
+            }
+        )
+
+        audit = self.env['sale.order'].wgs_audit_subscription_access_control(repair=True)
+
+        self.assertEqual(audit['issues'], 0)
+        person.invalidate_recordset(['active', 'access_state', 'managed_by_subscription'])
+        self.assertTrue(person.active)
+        self.assertEqual(person.access_state, 'enabled')
+        self.assertFalse(person.managed_by_subscription)
+
+    def test_audit_repairs_missing_person_for_active_subscription(self):
+        order = self._create_subscription_order()
+        progress_state = self._find_subscription_state_value('progress', 'en progreso')
+        order.write({'subscription_state': progress_state})
+        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
+        owner_person.unlink()
+
+        audit = self.env['sale.order'].wgs_audit_subscription_access_control(repair=False)
+
+        self.assertIn('missing_person', {line['issue'] for line in audit['lines']})
+
+        self.env['sale.order'].wgs_audit_subscription_access_control(repair=True)
+        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
+        self.assertTrue(owner_person)
+        self.assertTrue(owner_person.active)
+        self.assertTrue(owner_person.managed_by_subscription)
+
     def test_access_is_aggregated_across_multiple_subscriptions(self):
         progress_state = self._find_subscription_state_value('progress', 'en progreso')
         pause_state = self._find_subscription_state_value('pause', 'pausa', 'hold', 'suspend')

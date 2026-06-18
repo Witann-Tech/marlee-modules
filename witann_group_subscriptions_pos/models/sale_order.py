@@ -28,6 +28,7 @@ class SaleOrder(models.Model):
         'none': 8,
         'external_access': 9,
         'manual_access': 10,
+        'stale_access': 11,
     }
     _WGS_ACCESS_ENABLED_STATE_TOKENS = (
         'progress',
@@ -1331,11 +1332,13 @@ class SaleOrder(models.Model):
             origin_summary = self._summarize_partner_access_origin_items_for_pos(
                 access_origin_items_by_partner.get(partner.id, [])
             )
-            if summary.get('state') == 'none' and origin_summary:
+            if self._should_explain_access_origin_over_subscription_summary_for_pos(summary) and origin_summary:
                 summary.update(origin_summary)
-            elif summary.get('state') == 'none':
+            elif self._should_explain_access_origin_over_subscription_summary_for_pos(summary):
+                access_status = access_status_map.get(partner.id)
                 summary.update(
-                    self._summarize_partner_manual_access_for_pos(access_status_map.get(partner.id))
+                    self._summarize_partner_manual_access_for_pos(access_status)
+                    or self._summarize_partner_stale_subscription_access_for_pos(access_status)
                 )
             try:
                 birthday_value = self._get_partner_field_value_for_pos(
@@ -1476,11 +1479,13 @@ class SaleOrder(models.Model):
                 'partner_name': partner.display_name,
             }
 
-            if summary.get('state') == 'none' and origin_summary:
+            if self._should_explain_access_origin_over_subscription_summary_for_pos(summary) and origin_summary:
                 values.update(origin_summary)
-            elif summary.get('state') == 'none':
+            elif self._should_explain_access_origin_over_subscription_summary_for_pos(summary):
+                access_status = access_status_map.get(partner.id)
                 values.update(
-                    self._summarize_partner_manual_access_for_pos(access_status_map.get(partner.id))
+                    self._summarize_partner_manual_access_for_pos(access_status)
+                    or self._summarize_partner_stale_subscription_access_for_pos(access_status)
                 )
 
             if include_profile_fields:
@@ -1558,6 +1563,7 @@ class SaleOrder(models.Model):
             'none': 0,
             'external_access': 0,
             'manual_access': 0,
+            'stale_access': 0,
         }
 
         for state in self._get_partner_directory_summary_state_counts_for_pos(company=company).values():
@@ -2063,6 +2069,11 @@ class SaleOrder(models.Model):
         }
 
     @api.model
+    def _should_explain_access_origin_over_subscription_summary_for_pos(self, summary):
+        state = (summary or {}).get('state') or 'none'
+        return state in ('none', 'cancel', 'closed')
+
+    @api.model
     def _summarize_partner_manual_access_for_pos(self, access_status=False):
         access_status = dict(access_status or {})
         if not access_status.get('access_enabled') or access_status.get('managed_by_subscription'):
@@ -2074,6 +2085,36 @@ class SaleOrder(models.Model):
         )
         return {
             'state': 'manual_access',
+            'state_label': label,
+            'short_label': label,
+            'valid_until': False,
+            'start_date': False,
+            'subscription_id': False,
+            'package_label': label,
+            'package_names': [],
+            'plan_name': False,
+            'reason': message,
+            'subscription_name': False,
+            'access_origin_label': label,
+            'access_origin_message': message,
+            'access_origin_company_name': False,
+            'access_origin_subscription_id': False,
+            'access_origin_subscription_name': False,
+        }
+
+    @api.model
+    def _summarize_partner_stale_subscription_access_for_pos(self, access_status=False):
+        access_status = dict(access_status or {})
+        if not access_status.get('access_enabled') or not access_status.get('managed_by_subscription'):
+            return {}
+
+        label = _('Acceso inconsistente')
+        message = _(
+            'Acceso activo marcado como gestionado por suscripción, pero sin membresía vigente visible para este POS. '
+            'Debe corregirse con la sincronización central de accesos.'
+        )
+        return {
+            'state': 'stale_access',
             'state_label': label,
             'short_label': label,
             'valid_until': False,
