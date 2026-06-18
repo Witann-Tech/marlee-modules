@@ -1990,9 +1990,33 @@ class SaleOrder(models.Model):
     def _get_subscription_action_domain_for_pos(self, company=False):
         base_domain = [('state', 'in', ['sale', 'done'])]
         company = company or self.env.company
+        visibility_domains = []
         if 'company_id' in self._fields:
-            base_domain.append(('company_id', '=', company.id))
-        return base_domain
+            visibility_domains.append([('company_id', '=', company.id)])
+
+        pos_site_ids = self._wgs_get_pos_access_sites_for_pos(company).ids
+        if pos_site_ids and 'wgs_access_site_ids' in self._fields:
+            visibility_domains.append([('wgs_access_site_ids', 'in', pos_site_ids)])
+
+        product_template_model = (
+            self.env['product.template'] if 'product.template' in self.env.registry else False
+        )
+        if (
+            pos_site_ids
+            and product_template_model
+            and 'wgs_access_site_ids' in product_template_model._fields
+            and 'order_line' in self._fields
+        ):
+            visibility_domains.append([
+                ('order_line.product_id.product_tmpl_id.wgs_access_site_ids', 'in', pos_site_ids)
+            ])
+
+        if not visibility_domains:
+            return base_domain
+        return fields.Domain.AND([
+            base_domain,
+            fields.Domain.OR(visibility_domains),
+        ])
 
     def _is_subscription_record_for_pos(self):
         self.ensure_one()

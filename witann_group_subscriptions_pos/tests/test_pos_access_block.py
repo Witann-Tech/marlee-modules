@@ -170,3 +170,24 @@ class TestPosAccessBlock(TransactionCase):
             {item['subscription_id'] for item in other_detail['items']},
             {other_order.id},
         )
+
+    def test_partner_detail_includes_cross_company_subscription_with_pos_access_site(self):
+        if 'wgs_access_site_ids' not in self.product.product_tmpl_id._fields:
+            self.skipTest('El runtime no expone sitios de acceso en producto.')
+
+        progress_state = self._find_subscription_state_value('progress', 'en progreso')
+        self.product.product_tmpl_id.write({
+            'wgs_access_site_ids': [Command.set([self.site.id, self.other_site.id])],
+        })
+        current_order = self._create_subscription_order()
+        current_order.write({'subscription_state': progress_state})
+
+        other_detail = self.env['sale.order'].get_partner_subscription_detail_for_pos(
+            self.owner.id,
+            company_id=self.other_company.id,
+        )
+
+        self.assertIn(
+            current_order.id,
+            {item['subscription_id'] for item in other_detail['items']},
+        )
