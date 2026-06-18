@@ -206,6 +206,10 @@ class TestPosAccessBlock(TransactionCase):
             company_id=self.other_company.id,
         )
         self.assertIn(self.owner.id, {row['id'] for row in rows})
+        counts = self.env['sale.order'].get_partner_directory_summary_for_pos({
+            'company_id': self.other_company.id,
+        })
+        self.assertGreaterEqual(counts['external_access'], 1)
 
     def test_partner_detail_explains_cross_company_access_from_person_sites_fallback(self):
         progress_state = self._find_subscription_state_value('progress', 'en progreso')
@@ -264,3 +268,7 @@ class TestPosAccessBlock(TransactionCase):
             company_id=self.other_company.id,
         )
         self.assertIn(self.owner.id, {row['id'] for row in rows})
+        counts = self.env['sale.order'].get_partner_directory_summary_for_pos({
+            'company_id': self.other_company.id,
+        })
+        self.assertGreaterEqual(counts['manual_access'], 1)

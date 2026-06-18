@@ -1413,14 +1413,20 @@ class SaleOrder(models.Model):
         today = fields.Date.context_today(self)
         subscriptions_by_partner = self._get_pos_subscription_orders_by_partners(partners, company=company)
         access_last_map = {}
-        access_status_map = {}
+        try:
+            access_status_map = self._get_access_person_status_map_for_pos(partners, company=company)
+        except Exception as error:
+            self._wgs_raise_pos_data_error(
+                _('No se pudo consultar el estado de acceso para construir el directorio de suscripciones.'),
+                error=error,
+                partner_ids=partners.ids,
+            )
         if include_profile_fields:
             try:
                 access_last_map = self._get_access_person_last_access_map_for_pos(partners)
-                access_status_map = self._get_access_person_status_map_for_pos(partners, company=company)
             except Exception as error:
                 self._wgs_raise_pos_data_error(
-                    _('No se pudo consultar la información de acceso para construir el directorio de suscripciones.'),
+                    _('No se pudo consultar el último acceso para construir el directorio de suscripciones.'),
                     error=error,
                     partner_ids=partners.ids,
                 )
