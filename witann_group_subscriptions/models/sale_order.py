@@ -233,9 +233,19 @@ class SaleOrder(models.Model):
                 return fields.Date.to_date(value)
         return False
 
+    def _wgs_is_confirmed_access_subscription_order(self):
+        self.ensure_one()
+        if 'state' in self._fields and self.state not in ('sale', 'done'):
+            return False
+        if 'is_subscription' in self._fields and not self.is_subscription:
+            return False
+        if 'subscription_state' in self._fields and not (self.subscription_state or '').strip():
+            return False
+        return bool(self._get_subscription_recurring_lines())
+
     def _wgs_classify_subscription_access_state(self):
         self.ensure_one()
-        if not self._get_subscription_recurring_lines():
+        if not self._wgs_is_confirmed_access_subscription_order():
             return False
         if 'subscription_state' not in self._fields:
             return False
@@ -275,11 +285,16 @@ class SaleOrder(models.Model):
     def _wgs_get_related_subscription_orders_for_partner(self, partner):
         if not partner:
             return self.browse()
-        orders = self.sudo().search(
-            ['|', ('partner_id', '=', partner.id), ('participant_ids', 'in', partner.id)],
-            order='id asc',
-        )
-        return orders.filtered(lambda order: order._get_subscription_recurring_lines())
+        domain = [
+            ('state', 'in', ['sale', 'done']),
+            '|',
+            ('partner_id', '=', partner.id),
+            ('participant_ids', 'in', partner.id),
+        ]
+        if 'order_line' in self._fields:
+            domain.append(('order_line.product_id.product_tmpl_id.recurring_invoice', '=', True))
+        orders = self.sudo().search(domain, order='id asc')
+        return orders.filtered(lambda order: order._wgs_is_confirmed_access_subscription_order())
 
     @api.model
     def _wgs_get_access_profile_for_partner(self, partner):

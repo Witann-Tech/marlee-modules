@@ -1860,7 +1860,11 @@ class SaleOrder(models.Model):
         short_label = '[%s]' % state_label.upper()
 
         access_enabled_items = [row for row in items if row.get('access_state') == 'enabled']
-        package_source_items = access_enabled_items or prioritized[:1]
+        package_source_items = [
+            row
+            for row in (access_enabled_items or prioritized[:1])
+            if row.get('package_names')
+        ] or [row for row in prioritized if row.get('package_names')]
 
         package_names = sorted(
             {
@@ -2418,6 +2422,7 @@ class SaleOrder(models.Model):
             lambda line: (
                 line.product_id
                 and line.product_id.product_tmpl_id.recurring_invoice
+                and not ('display_type' in line._fields and line.display_type)
                 and self._wgs_get_sale_order_line_qty_for_pos(line) > 0
             )
         )

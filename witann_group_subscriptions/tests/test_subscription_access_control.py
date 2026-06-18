@@ -55,6 +55,7 @@ class TestSubscriptionAccessControl(TransactionCase):
             {
                 'partner_id': self.owner.id,
                 'company_id': self.env.company.id,
+                'state': 'sale',
                 'order_line': [
                     Command.create(
                         {
@@ -88,6 +89,35 @@ class TestSubscriptionAccessControl(TransactionCase):
         self.assertEqual(participant_person.access_state, 'enabled')
         self.assertEqual(set(owner_person.site_ids.ids), {self.site.id})
         self.assertEqual(set(participant_person.site_ids.ids), {self.site.id})
+
+    def test_draft_subscription_state_does_not_grant_access(self):
+        order = self.env['sale.order'].create(
+            {
+                'partner_id': self.owner.id,
+                'company_id': self.env.company.id,
+                'order_line': [
+                    Command.create(
+                        {
+                            'product_id': self.product.id,
+                            'name': self.product.name,
+                            'product_uom_qty': 1,
+                            'product_uom': self.product.uom_id.id,
+                            'price_unit': self.product.list_price,
+                        }
+                    )
+                ],
+            }
+        )
+        order.write({'participant_ids': [Command.set([self.owner.id, self.participant.id])]})
+        progress_state = self._find_subscription_state_value('progress', 'en progreso')
+
+        order.write({'subscription_state': progress_state})
+
+        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
+        participant_person = self.env['access_control.person'].search([('partner_id', '=', self.participant.id)], limit=1)
+
+        self.assertFalse(owner_person and owner_person.active)
+        self.assertFalse(participant_person and participant_person.active)
 
     def test_manual_access_block_overrides_active_subscription(self):
         order = self._create_subscription_order()
@@ -358,6 +388,7 @@ class TestSubscriptionAccessControl(TransactionCase):
             {
                 'partner_id': self.owner.id,
                 'company_id': self.env.company.id,
+                'state': 'sale',
                 'order_line': [
                     Command.create(
                         {
