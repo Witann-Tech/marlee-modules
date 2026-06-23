@@ -158,12 +158,14 @@ class SaleOrder(models.Model):
 
     @api.model
     def _wgs_and_domains_for_pos(self, left_domain, right_domain):
+        if not left_domain:
+            return list(right_domain or []) if isinstance(right_domain, (list, tuple)) else right_domain
+        if not right_domain:
+            return list(left_domain or []) if isinstance(left_domain, (list, tuple)) else left_domain
+        if not isinstance(left_domain, (list, tuple)) or not isinstance(right_domain, (list, tuple)):
+            return fields.Domain.AND([left_domain, right_domain])
         left_domain = list(left_domain or [])
         right_domain = list(right_domain or [])
-        if not left_domain:
-            return right_domain
-        if not right_domain:
-            return left_domain
         return ['&', *left_domain, *right_domain]
 
     @api.model
@@ -1957,7 +1959,7 @@ class SaleOrder(models.Model):
         )
         partner_ids = set(Partner.search(partner_search_domain).ids)
 
-        subscriptions = self.sudo().search(self._get_subscription_action_domain_for_pos(company=company))
+        subscriptions = self.sudo().search(self._get_local_pos_subscription_domain_for_pos(company=company))
         subscriptions = subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
         if subscriptions:
             recurring_lines = subscriptions.order_line.filtered(
@@ -1985,7 +1987,7 @@ class SaleOrder(models.Model):
 
     @api.model
     def _get_partner_ids_with_pos_subscriptions_for_pos(self, company=False):
-        subscriptions = self.sudo().search(self._get_subscription_action_domain_for_pos(company=company))
+        subscriptions = self.sudo().search(self._get_local_pos_subscription_domain_for_pos(company=company))
         subscriptions = subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
         partner_ids = set()
         for subscription in subscriptions:
@@ -2050,7 +2052,7 @@ class SaleOrder(models.Model):
             return []
 
         domain = fields.Domain.AND([
-            self._get_subscription_action_domain_for_pos(company=company),
+            self._get_local_pos_subscription_domain_for_pos(company=company),
             subscription_state_domain,
         ])
         subscriptions = self.sudo().search(domain, order='id desc')
@@ -2322,7 +2324,7 @@ class SaleOrder(models.Model):
             ('partner_id', '=', partner.id),
         ]
         domain = self._wgs_and_domains_for_pos(
-            self._get_subscription_action_domain_for_pos(company=company),
+            self._get_local_pos_subscription_domain_for_pos(company=company),
             partner_domain,
         )
 
@@ -2368,7 +2370,7 @@ class SaleOrder(models.Model):
             ('partner_id', 'in', partner_ids),
         ]
         domain = self._wgs_and_domains_for_pos(
-            self._get_subscription_action_domain_for_pos(company=company),
+            self._get_local_pos_subscription_domain_for_pos(company=company),
             partner_domain,
         )
 
@@ -2394,6 +2396,22 @@ class SaleOrder(models.Model):
         if 'company_id' in self._fields:
             base_domain.append(('company_id', '=', company.id))
         return base_domain
+
+    @api.model
+    def _get_local_pos_subscription_domain_for_pos(self, company=False):
+        """Subscriptions directly operable from this POS.
+
+        Company alone is not enough: a dirty or legacy subscription can carry a
+        product/snapshot from a different access site. The POS directory must
+        show those records only if their access-site snapshot belongs to the
+        current POS company. Cross-company access is handled separately as
+        "Acceso multisede".
+        """
+        action_domain = self._get_subscription_action_domain_for_pos(company=company)
+        site_domain = self._get_subscription_access_site_domain_for_pos(company=company)
+        if not site_domain:
+            return action_domain
+        return fields.Domain.AND([action_domain, site_domain])
 
     @api.model
     def _get_subscription_access_site_domain_for_pos(self, company=False):

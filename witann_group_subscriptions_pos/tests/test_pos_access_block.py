@@ -103,6 +103,30 @@ class TestPosAccessBlock(TransactionCase):
         order.write({'participant_ids': [Command.set([self.owner.id, self.participant.id])]})
         return order
 
+    def _create_subscription_order_with_product(self, product, company=False):
+        company = company or self.env.company
+        order = self.env['sale.order'].with_company(company).sudo().create(
+            {
+                'partner_id': self.owner.id,
+                'company_id': company.id,
+                'order_line': [
+                    Command.create(
+                        {
+                            'product_id': product.id,
+                            'name': product.name,
+                            'product_uom_qty': 1,
+                            'product_uom': product.uom_id.id,
+                            'price_unit': product.list_price,
+                        }
+                    )
+                ],
+            }
+        )
+        order.write({'participant_ids': [Command.set([self.owner.id, self.participant.id])]})
+        if hasattr(order, '_wgs_update_access_snapshot'):
+            order._wgs_update_access_snapshot(force=True)
+        return order
+
     def test_pos_access_block_from_participant_applies_to_full_package(self):
         order = self._create_subscription_order()
         order.write({'subscription_state': self._find_subscription_state_value('progress', 'en progreso')})
@@ -170,6 +194,69 @@ class TestPosAccessBlock(TransactionCase):
             {item['subscription_id'] for item in other_detail['items']},
             {other_order.id},
         )
+
+    def test_directory_ignores_same_company_subscription_from_another_access_site(self):
+        if 'wgs_access_site_ids' not in self.product.product_tmpl_id._fields:
+            self.skipTest('El runtime no expone sitios de acceso en producto.')
+
+        progress_state = self._find_subscription_state_value('progress', 'en progreso')
+        self.product.product_tmpl_id.write({
+            'wgs_access_site_ids': [Command.set([self.other_site.id])],
+        })
+        order = self._create_subscription_order()
+        if hasattr(order, '_wgs_update_access_snapshot'):
+            order._wgs_update_access_snapshot(force=True)
+        order.write({'subscription_state': progress_state})
+
+        row = self.env['sale.order'].get_partner_directory_row_for_pos(
+            self.owner.id,
+            company_id=self.env.company.id,
+        )
+        detail = self.env['sale.order'].get_partner_subscription_detail_for_pos(
+            self.owner.id,
+            company_id=self.env.company.id,
+        )
+
+        self.assertEqual(row['state'], 'none')
+        self.assertFalse(row['subscription_id'])
+        self.assertFalse(row['package_label'])
+        self.assertEqual(detail['state'], 'none')
+        self.assertEqual(detail['items'], [])
+
+    def test_directory_prefers_current_site_subscription_over_other_site_closed_card(self):
+        if 'wgs_access_site_ids' not in self.product.product_tmpl_id._fields:
+            self.skipTest('El runtime no expone sitios de acceso en producto.')
+
+        progress_state = self._find_subscription_state_value('progress', 'en progreso')
+        closed_state = self._find_subscription_state_value('closed', 'churn', 'cerrada')
+        current_site_product = self.product.copy({'name': 'Plan sitio actual'})
+        current_site_product.product_tmpl_id.write({
+            'wgs_access_site_ids': [Command.set([self.site.id])],
+        })
+        other_site_product = self.product.copy({'name': 'Plan sitio ajeno'})
+        other_site_product.product_tmpl_id.write({
+            'wgs_access_site_ids': [Command.set([self.other_site.id])],
+        })
+
+        other_site_order = self._create_subscription_order_with_product(other_site_product)
+        other_site_order.write({'subscription_state': closed_state})
+        current_site_order = self._create_subscription_order_with_product(current_site_product)
+        current_site_order.write({'subscription_state': progress_state})
+
+        row = self.env['sale.order'].get_partner_directory_row_for_pos(
+            self.owner.id,
+            company_id=self.env.company.id,
+        )
+        detail = self.env['sale.order'].get_partner_subscription_detail_for_pos(
+            self.owner.id,
+            company_id=self.env.company.id,
+        )
+
+        self.assertEqual(row['state'], 'progress')
+        self.assertEqual(row['subscription_id'], current_site_order.id)
+        self.assertIn(current_site_product.display_name, row['package_label'])
+        self.assertNotIn(other_site_product.display_name, row['package_label'])
+        self.assertEqual({item['subscription_id'] for item in detail['items']}, {current_site_order.id})
 
     def test_partner_detail_explains_cross_company_access_without_operable_card(self):
         if 'wgs_access_site_ids' not in self.product.product_tmpl_id._fields:
