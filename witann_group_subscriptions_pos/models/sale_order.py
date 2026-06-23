@@ -863,7 +863,7 @@ class SaleOrder(models.Model):
     @api.model
     def _wgs_get_access_person_for_partner_for_pos(self, partner):
         Person = self._wgs_person_model_for_pos()
-        if not Person or not partner:
+        if Person is False or not partner:
             return False
         return Person.search([('partner_id', '=', partner.id)], limit=1)
 
@@ -1168,7 +1168,7 @@ class SaleOrder(models.Model):
         if partners and hasattr(partners, '_sync_access_person_face'):
             partners.with_context(access_sync_priority=True)._sync_access_person_face()
         Person = self._wgs_person_model_for_pos()
-        if Person and partners:
+        if Person is not False and partners:
             people = Person.search([
                 ('partner_id', 'in', partners.ids),
                 ('active', '=', True),
@@ -1217,7 +1217,7 @@ class SaleOrder(models.Model):
 
         partners = self._wgs_partner_model_for_pos().browse(partner_ids).exists()
         Person = self._wgs_person_model_for_pos()
-        if not Person:
+        if Person is False:
             return {
                 'person_count': 0,
                 'active_count': 0,
@@ -1588,7 +1588,7 @@ class SaleOrder(models.Model):
         data = dict(options or {})
         company = self._wgs_resolve_pos_company_for_pos(data.get('company_id') or data.get('companyId'))
         Person = self._wgs_person_model_for_pos()
-        if not Person:
+        if Person is False:
             return {
                 'company_id': company.id if company else False,
                 'company_name': company.display_name if company else False,
@@ -3302,7 +3302,7 @@ class SaleOrder(models.Model):
 
     def _get_access_person_status_map_for_pos(self, partners, company=False):
         person_model = self._wgs_person_model_for_pos()
-        if not person_model or not partners:
+        if person_model is False or not partners:
             return {}
 
         if 'partner_id' not in person_model._fields:
@@ -3346,7 +3346,7 @@ class SaleOrder(models.Model):
 
     def _get_access_person_last_access_map_for_pos(self, partners):
         person_model = self._wgs_person_model_for_pos()
-        if not person_model or not partners:
+        if person_model is False or not partners:
             return {}
 
         fields_map = person_model._fields
