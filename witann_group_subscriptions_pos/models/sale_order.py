@@ -110,7 +110,10 @@ class SaleOrder(models.Model):
 
     @api.model
     def _wgs_person_model_for_pos(self):
-        return self.env['access_control.person'].sudo()
+        try:
+            return self.env['access_control.person'].sudo()
+        except KeyError:
+            return False
 
     @api.model
     def _wgs_resolve_pos_company_for_pos(self, company_id=False):
@@ -859,9 +862,9 @@ class SaleOrder(models.Model):
 
     @api.model
     def _wgs_get_access_person_for_partner_for_pos(self, partner):
-        Person = self.env['access_control.person'].sudo() if 'access_control.person' in self.env.registry else False
+        Person = self._wgs_person_model_for_pos()
         if not Person or not partner:
-            return self.env['access_control.person'].sudo().browse()
+            return False
         return Person.search([('partner_id', '=', partner.id)], limit=1)
 
     @api.model
@@ -1164,7 +1167,7 @@ class SaleOrder(models.Model):
         partners = self._wgs_partner_model_for_pos().browse(sorted(subscription._wgs_get_access_related_partner_ids())).exists()
         if partners and hasattr(partners, '_sync_access_person_face'):
             partners.with_context(access_sync_priority=True)._sync_access_person_face()
-        Person = self.env['access_control.person'].sudo() if 'access_control.person' in self.env.registry else False
+        Person = self._wgs_person_model_for_pos()
         if Person and partners:
             people = Person.search([
                 ('partner_id', 'in', partners.ids),
@@ -1214,6 +1217,27 @@ class SaleOrder(models.Model):
 
         partners = self._wgs_partner_model_for_pos().browse(partner_ids).exists()
         Person = self._wgs_person_model_for_pos()
+        if not Person:
+            return {
+                'person_count': 0,
+                'active_count': 0,
+                'suspended_count': 0,
+                'missing_count': len(partner_ids),
+                'site_names': [],
+                'people': [
+                    {
+                        'partner_id': partner.id,
+                        'partner_name': partner.display_name,
+                        'person_id': False,
+                        'active': False,
+                        'access_state': False,
+                        'global_user_id': False,
+                        'site_names': [],
+                        'managed_by_subscription': False,
+                    }
+                    for partner in partners
+                ],
+            }
         people = Person.search([('partner_id', 'in', partners.ids)], order='partner_id asc, id asc')
         people_by_partner = {person.partner_id.id: person for person in people}
 
@@ -1563,7 +1587,7 @@ class SaleOrder(models.Model):
 
         data = dict(options or {})
         company = self._wgs_resolve_pos_company_for_pos(data.get('company_id') or data.get('companyId'))
-        Person = self.env['access_control.person'].sudo() if 'access_control.person' in self.env.registry else False
+        Person = self._wgs_person_model_for_pos()
         if not Person:
             return {
                 'company_id': company.id if company else False,
@@ -3277,11 +3301,10 @@ class SaleOrder(models.Model):
         return payload
 
     def _get_access_person_status_map_for_pos(self, partners, company=False):
-        model_name = 'access_control.person'
-        if model_name not in self.env.registry or not partners:
+        person_model = self._wgs_person_model_for_pos()
+        if not person_model or not partners:
             return {}
 
-        person_model = self.env[model_name].sudo()
         if 'partner_id' not in person_model._fields:
             return {}
 
@@ -3322,11 +3345,10 @@ class SaleOrder(models.Model):
         return result
 
     def _get_access_person_last_access_map_for_pos(self, partners):
-        model_name = 'access_control.person'
-        if model_name not in self.env.registry or not partners:
+        person_model = self._wgs_person_model_for_pos()
+        if not person_model or not partners:
             return {}
 
-        person_model = self.env[model_name].sudo()
         fields_map = person_model._fields
         if 'partner_id' not in fields_map:
             return {}
