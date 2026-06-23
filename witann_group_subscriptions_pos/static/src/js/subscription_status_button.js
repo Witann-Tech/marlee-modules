@@ -549,7 +549,6 @@ patch(ControlButtons.prototype, {
                 <option value="cancel">${_t("Estado: Cancelada / churned")}</option>
                 <option value="external_access">${_t("Estado: Acceso multisede")}</option>
                 <option value="manual_access">${_t("Estado: Acceso manual")}</option>
-                <option value="stale_access">${_t("Estado: Acceso inconsistente")}</option>
                 <option value="none">${_t("Estado: Sin suscripcion")}</option>
             </select>
             <select class="wgs-filter-birthday">
