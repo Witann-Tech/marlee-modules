@@ -1959,7 +1959,8 @@ class SaleOrder(models.Model):
         )
         partner_ids = set(Partner.search(partner_search_domain).ids)
 
-        subscriptions = self.sudo().search(self._get_local_pos_subscription_domain_for_pos(company=company))
+        subscriptions = self.sudo().search(self._get_subscription_action_domain_for_pos(company=company))
+        subscriptions = self._filter_local_pos_subscriptions_for_pos(subscriptions, company=company)
         subscriptions = subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
         if subscriptions:
             recurring_lines = subscriptions.order_line.filtered(
@@ -1987,7 +1988,8 @@ class SaleOrder(models.Model):
 
     @api.model
     def _get_partner_ids_with_pos_subscriptions_for_pos(self, company=False):
-        subscriptions = self.sudo().search(self._get_local_pos_subscription_domain_for_pos(company=company))
+        subscriptions = self.sudo().search(self._get_subscription_action_domain_for_pos(company=company))
+        subscriptions = self._filter_local_pos_subscriptions_for_pos(subscriptions, company=company)
         subscriptions = subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
         partner_ids = set()
         for subscription in subscriptions:
@@ -2052,10 +2054,11 @@ class SaleOrder(models.Model):
             return []
 
         domain = fields.Domain.AND([
-            self._get_local_pos_subscription_domain_for_pos(company=company),
+            self._get_subscription_action_domain_for_pos(company=company),
             subscription_state_domain,
         ])
         subscriptions = self.sudo().search(domain, order='id desc')
+        subscriptions = self._filter_local_pos_subscriptions_for_pos(subscriptions, company=company)
         subscriptions = subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
         partner_ids = set()
         for subscription in subscriptions:
@@ -2324,11 +2327,12 @@ class SaleOrder(models.Model):
             ('partner_id', '=', partner.id),
         ]
         domain = self._wgs_and_domains_for_pos(
-            self._get_local_pos_subscription_domain_for_pos(company=company),
+            self._get_subscription_action_domain_for_pos(company=company),
             partner_domain,
         )
 
         subscriptions = self.sudo().search(domain, order='id desc')
+        subscriptions = self._filter_local_pos_subscriptions_for_pos(subscriptions, company=company)
         return subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
 
     @api.model
@@ -2370,11 +2374,12 @@ class SaleOrder(models.Model):
             ('partner_id', 'in', partner_ids),
         ]
         domain = self._wgs_and_domains_for_pos(
-            self._get_local_pos_subscription_domain_for_pos(company=company),
+            self._get_subscription_action_domain_for_pos(company=company),
             partner_domain,
         )
 
         subscriptions = self.sudo().search(domain, order='id desc')
+        subscriptions = self._filter_local_pos_subscriptions_for_pos(subscriptions, company=company)
         subscriptions = subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
 
         subscriptions_by_partner = {partner.id: self.browse() for partner in partners}
@@ -2398,20 +2403,46 @@ class SaleOrder(models.Model):
         return base_domain
 
     @api.model
-    def _get_local_pos_subscription_domain_for_pos(self, company=False):
-        """Subscriptions directly operable from this POS.
+    def _filter_local_pos_subscriptions_for_pos(self, subscriptions, company=False):
+        company = company or self.env.company
+        return subscriptions.filtered(lambda order: order._wgs_is_local_pos_subscription_for_pos(company))
 
-        Company alone is not enough: a dirty or legacy subscription can carry a
-        product/snapshot from a different access site. The POS directory must
-        show those records only if their access-site snapshot belongs to the
-        current POS company. Cross-company access is handled separately as
-        "Acceso multisede".
-        """
-        action_domain = self._get_subscription_action_domain_for_pos(company=company)
-        site_domain = self._get_subscription_access_site_domain_for_pos(company=company)
-        if not site_domain:
-            return action_domain
-        return fields.Domain.AND([action_domain, site_domain])
+    def _wgs_is_local_pos_subscription_for_pos(self, company=False):
+        self.ensure_one()
+        company = company or self.env.company
+        if 'company_id' in self._fields and company and self.company_id and self.company_id != company:
+            return False
+
+        pos_site_ids = set(self._wgs_get_pos_access_sites_for_pos(company).ids)
+        if not pos_site_ids:
+            return True
+
+        subscription_site_ids = self._wgs_get_subscription_configured_access_site_ids_for_pos()
+        if subscription_site_ids:
+            return bool(subscription_site_ids.intersection(pos_site_ids))
+
+        # Legacy closed/renewal records may lack the access-site snapshot. Keep
+        # them visible as history/reinscription candidates, but never show an
+        # active subscription with no local site evidence as locally operable.
+        return self._classify_subscription_access_state_for_pos() != 'enabled'
+
+    def _wgs_get_subscription_configured_access_site_ids_for_pos(self):
+        self.ensure_one()
+        site_ids = set()
+        if 'wgs_access_site_ids' in self._fields and self.wgs_access_site_ids:
+            site_ids.update(self.wgs_access_site_ids.filtered(lambda site: getattr(site, 'active', True)).ids)
+
+        product_template_model = (
+            self.env['product.template'] if 'product.template' in self.env.registry else False
+        )
+        if product_template_model and 'wgs_access_site_ids' in product_template_model._fields:
+            for line in self._get_recurring_lines():
+                product_tmpl = line.product_id.product_tmpl_id
+                if product_tmpl and product_tmpl.wgs_access_site_ids:
+                    site_ids.update(
+                        product_tmpl.wgs_access_site_ids.filtered(lambda site: getattr(site, 'active', True)).ids
+                    )
+        return site_ids
 
     @api.model
     def _get_subscription_access_site_domain_for_pos(self, company=False):

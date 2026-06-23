@@ -223,6 +223,29 @@ class TestPosAccessBlock(TransactionCase):
         self.assertEqual(detail['state'], 'none')
         self.assertEqual(detail['items'], [])
 
+    def test_directory_keeps_legacy_closed_subscription_without_access_site_snapshot(self):
+        closed_state = self._find_subscription_state_value('closed', 'churn', 'cerrada')
+        order = self._create_subscription_order()
+        order.write({'subscription_state': closed_state})
+        if 'wgs_access_site_ids' in order._fields:
+            order.write({'wgs_access_site_ids': [Command.clear()]})
+        if 'wgs_access_site_ids' in self.product.product_tmpl_id._fields:
+            self.product.product_tmpl_id.write({'wgs_access_site_ids': [Command.clear()]})
+
+        row = self.env['sale.order'].get_partner_directory_row_for_pos(
+            self.owner.id,
+            company_id=self.env.company.id,
+        )
+        detail = self.env['sale.order'].get_partner_subscription_detail_for_pos(
+            self.owner.id,
+            company_id=self.env.company.id,
+        )
+
+        self.assertIn(row['state'], ('cancel', 'closed'))
+        self.assertEqual(row['subscription_id'], order.id)
+        self.assertTrue(row['package_label'])
+        self.assertEqual({item['subscription_id'] for item in detail['items']}, {order.id})
+
     def test_directory_prefers_current_site_subscription_over_other_site_closed_card(self):
         if 'wgs_access_site_ids' not in self.product.product_tmpl_id._fields:
             self.skipTest('El runtime no expone sitios de acceso en producto.')
