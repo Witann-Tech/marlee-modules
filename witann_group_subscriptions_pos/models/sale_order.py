@@ -1599,20 +1599,28 @@ class SaleOrder(models.Model):
             )
             return summary
 
-        person_domain = [
+        site_person_domain = [
             ('partner_id', '!=', False),
-            ('active', '=', True),
-            ('access_state', '=', 'enabled'),
             ('site_ids', 'in', pos_sites.ids),
         ]
 
-        people = Person.search(person_domain, order='partner_id asc, id desc')
+        people = Person.with_context(active_test=False).search(site_person_domain, order='partner_id asc, id desc')
         Partner = self._wgs_partner_model_for_pos()
         partner_domain = self._wgs_get_partner_company_domain_for_pos(company)
         partners = Partner.search(
             self._wgs_and_domains_for_pos(partner_domain, [('id', 'in', people.mapped('partner_id').ids)])
         ) if people else Partner
         partner_ids = set(partners.ids)
+        active_enabled_people = people.filtered(
+            lambda person: person.active and person.access_state == 'enabled'
+        )
+        state_counts = {}
+        active_state_counts = {}
+        for person in people:
+            state_key = person.access_state or 'missing'
+            state_counts[state_key] = state_counts.get(state_key, 0) + 1
+            if person.active:
+                active_state_counts[state_key] = active_state_counts.get(state_key, 0) + 1
         status_map = self._get_partner_subscription_directory_status_map_for_pos(
             partners,
             include_profile_fields=False,
@@ -1624,7 +1632,7 @@ class SaleOrder(models.Model):
         active_manual = 0
         active_multisite = 0
         seen_partner_ids = set()
-        for person in people:
+        for person in active_enabled_people:
             partner = person.partner_id
             if not partner or partner.id not in partner_ids:
                 continue
@@ -1663,7 +1671,12 @@ class SaleOrder(models.Model):
             'site_ids': pos_sites.ids,
             'site_names': pos_sites.mapped('name'),
             'checked_access_people': len(people),
+            'active_enabled_access_people': len(active_enabled_people),
             'checked_partners': len(seen_partner_ids),
+            'company_partner_people': len(people.filtered(lambda person: person.partner_id.id in partner_ids)),
+            'out_of_company_people': len(people.filtered(lambda person: person.partner_id.id not in partner_ids)),
+            'access_state_counts': state_counts,
+            'active_access_state_counts': active_state_counts,
             'active_managed': active_managed,
             'active_manual': active_manual,
             'active_multisite': active_multisite,
@@ -1671,12 +1684,14 @@ class SaleOrder(models.Model):
             'rows': rows,
         }
         _logger.info(
-            'WGS POS ACCESS AUDIT company=%s sites=%s checked_people=%s checked_partners=%s stale_managed=%s',
+            'WGS POS ACCESS AUDIT company=%s sites=%s checked_people=%s active_enabled=%s checked_partners=%s stale_managed=%s state_counts=%s',
             summary['company_id'],
             summary['site_ids'],
             summary['checked_access_people'],
+            summary['active_enabled_access_people'],
             summary['checked_partners'],
             summary['stale_managed_access'],
+            summary['access_state_counts'],
         )
         return summary
 
