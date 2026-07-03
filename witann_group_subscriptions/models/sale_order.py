@@ -418,6 +418,16 @@ class SaleOrder(models.Model):
             return False
         return due_date + timedelta(days=auto_close_days)
 
+    def _wgs_normalize_next_invoice_date_for_access(self, next_invoice_date=False, hard_end_date=False):
+        next_date = fields.Date.to_date(next_invoice_date)
+        end_date = fields.Date.to_date(hard_end_date)
+        if next_date and end_date and next_date == end_date:
+            # Legacy imports and some manual corrections used the inclusive
+            # period end as next_invoice_date. Access must remain valid through
+            # that full day and expire on the following date.
+            return end_date + timedelta(days=1)
+        return next_date
+
     def _wgs_get_subscription_auto_close_deadline_from_order(self, today=False):
         self.ensure_one()
         recurring_lines = self._get_subscription_recurring_lines()
@@ -430,10 +440,14 @@ class SaleOrder(models.Model):
         next_invoice_date = self._wgs_get_first_access_date_value(
             ('recurring_next_date', 'next_invoice_date', 'recurring_next_invoice_date')
         )
+        hard_end_date = self._wgs_get_first_access_date_value(
+            ('date_end', 'end_date', 'subscription_end_date', 'recurring_end_date')
+        )
         if start_date and (not next_invoice_date or next_invoice_date <= start_date):
             next_invoice_date = start_date + self._wgs_get_subscription_recurrence_delta(
                 primary_recurring_line=primary_recurring_line
             )
+        next_invoice_date = self._wgs_normalize_next_invoice_date_for_access(next_invoice_date, hard_end_date)
         return self._wgs_get_subscription_auto_close_deadline(
             next_invoice_date=next_invoice_date,
             primary_recurring_line=primary_recurring_line,
@@ -561,12 +575,13 @@ class SaleOrder(models.Model):
         next_invoice_date = self._wgs_get_first_access_date_value(
             ('recurring_next_date', 'next_invoice_date', 'recurring_next_invoice_date')
         )
-        if next_invoice_date and next_invoice_date <= today:
-            return False
-
         hard_end_date = self._wgs_get_first_access_date_value(
             ('date_end', 'end_date', 'subscription_end_date', 'recurring_end_date')
         )
+        next_invoice_date = self._wgs_normalize_next_invoice_date_for_access(next_invoice_date, hard_end_date)
+        if next_invoice_date and next_invoice_date <= today:
+            return False
+
         if hard_end_date and hard_end_date < today:
             return False
 

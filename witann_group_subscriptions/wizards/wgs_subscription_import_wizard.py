@@ -1,6 +1,7 @@
 import base64
 import io
 import logging
+from datetime import timedelta
 
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError
@@ -367,11 +368,11 @@ class WgsSubscriptionImportWizard(models.TransientModel):
         # de Odoo sobreescriba o interfiera con los valores.
         #
         # Constraint sale_order_check_start_date_lower_next_invoice_date exige
-        # start_date ≤ next_invoice_date. Como Inicio ≤ Fin en los datos de Excel,
-        # esto se cumple incluso para suscripciones vencidas.
+        # start_date ≤ next_invoice_date. "Fin" en Excel es inclusivo, mientras
+        # next_invoice_date es el primer día no cubierto / próximo cobro.
         post_confirm_write = {}
         if line.end_date:
-            post_confirm_write['next_invoice_date'] = line.end_date
+            post_confirm_write['next_invoice_date'] = line.end_date + timedelta(days=1)
         if line.start_date and 'start_date' in order._fields:
             post_confirm_write['start_date'] = line.start_date
         if line.start_date and 'first_contract_date' in order._fields:

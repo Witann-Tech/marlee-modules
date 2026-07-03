@@ -2588,6 +2588,8 @@ class SaleOrder(models.Model):
 
         if start_date and (not next_invoice_date or next_invoice_date <= start_date):
             next_invoice_date = start_date + recurrence_delta
+        if hasattr(self, '_wgs_normalize_next_invoice_date_for_access'):
+            next_invoice_date = self._wgs_normalize_next_invoice_date_for_access(next_invoice_date, hard_end_date)
 
         period_start = False
         valid_until = False
@@ -2687,6 +2689,8 @@ class SaleOrder(models.Model):
         # next invoice unset (or equal to start date), infer the next cycle boundary.
         if start_date and (not next_invoice_date or next_invoice_date <= start_date):
             next_invoice_date = start_date + recurrence_delta
+        if hasattr(self, '_wgs_normalize_next_invoice_date_for_access'):
+            next_invoice_date = self._wgs_normalize_next_invoice_date_for_access(next_invoice_date, hard_end_date)
 
         period_start = False
         valid_until = False

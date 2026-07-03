@@ -277,6 +277,43 @@ class TestSubscriptionAccessControl(TransactionCase):
         self.assertFalse(owner_person.active)
         self.assertFalse(participant_person.active)
 
+    def test_inclusive_period_end_keeps_access_until_end_of_day(self):
+        order = self._create_subscription_order()
+        progress_state = self._find_subscription_state_value('progress', 'en progreso')
+        next_field = next(
+            (
+                field_name
+                for field_name in ('recurring_next_date', 'next_invoice_date', 'recurring_next_invoice_date')
+                if field_name in order._fields
+            ),
+            False,
+        )
+        end_field = next(
+            (
+                field_name
+                for field_name in ('date_end', 'end_date', 'subscription_end_date', 'recurring_end_date')
+                if field_name in order._fields
+            ),
+            False,
+        )
+        if not next_field or not end_field:
+            self.skipTest('El runtime no expone campos de próxima fecha y fin de suscripción.')
+
+        today = fields.Date.context_today(order)
+        order.write({'subscription_state': progress_state})
+        order.write({
+            next_field: today,
+            end_field: today,
+        })
+
+        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
+        participant_person = self.env['access_control.person'].search([('partner_id', '=', self.participant.id)], limit=1)
+
+        self.assertTrue(owner_person.active)
+        self.assertTrue(participant_person.active)
+        self.assertEqual(owner_person.access_state, 'enabled')
+        self.assertEqual(participant_person.access_state, 'enabled')
+
     def test_cancelled_subscription_deactivates_managed_people(self):
         order = self._create_subscription_order()
         progress_state = self._find_subscription_state_value('progress', 'en progreso')
