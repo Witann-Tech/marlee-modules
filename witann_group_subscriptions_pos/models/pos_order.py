@@ -2496,28 +2496,20 @@ class PosOrder(models.Model):
         if not self._wgs_is_subscription_order_closed_for_reenroll(source_order) and not allow_active_repair:
             raise UserError(_('La suscripción origen no está cerrada/cancelada para reinscripción.'))
 
+        holder_partner = source_order.partner_id or self.partner_id
         product = line.product_id
         qty = abs(line.qty or 0.0) or 1.0
-        max_total = int((product.max_participants_total or 1) * qty)
-        if max_total < 1:
-            max_total = 1
-
-        participant_ids = line.wgs_get_participant_ids()
-        holder_partner = source_order.partner_id or self.partner_id
-        if holder_partner and holder_partner.id not in participant_ids:
-            participant_ids.insert(0, holder_partner.id)
-        participant_ids = list(dict.fromkeys(participant_ids))
-        if len(participant_ids) > max_total:
-            raise UserError(
-                _(
-                    'No puedes asignar %(current)s participantes para %(product)s. El máximo permitido es %(max)s.'
-                )
-                % {
-                    'current': len(participant_ids),
-                    'product': product.display_name,
-                    'max': max_total,
-                }
-            )
+        previous_access_partner_ids = (
+            source_order._wgs_get_access_related_partner_ids()
+            if hasattr(source_order, '_wgs_get_access_related_partner_ids')
+            else set(source_order.participant_ids.ids if 'participant_ids' in source_order._fields else [])
+        )
+        participant_ids = self._wgs_resolve_subscription_participant_ids_for_pos_line(
+            line=line,
+            holder_partner=holder_partner,
+            product=product,
+            qty=qty,
+        )
 
         pricing_state = self._wgs_get_persisted_subscription_pricing_from_pos_line(line)
         recurring_price_unit = pricing_state['price_unit']
@@ -2573,8 +2565,10 @@ class PosOrder(models.Model):
         self._wgs_reactivate_subscription_order_for_pos(source_order)
         if single_day_term:
             self._wgs_clear_subscription_next_billing_date(source_order)
-        if hasattr(source_order, '_wgs_sync_access_control_people'):
-            source_order.with_context(access_sync_priority=True)._wgs_sync_access_control_people()
+        self._wgs_finalize_reenroll_subscription_access_for_pos(
+            source_order,
+            extra_partner_ids=previous_access_partner_ids,
+        )
 
         self._wgs_link_pos_and_sale_records(
             pos_line=line,
@@ -2611,6 +2605,35 @@ class PosOrder(models.Model):
             amount_paid,
         )
         return source_order
+
+    def _wgs_resolve_subscription_participant_ids_for_pos_line(self, *, line, holder_partner, product, qty=1.0):
+        product = product.exists()
+        qty = abs(float(qty or 0.0)) or 1.0
+        max_total = int((product.max_participants_total or 1) * qty) if product else 1
+        if max_total < 1:
+            max_total = 1
+
+        holder_id = holder_partner.id if holder_partner else False
+        if max_total <= 1:
+            return [holder_id] if holder_id else []
+
+        participant_ids = line.wgs_get_participant_ids()
+        if holder_id and holder_id not in participant_ids:
+            participant_ids.insert(0, holder_id)
+
+        participant_ids = list(dict.fromkeys(participant_ids))
+        if len(participant_ids) > max_total:
+            raise UserError(
+                _(
+                    'No puedes asignar %(current)s participantes para %(product)s. El máximo permitido es %(max)s.'
+                )
+                % {
+                    'current': len(participant_ids),
+                    'product': product.display_name,
+                    'max': max_total,
+                }
+            )
+        return participant_ids
 
     def _wgs_get_sale_line_qty_field_name_for_pos(self, line_fields):
         return next(
@@ -2661,6 +2684,7 @@ class PosOrder(models.Model):
             line_values.pop('product_id', None)
             if line_values:
                 source_line.write(line_values)
+                source_order.invalidate_recordset(['order_line'])
             return source_line
 
         old_line_values = {}
@@ -2678,6 +2702,7 @@ class PosOrder(models.Model):
             **line_values,
             'order_id': source_order.id,
         })
+        source_order.invalidate_recordset(['order_line'])
         _logger.info(
             'WGS POS: reenroll replaced recurring line %s with %s on subscription %s (%s -> %s)',
             source_line.id,
@@ -2739,6 +2764,25 @@ class PosOrder(models.Model):
                 comodel_checker=self._wgs_is_pricing_model_name,
             )
         return values
+
+    def _wgs_finalize_reenroll_subscription_access_for_pos(self, source_order, extra_partner_ids=False):
+        source_order.ensure_one()
+        source_order.invalidate_recordset([
+            field_name
+            for field_name in (
+                'order_line',
+                'participant_ids',
+                'wgs_access_site_ids',
+                'wgs_access_timezone_snapshot_id',
+            )
+            if field_name in source_order._fields
+        ])
+        if hasattr(source_order, '_wgs_update_access_snapshot'):
+            source_order._wgs_update_access_snapshot(force=True)
+        if hasattr(source_order, '_wgs_sync_access_control_people'):
+            source_order.with_context(access_sync_priority=True)._wgs_sync_access_control_people(
+                extra_partner_ids=extra_partner_ids or set()
+            )
 
     def _wgs_reactivate_subscription_order_for_pos(self, source_order):
         source_order.ensure_one()
@@ -3083,26 +3127,12 @@ class PosOrder(models.Model):
                     self._wgs_get_subscription_history_blocks_new_flow_message(historical_subscription)
                 )
         qty = abs(line.qty)
-        max_total = int((product.max_participants_total or 1) * qty)
-        if max_total < 1:
-            max_total = 1
-
-        participant_ids = line.wgs_get_participant_ids()
-        if self.partner_id.id not in participant_ids:
-            participant_ids.insert(0, self.partner_id.id)
-
-        participant_ids = list(dict.fromkeys(participant_ids))
-        if len(participant_ids) > max_total:
-            raise UserError(
-                _(
-                    'No puedes asignar %(current)s participantes para %(product)s. El máximo permitido es %(max)s.'
-                )
-                % {
-                    'current': len(participant_ids),
-                    'product': product.display_name,
-                    'max': max_total,
-                }
-            )
+        participant_ids = self._wgs_resolve_subscription_participant_ids_for_pos_line(
+            line=line,
+            holder_partner=self.partner_id,
+            product=product,
+            qty=qty,
+        )
 
         pricing_state = self._wgs_get_persisted_subscription_pricing_from_pos_line(line)
         recurring_price_unit = pricing_state['price_unit']

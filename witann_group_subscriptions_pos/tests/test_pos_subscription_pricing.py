@@ -413,6 +413,98 @@ class TestPosSubscriptionPricing(TransactionCase):
             self.PosOrder._wgs_reactivate_subscription_order_for_pos(order)
             self.assertEqual(order.subscription_state, progress_state)
 
+    def test_reenroll_to_single_package_replaces_product_participants_and_access_snapshot(self):
+        site_old = self.env['access_control.site'].create(
+            {
+                'name': 'Sitio paquete anterior',
+                'code': 'OLD-POS',
+                'company_id': self.env.company.id,
+            }
+        )
+        site_new = self.env['access_control.site'].create(
+            {
+                'name': 'Sitio paquete destino',
+                'code': 'NEW-POS',
+                'company_id': self.env.company.id,
+            }
+        )
+        participant_a = self.env['res.partner'].create({'name': 'Participante POS A'})
+        participant_b = self.env['res.partner'].create({'name': 'Participante POS B'})
+        self.product.product_tmpl_id.write({
+            'max_participants_total': 3,
+            'wgs_access_site_ids': [Command.set([site_old.id])],
+        })
+        target_product = self.env['product.product'].create(
+            {
+                'name': 'Plan POS individual destino',
+                'detailed_type': 'service',
+                'list_price': 120.0,
+                'sale_ok': True,
+                'available_in_pos': True,
+                'recurring_invoice': True,
+                'max_participants_total': 1,
+            }
+        )
+        target_product.product_tmpl_id.write({'wgs_access_site_ids': [Command.set([site_new.id])]})
+
+        order = self._create_subscription_like_order(start_date='2026-05-01')
+        order.write({
+            'participant_ids': [Command.set([self.partner.id, participant_a.id, participant_b.id])],
+            'subscription_state': 'closed',
+        })
+        order._wgs_update_access_snapshot(force=True)
+        self.assertEqual(set(order.wgs_access_site_ids.ids), {site_old.id})
+
+        pos_line = self.env['pos.order.line'].new(
+            {
+                'product_id': target_product.id,
+                'qty': 1,
+                'price_unit': 120.0,
+                'discount': 0.0,
+                'wgs_participant_ids_json': '[]',
+            }
+        )
+        participant_ids = self.PosOrder._wgs_resolve_subscription_participant_ids_for_pos_line(
+            line=pos_line,
+            holder_partner=order.partner_id,
+            product=target_product,
+            qty=1,
+        )
+        source_line = order._get_recurring_lines()[:1]
+        new_line = self.PosOrder._wgs_apply_reenroll_source_line_values(
+            source_order=order,
+            source_line=source_line,
+            pos_line=pos_line,
+            product=target_product,
+            qty=1,
+            recurring_price_unit=120.0,
+            recurring_plan_id=self.plan.id,
+        )
+        self.PosOrder._wgs_sync_subscription_metadata(
+            sale_order=order,
+            participant_ids=participant_ids,
+            contract_date=fields.Date.to_date('2026-07-01'),
+            subscription_start_date=fields.Date.to_date('2026-07-01'),
+            subscription_end_date=fields.Date.to_date('2026-07-31'),
+            next_billing_date=fields.Date.to_date('2026-08-01'),
+        )
+        self.PosOrder._wgs_reactivate_subscription_order_for_pos(order)
+        self.PosOrder._wgs_finalize_reenroll_subscription_access_for_pos(
+            order,
+            extra_partner_ids={self.partner.id, participant_a.id, participant_b.id},
+        )
+
+        order.invalidate_recordset(['order_line', 'participant_ids', 'wgs_access_site_ids'])
+        recurring_lines = order._get_recurring_lines()
+        self.assertEqual(recurring_lines, new_line)
+        self.assertEqual(order.participant_ids.ids, [self.partner.id])
+        self.assertEqual(set(order.wgs_access_site_ids.ids), {site_new.id})
+
+        item = order._build_pos_subscription_status_item(fields.Date.to_date('2026-07-15'))
+        self.assertEqual(item['package_names'], [target_product.display_name])
+        self.assertEqual(item['native_state_key'], 'progress')
+        self.assertEqual(item['access_state'], 'enabled')
+
     def test_subscription_detail_prefers_active_card_over_renew_or_churned(self):
         items = [
             {
