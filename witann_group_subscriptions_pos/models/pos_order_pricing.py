@@ -536,7 +536,7 @@ class PosOrderPricingMixin(models.Model):
                 plan_id=choice.get('plan_id') or preferred_plan_id,
                 pricing_id=choice.get('pricing_id') or preferred_pricing_id,
             )
-            if flow in ('new', 'reenroll') and self._wgs_should_align_plan_to_calendar_month(resolved_plan):
+            if flow == 'new' and self._wgs_should_align_plan_to_calendar_month(resolved_plan):
                 first_period_alignment = self._wgs_get_aligned_monthly_first_period_schedule(
                     start_date or fields.Date.context_today(self)
                 )

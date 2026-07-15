@@ -404,6 +404,36 @@ class TestPosSubscriptionPricing(TransactionCase):
         self.assertEqual(charge['display_recurring_price'], 116.0)
         self.assertTrue(charge['is_reenroll'])
 
+    def test_reenroll_aligned_plan_charges_full_package_not_prorated(self):
+        alignment_field = self.PosOrder._wgs_get_period_alignment_field_name(self.plan)
+        if not alignment_field:
+            self.skipTest('El runtime no expone el campo nativo de alineación de periodo.')
+        self.plan.write({alignment_field: True})
+        order = self._create_subscription_like_order()
+        if 'subscription_state' in order._fields:
+            order.write({'subscription_state': 'closed'})
+
+        charge = self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
+            partner_id=False,
+            product_id=self.product.id,
+            flow='reenroll',
+            source_subscription_id=order.id,
+            pending_move_id=False,
+            fallback=0.0,
+            preferred_plan_id=self.plan.id,
+            preferred_pricing_id=False,
+            start_date='2026-05-12',
+        )
+
+        self.assertEqual(charge['recurring_price'], 100.0)
+        self.assertEqual(charge['charge_now'], 100.0)
+        self.assertEqual(charge['display_charge_now'], 116.0)
+        self.assertEqual(charge['ticket_charge_now'], 116.0)
+        self.assertFalse(charge['first_period_alignment'])
+        self.assertFalse(charge['subscription_start_date'])
+        self.assertFalse(charge['subscription_end_date'])
+        self.assertTrue(charge['is_reenroll'])
+
     def test_reenroll_reactivation_resolves_progress_state(self):
         order = self._create_subscription_like_order()
 
