@@ -121,14 +121,28 @@ async function openRenewalForm(state, item, {
     stopPartnerCamera();
     state.newPartnerForm = null;
     state.participantEditForm = null;
+    const historicalHolderPartnerId = Number(item.holder_partner_id || 0) || false;
+    const selectedPartnerId = Number(state.selectedPartnerId || 0) || false;
+    const holderPartnerId = mode === "reenroll"
+        ? (selectedPartnerId || historicalHolderPartnerId)
+        : historicalHolderPartnerId;
+    const holderPartnerName = mode === "reenroll"
+        ? (
+            holderPartnerId && state.currentDetail && Number(state.currentDetail.partner_id || 0) === holderPartnerId
+                ? state.currentDetail.partner_name || ""
+                : (holderPartnerId === historicalHolderPartnerId ? item.holder_partner_name || "" : "")
+        )
+        : item.holder_partner_name || "";
     state.renewalForm = {
         subscriptionId: Number(item.subscription_id || 0) || false,
         subscriptionName: item.subscription_name || "",
-        holderPartnerId: Number(item.holder_partner_id || 0) || false,
-        holderPartnerName: item.holder_partner_name || "",
+        holderPartnerId,
+        holderPartnerName,
         productId: Number(item.renewal_product_id || 0) || false,
         productName: item.renewal_product_name || "",
-        participantIds: Array.isArray(item.participant_ids) ? [...item.participant_ids] : [],
+        participantIds: mode === "reenroll"
+            ? getOwnerOnlyParticipantIds(holderPartnerId)
+            : (Array.isArray(item.participant_ids) ? [...item.participant_ids] : []),
         title: title || (mode === "reenroll" ? _t("Reinscribir suscripción") : _t("Renovar suscripción")),
         submitLabel: submitLabel || (mode === "reenroll" ? _t("Agregar reinscripción al ticket") : _t("Agregar al ticket")),
         isReenroll: mode === "reenroll",
@@ -529,7 +543,9 @@ async function applySelectedReenrollProduct(state, productId, {
     state.renewalForm.pricingSnapshot = null;
     resetDiscountAuthorization(state.renewalForm);
     state.renewalForm.participantIds = clampParticipantIds(
-        state.renewalForm.participantIds,
+        state.renewalForm.maxParticipantsTotal > 1
+            ? state.renewalForm.participantIds
+            : getOwnerOnlyParticipantIds(state.renewalForm.holderPartnerId),
         state.renewalForm.holderPartnerId,
         state.renewalForm.maxParticipantsTotal
     );

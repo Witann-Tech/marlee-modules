@@ -1,6 +1,6 @@
 {
     'name': 'Witann Group Subscriptions POS',
-    'version': '19.0.1.5.242',
+    'version': '19.0.1.5.243',
     'summary': 'Directorio y detalle de suscripciones nativas en Punto de Venta',
     'category': 'Point of Sale',
     'author': 'Witann Technologies',

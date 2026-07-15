@@ -2498,7 +2498,7 @@ class PosOrder(models.Model):
         if not self._wgs_is_subscription_order_closed_for_reenroll(source_order) and not allow_active_repair:
             raise UserError(_('La suscripción origen no está cerrada/cancelada para reinscripción.'))
 
-        holder_partner = source_order.partner_id or self.partner_id
+        holder_partner = self.partner_id or source_order.partner_id
         product = line.product_id
         qty = abs(line.qty or 0.0) or 1.0
         previous_access_partner_ids = (
@@ -2506,6 +2506,16 @@ class PosOrder(models.Model):
             if hasattr(source_order, '_wgs_get_access_related_partner_ids')
             else set(source_order.participant_ids.ids if 'participant_ids' in source_order._fields else [])
         )
+        if holder_partner and source_order.partner_id != holder_partner and 'partner_id' in source_order._fields:
+            previous_partner = source_order.partner_id
+            source_order.write({'partner_id': holder_partner.id})
+            _logger.info(
+                'WGS POS: reenroll reassigned subscription %s holder from %s to %s via POS %s',
+                source_order.name,
+                previous_partner.display_name if previous_partner else False,
+                holder_partner.display_name,
+                self.pos_reference or self.name,
+            )
         participant_ids = self._wgs_resolve_subscription_participant_ids_for_pos_line(
             line=line,
             holder_partner=holder_partner,

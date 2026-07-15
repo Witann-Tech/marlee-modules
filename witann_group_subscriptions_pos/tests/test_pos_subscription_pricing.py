@@ -570,6 +570,40 @@ class TestPosSubscriptionPricing(TransactionCase):
         self.assertEqual(item['native_state_key'], 'progress')
         self.assertEqual(item['access_state'], 'enabled')
 
+    def test_reenroll_single_package_ignores_previous_partner_participants(self):
+        previous_holder = self.env['res.partner'].create({'name': 'Titular pareja anterior POS'})
+        selected_partner = self.env['res.partner'].create({'name': 'Socio reinscrito POS'})
+        previous_partner = self.env['res.partner'].create({'name': 'Pareja anterior POS'})
+        target_product = self.env['product.product'].create(
+            {
+                'name': 'Plan POS personal sin pareja',
+                'detailed_type': 'service',
+                'list_price': 120.0,
+                'sale_ok': True,
+                'available_in_pos': True,
+                'recurring_invoice': True,
+                'max_participants_total': 1,
+            }
+        )
+        pos_line = self.env['pos.order.line'].new(
+            {
+                'product_id': target_product.id,
+                'qty': 1,
+                'price_unit': 120.0,
+                'discount': 0.0,
+                'wgs_participant_ids_json': '[%s, %s]' % (previous_holder.id, previous_partner.id),
+            }
+        )
+
+        participant_ids = self.PosOrder._wgs_resolve_subscription_participant_ids_for_pos_line(
+            line=pos_line,
+            holder_partner=selected_partner,
+            product=target_product,
+            qty=1,
+        )
+
+        self.assertEqual(participant_ids, [selected_partner.id])
+
     def test_subscription_detail_prefers_active_card_over_renew_or_churned(self):
         items = [
             {
