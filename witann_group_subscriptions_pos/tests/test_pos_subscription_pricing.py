@@ -413,6 +413,39 @@ class TestPosSubscriptionPricing(TransactionCase):
             self.PosOrder._wgs_reactivate_subscription_order_for_pos(order)
             self.assertEqual(order.subscription_state, progress_state)
 
+    def test_reenroll_period_normalization_recomputes_invalid_same_day_end(self):
+        end_date, next_billing_date, single_day = self.PosOrder._wgs_normalize_subscription_period_for_pos(
+            product=self.product,
+            plan_record=self.plan,
+            subscription_start_date=fields.Date.to_date('2026-07-01'),
+            subscription_end_date=fields.Date.to_date('2026-07-01'),
+            next_billing_date=False,
+        )
+
+        self.assertFalse(single_day)
+        self.assertEqual(end_date, fields.Date.to_date('2026-07-31'))
+        self.assertEqual(next_billing_date, fields.Date.to_date('2026-08-01'))
+
+    def test_reenroll_plan_fallback_does_not_inherit_source_plan_for_different_product(self):
+        order = self._create_subscription_like_order()
+        target_product = self.env['product.product'].create(
+            {
+                'name': 'Plan POS reinscripcion diferente',
+                'detailed_type': 'service',
+                'list_price': 150.0,
+                'sale_ok': True,
+                'available_in_pos': True,
+                'recurring_invoice': True,
+            }
+        )
+
+        inherited_plan_id = self.PosOrder._wgs_extract_plan_id_from_subscription_source_line(
+            order,
+            target_product,
+        )
+
+        self.assertFalse(inherited_plan_id)
+
     def test_reenroll_to_single_package_replaces_product_participants_and_access_snapshot(self):
         site_old = self.env['access_control.site'].create(
             {

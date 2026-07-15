@@ -2527,14 +2527,13 @@ class PosOrder(models.Model):
             or line.wgs_get_subscription_end_date()
         )
         next_billing_date = pricing_state.get('next_billing_date') or False
-        if plan_record and not subscription_end_date:
-            subscription_end_date = self._wgs_get_plan_period_end_date(plan_record, subscription_start_date)
-        if plan_record and not next_billing_date:
-            next_billing_date = self._wgs_get_plan_min_end_threshold(plan_record, subscription_start_date)
-        single_day_term = self._wgs_product_has_single_day_term(product)
-        if single_day_term:
-            subscription_end_date = subscription_start_date
-            next_billing_date = False
+        subscription_end_date, next_billing_date, single_day_term = self._wgs_normalize_subscription_period_for_pos(
+            product=product,
+            plan_record=plan_record,
+            subscription_start_date=subscription_start_date,
+            subscription_end_date=subscription_end_date,
+            next_billing_date=next_billing_date,
+        )
 
         source_lines = source_order.order_line.filtered(lambda so_line: self._wgs_is_recurring_so_line(so_line))
         source_line = source_lines.filtered(lambda so_line: self._wgs_sale_order_line_has_positive_qty_for_pos(so_line))[:1]
@@ -2605,6 +2604,31 @@ class PosOrder(models.Model):
             amount_paid,
         )
         return source_order
+
+    def _wgs_normalize_subscription_period_for_pos(
+        self,
+        *,
+        product,
+        plan_record=False,
+        subscription_start_date=False,
+        subscription_end_date=False,
+        next_billing_date=False,
+    ):
+        subscription_start_date = fields.Date.to_date(subscription_start_date) or fields.Date.context_today(self)
+        subscription_end_date = fields.Date.to_date(subscription_end_date) if subscription_end_date else False
+        next_billing_date = fields.Date.to_date(next_billing_date) if next_billing_date else False
+        single_day_term = self._wgs_product_has_single_day_term(product)
+        if single_day_term:
+            return subscription_start_date, False, True
+
+        if plan_record and (
+            not subscription_end_date
+            or subscription_end_date <= subscription_start_date
+        ):
+            subscription_end_date = self._wgs_get_plan_period_end_date(plan_record, subscription_start_date)
+        if plan_record and not next_billing_date:
+            next_billing_date = self._wgs_get_plan_min_end_threshold(plan_record, subscription_start_date)
+        return subscription_end_date, next_billing_date, False
 
     def _wgs_resolve_subscription_participant_ids_for_pos_line(self, *, line, holder_partner, product, qty=1.0):
         product = product.exists()
@@ -3104,8 +3128,7 @@ class PosOrder(models.Model):
                 and self._wgs_sale_order_line_has_positive_qty_for_pos(so_line)
             )
         )
-        matching_lines = recurring_lines.filtered(lambda so_line: so_line.product_id == product)
-        source_line = (matching_lines or recurring_lines)[:1]
+        source_line = recurring_lines.filtered(lambda so_line: so_line.product_id == product)[:1]
         if not source_line:
             return False
         for field_name in ('subscription_plan_id', 'plan_id', 'recurring_plan_id'):

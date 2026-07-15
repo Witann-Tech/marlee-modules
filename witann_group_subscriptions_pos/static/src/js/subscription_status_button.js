@@ -142,6 +142,7 @@ import {
     recalculateNewSubscriptionCharge as recalculateNewSubscriptionChargeFlow,
     toggleEditedParticipant as toggleEditedParticipantFlow,
     toggleParticipant as toggleParticipantFlow,
+    toggleReenrollParticipant as toggleReenrollParticipantFlow,
     toggleUpsaleParticipant as toggleUpsaleParticipantFlow,
     updateSelectedPlan as updateSelectedPlanFlow,
     updateSelectedReenrollPlan as updateSelectedReenrollPlanFlow,
@@ -1302,6 +1303,9 @@ patch(ControlButtons.prototype, {
                 fetchSubscriptionProductCatalog: (searchTerm) => this._fetchSubscriptionProductCatalog(searchTerm),
                 _t,
             });
+            if (renewalForm && Number(renewalForm.maxParticipantsTotal || 1) > 1) {
+                void loadParticipantRows(renewalForm.participantSearch || "");
+            }
         };
 
         const recalculateNewSubscriptionCharge = async (product, preferredPlan = null) => {
@@ -1329,6 +1333,9 @@ patch(ControlButtons.prototype, {
                 fetchSubscriptionQuote: (...args) => this._fetchSubscriptionQuote(...args),
                 _t,
             });
+            if (renewalForm && formMode === "reenroll" && Number(renewalForm.maxParticipantsTotal || 1) > 1) {
+                void loadParticipantRows(renewalForm.participantSearch || "");
+            }
         };
 
         const updateSelectedReenrollPlan = async (planChoice) => {
@@ -1349,6 +1356,10 @@ patch(ControlButtons.prototype, {
 
         const toggleUpsaleParticipantHandler = (partnerId, checked) => {
             toggleUpsaleParticipantFlow(modalState, partnerId, checked);
+        };
+
+        const toggleReenrollParticipantHandler = (partnerId, checked) => {
+            toggleReenrollParticipantFlow(modalState, partnerId, checked);
         };
 
         const openUpsaleForm = async (item) => {
@@ -1685,6 +1696,10 @@ patch(ControlButtons.prototype, {
                 formMode,
                 renewalForm,
                 productCatalog,
+                filteredParticipants: formMode === "reenroll" && renewalForm
+                    ? filterParticipantRowsByTerm(renewalForm.participantSearch)
+                    : [],
+                participantRowsLoading,
                 formError,
                 formNotice,
                 catalogLoading,
@@ -2192,6 +2207,7 @@ patch(ControlButtons.prototype, {
                     applySelectedUpsaleProduct,
                     updateSelectedUpsalePlan,
                     toggleParticipant: toggleParticipantHandler,
+                    toggleReenrollParticipant: toggleReenrollParticipantHandler,
                     toggleUpsaleParticipant: toggleUpsaleParticipantHandler,
                     toggleEditedParticipant: toggleEditedParticipantHandler,
                     formatTodayISO,
@@ -2228,7 +2244,7 @@ patch(ControlButtons.prototype, {
             }
             if (shouldRender) {
                 renderDetailPreservingFocus(currentDetail);
-                if (["participant_search", "upsale_participant_search", "edit_participant_search"].includes(field)) {
+                if (["participant_search", "reenroll_participant_search", "upsale_participant_search", "edit_participant_search"].includes(field)) {
                     scheduleParticipantRowsLoad(target.value || "");
                 }
             }

@@ -736,6 +736,24 @@ function toggleUpsaleParticipant(state, partnerId, checked) {
     );
 }
 
+function toggleReenrollParticipant(state, partnerId, checked) {
+    if (!state.renewalForm || state.formMode !== "reenroll") {
+        return;
+    }
+    const numericPartnerId = Number(partnerId || 0);
+    const holderPartnerId = Number(state.renewalForm.holderPartnerId || 0);
+    let values = [...(state.renewalForm.participantIds || [])].map((item) => Number(item));
+    values = values.filter((item) => item > 0 && item !== holderPartnerId && item !== numericPartnerId);
+    if (checked && numericPartnerId > 0 && numericPartnerId !== holderPartnerId) {
+        values.push(numericPartnerId);
+    }
+    state.renewalForm.participantIds = clampParticipantIds(
+        holderPartnerId ? [holderPartnerId, ...new Set(values)] : [...new Set(values)],
+        holderPartnerId,
+        state.renewalForm.maxParticipantsTotal
+    );
+}
+
 function toggleEditedParticipant(state, partnerId, checked) {
     if (!state.participantEditForm) {
         return;
@@ -768,6 +786,7 @@ export {
     recalculateNewSubscriptionCharge,
     toggleEditedParticipant,
     toggleParticipant,
+    toggleReenrollParticipant,
     toggleUpsaleParticipant,
     updateSelectedPlan,
     updateSelectedReenrollPlan,

@@ -928,6 +928,7 @@ async function handleSubscriptionInlineFieldChange({ field, target }, {
     applySelectedUpsaleProduct,
     updateSelectedUpsalePlan,
     toggleParticipant,
+    toggleReenrollParticipant,
     toggleUpsaleParticipant,
     toggleEditedParticipant,
     formatTodayISO,
@@ -961,6 +962,8 @@ async function handleSubscriptionInlineFieldChange({ field, target }, {
         if (Number(state.renewalForm.productId || 0) && selectedChoice !== "0:0") {
             await updateSelectedReenrollPlan(selectedChoice);
         }
+    } else if (state.formMode === "reenroll" && field === "reenroll_participant_toggle") {
+        toggleReenrollParticipant(target.value, target.checked);
     } else if ((state.formMode === "renewal" || state.formMode === "reenroll") && field === "renewal_discount_percent") {
         state.renewalForm.discountPercent = target.value || "";
         state.renewalForm.authorizedDiscount = null;
@@ -1009,6 +1012,10 @@ function handleSubscriptionInlineFieldInput({ field, target }, {
     if ((state.formMode === "renewal" || state.formMode === "reenroll") && field === "renewal_discount_percent") {
         state.renewalForm.discountPercent = target.value || "";
         state.renewalForm.authorizedDiscount = null;
+        return true;
+    }
+    if (state.formMode === "reenroll" && field === "reenroll_participant_search") {
+        state.renewalForm.participantSearch = target.value || "";
         return true;
     }
     if (state.formMode === "upsale" && field === "upsale_participant_search") {

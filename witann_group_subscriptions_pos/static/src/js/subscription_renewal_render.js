@@ -11,6 +11,8 @@ function renderRenewalForm({
     formMode,
     renewalForm,
     productCatalog = [],
+    filteredParticipants = [],
+    participantRowsLoading = false,
     formError,
     formNotice,
     catalogLoading = false,
@@ -34,6 +36,7 @@ function renderRenewalForm({
     const dateLabel = formMode === "reenroll" ? _t("Nueva vigencia desde") : _t("Próxima fecha");
     const dateValue = formMode === "reenroll" ? formatDateDisplay(renewalForm.startDate) : formatDateDisplay(renewalForm.nextInvoiceDate);
     const isReenroll = formMode === "reenroll";
+    const holderPartnerId = Number(renewalForm.holderPartnerId || 0);
     const productOptions = (productCatalog || []).map((product) => {
         const selected = Number(product.id) === Number(renewalForm.productId) ? "selected" : "";
         return `<option value="${escapeHtml(String(product.id))}" ${selected}>${escapeHtml(product.name || "-")}</option>`;
@@ -51,6 +54,20 @@ function renderRenewalForm({
         buildChargeFromSnapshot(renewalForm, "charge_now"),
         renewalForm
     );
+    const participantOptions = isReenroll && Number(renewalForm.maxParticipantsTotal || 1) > 1
+        ? (filteredParticipants || [])
+            .map((row) => {
+                const rowId = Number(row.id || 0);
+                const selected = (renewalForm.participantIds || []).includes(rowId);
+                const isOwner = rowId === holderPartnerId;
+                return `
+                    <label class="wgs-checkbox-option ${isOwner ? "wgs-checkbox-owner" : ""}">
+                        <input type="checkbox" data-field="reenroll_participant_toggle" value="${escapeHtml(String(rowId))}" ${selected ? "checked" : ""} ${isOwner ? "disabled" : ""} />
+                        <span>${escapeHtml(row.name || "-")}${isOwner ? ` ${escapeHtml(_t("(Titular)"))}` : ""}</span>
+                    </label>
+                `;
+            }).join("")
+        : "";
     return `
         <div class="wgs-inline-form-card">
             <div class="wgs-inline-form-header">
@@ -85,6 +102,16 @@ function renderRenewalForm({
                         <span>${escapeHtml(_t("Importe a cobrar"))}</span>
                         <strong class="wgs-inline-static-value">${escapeHtml(formatMoney(chargeDisplayAmount))}</strong>
                     </div>
+                    <div>
+                        <span>${escapeHtml(_t("Cupo total"))}</span>
+                        <strong class="wgs-inline-static-value">${escapeHtml(String(renewalForm.maxParticipantsTotal || 1))}</strong>
+                    </div>
+                    ${Number(renewalForm.maxParticipantsTotal || 1) > 1 ? `
+                        <div>
+                            <span>${escapeHtml(_t("Participantes seleccionados"))}</span>
+                            <strong class="wgs-inline-static-value">${escapeHtml(String((renewalForm.participantIds || []).length || 0))}</strong>
+                        </div>
+                    ` : ""}
                 </div>
             ` : `
                 <div class="wgs-inline-form-meta">
@@ -105,6 +132,14 @@ function renderRenewalForm({
                 pinField: "renewal_supervisor_pin",
                 _t,
             })}
+            ${isReenroll && Number(renewalForm.maxParticipantsTotal || 1) > 1 ? `
+                <div class="wgs-inline-participants">
+                    <span class="wgs-inline-section-title">${escapeHtml(_t("Participantes resultantes"))}</span>
+                    <input type="text" class="wgs-inline-search" data-field="reenroll_participant_search" placeholder="${escapeHtml(_t("Buscar participante"))}" value="${escapeHtml(renewalForm.participantSearch || "")}" />
+                    ${participantRowsLoading ? `<div class="wgs-inline-loading">${escapeHtml(_t("Buscando participantes..."))}</div>` : ""}
+                    <div class="wgs-inline-participant-list">${participantOptions}</div>
+                </div>
+            ` : ""}
             <div class="wgs-inline-actions">
                 <button type="button" class="wgs-primary-action-btn" data-action="${escapeHtml(saveAction)}" ${renewalForm.loading ? "disabled" : ""}>${escapeHtml(submitLabel)}</button>
                 <button type="button" class="wgs-secondary-action-btn" data-action="${escapeHtml(cancelAction)}">${escapeHtml(_t("Cancelar"))}</button>
