@@ -1421,6 +1421,10 @@ class PosOrder(models.Model):
         lock_payload = lock_payload if isinstance(lock_payload, dict) else {}
 
         price_unit = False
+        if lock_payload:
+            price_unit = self._wgs_to_signed_float(
+                lock_payload.get('price_unit', lock_payload.get('priceUnit', False))
+            )
         for key in (
             'ticket_charge_now',
             'charge_now',
@@ -1431,13 +1435,11 @@ class PosOrder(models.Model):
             'ticket_recurring_price',
             'recurring_price',
         ):
+            if price_unit is not False:
+                break
             if key in snapshot and snapshot.get(key) not in (None, ''):
                 price_unit = self._wgs_to_signed_float(snapshot.get(key))
                 break
-        if price_unit is False and lock_payload:
-            price_unit = self._wgs_to_signed_float(
-                lock_payload.get('price_unit', lock_payload.get('priceUnit', False))
-            )
         if price_unit is False and fallback_price is not False:
             price_unit = self._wgs_to_signed_float(fallback_price)
 

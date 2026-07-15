@@ -494,6 +494,24 @@ class TestPosPartnerCurp(TransactionCase):
         self.assertEqual(values['price_unit'], 799.0)
         self.assertEqual(values['discount'], 0.0)
 
+    def test_subscription_line_price_lock_prefers_pos_line_lock_over_snapshot(self):
+        values = self.PosOrder.sudo()._wgs_get_locked_subscription_line_price_values_for_pos(
+            {
+                'pricing_snapshot': {
+                    'ticket_charge_now': 64.52,
+                    'display_charge_now': 74.84,
+                },
+                'pricing_lock': {
+                    'price_unit': 74.84,
+                    'discount_percent': 0.0,
+                },
+            },
+            fallback_price=1.0,
+        )
+
+        self.assertEqual(values['price_unit'], 74.84)
+        self.assertEqual(values['discount'], 0.0)
+
     def test_subscription_line_price_lock_preserves_zero_charge(self):
         values = self.PosOrder.sudo()._wgs_get_locked_subscription_line_price_values_for_pos(
             {

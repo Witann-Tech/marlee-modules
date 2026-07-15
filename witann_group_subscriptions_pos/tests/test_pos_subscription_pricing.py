@@ -214,6 +214,8 @@ class TestPosSubscriptionPricing(TransactionCase):
         self.assertEqual(charge['recurring_price'], 100.0)
         self.assertEqual(charge['charge_now'], 64.52)
         self.assertEqual(charge['display_charge_now'], 74.84)
+        self.assertEqual(charge['ticket_charge_now'], 74.84)
+        self.assertEqual(charge['ticket_recurring_price'], 116.0)
         self.assertEqual(charge['subscription_start_date'], '2026-05-01')
         self.assertEqual(charge['first_period_access_start_date'], '2026-05-12')
         self.assertEqual(charge['subscription_end_date'], '2026-05-31')
