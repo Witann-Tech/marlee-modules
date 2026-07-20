@@ -53,6 +53,9 @@ class TestSubscriptionAccessControl(TransactionCase):
         self.skipTest('No se encontró un estado de suscripción compatible con tokens: %s' % (tokens,))
 
     def _create_subscription_order(self):
+        return self._create_subscription_order_for_product(self.product)
+
+    def _create_subscription_order_for_product(self, product):
         order = self.env['sale.order'].create(
             {
                 'partner_id': self.owner.id,
@@ -61,11 +64,11 @@ class TestSubscriptionAccessControl(TransactionCase):
                 'order_line': [
                     Command.create(
                         {
-                            'product_id': self.product.id,
-                            'name': self.product.name,
+                            'product_id': product.id,
+                            'name': product.name,
                             'product_uom_qty': 1,
-                            'product_uom': self.product.uom_id.id,
-                            'price_unit': self.product.list_price,
+                            'product_uom': product.uom_id.id,
+                            'price_unit': product.list_price,
                         }
                     )
                 ],
@@ -457,6 +460,69 @@ class TestSubscriptionAccessControl(TransactionCase):
 
         self.assertEqual(owner_person.access_state, 'enabled')
         self.assertEqual(participant_person.access_state, 'enabled')
+
+    def test_suspended_restricted_subscription_does_not_restrict_active_general_access(self):
+        progress_state = self._find_subscription_state_value('progress', 'en progreso')
+        pause_state = self._find_subscription_state_value('pause', 'pausa', 'hold', 'suspend')
+        general_timezone = self.env.ref('access_control_api.access_timezone_general')
+        restricted_timezone = self.env['access_control.timezone'].create({'name': 'Horario restringido pausado'})
+        restricted_product = self.product.copy({'name': 'Plan acceso restringido pausado'})
+        restricted_product.product_tmpl_id.write({'wgs_access_timezone_id': restricted_timezone.id})
+
+        active_order = self._create_subscription_order_for_product(self.product)
+        active_order.write({'subscription_state': progress_state})
+        paused_order = self._create_subscription_order_for_product(restricted_product)
+        paused_order.write({'subscription_state': pause_state})
+
+        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
+        participant_person = self.env['access_control.person'].search([('partner_id', '=', self.participant.id)], limit=1)
+
+        self.assertEqual(owner_person.access_state, 'enabled')
+        self.assertEqual(participant_person.access_state, 'enabled')
+        self.assertEqual(owner_person.access_timezone_id, general_timezone)
+        self.assertEqual(participant_person.access_timezone_id, general_timezone)
+
+    def test_active_general_subscription_wins_over_active_restricted_timezone(self):
+        progress_state = self._find_subscription_state_value('progress', 'en progreso')
+        general_timezone = self.env.ref('access_control_api.access_timezone_general')
+        restricted_timezone = self.env['access_control.timezone'].create({'name': 'Horario restringido activo'})
+        restricted_product = self.product.copy({'name': 'Plan acceso restringido activo'})
+        restricted_product.product_tmpl_id.write({'wgs_access_timezone_id': restricted_timezone.id})
+
+        active_general_order = self._create_subscription_order_for_product(self.product)
+        active_general_order.write({'subscription_state': progress_state})
+        active_restricted_order = self._create_subscription_order_for_product(restricted_product)
+        active_restricted_order.write({'subscription_state': progress_state})
+
+        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
+        participant_person = self.env['access_control.person'].search([('partner_id', '=', self.participant.id)], limit=1)
+
+        self.assertEqual(owner_person.access_timezone_id, general_timezone)
+        self.assertEqual(participant_person.access_timezone_id, general_timezone)
+
+    def test_access_audit_detects_and_repairs_timezone_mismatch(self):
+        progress_state = self._find_subscription_state_value('progress', 'en progreso')
+        general_timezone = self.env.ref('access_control_api.access_timezone_general')
+        restricted_timezone = self.env['access_control.timezone'].create({'name': 'Horario drift auditoria'})
+        order = self._create_subscription_order_for_product(self.product)
+        order.write({'subscription_state': progress_state})
+
+        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
+        owner_person.write({'access_timezone_id': restricted_timezone.id})
+
+        audit = self.env['sale.order'].wgs_audit_subscription_access_control(repair=False)
+        owner_lines = [
+            line for line in audit['lines']
+            if line['partner_id'] == self.owner.id and line['issue'] == 'person_mismatch'
+        ]
+        self.assertTrue(owner_lines)
+        self.assertEqual(owner_lines[0]['expected_timezone_id'], general_timezone.id)
+        self.assertEqual(owner_lines[0]['current_timezone_id'], restricted_timezone.id)
+
+        repair = self.env['sale.order'].wgs_audit_subscription_access_control(repair=True)
+        owner_person.invalidate_recordset(['access_timezone_id'])
+        self.assertIn(self.owner.id, repair['repaired_partner_ids'])
+        self.assertEqual(owner_person.access_timezone_id, general_timezone)
 
     def test_configured_access_sites_override_company_wide_sites(self):
         self.product.product_tmpl_id.write({'wgs_access_site_ids': [Command.set([self.site_b.id])]})

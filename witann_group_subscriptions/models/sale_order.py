@@ -620,27 +620,29 @@ class SaleOrder(models.Model):
 
         enabled = False
         suspended = False
-        site_ids = set()
-        access_timezone = False
+        enabled_site_ids = set()
+        enabled_timezones = self.env['access_control.timezone'].sudo()
         considered_orders = []
         for order in orders:
             state = order._wgs_classify_subscription_access_state()
             if not state:
                 continue
             considered_orders.append(order.id)
-            site_ids.update(order._wgs_get_access_site_ids())
-            order_timezone = order._wgs_get_access_timezone()
-            if order_timezone and (not access_timezone or order_timezone.timezone_id > 1):
-                access_timezone = order_timezone
             if state == 'enabled':
                 enabled = True
+                enabled_site_ids.update(order._wgs_get_access_site_ids())
+                order_timezone = order._wgs_get_access_timezone()
+                if order_timezone:
+                    enabled_timezones |= order_timezone
             elif state == 'suspended':
                 suspended = True
 
-        profile['site_ids'] = sorted(site_ids)
         profile['order_ids'] = considered_orders
-        profile['access_timezone_id'] = access_timezone.id if access_timezone else False
         if enabled:
+            general_timezone = enabled_timezones.filtered(lambda timezone: int(timezone.timezone_id or 0) == 1)[:1]
+            access_timezone = general_timezone or enabled_timezones.sorted(key=lambda timezone: int(timezone.timezone_id or 0))[:1]
+            profile['site_ids'] = sorted(enabled_site_ids)
+            profile['access_timezone_id'] = access_timezone.id if access_timezone else False
             profile['access_state'] = 'enabled'
         elif suspended:
             profile['access_state'] = 'suspended'
@@ -782,6 +784,7 @@ class SaleOrder(models.Model):
         person = Person.search([('partner_id', '=', partner.id)], limit=1)
         expected_state = profile.get('access_state') or False
         expected_site_ids = set(profile.get('site_ids') or [])
+        expected_timezone_id = profile.get('access_timezone_id') or False
         expected_active = expected_state == 'enabled' and bool(expected_site_ids)
 
         if expected_active:
@@ -793,16 +796,20 @@ class SaleOrder(models.Model):
                     'expected_active': True,
                     'expected_state': expected_state,
                     'expected_site_ids': sorted(expected_site_ids),
+                    'expected_timezone_id': expected_timezone_id,
                     'current_active': False,
                     'current_state': False,
                     'current_site_ids': [],
+                    'current_timezone_id': False,
                     'order_ids': profile.get('order_ids') or [],
                 }
             current_site_ids = set(person.site_ids.ids)
+            current_timezone_id = person.access_timezone_id.id if person.access_timezone_id else False
             if (
                 not person.active
                 or person.access_state != 'enabled'
                 or current_site_ids != expected_site_ids
+                or current_timezone_id != expected_timezone_id
                 or not person.managed_by_subscription
             ):
                 return {
@@ -812,9 +819,11 @@ class SaleOrder(models.Model):
                     'expected_active': True,
                     'expected_state': expected_state,
                     'expected_site_ids': sorted(expected_site_ids),
+                    'expected_timezone_id': expected_timezone_id,
                     'current_active': bool(person.active),
                     'current_state': person.access_state or False,
                     'current_site_ids': sorted(current_site_ids),
+                    'current_timezone_id': current_timezone_id,
                     'current_managed_by_subscription': bool(person.managed_by_subscription),
                     'order_ids': profile.get('order_ids') or [],
                 }
@@ -828,9 +837,11 @@ class SaleOrder(models.Model):
                 'expected_active': False,
                 'expected_state': expected_state,
                 'expected_site_ids': sorted(expected_site_ids),
+                'expected_timezone_id': expected_timezone_id,
                 'current_active': bool(person.active),
                 'current_state': person.access_state or False,
                 'current_site_ids': sorted(person.site_ids.ids),
+                'current_timezone_id': person.access_timezone_id.id if person.access_timezone_id else False,
                 'current_managed_by_subscription': True,
                 'order_ids': profile.get('order_ids') or [],
             }
