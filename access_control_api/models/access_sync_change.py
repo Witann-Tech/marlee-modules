@@ -101,7 +101,7 @@ class AccessSyncChange(models.Model):
             return False
         vals_list = []
         for timezone in timezones:
-            if not timezone.active or timezone.timezone_id <= 1:
+            if not timezone.active:
                 continue
             payload = timezone._command_payload()
             for site in Site.browse(resolved_site_ids).exists():

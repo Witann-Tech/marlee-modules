@@ -8,6 +8,10 @@ from odoo.exceptions import ValidationError
 
 _logger = logging.getLogger(__name__)
 _TIME_RE = re.compile(r"^\d{2}:\d{2}$")
+_GENERAL_ACCESS_INTERVALS = tuple(
+    {"day": day, "start": "00:00", "end": "23:59"}
+    for day in ("sun", "mon", "tue", "wed", "thu", "fri", "sat")
+)
 
 
 class AccessControlTimezone(models.Model):
@@ -130,6 +134,8 @@ class AccessControlTimezone(models.Model):
 
     def _interval_payload(self):
         self.ensure_one()
+        if self.timezone_id == 1:
+            return [dict(interval) for interval in _GENERAL_ACCESS_INTERVALS]
         return [
             {
                 "day": line.day,
@@ -155,12 +161,12 @@ class AccessControlTimezone(models.Model):
 
     @api.model
     def queue_active_timezones_for_sites(self, site_ids=None, reason="timezone_resync"):
-        timezones = self.search([("active", "=", True), ("timezone_id", ">", 1)], order="timezone_id asc")
+        timezones = self.search([("active", "=", True)], order="timezone_id asc")
         return timezones._queue_timezone_upserts(site_ids=site_ids, reason=reason) if timezones else False
 
     def mark_synced(self, synced_at=None):
         synced_at = synced_at or fields.Datetime.now()
-        self.filtered(lambda rec: rec.timezone_id > 1).sudo().write(
+        self.sudo().write(
             {
                 "last_sync_at": synced_at,
                 "sync_state": "synced",

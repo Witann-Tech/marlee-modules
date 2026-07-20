@@ -401,6 +401,30 @@ class TestFaceSyncDelta(TransactionCase):
             ],
         )
 
+    def test_general_timezone_command_payload_is_explicit_full_access(self):
+        self.Change.search([]).unlink()
+        timezone = self.env.ref("access_control_api.access_timezone_general")
+
+        timezone.queue_active_timezones_for_sites(site_ids=[self.site.id], reason="general_timezone_resync")
+        changes = self.Change.search([("command_type", "=", "timezone_upsert")], order="id asc")
+        commands = self.controller._command_payloads_for_changes(
+            changes,
+            self.site.code,
+            device_serial=self.device.device_serial,
+        )
+
+        self.assertEqual(len(commands), 1)
+        self.assertEqual(commands[0]["timezoneId"], 1)
+        self.assertEqual(commands[0]["intervals"], [
+            {"day": "sun", "start": "00:00", "end": "23:59"},
+            {"day": "mon", "start": "00:00", "end": "23:59"},
+            {"day": "tue", "start": "00:00", "end": "23:59"},
+            {"day": "wed", "start": "00:00", "end": "23:59"},
+            {"day": "thu", "start": "00:00", "end": "23:59"},
+            {"day": "fri", "start": "00:00", "end": "23:59"},
+            {"day": "sat", "start": "00:00", "end": "23:59"},
+        ])
+
     def test_priority_upsert_queue_marks_change_and_payload(self):
         _, person = self._make_person(self._make_image_b64())
         self.Change.search([]).unlink()
@@ -468,8 +492,9 @@ class TestFaceSyncDelta(TransactionCase):
         )
 
         self.assertEqual(result["tag"], "display_notification")
-        self.assertEqual(len(timezone_changes), 1)
-        self.assertEqual(timezone_changes.access_timezone_id.id, timezone.id)
+        self.assertEqual(len(timezone_changes), 2)
+        self.assertIn(timezone.id, timezone_changes.mapped("access_timezone_id").ids)
+        self.assertIn(self.env.ref("access_control_api.access_timezone_general").id, timezone_changes.mapped("access_timezone_id").ids)
         self.assertTrue(timezone_changes.priority)
         self.assertEqual(user_changes.mapped("global_user_id"), [person_1.global_user_id, person_2.global_user_id])
         self.assertTrue(all(user_changes.mapped("priority")))
