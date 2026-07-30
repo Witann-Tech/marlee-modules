@@ -366,10 +366,7 @@ class PosOrderPricingMixin(models.Model):
         return normalized in ('1', 'true', 'yes', 'y', 'period_start', 'start', 'calendar', 'month_start')
 
     def _wgs_should_align_plan_to_calendar_month(self, plan):
-        if not self._wgs_plan_aligns_to_period_start(plan):
-            return False
-        interval_value, interval_unit = self._wgs_extract_interval_from_plan(plan)
-        return int(interval_value or 1) == 1 and (interval_unit or 'month') == 'month'
+        return self._wgs_plan_aligns_to_period_start(plan)
 
     def _wgs_get_aligned_monthly_first_period_schedule(self, start_date):
         access_start_date = fields.Date.to_date(start_date) or fields.Date.context_today(self)

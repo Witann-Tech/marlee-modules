@@ -81,6 +81,32 @@ class TestPosSubscriptionPricing(TransactionCase):
             order.write(order_updates)
         return order
 
+    def _create_subscription_pricing(self, plan, price=100.0, name='Pricing POS'):
+        if 'sale.subscription.pricing' not in self.env.registry:
+            self.skipTest('sale.subscription.pricing no existe en este runtime.')
+
+        pricing_model = self.env['sale.subscription.pricing']
+        pricing_vals = {}
+        for field_name in ('product_tmpl_id', 'product_template_id'):
+            if field_name in pricing_model._fields:
+                pricing_vals[field_name] = self.product.product_tmpl_id.id
+                break
+        for field_name in ('plan_id', 'subscription_plan_id', 'recurring_plan_id'):
+            if field_name in pricing_model._fields:
+                pricing_vals[field_name] = plan.id
+                break
+        for field_name in ('fixed_price', 'price', 'recurring_price', 'price_unit', 'list_price', 'amount'):
+            if field_name in pricing_model._fields:
+                pricing_vals[field_name] = price
+                break
+        if 'name' in pricing_model._fields:
+            pricing_vals['name'] = name
+
+        try:
+            return pricing_model.create(pricing_vals)
+        except Exception:
+            self.skipTest('No se pudo crear sale.subscription.pricing en este runtime.')
+
     def test_price_with_taxes_for_pos_uses_product_taxes(self):
         total = self.PosOrder._wgs_get_price_with_taxes_for_pos(self.product, 100.0, partner=self.partner)
         self.assertEqual(total, 116.0)
@@ -172,32 +198,9 @@ class TestPosSubscriptionPricing(TransactionCase):
         alignment_field = self.PosOrder._wgs_get_period_alignment_field_name(self.plan)
         if not alignment_field:
             self.skipTest('El runtime no expone el campo nativo de alineación de periodo.')
-        if 'sale.subscription.pricing' not in self.env.registry:
-            self.skipTest('sale.subscription.pricing no existe en este runtime.')
 
         self.plan.write({alignment_field: True})
-
-        pricing_model = self.env['sale.subscription.pricing']
-        pricing_vals = {}
-        for field_name in ('product_tmpl_id', 'product_template_id'):
-            if field_name in pricing_model._fields:
-                pricing_vals[field_name] = self.product.product_tmpl_id.id
-                break
-        for field_name in ('plan_id', 'subscription_plan_id', 'recurring_plan_id'):
-            if field_name in pricing_model._fields:
-                pricing_vals[field_name] = self.plan.id
-                break
-        for field_name in ('fixed_price', 'price', 'recurring_price', 'price_unit', 'list_price', 'amount'):
-            if field_name in pricing_model._fields:
-                pricing_vals[field_name] = 100.0
-                break
-        if 'name' in pricing_model._fields:
-            pricing_vals['name'] = 'Pricing mensual alineado POS'
-
-        try:
-            pricing_model.create(pricing_vals)
-        except Exception:
-            self.skipTest('No se pudo crear sale.subscription.pricing alineado en este runtime.')
+        self._create_subscription_pricing(self.plan, price=100.0, name='Pricing mensual alineado POS')
 
         charge = self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
             partner_id=self.partner.id,
@@ -223,6 +226,43 @@ class TestPosSubscriptionPricing(TransactionCase):
         self.assertTrue(charge['first_period_alignment'])
         self.assertEqual(charge['first_period_days'], 31)
         self.assertEqual(charge['first_period_charge_days'], 20)
+
+    def test_aligned_annual_plan_charges_first_period_proportionally_for_new_sale(self):
+        alignment_field = self.PosOrder._wgs_get_period_alignment_field_name(self.plan)
+        if not alignment_field:
+            self.skipTest('El runtime no expone el campo nativo de alineación de periodo.')
+
+        annual_plan = self.env['sale.subscription.plan'].create(
+            {
+                'name': 'Plan anual domiciliado POS',
+                'recurring_interval': 1,
+                'recurring_rule_type': 'year',
+            }
+        )
+        annual_plan.write({alignment_field: True})
+        self._create_subscription_pricing(annual_plan, price=100.0, name='Pricing anual alineado POS')
+
+        charge = self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
+            partner_id=self.partner.id,
+            product_id=self.product.id,
+            flow='new',
+            source_subscription_id=False,
+            pending_move_id=False,
+            fallback=100.0,
+            preferred_plan_id=annual_plan.id,
+            preferred_pricing_id=False,
+            start_date='2026-05-12',
+        )
+
+        self.assertEqual(charge['recurring_price'], 100.0)
+        self.assertEqual(charge['charge_now'], 64.52)
+        self.assertEqual(charge['display_charge_now'], 74.84)
+        self.assertEqual(charge['ticket_charge_now'], 64.52)
+        self.assertEqual(charge['subscription_start_date'], '2026-05-01')
+        self.assertEqual(charge['first_period_access_start_date'], '2026-05-12')
+        self.assertEqual(charge['subscription_end_date'], '2026-05-31')
+        self.assertEqual(charge['next_billing_date'], '2026-06-01')
+        self.assertTrue(charge['first_period_alignment'])
 
     def test_subscription_pricing_beats_generic_pricelist_candidate(self):
         pricing_model_name = 'sale.subscription.pricing'
