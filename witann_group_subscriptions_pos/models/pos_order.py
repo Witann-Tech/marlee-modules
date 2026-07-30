@@ -170,6 +170,31 @@ class PosOrder(models.Model):
             raise UserError(error_message)
 
     @api.model
+    def _wgs_disable_invoice_request_for_pos_order_payload(self, order):
+        if not isinstance(order, dict):
+            return order
+
+        containers = [order]
+        data = order.get('data')
+        if isinstance(data, dict):
+            containers.append(data)
+
+        disabled_keys = []
+        for container in containers:
+            for key in ('to_invoice', 'toInvoice', 'is_to_invoice', 'isToInvoice'):
+                if key in container:
+                    if container.get(key):
+                        disabled_keys.append(key)
+                    container[key] = False
+
+        if disabled_keys:
+            _logger.warning(
+                'WGS POS: invoice request disabled for POS order payload keys=%s',
+                sorted(set(disabled_keys)),
+            )
+        return order
+
+    @api.model
     def _wgs_product_model_for_pos(self):
         return self.env['product.product'].sudo()
 
@@ -1664,6 +1689,7 @@ class PosOrder(models.Model):
 
     @api.model
     def _process_order(self, order, draft, *args, **kwargs):
+        order = self._wgs_disable_invoice_request_for_pos_order_payload(order)
         existing_order = kwargs.get('existing_order', False)
         if args:
             existing_order = args[0]
