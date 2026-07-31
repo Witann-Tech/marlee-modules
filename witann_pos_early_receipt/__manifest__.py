@@ -1,6 +1,6 @@
 {
     'name': 'Witann POS Early Receipt',
-    'version': '19.0.1.0.0',
+    'version': '19.0.1.0.1',
     'summary': 'Imprime una precuenta antes del pago en POS no restaurante',
     'category': 'Point of Sale',
     'author': 'Witann Technologies',
