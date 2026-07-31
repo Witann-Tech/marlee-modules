@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+  <record id="res_config_settings_view_form" model="ir.ui.view">
+    <field name="name">res.config.settings.form.witann.pos.early.receipt</field>
+    <field name="model">res.config.settings</field>
+    <field name="inherit_id" ref="point_of_sale.res_config_settings_view_form"/>
+    <field name="arch" type="xml">
+      <xpath expr="//form" position="inside">
+        <app string="Punto de Venta" name="witann_pos_early_receipt" data-string="Punto de Venta">
+          <block title="Recibos">
+            <setting id="wgs_early_receipt_printing" string="Impresion anticipada de recibo" help="Muestra Imprimir precuenta en el POS antes de cobrar. La impresion no registra pagos ni genera facturas.">
+              <field name="wgs_early_receipt_printing"/>
+            </setting>
+          </block>
+        </app>
+      </xpath>
+    </field>
+  </record>
+</odoo>
