@@ -272,17 +272,21 @@ function addPeriodToDate(dateValue, intervalValue, intervalUnit) {
     if (!parsed) {
         return "";
     }
-    const date = new Date(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate());
+    const date = new Date(Date.UTC(
+        parsed.getUTCFullYear(),
+        parsed.getUTCMonth(),
+        parsed.getUTCDate(),
+    ));
     const value = Math.max(1, Number(intervalValue || 1));
     const unit = String(intervalUnit || "month").toLowerCase();
     if (unit.includes("day")) {
-        date.setDate(date.getDate() + value);
+        date.setUTCDate(date.getUTCDate() + value);
     } else if (unit.includes("week")) {
-        date.setDate(date.getDate() + (value * 7));
+        date.setUTCDate(date.getUTCDate() + (value * 7));
     } else if (unit.includes("year")) {
-        date.setFullYear(date.getFullYear() + value);
+        date.setUTCFullYear(date.getUTCFullYear() + value);
     } else {
-        date.setMonth(date.getMonth() + value);
+        date.setUTCMonth(date.getUTCMonth() + value);
     }
     return date.toISOString().slice(0, 10);
 }
@@ -292,8 +296,12 @@ function addDaysToDate(dateValue, days) {
     if (!parsed) {
         return "";
     }
-    const date = new Date(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate());
-    date.setDate(date.getDate() + Number(days || 0));
+    const date = new Date(Date.UTC(
+        parsed.getUTCFullYear(),
+        parsed.getUTCMonth(),
+        parsed.getUTCDate(),
+    ));
+    date.setUTCDate(date.getUTCDate() + Number(days || 0));
     return date.toISOString().slice(0, 10);
 }
 
@@ -773,6 +781,7 @@ patch(ControlButtons.prototype, {
         let activeTab = "directory";
         let detailRequestToken = 0;
         let currentDetail = null;
+        let businessDate = formatTodayISO();
         let directoryLoading = false;
         let directoryFullyLoaded = false;
         let directoryLoadError = "";
@@ -842,6 +851,8 @@ patch(ControlButtons.prototype, {
             get detailCache() { return detailCache; },
             get currentDetail() { return currentDetail; },
             set currentDetail(value) { currentDetail = value; },
+            get businessDate() { return businessDate; },
+            set businessDate(value) { businessDate = String(value || "") || formatTodayISO(); },
             get directoryLoading() { return directoryLoading; },
             set directoryLoading(value) { directoryLoading = Boolean(value); },
             get directoryFullyLoaded() { return directoryFullyLoaded; },
@@ -1255,7 +1266,10 @@ patch(ControlButtons.prototype, {
         const openNewSubscriptionForm = async () => {
             await openNewSubscriptionFlow(modalState, {
                 stopPartnerCamera,
-                createNewSubscriptionForm: (partnerId) => this._getDefaultNewSubscriptionForm(partnerId),
+                createNewSubscriptionForm: (partnerId, resolvedBusinessDate) => this._getDefaultNewSubscriptionForm(
+                    partnerId,
+                    resolvedBusinessDate || modalState.businessDate,
+                ),
                 renderDetail,
                 loadDetail,
                 fetchSubscriptionProductCatalog: (searchTerm) => this._fetchSubscriptionProductCatalog(searchTerm),
@@ -1291,6 +1305,7 @@ patch(ControlButtons.prototype, {
                 stopPartnerCamera,
                 renderDetail,
                 fetchSubscriptionQuote: (...args) => this._fetchSubscriptionQuote(...args),
+                formatTodayISO,
                 _t,
             });
         };
@@ -1301,6 +1316,7 @@ patch(ControlButtons.prototype, {
                 renderDetail,
                 fetchSubscriptionQuote: (...args) => this._fetchSubscriptionQuote(...args),
                 fetchSubscriptionProductCatalog: (searchTerm) => this._fetchSubscriptionProductCatalog(searchTerm),
+                formatTodayISO,
                 _t,
             });
             if (renewalForm && Number(renewalForm.maxParticipantsTotal || 1) > 1) {
@@ -2320,9 +2336,10 @@ patch(ControlButtons.prototype, {
         });
     },
 
-    _getDefaultNewSubscriptionForm(partnerId) {
+    _getDefaultNewSubscriptionForm(partnerId, businessDate = false) {
         return getDefaultNewSubscriptionForm(partnerId, {
             buildChargeBreakdown,
+            businessDate,
             formatTodayISO,
         });
     },

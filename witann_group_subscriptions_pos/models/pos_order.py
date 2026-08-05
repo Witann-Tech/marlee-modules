@@ -170,6 +170,18 @@ class PosOrder(models.Model):
             raise UserError(error_message)
 
     @api.model
+    def _wgs_get_subscription_business_timezone_for_pos(self):
+        return self.env['sale.order']._wgs_get_subscription_business_timezone()
+
+    @api.model
+    def _wgs_get_subscription_business_today_for_pos(self, company=False, now=False):
+        return self.env['sale.order']._wgs_get_subscription_business_today(company=company, now=now)
+
+    @api.model
+    def _wgs_get_subscription_business_date_from_datetime_for_pos(self, value):
+        return self.env['sale.order']._wgs_get_subscription_business_date_from_datetime(value)
+
+    @api.model
     def _wgs_disable_invoice_request_for_pos_order_payload(self, order):
         if not isinstance(order, dict):
             return order
@@ -798,7 +810,7 @@ class PosOrder(models.Model):
         except (TypeError, ValueError):
             return False
 
-        current_two_digit_year = fields.Date.context_today(self).year % 100
+        current_two_digit_year = self._wgs_get_subscription_business_today_for_pos().year % 100
         century = 2000 if year <= current_two_digit_year else 1900
         try:
             return date(century + year, month, day)
@@ -810,7 +822,7 @@ class PosOrder(models.Model):
         if not birthdate:
             return 0
         birthdate = fields.Date.to_date(birthdate)
-        today = fields.Date.to_date(today) if today else fields.Date.context_today(self)
+        today = fields.Date.to_date(today) if today else self._wgs_get_subscription_business_today_for_pos()
         age = today.year - birthdate.year
         if (today.month, today.day) < (birthdate.month, birthdate.day):
             age -= 1
@@ -962,7 +974,11 @@ class PosOrder(models.Model):
     ):
         product.ensure_one()
         source_order = source_order.exists() if source_order else self.env['sale.order']
-        pricing_company = source_order.company_id if source_order and 'company_id' in source_order._fields else False
+        pricing_company = (
+            source_order.company_id
+            if source_order and 'company_id' in source_order._fields
+            else self.env.company
+        )
         pricing_fiscal_position = source_order.fiscal_position_id if source_order and 'fiscal_position_id' in source_order._fields else False
         snapshot = self._wgs_resolve_subscription_pricing_snapshot(
             flow=flow,
@@ -975,7 +991,9 @@ class PosOrder(models.Model):
             preferred_plan_id=preferred_plan_id,
             preferred_pricing_id=preferred_pricing_id,
             include_credit=flow == 'upsale' and bool(source_order),
-            start_date=start_date,
+            start_date=fields.Date.to_date(start_date) or self._wgs_get_subscription_business_today_for_pos(
+                company=pricing_company,
+            ),
         )
         candidates = list(snapshot.get('candidates') or [])
         candidates.sort(key=lambda row: (row['sequence'], row.get('pricing_id') or 0))
@@ -1014,6 +1032,9 @@ class PosOrder(models.Model):
             'is_upgrade': bool(source_order),
             'source_subscription_id': source_order.id if source_order else False,
             'source_subscription_name': source_order.name if source_order else False,
+            'business_date': fields.Date.to_string(
+                self._wgs_get_subscription_business_today_for_pos(company=pricing_company)
+            ),
             'plans': [
                 {
                     'plan_id': row.get('plan_id') or False,
@@ -2455,7 +2476,7 @@ class PosOrder(models.Model):
         if not source_line:
             source_line = recurring_lines.sorted(key=lambda so_line: so_line.id)[:1]
 
-        today = fields.Date.context_today(self)
+        today = self._wgs_get_subscription_business_today_for_pos(company=source_order.company_id)
         renewal_schedule = self._wgs_get_subscription_renewal_schedule(
             source_order,
             today=today,
@@ -2554,7 +2575,7 @@ class PosOrder(models.Model):
         recurring_plan_id = pricing_state['plan_id']
         recurring_pricing_id = pricing_state['pricing_id']
         plan_record = pricing_state['plan_record']
-        today = fields.Date.context_today(self)
+        today = self._wgs_get_subscription_business_today_for_pos(company=self.company_id)
         subscription_start_date = (
             pricing_state.get('subscription_start_date')
             or line.wgs_get_subscription_start_date()
@@ -2652,7 +2673,7 @@ class PosOrder(models.Model):
         subscription_end_date=False,
         next_billing_date=False,
     ):
-        subscription_start_date = fields.Date.to_date(subscription_start_date) or fields.Date.context_today(self)
+        subscription_start_date = fields.Date.to_date(subscription_start_date) or self._wgs_get_subscription_business_today_for_pos()
         subscription_end_date = fields.Date.to_date(subscription_end_date) if subscription_end_date else False
         next_billing_date = fields.Date.to_date(next_billing_date) if next_billing_date else False
         single_day_term = self._wgs_product_has_single_day_term(product)
@@ -3200,7 +3221,7 @@ class PosOrder(models.Model):
         recurring_plan_id = pricing_state['plan_id']
         recurring_pricing_id = pricing_state['pricing_id']
         plan_record = pricing_state['plan_record']
-        today = fields.Date.context_today(self)
+        today = self._wgs_get_subscription_business_today_for_pos(company=self.company_id)
         subscription_start_date = (
             pricing_state.get('subscription_start_date')
             or line.wgs_get_subscription_start_date()
@@ -3268,7 +3289,7 @@ class PosOrder(models.Model):
                 comodel_checker=self._wgs_is_pricing_model_name,
             )
 
-        contract_date = fields.Date.context_today(self)
+        contract_date = self._wgs_get_subscription_business_today_for_pos(company=self.company_id)
         upsell_source_order = self.env['sale.order']
         if line.wgs_subscription_flow == 'upsale':
             upsell_source_order = pricing_state['source_order'] or self._wgs_resolve_upsell_source_order_for_line(line)
@@ -3633,7 +3654,7 @@ class PosOrder(models.Model):
         build_item = getattr(source_order, '_build_pos_subscription_status_item', None)
         if callable(build_item):
             try:
-                item = build_item(fields.Date.context_today(self)) or {}
+                item = build_item(self._wgs_get_subscription_business_today_for_pos()) or {}
             except Exception:
                 item = {}
         package_label = ', '.join(item.get('package_names') or []) or source_order.name or source_order.display_name
@@ -3844,6 +3865,9 @@ class PosOrder(models.Model):
             'is_reenroll': bool(is_reenroll),
             'source_subscription_id': source_order.id,
             'source_subscription_name': source_order.name,
+            'business_date': fields.Date.to_string(
+                self._wgs_get_subscription_business_today_for_pos(company=source_order.company_id)
+            ),
         }
 
     def _wgs_is_order_recognized_as_subscription(self, sale_order):
@@ -4167,7 +4191,9 @@ class PosOrder(models.Model):
     def _wgs_close_source_subscription_after_upgrade(self, source_order, new_subscription_start_date):
         source_order.ensure_one()
 
-        close_date = fields.Date.to_date(new_subscription_start_date) or fields.Date.context_today(self)
+        close_date = fields.Date.to_date(new_subscription_start_date) or self._wgs_get_subscription_business_today_for_pos(
+            company=source_order.company_id,
+        )
         close_date = close_date - timedelta(days=1)
         values = {}
         end_field = self._wgs_find_subscription_end_date_field(source_order)
@@ -4199,7 +4225,9 @@ class PosOrder(models.Model):
     def _wgs_get_upsale_schedule_from_source(self, source_order, today=False):
         source_order.ensure_one()
 
-        sale_start_date = fields.Date.to_date(today) or fields.Date.context_today(self)
+        sale_start_date = fields.Date.to_date(today) or self._wgs_get_subscription_business_today_for_pos(
+            company=source_order.company_id,
+        )
         subscription_start_date = self._wgs_get_first_date_from_order(
             source_order,
             ('wgs_effective_start_date', 'start_date', 'date_start', 'subscription_start_date', 'recurring_start_date', 'date_order'),

@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from odoo import Command, fields
 from odoo.tests.common import TransactionCase
 
@@ -110,6 +112,17 @@ class TestPosSubscriptionPricing(TransactionCase):
     def test_price_with_taxes_for_pos_uses_product_taxes(self):
         total = self.PosOrder._wgs_get_price_with_taxes_for_pos(self.product, 100.0, partner=self.partner)
         self.assertEqual(total, 116.0)
+
+    def test_subscription_business_date_uses_mexico_calendar_after_utc_midnight(self):
+        business_day = self.PosOrder._wgs_get_subscription_business_today_for_pos(
+            now=datetime(2026, 5, 13, 0, 30, 0),
+        )
+        self.assertEqual(business_day, fields.Date.to_date('2026-05-12'))
+
+        date_order_day = self.PosOrder._wgs_get_subscription_business_date_from_datetime_for_pos(
+            datetime(2026, 5, 13, 0, 30, 0),
+        )
+        self.assertEqual(date_order_day, fields.Date.to_date('2026-05-12'))
 
     def test_subscription_pricing_for_pos_returns_tax_included_display_price(self):
         charge = self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(

@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from odoo import fields
 from odoo.fields import Command
@@ -54,6 +54,17 @@ class TestSubscriptionAccessControl(TransactionCase):
 
     def _create_subscription_order(self):
         return self._create_subscription_order_for_product(self.product)
+
+    def test_business_date_stays_on_mexico_calendar_after_utc_midnight(self):
+        business_day = self.env['sale.order']._wgs_get_subscription_business_today(
+            now=datetime(2026, 5, 13, 0, 30, 0),
+        )
+        self.assertEqual(business_day, fields.Date.to_date('2026-05-12'))
+
+        date_order_day = self.env['sale.order']._wgs_get_subscription_business_date_from_datetime(
+            datetime(2026, 5, 13, 0, 30, 0),
+        )
+        self.assertEqual(date_order_day, fields.Date.to_date('2026-05-12'))
 
     def _create_subscription_order_for_product(self, product):
         order = self.env['sale.order'].create(

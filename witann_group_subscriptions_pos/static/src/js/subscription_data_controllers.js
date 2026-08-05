@@ -111,6 +111,7 @@ async function loadDetail(state, partnerId, {
         if (requestId !== state.detailRequestToken) {
             return;
         }
+        state.businessDate = detail && detail.business_date ? detail.business_date : state.businessDate;
         state.detailCache.set(partnerId, detail);
         if (state.selectedPartnerId === partnerId) {
             renderDetail(detail);

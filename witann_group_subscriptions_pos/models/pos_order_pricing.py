@@ -180,7 +180,9 @@ class PosOrderPricingMixin(models.Model):
 
     def _wgs_get_current_subscription_period_bounds(self, source_order, today=False, preferred_line=False):
         source_order.ensure_one()
-        today = fields.Date.to_date(today) or fields.Date.context_today(self)
+        today = fields.Date.to_date(today) or self._wgs_get_subscription_business_today_for_pos(
+            company=source_order.company_id,
+        )
 
         period_end = self._wgs_get_first_date_from_order(source_order, ('recurring_next_date', 'next_invoice_date'))
         delta = self._wgs_get_order_recurrence_delta(source_order, preferred_line=preferred_line)
@@ -272,7 +274,7 @@ class PosOrderPricingMixin(models.Model):
         if not value:
             return False
         if isinstance(value, datetime):
-            return value.date()
+            return self._wgs_get_subscription_business_date_from_datetime_for_pos(value)
         if isinstance(value, date):
             return value
         return fields.Date.to_date(value)
@@ -314,7 +316,7 @@ class PosOrderPricingMixin(models.Model):
         return False
 
     def _wgs_get_plan_min_end_threshold(self, plan, start_date, periods_count=1):
-        start_date = fields.Date.to_date(start_date) or fields.Date.context_today(self)
+        start_date = fields.Date.to_date(start_date) or self._wgs_get_subscription_business_today_for_pos()
         interval_value, interval_unit = self._wgs_extract_interval_from_plan(plan)
         multiplier = max(1, int(periods_count or 1))
         interval_value = interval_value * multiplier
@@ -330,7 +332,7 @@ class PosOrderPricingMixin(models.Model):
         next_threshold = self._wgs_get_plan_min_end_threshold(plan, start_date, periods_count=periods_count)
         if not next_threshold:
             return False
-        start_date = fields.Date.to_date(start_date) or fields.Date.context_today(self)
+        start_date = fields.Date.to_date(start_date) or self._wgs_get_subscription_business_today_for_pos()
         period_end = fields.Date.to_date(next_threshold) - timedelta(days=1)
         if period_end < start_date:
             return start_date
@@ -369,7 +371,7 @@ class PosOrderPricingMixin(models.Model):
         return self._wgs_plan_aligns_to_period_start(plan)
 
     def _wgs_get_aligned_monthly_first_period_schedule(self, start_date):
-        access_start_date = fields.Date.to_date(start_date) or fields.Date.context_today(self)
+        access_start_date = fields.Date.to_date(start_date) or self._wgs_get_subscription_business_today_for_pos()
         period_start = access_start_date.replace(day=1)
         next_billing_date = period_start + relativedelta(months=1)
         period_end = next_billing_date - timedelta(days=1)
@@ -388,7 +390,9 @@ class PosOrderPricingMixin(models.Model):
 
     def _wgs_get_subscription_renewal_schedule(self, source_order, today=False, preferred_line=False):
         source_order.ensure_one()
-        today = fields.Date.to_date(today) or fields.Date.context_today(self)
+        today = fields.Date.to_date(today) or self._wgs_get_subscription_business_today_for_pos(
+            company=source_order.company_id,
+        )
         preferred_line = preferred_line.exists() if preferred_line else self.env['sale.order.line']
         plan = self._wgs_extract_plan_record_from_subscription_line(preferred_line)
         if not plan:
@@ -535,7 +539,7 @@ class PosOrderPricingMixin(models.Model):
             )
             if flow == 'new' and self._wgs_should_align_plan_to_calendar_month(resolved_plan):
                 first_period_alignment = self._wgs_get_aligned_monthly_first_period_schedule(
-                    start_date or fields.Date.context_today(self)
+                    start_date or self._wgs_get_subscription_business_today_for_pos(company=company)
                 )
                 subscription_start_date = first_period_alignment['subscription_start_date']
                 subscription_end_date = first_period_alignment['subscription_end_date']
@@ -664,6 +668,7 @@ class PosOrderPricingMixin(models.Model):
         interval_value, interval_unit = self._wgs_extract_interval_from_plan(resolved_plan_record)
         renewal_schedule = self._wgs_get_subscription_renewal_schedule(
             source_order,
+            today=self._wgs_get_subscription_business_today_for_pos(company=source_order.company_id),
             preferred_line=recurring_line,
         )
         return {

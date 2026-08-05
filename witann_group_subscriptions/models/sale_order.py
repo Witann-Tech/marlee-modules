@@ -1,6 +1,7 @@
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 
+import pytz
 from dateutil.relativedelta import relativedelta
 
 from odoo import _, api, fields, models
@@ -12,6 +13,8 @@ _logger = logging.getLogger(__name__)
 
 class SaleOrder(models.Model):
     _inherit = 'sale.order'
+
+    _WGS_SUBSCRIPTION_BUSINESS_TIMEZONE = 'America/Mexico_City'
 
     _WGS_ACCESS_ENABLED_STATE_TOKENS = (
         'progress',
@@ -99,6 +102,34 @@ class SaleOrder(models.Model):
         copy=True,
         help='Snapshot del horario de acceso definido al momento de vender o cambiar el paquete.',
     )
+
+    @api.model
+    def _wgs_get_subscription_business_timezone(self):
+        """Return the authoritative timezone for subscription calendar dates."""
+        return pytz.timezone(self._WGS_SUBSCRIPTION_BUSINESS_TIMEZONE)
+
+    @api.model
+    def _wgs_get_subscription_business_today(self, company=False, now=False):
+        """Resolve the operational date without depending on user or server timezone."""
+        # Keep company in the contract so callers make the business scope explicit.
+        # All active subscription companies currently operate on the same calendar timezone.
+        current_utc = now or fields.Datetime.now()
+        if current_utc.tzinfo:
+            current_utc = current_utc.astimezone(pytz.UTC)
+        else:
+            current_utc = pytz.UTC.localize(current_utc)
+        return current_utc.astimezone(self._wgs_get_subscription_business_timezone()).date()
+
+    @api.model
+    def _wgs_get_subscription_business_date_from_datetime(self, value):
+        """Convert UTC datetime fallbacks, such as date_order, to a business date."""
+        if not isinstance(value, datetime):
+            return fields.Date.to_date(value)
+        if value.tzinfo:
+            value = value.astimezone(pytz.UTC)
+        else:
+            value = pytz.UTC.localize(value)
+        return value.astimezone(self._wgs_get_subscription_business_timezone()).date()
 
     @api.depends(
         'order_line',
@@ -321,7 +352,7 @@ class SaleOrder(models.Model):
                 continue
             value = self[field_name]
             if value:
-                return fields.Date.to_date(value)
+                return self._wgs_get_subscription_business_date_from_datetime(value)
         return False
 
     def _wgs_get_subscription_plan_from_line(self, line):
@@ -482,7 +513,7 @@ class SaleOrder(models.Model):
         if self._wgs_get_subscription_state_category() in ('cancel', 'closed', 'draft', 'upsell'):
             return False
         close_deadline = self._wgs_get_subscription_auto_close_deadline_from_order(today=today)
-        today = fields.Date.to_date(today) or fields.Date.context_today(self)
+        today = fields.Date.to_date(today) or self._wgs_get_subscription_business_today(company=self.company_id)
         return bool(close_deadline and today >= close_deadline)
 
     def _wgs_find_subscription_closed_state_value(self):
@@ -565,7 +596,7 @@ class SaleOrder(models.Model):
         if not any(token in state_value for token in self._WGS_ACCESS_ENABLED_STATE_TOKENS):
             return False
 
-        today = fields.Date.context_today(self)
+        today = self._wgs_get_subscription_business_today(company=self.company_id)
         start_date = self._wgs_get_first_access_date_value(
             ('wgs_effective_start_date', 'start_date', 'date_start', 'subscription_start_date', 'date_order')
         )
@@ -890,7 +921,7 @@ class SaleOrder(models.Model):
 
     @api.model
     def _cron_wgs_close_overdue_subscriptions(self, limit=0):
-        today = fields.Date.context_today(self)
+        today = self._wgs_get_subscription_business_today()
         domain = [('state', 'in', ['sale', 'done'])]
         if 'subscription_state' in self._fields:
             domain.append(('subscription_state', '!=', False))

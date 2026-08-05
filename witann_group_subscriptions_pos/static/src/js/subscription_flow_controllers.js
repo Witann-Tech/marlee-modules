@@ -75,11 +75,11 @@ async function openNewSubscriptionForm(state, {
     state.participantEditForm = null;
     state.newPartnerForm = null;
     state.partnerPhotoForm = null;
-    state.newSubscriptionForm = createNewSubscriptionForm(state.selectedPartnerId);
-    renderDetail(state.currentDetail);
     if (loadDetail) {
         await loadDetail(state.selectedPartnerId, { force: true });
     }
+    state.newSubscriptionForm = createNewSubscriptionForm(state.selectedPartnerId, state.businessDate);
+    renderDetail(state.currentDetail);
     if (state.productCatalog.length || state.catalogLoading) {
         return;
     }
@@ -107,6 +107,7 @@ async function openRenewalForm(state, item, {
     renderDetail,
     fetchSubscriptionQuote,
     fetchSubscriptionProductCatalog,
+    formatTodayISO,
     mode = "renewal",
     title = false,
     submitLabel = false,
@@ -146,7 +147,7 @@ async function openRenewalForm(state, item, {
         title: title || (mode === "reenroll" ? _t("Reinscribir suscripción") : _t("Renovar suscripción")),
         submitLabel: submitLabel || (mode === "reenroll" ? _t("Agregar reinscripción al ticket") : _t("Agregar al ticket")),
         isReenroll: mode === "reenroll",
-        startDate: mode === "reenroll" ? new Date().toISOString().slice(0, 10) : false,
+        startDate: mode === "reenroll" ? (state.businessDate || formatTodayISO()) : false,
         pricingSnapshot: null,
         discountPercent: "",
         supervisorPin: "",

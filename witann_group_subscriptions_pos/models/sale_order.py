@@ -92,6 +92,11 @@ class SaleOrder(models.Model):
     )
 
     @api.model
+    def _wgs_subscription_business_today_for_pos(self, company=False):
+        """Delegate POS subscription calendar ownership to its central resolver."""
+        return self._wgs_get_subscription_business_today(company=company)
+
+    @api.model
     def _wgs_ensure_pos_user_for_pos(self, error_message):
         if not self.env.user.has_group('point_of_sale.group_pos_user'):
             raise AccessError(error_message)
@@ -187,12 +192,12 @@ class SaleOrder(models.Model):
             return {
                 'partner_id': False,
                 'partner_name': False,
-                'today': fields.Date.context_today(self).isoformat(),
+                'today': self._wgs_subscription_business_today_for_pos(company=company).isoformat(),
                 'items': [],
                 'valid_count': 0,
             }
 
-        today = fields.Date.context_today(self)
+        today = self._wgs_subscription_business_today_for_pos(company=company)
         subscriptions = self._get_pos_subscription_orders(partner, company=company)
 
         items = []
@@ -226,7 +231,7 @@ class SaleOrder(models.Model):
         if not partner:
             return {'partner_id': False, 'items': []}
 
-        today = fields.Date.context_today(self)
+        today = self._wgs_subscription_business_today_for_pos(company=company)
         subscriptions = self._get_pos_subscription_orders(partner, company=company)
         items = []
         for subscription in subscriptions:
@@ -273,6 +278,7 @@ class SaleOrder(models.Model):
         return {
             'partner_id': partner.id,
             'partner_name': partner.display_name,
+            'business_date': fields.Date.to_string(today),
             'state': summary.get('state') or 'none',
             'state_label': summary.get('state_label') or _('Sin suscripción'),
             'package_label': summary.get('package_label') or False,
@@ -604,7 +610,7 @@ class SaleOrder(models.Model):
 
     @api.model
     def _wgs_get_access_block_subscription_orders_for_pos(self, partner, company=False):
-        today = fields.Date.context_today(self)
+        today = self._wgs_subscription_business_today_for_pos(company=company)
         subscriptions = self._get_pos_subscription_orders(partner, company=company)
         if not subscriptions:
             return self.browse()
@@ -1304,7 +1310,7 @@ class SaleOrder(models.Model):
         if not partners:
             return {}
 
-        today = fields.Date.context_today(self)
+        today = self._wgs_subscription_business_today_for_pos(company=company)
         subscriptions_by_partner = self._get_pos_subscription_orders_by_partners(partners, company=company)
         try:
             access_last_map = self._get_access_person_last_access_map_for_pos(partners)
@@ -1420,7 +1426,7 @@ class SaleOrder(models.Model):
             return {}
 
         company = company or self.env.company
-        today = fields.Date.context_today(self)
+        today = self._wgs_subscription_business_today_for_pos(company=company)
         subscriptions_by_partner = self._get_pos_subscription_orders_by_partners(partners, company=company)
         access_last_map = {}
         try:
@@ -2501,7 +2507,7 @@ class SaleOrder(models.Model):
             base_domain.append(('company_id', '!=', company.id))
 
         origin_domain = self._get_subscription_access_origin_domain_for_pos(company=company)
-        today = fields.Date.context_today(self)
+        today = self._wgs_subscription_business_today_for_pos(company=company)
         partner_id_set = set(partner_ids)
 
         def add_subscription_origin(subscription, candidate_partner_ids=False):
@@ -2855,7 +2861,7 @@ class SaleOrder(models.Model):
         if not item:
             return False
 
-        today = today or fields.Date.context_today(self)
+        today = today or self._wgs_subscription_business_today_for_pos()
         native_state_key = item.get('native_state_key') or False
         if item.get('has_replacement_subscription'):
             return False
