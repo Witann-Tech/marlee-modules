@@ -481,7 +481,7 @@ patch(ControlButtons.prototype, {
         return Array.isArray(backendCatalog) ? backendCatalog : [];
     },
 
-    async _fetchSubscriptionPricing(partnerId = false, productId = false, flow = "new", sourceSubscriptionId = false, pendingMoveId = false, fallback = 0, planId = false, pricingId = false, startDate = false) {
+    async _fetchSubscriptionPricing(partnerId = false, productId = false, flow = "new", sourceSubscriptionId = false, pendingMoveId = false, fallback = 0, planId = false, pricingId = false, startDate = false, domiciliationIncludeTerminalPrepayment = false) {
         return this.subscriptionPosApi.fetchSubscriptionPricing(
             partnerId || false,
             productId || false,
@@ -491,11 +491,12 @@ patch(ControlButtons.prototype, {
             fallback || 0,
             planId || false,
             pricingId || false,
-            startDate || false
+            startDate || false,
+            Boolean(domiciliationIncludeTerminalPrepayment)
         );
     },
 
-    async _fetchSubscriptionQuote(partnerId = false, productId = false, flow = "new", sourceSubscriptionId = false, pendingMoveId = false, fallback = 0, planId = false, pricingId = false, startDate = false, domiciliationMonthsToPay = false) {
+    async _fetchSubscriptionQuote(partnerId = false, productId = false, flow = "new", sourceSubscriptionId = false, pendingMoveId = false, fallback = 0, planId = false, pricingId = false, startDate = false, domiciliationMonthsToPay = false, domiciliationIncludeTerminalPrepayment = false) {
         return this.subscriptionPosApi.fetchSubscriptionQuote(
             partnerId || false,
             productId || false,
@@ -506,7 +507,8 @@ patch(ControlButtons.prototype, {
             planId || false,
             pricingId || false,
             startDate || false,
-            domiciliationMonthsToPay || false
+            domiciliationMonthsToPay || false,
+            Boolean(domiciliationIncludeTerminalPrepayment)
         );
     },
 
@@ -1509,6 +1511,18 @@ patch(ControlButtons.prototype, {
                     </div>
                 `
                 : "";
+            const domiciliation = pricingSnapshot.domiciliation || {};
+            const terminalInstallment = Array.isArray(domiciliation.installments)
+                ? domiciliation.installments.find((installment) => installment.kind === "terminal_prepayment")
+                : false;
+            const terminalPrepaymentOption = domiciliation.is_domiciliation && terminalInstallment
+                ? `
+                    <label class="wgs-checkbox-option">
+                        <input type="checkbox" data-field="domiciliation_include_terminal_prepayment" ${newSubscriptionForm.domiciliationIncludeTerminalPrepayment ? "checked" : ""} />
+                        <span>${this._escapeHtml(_t("Cobrar último mes por anticipado"))}: ${this._escapeHtml(this._formatDateDisplay(terminalInstallment.period_start_date) || "-")} - ${this._escapeHtml(this._formatDateDisplay(terminalInstallment.period_end_date) || "-")}</span>
+                    </label>
+                `
+                : "";
             const partnerCurp = String(currentDetail && currentDetail.curp ? currentDetail.curp : "").trim();
             const requiresCurp = Boolean(newSubscriptionForm.requiresCurp);
             const needsCurpCapture = requiresCurp && !partnerCurp;
@@ -1589,6 +1603,7 @@ patch(ControlButtons.prototype, {
                             <strong class="wgs-inline-static-value">${this._escapeHtml(this._formatDateDisplay(automaticEndDate) || "-")}</strong>
                         </div>
                     </div>
+                    ${terminalPrepaymentOption}
                     ${needsCurpCapture ? `
                         <div class="wgs-inline-form-grid">
                             <label>

@@ -127,7 +127,18 @@ class WgsSubscriptionDomiciliationContract(models.Model):
         }
 
     @api.model
-    def wgs_create_for_subscription(self, subscription, *, product, plan, start_date, monthly_amount, pos_line=False, restart=False):
+    def wgs_create_for_subscription(
+        self,
+        subscription,
+        *,
+        product,
+        plan,
+        start_date,
+        monthly_amount,
+        pos_line=False,
+        restart=False,
+        initial_installment_sequences=False,
+    ):
         """Create the contract only after the POS sale has become paid and synchronized."""
         subscription.ensure_one()
         existing = self.search([('subscription_id', '=', subscription.id)], limit=1)
@@ -143,6 +154,20 @@ class WgsSubscriptionDomiciliationContract(models.Model):
             monthly_amount=monthly_amount,
             term_months=plan.wgs_domiciliation_term_months,
         )
+        default_sequences = list(schedule['initial_installment_sequences'])
+        selected_sequences = sorted({
+            int(sequence)
+            for sequence in (initial_installment_sequences or default_sequences)
+            if int(sequence) > 0
+        })
+        allowed_initial_sequences = {1, schedule['term_months']}
+        if (
+            1 not in selected_sequences
+            or not set(selected_sequences).issubset(allowed_initial_sequences)
+        ):
+            raise ValidationError(_(
+                'La contratación domiciliada debe cobrar el proporcional inicial y opcionalmente el último mes anticipado.'
+            ))
         contract_values = {
             'subscription_id': subscription.id,
             'product_id': product.id,
@@ -165,7 +190,7 @@ class WgsSubscriptionDomiciliationContract(models.Model):
         if pos_line:
             contract.wgs_apply_pos_payment(
                 pos_line,
-                installment_sequences=schedule['initial_installment_sequences'],
+                installment_sequences=selected_sequences,
                 allow_terminal_prepayment=True,
             )
         return contract

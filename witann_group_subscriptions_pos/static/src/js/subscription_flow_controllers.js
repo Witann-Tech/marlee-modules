@@ -150,6 +150,7 @@ async function openRenewalForm(state, item, {
         startDate: mode === "reenroll" ? (state.businessDate || formatTodayISO()) : false,
         pricingSnapshot: null,
         domiciliationMonthsToPay: false,
+        domiciliationIncludeTerminalPrepayment: false,
         discountPercent: "",
         supervisorPin: "",
         authorizedDiscount: null,
@@ -434,7 +435,8 @@ async function recalculateNewSubscriptionCharge(state, product, preferredPlan, {
             Number(preferredPlan && preferredPlan.price ? preferredPlan.price : product.default_price || 0),
             preferredPlan ? Number(preferredPlan.plan_id || 0) || false : false,
             preferredPlan ? Number(preferredPlan.pricing_id || 0) || false : false,
-            state.newSubscriptionForm.startDate || false
+            state.newSubscriptionForm.startDate || false,
+            Boolean(state.newSubscriptionForm.domiciliationIncludeTerminalPrepayment)
         );
         applyPricingPayloadToNewSubscriptionForm(state, payload, preferredPlan, {
             _t,
@@ -481,7 +483,9 @@ async function applySelectedProduct(state, productId, {
                 Number(product.default_price || 0),
                 false,
                 false,
-                state.newSubscriptionForm.startDate || false
+                state.newSubscriptionForm.startDate || false,
+                false,
+                Boolean(state.newSubscriptionForm.domiciliationIncludeTerminalPrepayment)
             );
             const pricing = quote && quote.pricing ? quote.pricing : {};
             applyPricingPayloadToNewSubscriptionForm(state, pricing, null, {
@@ -568,7 +572,9 @@ async function applySelectedReenrollProduct(state, productId, {
             Number(product.default_price || 0),
             false,
             false,
-            state.renewalForm.startDate || false
+            state.renewalForm.startDate || false,
+            false,
+            Boolean(state.renewalForm.domiciliationIncludeTerminalPrepayment)
         );
         const payload = quote && quote.pricing ? quote.pricing : {};
         state.renewalForm = {
@@ -616,7 +622,9 @@ async function updateSelectedReenrollPlan(state, planChoice, {
             Number(selectedPlan.price || 0),
             Number(selectedPlan.plan_id || 0) || false,
             Number(selectedPlan.pricing_id || 0) || false,
-            state.renewalForm.startDate || false
+            state.renewalForm.startDate || false,
+            false,
+            Boolean(state.renewalForm.domiciliationIncludeTerminalPrepayment)
         );
         const payload = quote && quote.pricing ? quote.pricing : {};
         state.renewalForm = {

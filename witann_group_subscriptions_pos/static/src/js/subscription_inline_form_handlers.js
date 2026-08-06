@@ -951,6 +951,13 @@ async function handleSubscriptionInlineFieldChange({ field, target }, {
         if (Number(state.newSubscriptionForm.productId || 0) && selectedChoice !== "0:0") {
             await updateSelectedPlan(selectedChoice);
         }
+    } else if (state.formMode === "new" && field === "domiciliation_include_terminal_prepayment") {
+        state.newSubscriptionForm.domiciliationIncludeTerminalPrepayment = Boolean(target.checked);
+        const snapshot = state.newSubscriptionForm.pricingSnapshot || {};
+        const selectedChoice = `${Number(snapshot.plan_id || 0)}:${Number(snapshot.pricing_id || 0)}`;
+        if (Number(state.newSubscriptionForm.productId || 0) && selectedChoice !== "0:0") {
+            await updateSelectedPlan(selectedChoice);
+        }
     } else if (state.formMode === "new" && field === "participant_toggle") {
         toggleParticipant(target.value, target.checked);
     } else if (state.formMode === "reenroll" && field === "reenroll_product_id") {
@@ -959,6 +966,13 @@ async function handleSubscriptionInlineFieldChange({ field, target }, {
         await updateSelectedReenrollPlan(target.value);
     } else if (state.formMode === "reenroll" && field === "reenroll_start_date") {
         state.renewalForm.startDate = target.value || formatTodayISO();
+        const snapshot = state.renewalForm.pricingSnapshot || {};
+        const selectedChoice = `${Number(snapshot.plan_id || 0)}:${Number(snapshot.pricing_id || 0)}`;
+        if (Number(state.renewalForm.productId || 0) && selectedChoice !== "0:0") {
+            await updateSelectedReenrollPlan(selectedChoice);
+        }
+    } else if (state.formMode === "reenroll" && field === "domiciliation_include_terminal_prepayment") {
+        state.renewalForm.domiciliationIncludeTerminalPrepayment = Boolean(target.checked);
         const snapshot = state.renewalForm.pricingSnapshot || {};
         const selectedChoice = `${Number(snapshot.plan_id || 0)}:${Number(snapshot.pricing_id || 0)}`;
         if (Number(state.renewalForm.productId || 0) && selectedChoice !== "0:0") {
