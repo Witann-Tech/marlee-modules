@@ -66,6 +66,20 @@ class TestSubscriptionAccessControl(TransactionCase):
         )
         self.assertEqual(date_order_day, fields.Date.to_date('2026-05-12'))
 
+    def test_domiciliation_schedule_charges_proration_and_terminal_month(self):
+        schedule = self.env['wgs.subscription.domiciliation.contract'].wgs_build_initial_schedule(
+            start_date='2026-05-12',
+            monthly_amount=100.0,
+            term_months=12,
+        )
+
+        self.assertEqual(schedule['term_start_date'], fields.Date.to_date('2026-05-01'))
+        self.assertEqual(schedule['term_end_date'], fields.Date.to_date('2027-04-30'))
+        self.assertEqual(schedule['initial_installment_sequences'], [1, 12])
+        self.assertEqual(schedule['installments'][0]['amount'], round(100.0 * 20 / 31, 2))
+        self.assertEqual(schedule['installments'][-1]['amount'], 100.0)
+        self.assertEqual(schedule['initial_charge'], round(100.0 + 100.0 * 20 / 31, 2))
+
     def _create_subscription_order_for_product(self, product):
         order = self.env['sale.order'].create(
             {

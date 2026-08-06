@@ -97,6 +97,9 @@ function buildPricingSnapshotFromCharge(charge, {
                 ? charge.source_display_recurring_price
                 : (charge && charge.source_recurring_price ? charge.source_recurring_price : 0)
         ) || 0,
+        domiciliation: charge && charge.domiciliation && typeof charge.domiciliation === "object"
+            ? { ...charge.domiciliation }
+            : false,
     };
 }
 

@@ -149,6 +149,7 @@ async function openRenewalForm(state, item, {
         isReenroll: mode === "reenroll",
         startDate: mode === "reenroll" ? (state.businessDate || formatTodayISO()) : false,
         pricingSnapshot: null,
+        domiciliationMonthsToPay: false,
         discountPercent: "",
         supervisorPin: "",
         authorizedDiscount: null,
@@ -196,6 +197,7 @@ async function openRenewalForm(state, item, {
                 sourceSubscriptionId: state.renewalForm.subscriptionId,
                 sourceSubscriptionName: state.renewalForm.subscriptionName,
             }),
+            domiciliationMonthsToPay: Number(pricing.domiciliation && pricing.domiciliation.due_installment_count || 0) || false,
         };
         if (mode === "reenroll") {
             applyPricingPayloadToReenrollForm(state, pricing, null, { _t });

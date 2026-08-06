@@ -54,6 +54,12 @@ function renderRenewalForm({
         buildChargeFromSnapshot(renewalForm, "charge_now"),
         renewalForm
     );
+    const domiciliation = renewalForm.pricingSnapshot && renewalForm.pricingSnapshot.domiciliation;
+    const dueCount = Number(domiciliation && domiciliation.due_installment_count || 0) || 0;
+    const selectedMonths = Number(renewalForm.domiciliationMonthsToPay || dueCount) || dueCount;
+    const domiciliationChoices = Array.from({ length: dueCount }, (_, index) => index + 1)
+        .map((months) => `<option value="${months}" ${months === selectedMonths ? "selected" : ""}>${escapeHtml(String(months))}</option>`)
+        .join("");
     const participantOptions = isReenroll && Number(renewalForm.maxParticipantsTotal || 1) > 1
         ? (filteredParticipants || [])
             .map((row) => {
@@ -120,6 +126,7 @@ function renderRenewalForm({
                     <div><span>${escapeHtml(_t("Producto"))}</span><strong>${escapeHtml(renewalForm.productName || "-")}</strong></div>
                     <div><span>${escapeHtml(dateLabel)}</span><strong>${escapeHtml(dateValue || "-")}</strong></div>
                     <div><span>${escapeHtml(_t("Importe a cobrar"))}</span><strong>${escapeHtml(formatMoney(chargeDisplayAmount))}</strong></div>
+                    ${dueCount ? `<label><span>${escapeHtml(_t("Mensualidades a pagar"))}</span><select data-field="domiciliation_months_to_pay">${domiciliationChoices}</select></label>` : ""}
                 </div>
             `}
             ${renderDiscountAuthorizationSection({

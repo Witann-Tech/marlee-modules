@@ -495,7 +495,7 @@ patch(ControlButtons.prototype, {
         );
     },
 
-    async _fetchSubscriptionQuote(partnerId = false, productId = false, flow = "new", sourceSubscriptionId = false, pendingMoveId = false, fallback = 0, planId = false, pricingId = false, startDate = false) {
+    async _fetchSubscriptionQuote(partnerId = false, productId = false, flow = "new", sourceSubscriptionId = false, pendingMoveId = false, fallback = 0, planId = false, pricingId = false, startDate = false, domiciliationMonthsToPay = false) {
         return this.subscriptionPosApi.fetchSubscriptionQuote(
             partnerId || false,
             productId || false,
@@ -505,7 +505,8 @@ patch(ControlButtons.prototype, {
             fallback || 0,
             planId || false,
             pricingId || false,
-            startDate || false
+            startDate || false,
+            domiciliationMonthsToPay || false
         );
     },
 
@@ -2228,6 +2229,8 @@ patch(ControlButtons.prototype, {
                     toggleEditedParticipant: toggleEditedParticipantHandler,
                     formatTodayISO,
                     renderDetail,
+                    fetchSubscriptionQuote: (...args) => this._fetchSubscriptionQuote(...args),
+                    _t,
                 }
             );
         });

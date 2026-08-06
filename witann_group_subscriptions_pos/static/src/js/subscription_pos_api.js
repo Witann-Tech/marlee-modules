@@ -106,11 +106,11 @@ export function createSubscriptionPosApi(orm) {
                 [partnerId || false, productId || false, flow || "new", sourceSubscriptionId || false, pendingMoveId || false, fallback || 0, planId || false, pricingId || false, startDate || false]
             );
         },
-        async fetchSubscriptionQuote(partnerId = false, productId = false, flow = "new", sourceSubscriptionId = false, pendingMoveId = false, fallback = 0, planId = false, pricingId = false, startDate = false) {
+        async fetchSubscriptionQuote(partnerId = false, productId = false, flow = "new", sourceSubscriptionId = false, pendingMoveId = false, fallback = 0, planId = false, pricingId = false, startDate = false, domiciliationMonthsToPay = false) {
             return orm.call(
                 "pos.order",
                 "wgs_get_subscription_quote_for_pos",
-                [partnerId || false, productId || false, flow || "new", sourceSubscriptionId || false, pendingMoveId || false, fallback || 0, planId || false, pricingId || false, startDate || false]
+                [partnerId || false, productId || false, flow || "new", sourceSubscriptionId || false, pendingMoveId || false, fallback || 0, planId || false, pricingId || false, startDate || false, domiciliationMonthsToPay || false]
             );
         },
         async saveSubscriptionParticipants(subscriptionId, participantIds) {

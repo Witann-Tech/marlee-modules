@@ -102,6 +102,10 @@ class SaleOrder(models.Model):
         copy=True,
         help='Snapshot del horario de acceso definido al momento de vender o cambiar el paquete.',
     )
+    wgs_domiciliation_contract_id = fields.Many2one(
+        'wgs.subscription.domiciliation.contract',
+        string='Contrato domiciliado WGS', copy=False, readonly=True,
+    )
 
     @api.model
     def _wgs_get_subscription_business_timezone(self):
@@ -510,6 +514,11 @@ class SaleOrder(models.Model):
 
     def _wgs_is_due_for_subscription_auto_close(self, today=False):
         self.ensure_one()
+        contract = self.wgs_domiciliation_contract_id
+        if contract and contract.state == 'active':
+            business_today = fields.Date.to_date(today) or self._wgs_get_subscription_business_today(company=self.company_id)
+            if business_today <= contract.term_end_date:
+                return False
         if self._wgs_get_subscription_state_category() in ('cancel', 'closed', 'draft', 'upsell'):
             return False
         close_deadline = self._wgs_get_subscription_auto_close_deadline_from_order(today=today)
@@ -597,6 +606,11 @@ class SaleOrder(models.Model):
             return False
 
         today = self._wgs_get_subscription_business_today(company=self.company_id)
+        contract = self.wgs_domiciliation_contract_id
+        if contract:
+            if contract.state != 'active' or today < contract.access_start_date or today > contract.term_end_date:
+                return False
+            return 'enabled' if contract.is_access_current else 'suspended'
         start_date = self._wgs_get_first_access_date_value(
             ('wgs_effective_start_date', 'start_date', 'date_start', 'subscription_start_date', 'date_order')
         )

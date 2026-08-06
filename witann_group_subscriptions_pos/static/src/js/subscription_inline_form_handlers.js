@@ -933,6 +933,8 @@ async function handleSubscriptionInlineFieldChange({ field, target }, {
     toggleEditedParticipant,
     formatTodayISO,
     renderDetail,
+    fetchSubscriptionQuote,
+    _t,
 }) {
     clearFeedback();
     if (state.formMode === "new" && field === "product_id") {
@@ -964,6 +966,38 @@ async function handleSubscriptionInlineFieldChange({ field, target }, {
         }
     } else if (state.formMode === "reenroll" && field === "reenroll_participant_toggle") {
         toggleReenrollParticipant(target.value, target.checked);
+    } else if (state.formMode === "renewal" && field === "domiciliation_months_to_pay") {
+        const form = state.renewalForm;
+        if (!form || !form.pricingSnapshot || typeof fetchSubscriptionQuote !== "function") {
+            return false;
+        }
+        form.loading = true;
+        form.domiciliationMonthsToPay = Number(target.value || 0) || false;
+        renderDetail(state.currentDetail);
+        try {
+            const quote = await fetchSubscriptionQuote(
+                form.holderPartnerId || false,
+                form.productId || false,
+                "renewal",
+                form.subscriptionId || false,
+                false,
+                0,
+                false,
+                false,
+                false,
+                form.domiciliationMonthsToPay,
+            );
+            const pricing = quote && quote.pricing ? quote.pricing : {};
+            form.pricingSnapshot = {
+                ...form.pricingSnapshot,
+                ...pricing,
+                domiciliation: pricing.domiciliation || false,
+            };
+        } catch (error) {
+            state.formError = (error && error.message) || _t("No se pudo recalcular las mensualidades domiciliadas.");
+        } finally {
+            form.loading = false;
+        }
     } else if ((state.formMode === "renewal" || state.formMode === "reenroll") && field === "renewal_discount_percent") {
         state.renewalForm.discountPercent = target.value || "";
         state.renewalForm.authorizedDiscount = null;
