@@ -203,6 +203,49 @@ class WgsSubscriptionDomiciliationContract(models.Model):
             'installments': [installment.wgs_as_payload() for installment in due_installments],
         }
 
+    def wgs_get_operational_status(self, today=False):
+        """Return the contract-owned status used by access and POS operations.
+
+        Odoo's native recurring state follows its own invoice cadence.  A
+        domiciliation contract instead remains operational for its full forced
+        term: an overdue installment suspends access, but never converts the
+        contract into a re-enrollment candidate.
+        """
+        self.ensure_one()
+        today = fields.Date.to_date(today) or self.env['sale.order']._wgs_get_subscription_business_today(
+            company=self.company_id
+        )
+        within_term = bool(
+            self.state == 'active'
+            and self.access_start_date <= today <= self.term_end_date
+        )
+        due_installments = self.wgs_get_due_installments(today=today) if within_term else self.browse()
+        is_current = bool(within_term and not due_installments)
+
+        if today < self.access_start_date and self.state == 'active':
+            state_key = 'future'
+            reason = _('El contrato domiciliado todavía no inicia.')
+        elif within_term and due_installments:
+            state_key = 'renew'
+            reason = _(
+                'El contrato domiciliado tiene %(count)s mensualidad(es) pendiente(s) de pago.'
+            ) % {'count': len(due_installments)}
+        elif within_term:
+            state_key = 'progress'
+            reason = _('Contrato domiciliado al corriente.')
+        else:
+            state_key = 'closed'
+            reason = _('El plazo forzoso del contrato domiciliado concluyó o fue cancelado.')
+
+        return {
+            'state_key': state_key,
+            'access_state': 'enabled' if is_current else ('suspended' if within_term else False),
+            'can_renew': bool(within_term and due_installments),
+            'due_installment_count': len(due_installments),
+            'next_due_date': due_installments[:1].due_date if due_installments else False,
+            'reason': reason,
+        }
+
     def wgs_apply_pos_payment(self, pos_line, *, installment_sequences, allow_terminal_prepayment=False):
         """Mark exactly the quoted full monthly installments paid, once per POS line."""
         self.ensure_one()

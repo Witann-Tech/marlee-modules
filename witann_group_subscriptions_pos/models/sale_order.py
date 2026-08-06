@@ -2569,12 +2569,85 @@ class SaleOrder(models.Model):
             return True
         return False
 
+    def _wgs_build_domiciliation_status_item_for_pos(self, today, include_actions=False):
+        """Project the contract-owned domiciliation state for the POS.
+
+        Native Odoo recurring state is deliberately not used here.  Its invoice
+        scheduler may close the originating sale order while the WGS forced
+        term remains collectible.  The contract is therefore the single source
+        of truth for the visual state and permitted action.
+        """
+        self.ensure_one()
+        contract = self.wgs_domiciliation_contract_id
+        if not contract or contract.state != 'active':
+            return False
+        if self._wgs_has_replacement_subscription_for_pos():
+            return False
+
+        recurring_lines = self._get_recurring_lines()
+        primary_line = recurring_lines.sorted(key=lambda line: line.id)[:1]
+        operational = contract.wgs_get_operational_status(today=today)
+        state_key = operational['state_key']
+        state_labels = {
+            'progress': _('En progreso'),
+            'renew': _('Por renovar'),
+            'future': _('Pendiente de inicio'),
+            'closed': _('Cerrada'),
+        }
+        access_state = operational['access_state'] or False
+        next_due_date = operational['next_due_date']
+        result = {
+            'subscription_id': self.id,
+            'subscription_name': self.name,
+            'state': self.subscription_state if 'subscription_state' in self._fields else False,
+            'access_state': access_state,
+            'native_state_key': state_key,
+            'native_state_label': state_labels.get(state_key, _('Sin estado')),
+            'holder_partner_id': self.partner_id.id or False,
+            'holder_partner_name': self.partner_id.display_name or False,
+            'package_names': [contract.product_id.display_name] if contract.product_id else [],
+            'plan_name': contract.plan_id.display_name or False,
+            'renewal_product_id': contract.product_id.id or False,
+            'start_date': fields.Date.to_string(contract.access_start_date),
+            'period_start': fields.Date.to_string(contract.term_start_date),
+            'valid_until': fields.Date.to_string(contract.term_end_date),
+            'next_invoice_date': fields.Date.to_string(next_due_date) if next_due_date else False,
+            'auto_close_date': False,
+            'is_valid': access_state == 'enabled',
+            'status_label': _('Vigente') if access_state == 'enabled' else _('Sin vigencia'),
+            'reason': operational['reason'],
+        }
+        if not include_actions:
+            return result
+
+        renewal_plan_id = contract.plan_id.id
+        renewal_pricing_id = False
+        for field_name in ('subscription_pricing_id', 'pricing_id', 'recurring_pricing_id'):
+            if primary_line and field_name in primary_line._fields and primary_line[field_name]:
+                renewal_pricing_id = primary_line[field_name].id
+                break
+        result.update({
+            'renewal_product_name': contract.product_id.display_name or False,
+            'renewal_plan_id': renewal_plan_id,
+            'renewal_pricing_id': renewal_pricing_id,
+            'has_replacement_subscription': False,
+            'can_renew': bool(operational['can_renew']),
+            'can_reenroll': state_key == 'closed',
+        })
+        return result
+
     def _build_pos_subscription_directory_status_item(self, today):
         self.ensure_one()
 
         recurring_lines = self._get_recurring_lines()
         if not recurring_lines:
             return False
+
+        domiciliation_item = self._wgs_build_domiciliation_status_item_for_pos(
+            today, include_actions=False,
+        )
+        if domiciliation_item:
+            return domiciliation_item
 
         primary_recurring_line = recurring_lines.sorted(key=lambda line: line.id)[:1]
         plan_name = self._get_subscription_plan_name_for_pos(recurring_lines)
@@ -2659,6 +2732,12 @@ class SaleOrder(models.Model):
         recurring_lines = self._get_recurring_lines()
         if not recurring_lines:
             return False
+
+        domiciliation_item = self._wgs_build_domiciliation_status_item_for_pos(
+            today, include_actions=True,
+        )
+        if domiciliation_item:
+            return domiciliation_item
         primary_recurring_line = recurring_lines.sorted(key=lambda line: line.id)[:1]
         renewal_product = primary_recurring_line.product_id if primary_recurring_line else self.env['product.product']
         renewal_plan_id = False

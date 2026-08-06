@@ -1154,7 +1154,11 @@ class PosOrder(models.Model):
                 raise UserError(_('La suscripción origen no existe.'))
             if not self._wgs_order_has_subscription_signal(source_order):
                 raise UserError(_('La orden origen no corresponde a una suscripción válida.'))
-            if not self._wgs_is_subscription_order_active_for_upsell(source_order):
+            contract = source_order.wgs_domiciliation_contract_id
+            if contract and contract.state == 'active':
+                if not contract.wgs_get_operational_status().get('can_renew'):
+                    raise UserError(_('El contrato domiciliado no tiene mensualidades exigibles para cobrar.'))
+            elif not self._wgs_is_subscription_order_active_for_upsell(source_order):
                 raise UserError(_('La suscripción origen no está activa para renovación.'))
 
         elif normalized_flow == 'reenroll':
@@ -2545,11 +2549,10 @@ class PosOrder(models.Model):
             raise UserError(_('No se encontró la suscripción origen para cobrar la renovación en POS.'))
         if not self._wgs_order_has_subscription_signal(source_order):
             raise UserError(_('La orden origen no corresponde a una suscripción válida para renovación.'))
-        if not self._wgs_is_subscription_order_active_for_upsell(source_order):
-            raise UserError(_('La suscripción origen no está activa para renovación.'))
-
         contract = source_order.wgs_domiciliation_contract_id
         if contract and contract.state == 'active':
+            if not contract.wgs_get_operational_status().get('can_renew'):
+                raise UserError(_('El contrato domiciliado no tiene mensualidades exigibles para cobrar.'))
             snapshot = self._wgs_get_persisted_subscription_pricing_from_pos_line(line).get('snapshot') or {}
             domiciliation = snapshot.get('domiciliation') if isinstance(snapshot, dict) else {}
             sequences = domiciliation.get('selected_installment_sequences') if isinstance(domiciliation, dict) else []
@@ -2564,6 +2567,9 @@ class PosOrder(models.Model):
             })
             source_order.with_context(access_sync_priority=True)._wgs_sync_access_control_people()
             return source_order
+
+        if not self._wgs_is_subscription_order_active_for_upsell(source_order):
+            raise UserError(_('La suscripción origen no está activa para renovación.'))
 
         recurring_lines = source_order.order_line.filtered(
             lambda so_line: (

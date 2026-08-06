@@ -595,6 +595,14 @@ class SaleOrder(models.Model):
         if 'subscription_state' not in self._fields:
             return False
 
+        # A domiciliation contract owns entitlement for its entire forced term.
+        # Native recurring jobs can mark the source order closed after a missed
+        # invoice; that is an accounting state, not a cancellation of the WGS
+        # contract and must not prevent its overdue installments from being paid.
+        contract = self.wgs_domiciliation_contract_id
+        if contract:
+            return contract.wgs_get_operational_status().get('access_state') or False
+
         state_value = (self.subscription_state or '').strip().lower()
         if not state_value:
             return False
@@ -606,11 +614,6 @@ class SaleOrder(models.Model):
             return False
 
         today = self._wgs_get_subscription_business_today(company=self.company_id)
-        contract = self.wgs_domiciliation_contract_id
-        if contract:
-            if contract.state != 'active' or today < contract.access_start_date or today > contract.term_end_date:
-                return False
-            return 'enabled' if contract.is_access_current else 'suspended'
         start_date = self._wgs_get_first_access_date_value(
             ('wgs_effective_start_date', 'start_date', 'date_start', 'subscription_start_date', 'date_order')
         )

@@ -80,6 +80,42 @@ class TestSubscriptionAccessControl(TransactionCase):
         self.assertEqual(schedule['installments'][-1]['amount'], 100.0)
         self.assertEqual(schedule['initial_charge'], round(100.0 + 100.0 * 20 / 31, 2))
 
+    def test_domiciliation_overdue_contract_remains_renewable_during_forced_term(self):
+        plan = self.env['sale.subscription.plan'].create({
+            'name': 'Domiciliado de prueba',
+            'wgs_domiciliation_enabled': True,
+            'wgs_domiciliation_term_months': 12,
+        })
+        order = self._create_subscription_order()
+        schedule = self.env['wgs.subscription.domiciliation.contract'].wgs_build_initial_schedule(
+            start_date='2026-02-15', monthly_amount=100.0, term_months=12,
+        )
+        contract = self.env['wgs.subscription.domiciliation.contract'].create({
+            'subscription_id': order.id,
+            'product_id': self.product.id,
+            'plan_id': plan.id,
+            'monthly_amount': 100.0,
+            'access_start_date': schedule['access_start_date'],
+            'term_start_date': schedule['term_start_date'],
+            'term_end_date': schedule['term_end_date'],
+            'term_months': schedule['term_months'],
+            'installment_ids': [
+                Command.create({
+                    **installment,
+                    'state': 'paid' if installment['sequence'] in (1, 12) else 'due',
+                })
+                for installment in schedule['installments']
+            ],
+        })
+        order.write({'wgs_domiciliation_contract_id': contract.id})
+
+        status = contract.wgs_get_operational_status(today='2026-08-05')
+
+        self.assertEqual(status['state_key'], 'renew')
+        self.assertEqual(status['access_state'], 'suspended')
+        self.assertTrue(status['can_renew'])
+        self.assertGreater(status['due_installment_count'], 0)
+
     def _create_subscription_order_for_product(self, product):
         order = self.env['sale.order'].create(
             {
