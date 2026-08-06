@@ -1298,6 +1298,7 @@ class PosOrder(models.Model):
         preferred_plan_id=False,
         preferred_pricing_id=False,
         start_date=False,
+        domiciliation_months_to_pay=False,
     ):
         self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar pricing de suscripción desde Punto de Venta.'))
         return self._wgs_build_subscription_quote_payload_for_pos(

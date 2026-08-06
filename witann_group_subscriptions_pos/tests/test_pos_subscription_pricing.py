@@ -207,6 +207,27 @@ class TestPosSubscriptionPricing(TransactionCase):
         self.assertEqual(schedule['period_days'], 31)
         self.assertEqual(schedule['charge_days'], 20)
 
+    def test_domiciliation_quote_supports_historical_start_dates(self):
+        self.plan.write({
+            'wgs_domiciliation_enabled': True,
+            'wgs_domiciliation_term_months': 12,
+        })
+        self._create_subscription_pricing(self.plan, price=100.0, name='Pricing domiciliado histórico POS')
+
+        charge = self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
+            partner_id=self.partner.id,
+            product_id=self.product.id,
+            flow='new',
+            fallback=100.0,
+            preferred_plan_id=self.plan.id,
+            start_date='2026-02-12',
+        )
+
+        self.assertTrue(charge['domiciliation']['is_domiciliation'])
+        self.assertEqual(charge['subscription_start_date'], '2026-02-12')
+        self.assertEqual(charge['subscription_end_date'], '2027-01-31')
+        self.assertEqual(charge['ticket_charge_now'], round(100.0 + (100.0 * 17 / 28), 2))
+
     def test_aligned_monthly_plan_charges_first_period_proportionally(self):
         alignment_field = self.PosOrder._wgs_get_period_alignment_field_name(self.plan)
         if not alignment_field:
