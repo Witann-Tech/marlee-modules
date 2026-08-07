@@ -1,7 +1,12 @@
 /** @odoo-module **/
 
 import { getRequestedDiscountPercent } from "./subscription_discount_render";
-import { buildChargeFromSnapshot, getPricingSnapshot } from "./subscription_pricing_snapshot";
+import { getToggledDomiciliationInstallmentSequences } from "./subscription_domiciliation_selection";
+import {
+    buildChargeFromSnapshot,
+    buildPricingSnapshotFromCharge,
+    getPricingSnapshot,
+} from "./subscription_pricing_snapshot";
 
 async function ensureEligibleProductForPartner(state, partnerId, productId, {
     flow = "new",
@@ -777,7 +782,9 @@ function buildSubscriptionInlineActionHandlers({
                     metadata: {
                         flow: "renewal",
                         partner_id: holderPartnerId || false,
-                        participant_ids: [],
+                        participant_ids: Array.isArray(state.renewalForm.participantIds)
+                            ? state.renewalForm.participantIds
+                            : [],
                         plan_id: Number(pricingSnapshot.plan_id || 0) || false,
                         pricing_id: Number(pricingSnapshot.pricing_id || 0) || false,
                         start_date: false,
@@ -923,16 +930,20 @@ async function handleSubscriptionInlineFieldChange({ field, target }, {
     clearFeedback,
     applySelectedProduct,
     updateSelectedPlan,
+    applySelectedRenewalProduct,
     applySelectedReenrollProduct,
     updateSelectedReenrollPlan,
     applySelectedUpsaleProduct,
     updateSelectedUpsalePlan,
     toggleParticipant,
+    toggleRenewalParticipant,
     toggleReenrollParticipant,
     toggleUpsaleParticipant,
     toggleEditedParticipant,
     formatTodayISO,
     renderDetail,
+    fetchSubscriptionQuote,
+    _t,
 }) {
     clearFeedback();
     if (state.formMode === "new" && field === "product_id") {
@@ -947,10 +958,25 @@ async function handleSubscriptionInlineFieldChange({ field, target }, {
         const snapshot = state.newSubscriptionForm.pricingSnapshot || {};
         const selectedChoice = `${Number(snapshot.plan_id || 0)}:${Number(snapshot.pricing_id || 0)}`;
         if (Number(state.newSubscriptionForm.productId || 0) && selectedChoice !== "0:0") {
-            await updateSelectedPlan(selectedChoice);
+            await updateSelectedPlan(selectedChoice, snapshot.domiciliation?.selected_installment_sequences || false);
+        }
+    } else if (state.formMode === "new" && field === "domiciliation_installment_toggle") {
+        const snapshot = state.newSubscriptionForm.pricingSnapshot || {};
+        const sequences = getToggledDomiciliationInstallmentSequences(
+            snapshot.domiciliation,
+            target.value,
+            target.checked,
+        );
+        const selectedChoice = `${Number(snapshot.plan_id || 0)}:${Number(snapshot.pricing_id || 0)}`;
+        if (Number(state.newSubscriptionForm.productId || 0) && selectedChoice !== "0:0") {
+            await updateSelectedPlan(selectedChoice, sequences);
         }
     } else if (state.formMode === "new" && field === "participant_toggle") {
         toggleParticipant(target.value, target.checked);
+    } else if (state.formMode === "renewal" && field === "renewal_product_id") {
+        await applySelectedRenewalProduct(target.value);
+    } else if (state.formMode === "renewal" && field === "renewal_participant_toggle") {
+        toggleRenewalParticipant(target.value, target.checked);
     } else if (state.formMode === "reenroll" && field === "reenroll_product_id") {
         await applySelectedReenrollProduct(target.value);
     } else if (state.formMode === "reenroll" && field === "reenroll_plan_choice") {
@@ -960,10 +986,58 @@ async function handleSubscriptionInlineFieldChange({ field, target }, {
         const snapshot = state.renewalForm.pricingSnapshot || {};
         const selectedChoice = `${Number(snapshot.plan_id || 0)}:${Number(snapshot.pricing_id || 0)}`;
         if (Number(state.renewalForm.productId || 0) && selectedChoice !== "0:0") {
-            await updateSelectedReenrollPlan(selectedChoice);
+            await updateSelectedReenrollPlan(selectedChoice, snapshot.domiciliation?.selected_installment_sequences || false);
+        }
+    } else if (state.formMode === "reenroll" && field === "domiciliation_installment_toggle") {
+        const snapshot = state.renewalForm.pricingSnapshot || {};
+        const sequences = getToggledDomiciliationInstallmentSequences(
+            snapshot.domiciliation,
+            target.value,
+            target.checked,
+        );
+        const selectedChoice = `${Number(snapshot.plan_id || 0)}:${Number(snapshot.pricing_id || 0)}`;
+        if (Number(state.renewalForm.productId || 0) && selectedChoice !== "0:0") {
+            await updateSelectedReenrollPlan(selectedChoice, sequences);
         }
     } else if (state.formMode === "reenroll" && field === "reenroll_participant_toggle") {
         toggleReenrollParticipant(target.value, target.checked);
+    } else if (state.formMode === "renewal" && field === "domiciliation_installment_toggle") {
+        const form = state.renewalForm;
+        if (!form || !form.pricingSnapshot || typeof fetchSubscriptionQuote !== "function") {
+            return false;
+        }
+        const currentSnapshot = form.pricingSnapshot;
+        const sequences = getToggledDomiciliationInstallmentSequences(
+            currentSnapshot.domiciliation,
+            target.value,
+            target.checked,
+        );
+        form.loading = true;
+        renderDetail(state.currentDetail);
+        try {
+            const quote = await fetchSubscriptionQuote(
+                form.holderPartnerId || false,
+                form.productId || false,
+                "renewal",
+                form.subscriptionId || false,
+                false,
+                0,
+                false,
+                false,
+                false,
+                sequences,
+            );
+            const pricing = quote && quote.pricing ? quote.pricing : {};
+            form.pricingSnapshot = buildPricingSnapshotFromCharge(pricing, {
+                flow: "renewal",
+                sourceSubscriptionId: form.subscriptionId,
+                sourceSubscriptionName: form.subscriptionName,
+            });
+        } catch (error) {
+            state.formError = (error && error.message) || _t("No se pudo recalcular las mensualidades domiciliadas.");
+        } finally {
+            form.loading = false;
+        }
     } else if ((state.formMode === "renewal" || state.formMode === "reenroll") && field === "renewal_discount_percent") {
         state.renewalForm.discountPercent = target.value || "";
         state.renewalForm.authorizedDiscount = null;
@@ -1015,6 +1089,10 @@ function handleSubscriptionInlineFieldInput({ field, target }, {
         return true;
     }
     if (state.formMode === "reenroll" && field === "reenroll_participant_search") {
+        state.renewalForm.participantSearch = target.value || "";
+        return true;
+    }
+    if (state.formMode === "renewal" && field === "renewal_participant_search") {
         state.renewalForm.participantSearch = target.value || "";
         return true;
     }

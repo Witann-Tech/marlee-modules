@@ -1,6 +1,7 @@
 from lxml import etree
 
-from odoo import api, fields, models
+from odoo import _, api, fields, models
+from odoo.exceptions import ValidationError
 
 
 class SaleSubscriptionPlan(models.Model):
@@ -11,6 +12,27 @@ class SaleSubscriptionPlan(models.Model):
         default=False,
         help='Cuando está activo, Witann Group Subscriptions tratará este plan como una vigencia exacta de un día.',
     )
+    wgs_domiciliation_enabled = fields.Boolean(
+        string='Domiciliado WGS',
+        default=False,
+        help=(
+            'Convierte este plan en un contrato de plazo forzoso cobrado por mensualidades. '
+            'La cartera y el acceso se controlan desde Witann Group Subscriptions.'
+        ),
+    )
+    wgs_domiciliation_term_months = fields.Integer(
+        string='Plazo forzoso domiciliado (meses)',
+        default=12,
+        help='Número de mensualidades del contrato domiciliado. El último mes se cobra por anticipado.',
+    )
+
+    @api.constrains('wgs_domiciliation_enabled', 'wgs_domiciliation_term_months')
+    def _check_wgs_domiciliation_term_months(self):
+        for plan in self:
+            if plan.wgs_domiciliation_enabled and int(plan.wgs_domiciliation_term_months or 0) < 2:
+                raise ValidationError(_(
+                    'Un plan domiciliado debe tener al menos dos mensualidades: el periodo inicial y el último mes anticipado.'
+                ))
 
     @api.model
     def _wgs_strip_removed_min_term_field(self, arch):

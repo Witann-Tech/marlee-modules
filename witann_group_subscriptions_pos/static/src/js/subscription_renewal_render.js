@@ -4,6 +4,7 @@ import {
     getDiscountedDisplayAmount,
     renderDiscountAuthorizationSection,
 } from "./subscription_discount_render";
+import { renderDomiciliationInstallmentSelector } from "./subscription_domiciliation_render";
 import { buildChargeFromSnapshot } from "./subscription_pricing_snapshot";
 
 function renderRenewalForm({
@@ -36,6 +37,16 @@ function renderRenewalForm({
     const dateLabel = formMode === "reenroll" ? _t("Nueva vigencia desde") : _t("Próxima fecha");
     const dateValue = formMode === "reenroll" ? formatDateDisplay(renewalForm.startDate) : formatDateDisplay(renewalForm.nextInvoiceDate);
     const isReenroll = formMode === "reenroll";
+    const domiciliation = renewalForm.pricingSnapshot && renewalForm.pricingSnapshot.domiciliation;
+    const canChangeRenewalPackage = !isReenroll
+        && Boolean(renewalForm.pricingSnapshot)
+        && !(domiciliation && domiciliation.is_domiciliation);
+    const hasRenewalPackageChange = canChangeRenewalPackage && Boolean(renewalForm.packageChangeSelected);
+    const canSelectParticipants = (isReenroll || hasRenewalPackageChange)
+        && Number(renewalForm.maxParticipantsTotal || 1) > 1;
+    const participantField = isReenroll ? "reenroll_participant_toggle" : "renewal_participant_toggle";
+    const participantSearchField = isReenroll ? "reenroll_participant_search" : "renewal_participant_search";
+    const renewalPeriodValue = `${formatDateDisplay(renewalForm.pricingSnapshot?.subscription_start_date) || "-"} - ${formatDateDisplay(renewalForm.pricingSnapshot?.subscription_end_date) || "-"}`;
     const holderPartnerId = Number(renewalForm.holderPartnerId || 0);
     const productOptions = (productCatalog || []).map((product) => {
         const selected = Number(product.id) === Number(renewalForm.productId) ? "selected" : "";
@@ -54,7 +65,14 @@ function renderRenewalForm({
         buildChargeFromSnapshot(renewalForm, "charge_now"),
         renewalForm
     );
-    const participantOptions = isReenroll && Number(renewalForm.maxParticipantsTotal || 1) > 1
+    const domiciliationSelector = renderDomiciliationInstallmentSelector({
+        domiciliation,
+        escapeHtml,
+        formatDateDisplay,
+        formatMoney,
+        _t,
+    });
+    const participantOptions = canSelectParticipants
         ? (filteredParticipants || [])
             .map((row) => {
                 const rowId = Number(row.id || 0);
@@ -62,7 +80,7 @@ function renderRenewalForm({
                 const isOwner = rowId === holderPartnerId;
                 return `
                     <label class="wgs-checkbox-option ${isOwner ? "wgs-checkbox-owner" : ""}">
-                        <input type="checkbox" data-field="reenroll_participant_toggle" value="${escapeHtml(String(rowId))}" ${selected ? "checked" : ""} ${isOwner ? "disabled" : ""} />
+                        <input type="checkbox" data-field="${participantField}" value="${escapeHtml(String(rowId))}" ${selected ? "checked" : ""} ${isOwner ? "disabled" : ""} />
                         <span>${escapeHtml(row.name || "-")}${isOwner ? ` ${escapeHtml(_t("(Titular)"))}` : ""}</span>
                     </label>
                 `;
@@ -76,7 +94,7 @@ function renderRenewalForm({
             </div>
             ${formError ? `<div class="wgs-inline-error">${escapeHtml(formError)}</div>` : ""}
             ${formNotice ? `<div class="wgs-inline-notice">${escapeHtml(formNotice)}</div>` : ""}
-            ${isReenroll && catalogLoading ? `<div class="wgs-inline-loading">${escapeHtml(_t("Cargando paquetes de suscripción..."))}</div>` : ""}
+            ${(isReenroll || canChangeRenewalPackage) && catalogLoading ? `<div class="wgs-inline-loading">${escapeHtml(_t("Cargando paquetes de suscripción..."))}</div>` : ""}
             ${renewalForm.loading ? `<div class="wgs-inline-loading">${escapeHtml(_t("Calculando importe de renovación..."))}</div>` : ""}
             ${isReenroll ? `
                 <div class="wgs-inline-form-grid">
@@ -113,6 +131,31 @@ function renderRenewalForm({
                         </div>
                     ` : ""}
                 </div>
+            ` : canChangeRenewalPackage ? `
+                <div class="wgs-inline-form-grid">
+                    <label>
+                        <span>${escapeHtml(_t("Paquete para la nueva vigencia"))}</span>
+                        <select data-field="renewal_product_id" ${(productCatalog || []).length ? "" : "disabled"}>
+                            <option value="">${escapeHtml(_t("Selecciona un paquete"))}</option>
+                            ${productOptions}
+                        </select>
+                    </label>
+                    <div>
+                        <span>${escapeHtml(_t("Nueva vigencia"))}</span>
+                        <strong class="wgs-inline-static-value">${escapeHtml(renewalPeriodValue)}</strong>
+                    </div>
+                    <div>
+                        <span>${escapeHtml(_t("Importe a cobrar"))}</span>
+                        <strong class="wgs-inline-static-value">${escapeHtml(formatMoney(chargeDisplayAmount))}</strong>
+                    </div>
+                    <div>
+                        <span>${escapeHtml(_t("Cupo total"))}</span>
+                        <strong class="wgs-inline-static-value">${escapeHtml(String(renewalForm.maxParticipantsTotal || 1))}</strong>
+                    </div>
+                </div>
+                ${hasRenewalPackageChange && Number(renewalForm.maxParticipantsTotal || 1) <= 1 ? `
+                    <div class="wgs-inline-notice">${escapeHtml(_t("El paquete seleccionado conserva únicamente al titular."))}</div>
+                ` : ""}
             ` : `
                 <div class="wgs-inline-form-meta">
                     <div><span>${escapeHtml(_t("Suscripción"))}</span><strong>${escapeHtml(renewalForm.subscriptionName || "-")}</strong></div>
@@ -122,6 +165,7 @@ function renderRenewalForm({
                     <div><span>${escapeHtml(_t("Importe a cobrar"))}</span><strong>${escapeHtml(formatMoney(chargeDisplayAmount))}</strong></div>
                 </div>
             `}
+            ${domiciliationSelector}
             ${renderDiscountAuthorizationSection({
                 form: renewalForm,
                 formError,
@@ -132,10 +176,10 @@ function renderRenewalForm({
                 pinField: "renewal_supervisor_pin",
                 _t,
             })}
-            ${isReenroll && Number(renewalForm.maxParticipantsTotal || 1) > 1 ? `
+            ${canSelectParticipants ? `
                 <div class="wgs-inline-participants">
                     <span class="wgs-inline-section-title">${escapeHtml(_t("Participantes resultantes"))}</span>
-                    <input type="text" class="wgs-inline-search" data-field="reenroll_participant_search" placeholder="${escapeHtml(_t("Buscar participante"))}" value="${escapeHtml(renewalForm.participantSearch || "")}" />
+                    <input type="text" class="wgs-inline-search" data-field="${participantSearchField}" placeholder="${escapeHtml(_t("Buscar participante"))}" value="${escapeHtml(renewalForm.participantSearch || "")}" />
                     ${participantRowsLoading ? `<div class="wgs-inline-loading">${escapeHtml(_t("Buscando participantes..."))}</div>` : ""}
                     <div class="wgs-inline-participant-list">${participantOptions}</div>
                 </div>

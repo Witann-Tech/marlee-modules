@@ -7,6 +7,8 @@
         <field name="arch" type="xml">
             <xpath expr="//field[@name='company_id']" position="after">
                 <field name="wgs_single_day_plan"/>
+                <field name="wgs_domiciliation_enabled"/>
+                <field name="wgs_domiciliation_term_months" invisible="not wgs_domiciliation_enabled" required="wgs_domiciliation_enabled"/>
             </xpath>
         </field>
     </record>

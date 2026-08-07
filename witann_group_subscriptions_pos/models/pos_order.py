@@ -170,6 +170,18 @@ class PosOrder(models.Model):
             raise UserError(error_message)
 
     @api.model
+    def _wgs_get_subscription_business_timezone_for_pos(self):
+        return self.env['sale.order']._wgs_get_subscription_business_timezone()
+
+    @api.model
+    def _wgs_get_subscription_business_today_for_pos(self, company=False, now=False):
+        return self.env['sale.order']._wgs_get_subscription_business_today(company=company, now=now)
+
+    @api.model
+    def _wgs_get_subscription_business_date_from_datetime_for_pos(self, value):
+        return self.env['sale.order']._wgs_get_subscription_business_date_from_datetime(value)
+
+    @api.model
     def _wgs_disable_invoice_request_for_pos_order_payload(self, order):
         if not isinstance(order, dict):
             return order
@@ -798,7 +810,7 @@ class PosOrder(models.Model):
         except (TypeError, ValueError):
             return False
 
-        current_two_digit_year = fields.Date.context_today(self).year % 100
+        current_two_digit_year = self._wgs_get_subscription_business_today_for_pos().year % 100
         century = 2000 if year <= current_two_digit_year else 1900
         try:
             return date(century + year, month, day)
@@ -810,7 +822,7 @@ class PosOrder(models.Model):
         if not birthdate:
             return 0
         birthdate = fields.Date.to_date(birthdate)
-        today = fields.Date.to_date(today) if today else fields.Date.context_today(self)
+        today = fields.Date.to_date(today) if today else self._wgs_get_subscription_business_today_for_pos()
         age = today.year - birthdate.year
         if (today.month, today.day) < (birthdate.month, birthdate.day):
             age -= 1
@@ -948,6 +960,52 @@ class PosOrder(models.Model):
             'free_trial_day': free_trial_day,
         }
 
+    def _wgs_get_domiciliation_installment_payloads_for_pos(
+        self,
+        installments,
+        *,
+        product,
+        partner=False,
+        company=False,
+        fiscal_position=False,
+        access_start_date=False,
+    ):
+        """Project contract installments for POS without duplicating fiscal rules.
+
+        The contract deliberately stores its schedule in untaxed amounts and by
+        calendar month.  POS must display the commercial amount and, for the
+        first prorated month, the actual access start date.
+        """
+        access_start_date = fields.Date.to_date(access_start_date)
+        payloads = []
+        for installment in installments or []:
+            payload = dict(installment)
+            period_start_date = fields.Date.to_date(payload.get('period_start_date'))
+            period_end_date = fields.Date.to_date(payload.get('period_end_date'))
+            due_date = fields.Date.to_date(payload.get('due_date'))
+            display_period_start_date = period_start_date
+            if payload.get('kind') == 'initial_proration' and access_start_date:
+                display_period_start_date = access_start_date
+
+            payload.update({
+                'period_start_date': fields.Date.to_string(period_start_date) if period_start_date else False,
+                'period_end_date': fields.Date.to_string(period_end_date) if period_end_date else False,
+                'due_date': fields.Date.to_string(due_date) if due_date else False,
+                'display_period_start_date': (
+                    fields.Date.to_string(display_period_start_date)
+                    if display_period_start_date else False
+                ),
+                'display_amount': float(self._wgs_get_price_with_taxes_for_pos(
+                    product,
+                    float(payload.get('amount') or 0.0),
+                    partner=partner,
+                    company=company,
+                    fiscal_position=fiscal_position,
+                )),
+            })
+            payloads.append(payload)
+        return payloads
+
     def _wgs_build_product_pricing_payload_for_pos(
         self,
         product,
@@ -959,10 +1017,15 @@ class PosOrder(models.Model):
         preferred_plan_id=False,
         preferred_pricing_id=False,
         start_date=False,
+        domiciliation_installment_sequences=False,
     ):
         product.ensure_one()
         source_order = source_order.exists() if source_order else self.env['sale.order']
-        pricing_company = source_order.company_id if source_order and 'company_id' in source_order._fields else False
+        pricing_company = (
+            source_order.company_id
+            if source_order and 'company_id' in source_order._fields
+            else self.env.company
+        )
         pricing_fiscal_position = source_order.fiscal_position_id if source_order and 'fiscal_position_id' in source_order._fields else False
         snapshot = self._wgs_resolve_subscription_pricing_snapshot(
             flow=flow,
@@ -975,11 +1038,72 @@ class PosOrder(models.Model):
             preferred_plan_id=preferred_plan_id,
             preferred_pricing_id=preferred_pricing_id,
             include_credit=flow == 'upsale' and bool(source_order),
-            start_date=start_date,
+            start_date=fields.Date.to_date(start_date) or self._wgs_get_subscription_business_today_for_pos(
+                company=pricing_company,
+            ),
         )
         candidates = list(snapshot.get('candidates') or [])
         candidates.sort(key=lambda row: (row['sequence'], row.get('pricing_id') or 0))
         flags = self._wgs_get_subscription_product_flags_for_pos(product)
+        plan = self.env['sale.subscription.plan'].browse(int(snapshot.get('plan_id') or 0)).exists()
+        domiciliation = {}
+        if plan and plan.wgs_domiciliation_enabled:
+            schedule = self.env['wgs.subscription.domiciliation.contract'].wgs_build_initial_schedule(
+                start_date=fields.Date.to_date(start_date) or self._wgs_get_subscription_business_today_for_pos(
+                    company=pricing_company
+                ),
+                monthly_amount=float(snapshot.get('price_unit') or 0.0),
+                term_months=plan.wgs_domiciliation_term_months,
+            )
+            selected_installment_sequences = (
+                self.env['wgs.subscription.domiciliation.contract']._wgs_validate_initial_installment_sequences(
+                    domiciliation_installment_sequences,
+                    schedule['term_months'],
+                )
+                if domiciliation_installment_sequences is not False
+                else [1]
+            )
+            installments_by_sequence = {
+                installment['sequence']: installment for installment in schedule['installments']
+            }
+            selected_charge = round(sum(
+                float(installments_by_sequence[sequence]['amount'])
+                for sequence in selected_installment_sequences
+            ), 2)
+            selected_display_charge = self._wgs_get_price_with_taxes_for_pos(
+                product,
+                selected_charge,
+                partner=partner or False,
+                company=pricing_company or False,
+                fiscal_position=pricing_fiscal_position or False,
+            )
+            domiciliation = {
+                'is_domiciliation': True,
+                'selection_mode': 'initial',
+                'term_months': int(schedule['term_months']),
+                'term_start_date': fields.Date.to_string(schedule['term_start_date']),
+                'term_end_date': fields.Date.to_string(schedule['term_end_date']),
+                'selected_installment_sequences': selected_installment_sequences,
+                'selected_charge': selected_charge,
+                'selected_display_charge': float(selected_display_charge),
+                'installments': self._wgs_get_domiciliation_installment_payloads_for_pos(
+                    schedule['installments'],
+                    product=product,
+                    partner=partner or False,
+                    company=pricing_company or False,
+                    fiscal_position=pricing_fiscal_position or False,
+                    access_start_date=schedule['access_start_date'],
+                ),
+            }
+            snapshot.update({
+                'charge_now': selected_charge,
+                'ticket_charge_now': selected_charge,
+                'display_charge_now': float(selected_display_charge),
+                'subscription_start_date': fields.Date.to_string(schedule['access_start_date']),
+                'subscription_end_date': fields.Date.to_string(schedule['term_end_date']),
+                'next_billing_date': fields.Date.to_string(schedule['installments'][1]['due_date']),
+                'domiciliation': domiciliation,
+            })
         return {
             **flags,
             'charge_now': float(snapshot.get('charge_now') or 0.0),
@@ -1014,6 +1138,9 @@ class PosOrder(models.Model):
             'is_upgrade': bool(source_order),
             'source_subscription_id': source_order.id if source_order else False,
             'source_subscription_name': source_order.name if source_order else False,
+            'business_date': fields.Date.to_string(
+                self._wgs_get_subscription_business_today_for_pos(company=pricing_company)
+            ),
             'plans': [
                 {
                     'plan_id': row.get('plan_id') or False,
@@ -1035,6 +1162,7 @@ class PosOrder(models.Model):
                 }
                 for row in candidates
             ],
+            'domiciliation': domiciliation,
         }
 
     def _wgs_prepare_subscription_pricing_request_for_pos(
@@ -1086,7 +1214,15 @@ class PosOrder(models.Model):
                 raise UserError(_('La suscripción origen no existe.'))
             if not self._wgs_order_has_subscription_signal(source_order):
                 raise UserError(_('La orden origen no corresponde a una suscripción válida.'))
-            if not self._wgs_is_subscription_order_active_for_upsell(source_order):
+            contract = source_order.wgs_domiciliation_contract_id
+            if contract and contract.state == 'active':
+                if product and product != contract.product_id:
+                    raise UserError(
+                        _('Los contratos domiciliados no permiten cambiar de paquete desde Renovar.')
+                    )
+                if not contract.wgs_get_operational_status().get('can_renew'):
+                    raise UserError(_('El contrato domiciliado no tiene mensualidades pendientes para cobrar.'))
+            elif not self._wgs_is_subscription_order_active_for_upsell(source_order):
                 raise UserError(_('La suscripción origen no está activa para renovación.'))
 
         elif normalized_flow == 'reenroll':
@@ -1122,6 +1258,7 @@ class PosOrder(models.Model):
         preferred_pricing_id=False,
         include_offers=False,
         start_date=False,
+        domiciliation_installment_sequences=False,
     ):
         request_data = self._wgs_prepare_subscription_pricing_request_for_pos(
             partner_id=partner_id,
@@ -1146,16 +1283,65 @@ class PosOrder(models.Model):
                 preferred_plan_id=preferred_plan_id,
                 preferred_pricing_id=preferred_pricing_id,
                 start_date=start_date,
+                domiciliation_installment_sequences=domiciliation_installment_sequences,
             )
             pricing['flow'] = normalized_flow
             pricing['is_upgrade'] = bool(source_order) if normalized_flow == 'upsale' else False
             pricing['is_renewal'] = False
         elif normalized_flow == 'renewal':
+            contract = source_order.wgs_domiciliation_contract_id
+            if contract and contract.state == 'active':
+                pricing = self._wgs_build_subscription_recurring_charge_payload(
+                    source_order,
+                    product_id=product.id if product else False,
+                    preferred_plan_id=preferred_plan_id,
+                    preferred_pricing_id=preferred_pricing_id,
+                    fallback=fallback,
+                    is_renewal=True,
+                    is_reenroll=False,
+                )
+                domiciliation_quote = contract.wgs_get_renewal_quote(
+                    installment_sequences=domiciliation_installment_sequences,
+                )
+                domiciliation_installments = self._wgs_get_domiciliation_installment_payloads_for_pos(
+                    domiciliation_quote['installments'],
+                    product=product or contract.product_id,
+                    partner=partner or source_order.partner_id,
+                    company=source_order.company_id,
+                    fiscal_position=(
+                        source_order.fiscal_position_id
+                        if 'fiscal_position_id' in source_order._fields else False
+                    ),
+                    access_start_date=contract.access_start_date,
+                )
+                pricing.update({
+                    'charge_now': domiciliation_quote['amount_due_total'],
+                    'ticket_charge_now': domiciliation_quote['amount_due_total'],
+                    'display_charge_now': self._wgs_get_price_with_taxes_for_pos(
+                        product or contract.product_id,
+                        domiciliation_quote['amount_due_total'],
+                        partner=partner or source_order.partner_id,
+                        company=source_order.company_id,
+                        fiscal_position=source_order.fiscal_position_id if 'fiscal_position_id' in source_order._fields else False,
+                    ),
+                    'domiciliation': {
+                        'is_domiciliation': True,
+                        'selection_mode': 'renewal',
+                        **domiciliation_quote,
+                        'installments': domiciliation_installments,
+                        'term_months': contract.term_months,
+                        'term_start_date': fields.Date.to_string(contract.term_start_date),
+                        'term_end_date': fields.Date.to_string(contract.term_end_date),
+                    },
+                })
+                pricing['flow'] = normalized_flow
+                return {'flow': normalized_flow, 'pricing': pricing, 'offers': offers}
             pricing = self._wgs_build_subscription_recurring_charge_payload(
                 source_order,
                 product_id=product.id if product else False,
                 preferred_plan_id=preferred_plan_id,
                 preferred_pricing_id=preferred_pricing_id,
+                fallback=fallback,
                 is_renewal=normalized_flow == 'renewal',
                 is_reenroll=False,
             )
@@ -1170,6 +1356,7 @@ class PosOrder(models.Model):
                 preferred_plan_id=preferred_plan_id,
                 preferred_pricing_id=preferred_pricing_id,
                 start_date=start_date,
+                domiciliation_installment_sequences=domiciliation_installment_sequences,
             )
             pricing['flow'] = normalized_flow
             pricing['is_upgrade'] = False
@@ -1196,6 +1383,7 @@ class PosOrder(models.Model):
         preferred_plan_id=False,
         preferred_pricing_id=False,
         start_date=False,
+        domiciliation_installment_sequences=False,
     ):
         self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar pricing de suscripción desde Punto de Venta.'))
         return self._wgs_build_subscription_quote_payload_for_pos(
@@ -1209,6 +1397,7 @@ class PosOrder(models.Model):
             preferred_pricing_id=preferred_pricing_id,
             include_offers=False,
             start_date=start_date,
+            domiciliation_installment_sequences=domiciliation_installment_sequences,
         )['pricing']
 
     @api.model
@@ -1223,6 +1412,7 @@ class PosOrder(models.Model):
         preferred_plan_id=False,
         preferred_pricing_id=False,
         start_date=False,
+        domiciliation_installment_sequences=False,
     ):
         self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar cotizaciones de suscripción desde Punto de Venta.'))
         return self._wgs_build_subscription_quote_payload_for_pos(
@@ -1236,6 +1426,7 @@ class PosOrder(models.Model):
             preferred_pricing_id=preferred_pricing_id,
             include_offers=True,
             start_date=start_date,
+            domiciliation_installment_sequences=domiciliation_installment_sequences,
         )
 
     @api.model
@@ -2439,6 +2630,27 @@ class PosOrder(models.Model):
             raise UserError(_('No se encontró la suscripción origen para cobrar la renovación en POS.'))
         if not self._wgs_order_has_subscription_signal(source_order):
             raise UserError(_('La orden origen no corresponde a una suscripción válida para renovación.'))
+        contract = source_order.wgs_domiciliation_contract_id
+        if contract and contract.state == 'active':
+            snapshot = self._wgs_get_persisted_subscription_pricing_from_pos_line(line).get('snapshot') or {}
+            domiciliation = snapshot.get('domiciliation') if isinstance(snapshot, dict) else {}
+            sequences = domiciliation.get('selected_installment_sequences') if isinstance(domiciliation, dict) else []
+            if not sequences:
+                raise UserError(_('La renovación domiciliada no contiene una selección válida de mensualidades.'))
+            contract.wgs_apply_pos_payment(
+                line,
+                installment_sequences=sequences,
+                selection_mode='renewal',
+            )
+            self._wgs_link_pos_and_sale_records(pos_line=line, sale_order=source_order)
+            line.write({
+                'wgs_sale_order_id': source_order.id,
+                'wgs_subscription_flow': 'renewal',
+                'wgs_subscription_source_id': source_order.id,
+            })
+            source_order.with_context(access_sync_priority=True)._wgs_sync_access_control_people()
+            return source_order
+
         if not self._wgs_is_subscription_order_active_for_upsell(source_order):
             raise UserError(_('La suscripción origen no está activa para renovación.'))
 
@@ -2451,11 +2663,25 @@ class PosOrder(models.Model):
         if not recurring_lines:
             raise UserError(_('La suscripción origen no tiene líneas recurrentes configuradas.'))
 
-        source_line = recurring_lines.filtered(lambda so_line: so_line.product_id.id == line.product_id.id)[:1]
-        if not source_line:
-            source_line = recurring_lines.sorted(key=lambda so_line: so_line.id)[:1]
+        source_line = recurring_lines.sorted(key=lambda so_line: so_line.id)[:1]
+        target_product = line.product_id
+        package_changed = source_line.product_id != target_product
+        previous_access_partner_ids = (
+            source_order._wgs_get_access_related_partner_ids()
+            if package_changed and hasattr(source_order, '_wgs_get_access_related_partner_ids')
+            else set()
+        )
+        participant_ids = []
+        if package_changed:
+            holder_partner = self.partner_id or source_order.partner_id
+            participant_ids = self._wgs_resolve_subscription_participant_ids_for_pos_line(
+                line=line,
+                holder_partner=holder_partner,
+                product=target_product,
+                qty=abs(line.qty or 0.0) or 1.0,
+            )
 
-        today = fields.Date.context_today(self)
+        today = self._wgs_get_subscription_business_today_for_pos(company=source_order.company_id)
         renewal_schedule = self._wgs_get_subscription_renewal_schedule(
             source_order,
             today=today,
@@ -2464,15 +2690,38 @@ class PosOrder(models.Model):
         next_billing_date = renewal_schedule['next_billing_date']
         subscription_end_date = renewal_schedule['subscription_end_date']
 
-        values = {}
-        next_field = self._wgs_find_subscription_next_invoice_date_field(source_order)
-        if next_field:
-            values[next_field] = next_billing_date
-        end_field = self._wgs_find_subscription_end_date_field(source_order)
-        if end_field:
-            values[end_field] = subscription_end_date
-        if values:
-            source_order.write(values)
+        if package_changed:
+            pricing_state = self._wgs_get_persisted_subscription_pricing_from_pos_line(line)
+            source_line = self._wgs_apply_subscription_recurring_line_values_for_pos(
+                source_order=source_order,
+                source_line=source_line,
+                pos_line=line,
+                product=target_product,
+                qty=abs(line.qty or 0.0) or 1.0,
+                recurring_price_unit=pricing_state['price_unit'],
+                recurring_plan_id=pricing_state['plan_id'],
+                recurring_pricing_id=pricing_state['pricing_id'],
+            )
+            self._wgs_sync_subscription_metadata(
+                sale_order=source_order,
+                participant_ids=participant_ids,
+                subscription_end_date=subscription_end_date,
+                next_billing_date=next_billing_date,
+            )
+            self._wgs_finalize_subscription_access_for_pos(
+                source_order,
+                extra_partner_ids=previous_access_partner_ids,
+            )
+        else:
+            values = {}
+            next_field = self._wgs_find_subscription_next_invoice_date_field(source_order)
+            if next_field:
+                values[next_field] = next_billing_date
+            end_field = self._wgs_find_subscription_end_date_field(source_order)
+            if end_field:
+                values[end_field] = subscription_end_date
+            if values:
+                source_order.write(values)
 
         self._wgs_link_pos_and_sale_records(
             pos_line=line,
@@ -2498,10 +2747,11 @@ class PosOrder(models.Model):
             )
 
         _logger.info(
-            'WGS POS: renewal payment synced for subscription %s from POS %s line %s (next=%s, amount=%s)',
+            'WGS POS: renewal payment synced for subscription %s from POS %s line %s (package_changed=%s next=%s, amount=%s)',
             source_order.name,
             self.pos_reference or self.name,
             line.id,
+            package_changed,
             next_billing_date,
             amount_paid,
         )
@@ -2554,7 +2804,7 @@ class PosOrder(models.Model):
         recurring_plan_id = pricing_state['plan_id']
         recurring_pricing_id = pricing_state['pricing_id']
         plan_record = pricing_state['plan_record']
-        today = fields.Date.context_today(self)
+        today = self._wgs_get_subscription_business_today_for_pos(company=self.company_id)
         subscription_start_date = (
             pricing_state.get('subscription_start_date')
             or line.wgs_get_subscription_start_date()
@@ -2579,7 +2829,7 @@ class PosOrder(models.Model):
             source_line = source_lines[:1]
         if not source_line:
             raise UserError(_('La suscripción origen no tiene líneas recurrentes para aplicar la reinscripción.'))
-        source_line = self._wgs_apply_reenroll_source_line_values(
+        source_line = self._wgs_apply_subscription_recurring_line_values_for_pos(
             source_order=source_order,
             source_line=source_line,
             pos_line=line,
@@ -2600,9 +2850,15 @@ class PosOrder(models.Model):
             clear_next_billing_date=single_day_term,
         )
         self._wgs_reactivate_subscription_order_for_pos(source_order)
+        self._wgs_apply_domiciliation_contract_from_pos_line(
+            source_order,
+            line,
+            pricing_state,
+            restart=True,
+        )
         if single_day_term:
             self._wgs_clear_subscription_next_billing_date(source_order)
-        self._wgs_finalize_reenroll_subscription_access_for_pos(
+        self._wgs_finalize_subscription_access_for_pos(
             source_order,
             extra_partner_ids=previous_access_partner_ids,
         )
@@ -2652,7 +2908,7 @@ class PosOrder(models.Model):
         subscription_end_date=False,
         next_billing_date=False,
     ):
-        subscription_start_date = fields.Date.to_date(subscription_start_date) or fields.Date.context_today(self)
+        subscription_start_date = fields.Date.to_date(subscription_start_date) or self._wgs_get_subscription_business_today_for_pos()
         subscription_end_date = fields.Date.to_date(subscription_end_date) if subscription_end_date else False
         next_billing_date = fields.Date.to_date(next_billing_date) if next_billing_date else False
         single_day_term = self._wgs_product_has_single_day_term(product)
@@ -2716,7 +2972,7 @@ class PosOrder(models.Model):
     def _wgs_sale_order_line_has_positive_qty_for_pos(self, line):
         return self._wgs_get_sale_line_qty_for_pos(line) > 0
 
-    def _wgs_apply_reenroll_source_line_values(
+    def _wgs_apply_subscription_recurring_line_values_for_pos(
         self,
         *,
         source_order,
@@ -2730,7 +2986,7 @@ class PosOrder(models.Model):
     ):
         source_order.ensure_one()
         source_line.ensure_one()
-        line_values = self._wgs_build_reenroll_source_line_values(
+        line_values = self._wgs_build_subscription_recurring_line_values_for_pos(
             source_line=source_line,
             pos_line=pos_line,
             product=product,
@@ -2766,7 +3022,7 @@ class PosOrder(models.Model):
         })
         source_order.invalidate_recordset(['order_line'])
         _logger.info(
-            'WGS POS: reenroll replaced recurring line %s with %s on subscription %s (%s -> %s)',
+            'WGS POS: replaced recurring line %s with %s on subscription %s (%s -> %s)',
             source_line.id,
             new_line.id,
             source_order.name,
@@ -2775,7 +3031,7 @@ class PosOrder(models.Model):
         )
         return new_line
 
-    def _wgs_build_reenroll_source_line_values(
+    def _wgs_build_subscription_recurring_line_values_for_pos(
         self,
         *,
         source_line,
@@ -2827,7 +3083,7 @@ class PosOrder(models.Model):
             )
         return values
 
-    def _wgs_finalize_reenroll_subscription_access_for_pos(self, source_order, extra_partner_ids=False):
+    def _wgs_finalize_subscription_access_for_pos(self, source_order, extra_partner_ids=False):
         source_order.ensure_one()
         source_order.invalidate_recordset([
             field_name
@@ -3153,7 +3409,34 @@ class PosOrder(models.Model):
             'subscription_start_date': persisted_subscription_start_date,
             'subscription_end_date': persisted_subscription_end_date,
             'next_billing_date': persisted_next_billing_date,
+            'snapshot': snapshot,
         }
+
+    def _wgs_apply_domiciliation_contract_from_pos_line(self, sale_order, line, pricing_state, restart=False):
+        """Persist a new/restarted contract after its immutable POS line is paid."""
+        plan = pricing_state.get('plan_record')
+        if not plan or not plan.wgs_domiciliation_enabled:
+            return self.env['wgs.subscription.domiciliation.contract']
+        start_date = pricing_state.get('subscription_start_date') or line.wgs_get_subscription_start_date()
+        if not start_date:
+            start_date = self._wgs_get_subscription_business_today_for_pos(company=sale_order.company_id)
+        discount = max(min(float(line.discount or 0.0), 100.0), 0.0)
+        monthly_amount = round(float(pricing_state['price_unit'] or 0.0) * (1 - discount / 100.0), 2)
+        domiciliation = pricing_state.get('snapshot', {}).get('domiciliation') or {}
+        selected_installment_sequences = domiciliation.get('selected_installment_sequences')
+        contract = self.env['wgs.subscription.domiciliation.contract'].wgs_create_for_subscription(
+            sale_order,
+            product=line.product_id,
+            plan=plan,
+            start_date=start_date,
+            monthly_amount=monthly_amount,
+            pos_line=line,
+            restart=restart,
+            selected_installment_sequences=selected_installment_sequences,
+        )
+        if contract:
+            sale_order.with_context(access_sync_priority=True)._wgs_sync_access_control_people()
+        return contract
 
     def _wgs_extract_plan_id_from_subscription_source_line(self, source_order, product):
         source_order = source_order.exists()
@@ -3200,7 +3483,7 @@ class PosOrder(models.Model):
         recurring_plan_id = pricing_state['plan_id']
         recurring_pricing_id = pricing_state['pricing_id']
         plan_record = pricing_state['plan_record']
-        today = fields.Date.context_today(self)
+        today = self._wgs_get_subscription_business_today_for_pos(company=self.company_id)
         subscription_start_date = (
             pricing_state.get('subscription_start_date')
             or line.wgs_get_subscription_start_date()
@@ -3268,7 +3551,7 @@ class PosOrder(models.Model):
                 comodel_checker=self._wgs_is_pricing_model_name,
             )
 
-        contract_date = fields.Date.context_today(self)
+        contract_date = self._wgs_get_subscription_business_today_for_pos(company=self.company_id)
         upsell_source_order = self.env['sale.order']
         if line.wgs_subscription_flow == 'upsale':
             upsell_source_order = pricing_state['source_order'] or self._wgs_resolve_upsell_source_order_for_line(line)
@@ -3504,6 +3787,7 @@ class PosOrder(models.Model):
             next_billing_date=next_billing_date,
             clear_next_billing_date=self._wgs_product_has_single_day_term(product),
         )
+        self._wgs_apply_domiciliation_contract_from_pos_line(sale_order, line, pricing_state)
 
         _logger.info(
             'Created sale subscription order %s from POS order %s line %s',
@@ -3633,7 +3917,7 @@ class PosOrder(models.Model):
         build_item = getattr(source_order, '_build_pos_subscription_status_item', None)
         if callable(build_item):
             try:
-                item = build_item(fields.Date.context_today(self)) or {}
+                item = build_item(self._wgs_get_subscription_business_today_for_pos()) or {}
             except Exception:
                 item = {}
         package_label = ', '.join(item.get('package_names') or []) or source_order.name or source_order.display_name
@@ -3811,6 +4095,7 @@ class PosOrder(models.Model):
         product_id=False,
         preferred_plan_id=False,
         preferred_pricing_id=False,
+        fallback=0.0,
         is_renewal=False,
         is_reenroll=False,
     ):
@@ -3819,6 +4104,7 @@ class PosOrder(models.Model):
             flow='renewal' if is_renewal else 'reenroll' if is_reenroll else 'renewal',
             source_order=source_order,
             product=self._wgs_browse_product_for_pos(product_id) if product_id else False,
+            fallback=fallback,
             preferred_plan_id=preferred_plan_id,
             preferred_pricing_id=preferred_pricing_id,
         )
@@ -3839,11 +4125,18 @@ class PosOrder(models.Model):
             'interval_label': snapshot.get('interval_label') or '',
             'interval_value': int(snapshot.get('interval_value') or 1),
             'interval_unit': snapshot.get('interval_unit') or 'month',
+            'subscription_start_date': snapshot.get('subscription_start_date') or False,
+            'subscription_end_date': snapshot.get('subscription_end_date') or False,
+            'next_billing_date': snapshot.get('next_billing_date') or False,
+            'first_period_alignment': bool(snapshot.get('first_period_alignment')),
             'is_upgrade': False,
             'is_renewal': bool(is_renewal),
             'is_reenroll': bool(is_reenroll),
             'source_subscription_id': source_order.id,
             'source_subscription_name': source_order.name,
+            'business_date': fields.Date.to_string(
+                self._wgs_get_subscription_business_today_for_pos(company=source_order.company_id)
+            ),
         }
 
     def _wgs_is_order_recognized_as_subscription(self, sale_order):
@@ -4167,7 +4460,9 @@ class PosOrder(models.Model):
     def _wgs_close_source_subscription_after_upgrade(self, source_order, new_subscription_start_date):
         source_order.ensure_one()
 
-        close_date = fields.Date.to_date(new_subscription_start_date) or fields.Date.context_today(self)
+        close_date = fields.Date.to_date(new_subscription_start_date) or self._wgs_get_subscription_business_today_for_pos(
+            company=source_order.company_id,
+        )
         close_date = close_date - timedelta(days=1)
         values = {}
         end_field = self._wgs_find_subscription_end_date_field(source_order)
@@ -4199,7 +4494,9 @@ class PosOrder(models.Model):
     def _wgs_get_upsale_schedule_from_source(self, source_order, today=False):
         source_order.ensure_one()
 
-        sale_start_date = fields.Date.to_date(today) or fields.Date.context_today(self)
+        sale_start_date = fields.Date.to_date(today) or self._wgs_get_subscription_business_today_for_pos(
+            company=source_order.company_id,
+        )
         subscription_start_date = self._wgs_get_first_date_from_order(
             source_order,
             ('wgs_effective_start_date', 'start_date', 'date_start', 'subscription_start_date', 'recurring_start_date', 'date_order'),

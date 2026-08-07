@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from odoo import Command, fields
 from odoo.tests.common import TransactionCase
 
@@ -81,15 +83,16 @@ class TestPosSubscriptionPricing(TransactionCase):
             order.write(order_updates)
         return order
 
-    def _create_subscription_pricing(self, plan, price=100.0, name='Pricing POS'):
+    def _create_subscription_pricing(self, plan, price=100.0, name='Pricing POS', product=False):
         if 'sale.subscription.pricing' not in self.env.registry:
             self.skipTest('sale.subscription.pricing no existe en este runtime.')
 
         pricing_model = self.env['sale.subscription.pricing']
+        product = product or self.product
         pricing_vals = {}
         for field_name in ('product_tmpl_id', 'product_template_id'):
             if field_name in pricing_model._fields:
-                pricing_vals[field_name] = self.product.product_tmpl_id.id
+                pricing_vals[field_name] = product.product_tmpl_id.id
                 break
         for field_name in ('plan_id', 'subscription_plan_id', 'recurring_plan_id'):
             if field_name in pricing_model._fields:
@@ -107,9 +110,76 @@ class TestPosSubscriptionPricing(TransactionCase):
         except Exception:
             self.skipTest('No se pudo crear sale.subscription.pricing en este runtime.')
 
+    def test_renewal_package_change_uses_target_price_and_source_period(self):
+        target_product = self.env['product.product'].create(
+            {
+                'name': 'Paquete destino renovación POS',
+                'detailed_type': 'service',
+                'list_price': 120.0,
+                'sale_ok': True,
+                'available_in_pos': True,
+                'recurring_invoice': True,
+                'taxes_id': [(6, 0, [self.tax_16.id])],
+            }
+        )
+        target_plan = self.env['sale.subscription.plan'].create(
+            {
+                'name': 'Plan destino renovación POS',
+                'recurring_interval': 12,
+                'recurring_rule_type': 'month',
+            }
+        )
+        self._create_subscription_pricing(
+            target_plan,
+            price=120.0,
+            name='Tarifa destino renovación POS',
+            product=target_product,
+        )
+        source_order = self._create_subscription_like_order(start_date='2026-05-01')
+        source_line = source_order._get_recurring_lines()[:1]
+        expected_schedule = self.PosOrder._wgs_get_subscription_renewal_schedule(
+            source_order,
+            today=self.PosOrder._wgs_get_subscription_business_today_for_pos(
+                company=source_order.company_id
+            ),
+            preferred_line=source_line,
+        )
+
+        snapshot = self.PosOrder._wgs_resolve_subscription_pricing_snapshot(
+            flow='renewal',
+            product=target_product,
+            partner=self.partner,
+            company=source_order.company_id,
+            source_order=source_order,
+            fallback=120.0,
+        )
+
+        self.assertEqual(snapshot['product_id'], target_product.id)
+        self.assertEqual(snapshot['price_unit'], 120.0)
+        self.assertEqual(snapshot['display_price_unit'], 139.2)
+        self.assertEqual(
+            snapshot['subscription_end_date'],
+            fields.Date.to_string(expected_schedule['subscription_end_date']),
+        )
+        self.assertEqual(
+            snapshot['next_billing_date'],
+            fields.Date.to_string(expected_schedule['next_billing_date']),
+        )
+
     def test_price_with_taxes_for_pos_uses_product_taxes(self):
         total = self.PosOrder._wgs_get_price_with_taxes_for_pos(self.product, 100.0, partner=self.partner)
         self.assertEqual(total, 116.0)
+
+    def test_subscription_business_date_uses_mexico_calendar_after_utc_midnight(self):
+        business_day = self.PosOrder._wgs_get_subscription_business_today_for_pos(
+            now=datetime(2026, 5, 13, 0, 30, 0),
+        )
+        self.assertEqual(business_day, fields.Date.to_date('2026-05-12'))
+
+        date_order_day = self.PosOrder._wgs_get_subscription_business_date_from_datetime_for_pos(
+            datetime(2026, 5, 13, 0, 30, 0),
+        )
+        self.assertEqual(date_order_day, fields.Date.to_date('2026-05-12'))
 
     def test_subscription_pricing_for_pos_returns_tax_included_display_price(self):
         charge = self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
@@ -193,6 +263,69 @@ class TestPosSubscriptionPricing(TransactionCase):
         self.assertEqual(schedule['next_billing_date'], fields.Date.to_date('2026-06-01'))
         self.assertEqual(schedule['period_days'], 31)
         self.assertEqual(schedule['charge_days'], 20)
+
+    def test_domiciliation_quote_supports_historical_start_dates(self):
+        self.plan.write({
+            'wgs_domiciliation_enabled': True,
+            'wgs_domiciliation_term_months': 12,
+        })
+        self._create_subscription_pricing(self.plan, price=100.0, name='Pricing domiciliado histórico POS')
+
+        charge = self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
+            partner_id=self.partner.id,
+            product_id=self.product.id,
+            flow='new',
+            fallback=100.0,
+            preferred_plan_id=self.plan.id,
+            start_date='2026-02-12',
+        )
+
+        self.assertTrue(charge['domiciliation']['is_domiciliation'])
+        self.assertEqual(charge['subscription_start_date'], '2026-02-12')
+        self.assertEqual(charge['subscription_end_date'], '2027-01-31')
+        self.assertEqual(charge['domiciliation']['selected_installment_sequences'], [1])
+        self.assertEqual(charge['ticket_charge_now'], round(100.0 * 17 / 28, 2))
+        first_installment = charge['domiciliation']['installments'][0]
+        self.assertEqual(first_installment['display_period_start_date'], '2026-02-12')
+        self.assertEqual(first_installment['display_amount'], 70.42)
+
+        charge_with_terminal_prepayment = self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
+            partner_id=self.partner.id,
+            product_id=self.product.id,
+            flow='new',
+            fallback=100.0,
+            preferred_plan_id=self.plan.id,
+            start_date='2026-02-12',
+            domiciliation_installment_sequences=[1, 12],
+        )
+
+        self.assertEqual(
+            charge_with_terminal_prepayment['domiciliation']['selected_installment_sequences'],
+            [1, 12],
+        )
+        self.assertEqual(
+            charge_with_terminal_prepayment['ticket_charge_now'],
+            round(100.0 + (100.0 * 17 / 28), 2),
+        )
+
+        charge_with_consecutive_months = self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
+            partner_id=self.partner.id,
+            product_id=self.product.id,
+            flow='new',
+            fallback=100.0,
+            preferred_plan_id=self.plan.id,
+            start_date='2026-02-12',
+            domiciliation_installment_sequences=[1, 2, 3],
+        )
+
+        self.assertEqual(
+            charge_with_consecutive_months['domiciliation']['selected_installment_sequences'],
+            [1, 2, 3],
+        )
+        self.assertEqual(
+            charge_with_consecutive_months['ticket_charge_now'],
+            round((100.0 * 17 / 28) + 100.0 + 100.0, 2),
+        )
 
     def test_aligned_monthly_plan_charges_first_period_proportionally(self):
         alignment_field = self.PosOrder._wgs_get_period_alignment_field_name(self.plan)
@@ -576,7 +709,7 @@ class TestPosSubscriptionPricing(TransactionCase):
             qty=1,
         )
         source_line = order._get_recurring_lines()[:1]
-        new_line = self.PosOrder._wgs_apply_reenroll_source_line_values(
+        new_line = self.PosOrder._wgs_apply_subscription_recurring_line_values_for_pos(
             source_order=order,
             source_line=source_line,
             pos_line=pos_line,
@@ -594,7 +727,7 @@ class TestPosSubscriptionPricing(TransactionCase):
             next_billing_date=fields.Date.to_date('2026-08-01'),
         )
         self.PosOrder._wgs_reactivate_subscription_order_for_pos(order)
-        self.PosOrder._wgs_finalize_reenroll_subscription_access_for_pos(
+        self.PosOrder._wgs_finalize_subscription_access_for_pos(
             order,
             extra_partner_ids={self.partner.id, participant_a.id, participant_b.id},
         )

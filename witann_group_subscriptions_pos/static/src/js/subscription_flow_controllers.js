@@ -75,11 +75,11 @@ async function openNewSubscriptionForm(state, {
     state.participantEditForm = null;
     state.newPartnerForm = null;
     state.partnerPhotoForm = null;
-    state.newSubscriptionForm = createNewSubscriptionForm(state.selectedPartnerId);
-    renderDetail(state.currentDetail);
     if (loadDetail) {
         await loadDetail(state.selectedPartnerId, { force: true });
     }
+    state.newSubscriptionForm = createNewSubscriptionForm(state.selectedPartnerId, state.businessDate);
+    renderDetail(state.currentDetail);
     if (state.productCatalog.length || state.catalogLoading) {
         return;
     }
@@ -107,6 +107,7 @@ async function openRenewalForm(state, item, {
     renderDetail,
     fetchSubscriptionQuote,
     fetchSubscriptionProductCatalog,
+    formatTodayISO,
     mode = "renewal",
     title = false,
     submitLabel = false,
@@ -140,13 +141,15 @@ async function openRenewalForm(state, item, {
         holderPartnerName,
         productId: Number(item.renewal_product_id || 0) || false,
         productName: item.renewal_product_name || "",
+        sourceProductId: Number(item.renewal_product_id || 0) || false,
+        packageChangeSelected: false,
         participantIds: mode === "reenroll"
             ? getOwnerOnlyParticipantIds(holderPartnerId)
             : (Array.isArray(item.participant_ids) ? [...item.participant_ids] : []),
         title: title || (mode === "reenroll" ? _t("Reinscribir suscripción") : _t("Renovar suscripción")),
         submitLabel: submitLabel || (mode === "reenroll" ? _t("Agregar reinscripción al ticket") : _t("Agregar al ticket")),
         isReenroll: mode === "reenroll",
-        startDate: mode === "reenroll" ? new Date().toISOString().slice(0, 10) : false,
+        startDate: mode === "reenroll" ? (state.businessDate || formatTodayISO()) : false,
         pricingSnapshot: null,
         discountPercent: "",
         supervisorPin: "",
@@ -157,7 +160,10 @@ async function openRenewalForm(state, item, {
         loading: true,
     };
     renderDetail(state.currentDetail);
-    if (mode === "reenroll" && fetchSubscriptionProductCatalog && !state.productCatalog.length && !state.catalogLoading) {
+    if (["renewal", "reenroll"].includes(mode)
+        && fetchSubscriptionProductCatalog
+        && !state.productCatalog.length
+        && !state.catalogLoading) {
         state.catalogLoading = true;
         renderDetail(state.currentDetail);
         try {
@@ -166,8 +172,8 @@ async function openRenewalForm(state, item, {
                 state.productCatalog = [];
             }
         } catch (error) {
-            console.error("Error al consultar catalogo de reinscripción POS", error);
-            state.formError = _t("No se pudo cargar el catálogo de paquetes para reinscripción.");
+            console.error("Error al consultar catálogo de paquetes para renovación POS", error);
+            state.formError = _t("No se pudo cargar el catálogo de paquetes para la renovación.");
         } finally {
             state.catalogLoading = false;
             renderDetail(state.currentDetail);
@@ -184,7 +190,8 @@ async function openRenewalForm(state, item, {
             0,
             Number(item.renewal_plan_id || 0) || false,
             Number(item.renewal_pricing_id || 0) || false,
-            state.renewalForm.startDate || false
+            state.renewalForm.startDate || false,
+            false
         );
         const pricing = quote && quote.pricing ? quote.pricing : {};
         state.renewalForm = {
@@ -196,6 +203,9 @@ async function openRenewalForm(state, item, {
                 sourceSubscriptionName: state.renewalForm.subscriptionName,
             }),
         };
+        if (mode === "renewal") {
+            applyPricingPayloadToRenewalForm(state, pricing);
+        }
         if (mode === "reenroll") {
             applyPricingPayloadToReenrollForm(state, pricing, null, { _t });
         }
@@ -411,11 +421,24 @@ function applyPricingPayloadToReenrollForm(state, payload, preferredPlan, {
     state.renewalForm.pricingSnapshot = snapshot;
 }
 
+function applyPricingPayloadToRenewalForm(state, payload) {
+    state.renewalForm.pricingSnapshot = buildPricingSnapshotFromCharge(payload, {
+        flow: "renewal",
+        sourceSubscriptionId: state.renewalForm.subscriptionId,
+        sourceSubscriptionName: state.renewalForm.subscriptionName,
+    });
+    state.renewalForm.maxParticipantsTotal = Number(
+        payload && payload.max_participants_total
+            ? payload.max_participants_total
+            : state.renewalForm.maxParticipantsTotal || 1
+    ) || 1;
+}
+
 async function recalculateNewSubscriptionCharge(state, product, preferredPlan, {
     renderDetail,
     fetchSubscriptionPricing,
     _t,
-}) {
+}, domiciliationInstallmentSequences = false) {
     if (!state.newSubscriptionForm || !product || !state.selectedPartnerId) {
         return;
     }
@@ -431,7 +454,8 @@ async function recalculateNewSubscriptionCharge(state, product, preferredPlan, {
             Number(preferredPlan && preferredPlan.price ? preferredPlan.price : product.default_price || 0),
             preferredPlan ? Number(preferredPlan.plan_id || 0) || false : false,
             preferredPlan ? Number(preferredPlan.pricing_id || 0) || false : false,
-            state.newSubscriptionForm.startDate || false
+            state.newSubscriptionForm.startDate || false,
+            domiciliationInstallmentSequences || false
         );
         applyPricingPayloadToNewSubscriptionForm(state, payload, preferredPlan, {
             _t,
@@ -478,7 +502,8 @@ async function applySelectedProduct(state, productId, {
                 Number(product.default_price || 0),
                 false,
                 false,
-                state.newSubscriptionForm.startDate || false
+                state.newSubscriptionForm.startDate || false,
+                false
             );
             const pricing = quote && quote.pricing ? quote.pricing : {};
             applyPricingPayloadToNewSubscriptionForm(state, pricing, null, {
@@ -499,14 +524,14 @@ async function applySelectedProduct(state, productId, {
 async function updateSelectedPlan(state, planChoice, {
     renderDetail,
     recalculateNewSubscriptionCharge,
-}) {
+}, domiciliationInstallmentSequences = false) {
     const selectedChoice = String(planChoice || "");
     const plan = (state.newSubscriptionForm.plans || []).find((item) => {
         return `${Number(item.plan_id || 0)}:${Number(item.pricing_id || 0)}` === selectedChoice;
     }) || null;
     const product = state.productCatalog.find((item) => Number(item.id) === Number(state.newSubscriptionForm.productId || 0)) || null;
     if (product && plan) {
-        await recalculateNewSubscriptionCharge(product, plan);
+        await recalculateNewSubscriptionCharge(product, plan, domiciliationInstallmentSequences);
         return;
     }
     renderDetail(state.currentDetail);
@@ -565,7 +590,8 @@ async function applySelectedReenrollProduct(state, productId, {
             Number(product.default_price || 0),
             false,
             false,
-            state.renewalForm.startDate || false
+            state.renewalForm.startDate || false,
+            false
         );
         const payload = quote && quote.pricing ? quote.pricing : {};
         state.renewalForm = {
@@ -584,11 +610,64 @@ async function applySelectedReenrollProduct(state, productId, {
     renderDetail(state.currentDetail);
 }
 
-async function updateSelectedReenrollPlan(state, planChoice, {
+async function applySelectedRenewalProduct(state, productId, {
     renderDetail,
     fetchSubscriptionQuote,
     _t,
 }) {
+    if (!state.renewalForm || state.formMode !== "renewal") {
+        return;
+    }
+    const numericProductId = Number(productId || 0);
+    const product = state.productCatalog.find((item) => Number(item.id) === numericProductId) || null;
+    const sourceProductId = Number(state.renewalForm.sourceProductId || 0);
+    state.renewalForm.productId = numericProductId;
+    state.renewalForm.productName = product ? product.name || "" : "";
+    state.renewalForm.maxParticipantsTotal = product ? Number(product.max_participants_total || 1) : 1;
+    state.renewalForm.pricingSnapshot = null;
+    state.renewalForm.packageChangeSelected = Boolean(product && numericProductId !== sourceProductId);
+    resetDiscountAuthorization(state.renewalForm);
+    if (state.renewalForm.packageChangeSelected) {
+        // A smaller package must be explicitly composed by the cashier.
+        state.renewalForm.participantIds = getOwnerOnlyParticipantIds(state.renewalForm.holderPartnerId);
+    }
+    if (!product) {
+        renderDetail(state.currentDetail);
+        return;
+    }
+    state.renewalForm.loading = true;
+    renderDetail(state.currentDetail);
+    try {
+        const quote = await fetchSubscriptionQuote(
+            state.renewalForm.holderPartnerId || false,
+            numericProductId,
+            "renewal",
+            state.renewalForm.subscriptionId,
+            false,
+            Number(product.default_price || 0),
+        );
+        const payload = quote && quote.pricing ? quote.pricing : {};
+        state.renewalForm = {
+            ...state.renewalForm,
+            loading: false,
+        };
+        applyPricingPayloadToRenewalForm(state, payload);
+    } catch (error) {
+        console.error("Error al calcular el cambio de paquete en renovación POS", error);
+        state.formError = _t("No se pudo calcular la renovación con el paquete seleccionado.");
+        state.renewalForm = {
+            ...state.renewalForm,
+            loading: false,
+        };
+    }
+    renderDetail(state.currentDetail);
+}
+
+async function updateSelectedReenrollPlan(state, planChoice, {
+    renderDetail,
+    fetchSubscriptionQuote,
+    _t,
+}, domiciliationInstallmentSequences = false) {
     if (!state.renewalForm || state.formMode !== "reenroll") {
         return;
     }
@@ -613,7 +692,8 @@ async function updateSelectedReenrollPlan(state, planChoice, {
             Number(selectedPlan.price || 0),
             Number(selectedPlan.plan_id || 0) || false,
             Number(selectedPlan.pricing_id || 0) || false,
-            state.renewalForm.startDate || false
+            state.renewalForm.startDate || false,
+            domiciliationInstallmentSequences || false
         );
         const payload = quote && quote.pricing ? quote.pricing : {};
         state.renewalForm = {
@@ -770,6 +850,24 @@ function toggleReenrollParticipant(state, partnerId, checked) {
     );
 }
 
+function toggleRenewalParticipant(state, partnerId, checked) {
+    if (!state.renewalForm || state.formMode !== "renewal") {
+        return;
+    }
+    const numericPartnerId = Number(partnerId || 0);
+    const holderPartnerId = Number(state.renewalForm.holderPartnerId || 0);
+    let values = [...(state.renewalForm.participantIds || [])].map((item) => Number(item));
+    values = values.filter((item) => item > 0 && item !== holderPartnerId && item !== numericPartnerId);
+    if (checked && numericPartnerId > 0 && numericPartnerId !== holderPartnerId) {
+        values.push(numericPartnerId);
+    }
+    state.renewalForm.participantIds = clampParticipantIds(
+        holderPartnerId ? [holderPartnerId, ...new Set(values)] : [...new Set(values)],
+        holderPartnerId,
+        state.renewalForm.maxParticipantsTotal
+    );
+}
+
 function toggleEditedParticipant(state, partnerId, checked) {
     if (!state.participantEditForm) {
         return;
@@ -790,6 +888,7 @@ function toggleEditedParticipant(state, partnerId, checked) {
 
 export {
     applySelectedProduct,
+    applySelectedRenewalProduct,
     applySelectedReenrollProduct,
     applySelectedUpsaleProduct,
     clampParticipantIds,
@@ -802,6 +901,7 @@ export {
     recalculateNewSubscriptionCharge,
     toggleEditedParticipant,
     toggleParticipant,
+    toggleRenewalParticipant,
     toggleReenrollParticipant,
     toggleUpsaleParticipant,
     updateSelectedPlan,

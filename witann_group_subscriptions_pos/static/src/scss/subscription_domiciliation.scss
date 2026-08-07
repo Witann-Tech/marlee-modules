@@ -1,0 +1,55 @@
+.wgs-domiciliation-installments {
+    margin: 12px 0;
+}
+
+.wgs-domiciliation-installment-help {
+    color: var(--o-gray-700, #4b5563);
+    font-size: 0.85rem;
+    margin: 4px 0 8px;
+}
+
+.wgs-domiciliation-installment-list {
+    display: grid;
+    gap: 6px;
+    grid-template-columns: repeat(auto-fit, minmax(245px, 1fr));
+}
+
+.wgs-domiciliation-installment {
+    align-items: flex-start;
+    border: 1px solid var(--o-gray-300, #d1d5db);
+    border-radius: 6px;
+    cursor: pointer;
+    display: flex;
+    gap: 8px;
+    margin: 0;
+    padding: 8px 10px;
+}
+
+.wgs-domiciliation-installment input {
+    margin-top: 3px;
+}
+
+.wgs-domiciliation-installment-copy {
+    display: grid;
+    gap: 2px;
+}
+
+.wgs-domiciliation-installment-copy small {
+    color: var(--o-gray-700, #4b5563);
+}
+
+.wgs-domiciliation-installment-fixed {
+    background: var(--o-gray-100, #f3f4f6);
+    border-color: var(--o-gray-300, #d1d5db);
+    cursor: not-allowed;
+}
+
+.wgs-domiciliation-installment-locked {
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+
+.wgs-domiciliation-installment-required {
+    border-color: #0f766e;
+    cursor: not-allowed;
+}

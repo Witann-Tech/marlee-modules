@@ -47,6 +47,7 @@ import {
     getDiscountedDisplayAmount,
     renderDiscountAuthorizationSection,
 } from "./subscription_discount_render";
+import { renderDomiciliationInstallmentSelector } from "./subscription_domiciliation_render";
 import {
     readFileAsDataUrl,
     showSimpleInfoModal,
@@ -130,6 +131,7 @@ import {
 } from "./subscription_inline_form_handlers";
 import {
     applySelectedProduct as applySelectedProductFlow,
+    applySelectedRenewalProduct as applySelectedRenewalProductFlow,
     applySelectedReenrollProduct as applySelectedReenrollProductFlow,
     applySelectedUpsaleProduct as applySelectedUpsaleProductFlow,
     clampParticipantIds,
@@ -142,6 +144,7 @@ import {
     recalculateNewSubscriptionCharge as recalculateNewSubscriptionChargeFlow,
     toggleEditedParticipant as toggleEditedParticipantFlow,
     toggleParticipant as toggleParticipantFlow,
+    toggleRenewalParticipant as toggleRenewalParticipantFlow,
     toggleReenrollParticipant as toggleReenrollParticipantFlow,
     toggleUpsaleParticipant as toggleUpsaleParticipantFlow,
     updateSelectedPlan as updateSelectedPlanFlow,
@@ -272,17 +275,21 @@ function addPeriodToDate(dateValue, intervalValue, intervalUnit) {
     if (!parsed) {
         return "";
     }
-    const date = new Date(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate());
+    const date = new Date(Date.UTC(
+        parsed.getUTCFullYear(),
+        parsed.getUTCMonth(),
+        parsed.getUTCDate(),
+    ));
     const value = Math.max(1, Number(intervalValue || 1));
     const unit = String(intervalUnit || "month").toLowerCase();
     if (unit.includes("day")) {
-        date.setDate(date.getDate() + value);
+        date.setUTCDate(date.getUTCDate() + value);
     } else if (unit.includes("week")) {
-        date.setDate(date.getDate() + (value * 7));
+        date.setUTCDate(date.getUTCDate() + (value * 7));
     } else if (unit.includes("year")) {
-        date.setFullYear(date.getFullYear() + value);
+        date.setUTCFullYear(date.getUTCFullYear() + value);
     } else {
-        date.setMonth(date.getMonth() + value);
+        date.setUTCMonth(date.getUTCMonth() + value);
     }
     return date.toISOString().slice(0, 10);
 }
@@ -292,8 +299,12 @@ function addDaysToDate(dateValue, days) {
     if (!parsed) {
         return "";
     }
-    const date = new Date(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate());
-    date.setDate(date.getDate() + Number(days || 0));
+    const date = new Date(Date.UTC(
+        parsed.getUTCFullYear(),
+        parsed.getUTCMonth(),
+        parsed.getUTCDate(),
+    ));
+    date.setUTCDate(date.getUTCDate() + Number(days || 0));
     return date.toISOString().slice(0, 10);
 }
 
@@ -473,7 +484,7 @@ patch(ControlButtons.prototype, {
         return Array.isArray(backendCatalog) ? backendCatalog : [];
     },
 
-    async _fetchSubscriptionPricing(partnerId = false, productId = false, flow = "new", sourceSubscriptionId = false, pendingMoveId = false, fallback = 0, planId = false, pricingId = false, startDate = false) {
+    async _fetchSubscriptionPricing(partnerId = false, productId = false, flow = "new", sourceSubscriptionId = false, pendingMoveId = false, fallback = 0, planId = false, pricingId = false, startDate = false, domiciliationInstallmentSequences = false) {
         return this.subscriptionPosApi.fetchSubscriptionPricing(
             partnerId || false,
             productId || false,
@@ -483,11 +494,12 @@ patch(ControlButtons.prototype, {
             fallback || 0,
             planId || false,
             pricingId || false,
-            startDate || false
+            startDate || false,
+            domiciliationInstallmentSequences || false
         );
     },
 
-    async _fetchSubscriptionQuote(partnerId = false, productId = false, flow = "new", sourceSubscriptionId = false, pendingMoveId = false, fallback = 0, planId = false, pricingId = false, startDate = false) {
+    async _fetchSubscriptionQuote(partnerId = false, productId = false, flow = "new", sourceSubscriptionId = false, pendingMoveId = false, fallback = 0, planId = false, pricingId = false, startDate = false, domiciliationInstallmentSequences = false) {
         return this.subscriptionPosApi.fetchSubscriptionQuote(
             partnerId || false,
             productId || false,
@@ -497,7 +509,8 @@ patch(ControlButtons.prototype, {
             fallback || 0,
             planId || false,
             pricingId || false,
-            startDate || false
+            startDate || false,
+            domiciliationInstallmentSequences || false
         );
     },
 
@@ -773,6 +786,7 @@ patch(ControlButtons.prototype, {
         let activeTab = "directory";
         let detailRequestToken = 0;
         let currentDetail = null;
+        let businessDate = formatTodayISO();
         let directoryLoading = false;
         let directoryFullyLoaded = false;
         let directoryLoadError = "";
@@ -842,6 +856,8 @@ patch(ControlButtons.prototype, {
             get detailCache() { return detailCache; },
             get currentDetail() { return currentDetail; },
             set currentDetail(value) { currentDetail = value; },
+            get businessDate() { return businessDate; },
+            set businessDate(value) { businessDate = String(value || "") || formatTodayISO(); },
             get directoryLoading() { return directoryLoading; },
             set directoryLoading(value) { directoryLoading = Boolean(value); },
             get directoryFullyLoaded() { return directoryFullyLoaded; },
@@ -1238,6 +1254,24 @@ patch(ControlButtons.prototype, {
             });
         };
 
+        const focusInlineSubscriptionForm = () => {
+            window.requestAnimationFrame(() => {
+                const form = detailPane.querySelector(".wgs-inline-form-card");
+                if (!form) {
+                    return;
+                }
+                const formTop = form.getBoundingClientRect().top;
+                const paneTop = detailPane.getBoundingClientRect().top;
+                detailPane.scrollTo({
+                    top: Math.max(0, detailPane.scrollTop + formTop - paneTop - 12),
+                    behavior: "smooth",
+                });
+                form.querySelector("select:not(:disabled), input:not(:disabled)")?.focus({
+                    preventScroll: true,
+                });
+            });
+        };
+
         const getSelectedPlan = () => {
             const planKey = String(getCurrentPlanChoice(newSubscriptionForm) || "");
             return (newSubscriptionForm.plans || []).find((item) => {
@@ -1255,12 +1289,16 @@ patch(ControlButtons.prototype, {
         const openNewSubscriptionForm = async () => {
             await openNewSubscriptionFlow(modalState, {
                 stopPartnerCamera,
-                createNewSubscriptionForm: (partnerId) => this._getDefaultNewSubscriptionForm(partnerId),
+                createNewSubscriptionForm: (partnerId, resolvedBusinessDate) => this._getDefaultNewSubscriptionForm(
+                    partnerId,
+                    resolvedBusinessDate || modalState.businessDate,
+                ),
                 renderDetail,
                 loadDetail,
                 fetchSubscriptionProductCatalog: (searchTerm) => this._fetchSubscriptionProductCatalog(searchTerm),
                 _t,
             });
+            focusInlineSubscriptionForm();
         };
 
         const openNewPartnerForm = () => {
@@ -1291,8 +1329,16 @@ patch(ControlButtons.prototype, {
                 stopPartnerCamera,
                 renderDetail,
                 fetchSubscriptionQuote: (...args) => this._fetchSubscriptionQuote(...args),
+                fetchSubscriptionProductCatalog: (searchTerm) => this._fetchSubscriptionProductCatalog(searchTerm),
+                formatTodayISO,
                 _t,
             });
+            if (renewalForm
+                && !(renewalForm.pricingSnapshot?.domiciliation?.is_domiciliation)
+                && Number(renewalForm.maxParticipantsTotal || 1) > 1) {
+                void loadParticipantRows(renewalForm.participantSearch || "");
+            }
+            focusInlineSubscriptionForm();
         };
 
         const openReenrollForm = async (item) => {
@@ -1301,19 +1347,21 @@ patch(ControlButtons.prototype, {
                 renderDetail,
                 fetchSubscriptionQuote: (...args) => this._fetchSubscriptionQuote(...args),
                 fetchSubscriptionProductCatalog: (searchTerm) => this._fetchSubscriptionProductCatalog(searchTerm),
+                formatTodayISO,
                 _t,
             });
             if (renewalForm && Number(renewalForm.maxParticipantsTotal || 1) > 1) {
                 void loadParticipantRows(renewalForm.participantSearch || "");
             }
+            focusInlineSubscriptionForm();
         };
 
-        const recalculateNewSubscriptionCharge = async (product, preferredPlan = null) => {
+        const recalculateNewSubscriptionCharge = async (product, preferredPlan = null, domiciliationInstallmentSequences = false) => {
             await recalculateNewSubscriptionChargeFlow(modalState, product, preferredPlan, {
                 renderDetail,
                 fetchSubscriptionPricing: (...args) => this._fetchSubscriptionPricing(...args),
                 _t,
-            });
+            }, domiciliationInstallmentSequences);
         };
 
         const applySelectedUpsaleProduct = async (productId) => {
@@ -1338,12 +1386,23 @@ patch(ControlButtons.prototype, {
             }
         };
 
-        const updateSelectedReenrollPlan = async (planChoice) => {
-            await updateSelectedReenrollPlanFlow(modalState, planChoice, {
+        const applySelectedRenewalProduct = async (productId) => {
+            await applySelectedRenewalProductFlow(modalState, productId, {
                 renderDetail,
                 fetchSubscriptionQuote: (...args) => this._fetchSubscriptionQuote(...args),
                 _t,
             });
+            if (renewalForm && Number(renewalForm.maxParticipantsTotal || 1) > 1) {
+                void loadParticipantRows(renewalForm.participantSearch || "");
+            }
+        };
+
+        const updateSelectedReenrollPlan = async (planChoice, domiciliationInstallmentSequences = false) => {
+            await updateSelectedReenrollPlanFlow(modalState, planChoice, {
+                renderDetail,
+                fetchSubscriptionQuote: (...args) => this._fetchSubscriptionQuote(...args),
+                _t,
+            }, domiciliationInstallmentSequences);
         };
 
         const updateSelectedUpsalePlan = async (planChoice) => {
@@ -1360,6 +1419,10 @@ patch(ControlButtons.prototype, {
 
         const toggleReenrollParticipantHandler = (partnerId, checked) => {
             toggleReenrollParticipantFlow(modalState, partnerId, checked);
+        };
+
+        const toggleRenewalParticipantHandler = (partnerId, checked) => {
+            toggleRenewalParticipantFlow(modalState, partnerId, checked);
         };
 
         const openUpsaleForm = async (item) => {
@@ -1401,11 +1464,11 @@ patch(ControlButtons.prototype, {
             }
         };
 
-        const updateSelectedPlanHandler = async (planChoice) => {
+        const updateSelectedPlanHandler = async (planChoice, domiciliationInstallmentSequences = false) => {
             await updateSelectedPlanFlow(modalState, planChoice, {
                 renderDetail,
                 recalculateNewSubscriptionCharge,
-            });
+            }, domiciliationInstallmentSequences);
         };
 
         const toggleParticipantHandler = (partnerId, checked) => {
@@ -1492,6 +1555,13 @@ patch(ControlButtons.prototype, {
                     </div>
                 `
                 : "";
+            const domiciliationSelector = renderDomiciliationInstallmentSelector({
+                domiciliation: pricingSnapshot.domiciliation,
+                escapeHtml: (value) => this._escapeHtml(value),
+                formatDateDisplay: (value) => this._formatDateDisplay(value),
+                formatMoney: (value) => this._formatMoney(value),
+                _t,
+            });
             const partnerCurp = String(currentDetail && currentDetail.curp ? currentDetail.curp : "").trim();
             const requiresCurp = Boolean(newSubscriptionForm.requiresCurp);
             const needsCurpCapture = requiresCurp && !partnerCurp;
@@ -1572,6 +1642,7 @@ patch(ControlButtons.prototype, {
                             <strong class="wgs-inline-static-value">${this._escapeHtml(this._formatDateDisplay(automaticEndDate) || "-")}</strong>
                         </div>
                     </div>
+                    ${domiciliationSelector}
                     ${needsCurpCapture ? `
                         <div class="wgs-inline-form-grid">
                             <label>
@@ -1696,7 +1767,7 @@ patch(ControlButtons.prototype, {
                 formMode,
                 renewalForm,
                 productCatalog,
-                filteredParticipants: formMode === "reenroll" && renewalForm
+                filteredParticipants: ["renewal", "reenroll"].includes(formMode) && renewalForm
                     ? filterParticipantRowsByTerm(renewalForm.participantSearch)
                     : [],
                 participantRowsLoading,
@@ -2202,16 +2273,20 @@ patch(ControlButtons.prototype, {
                     clearFeedback,
                     applySelectedProduct,
                     updateSelectedPlan: updateSelectedPlanHandler,
+                    applySelectedRenewalProduct,
                     applySelectedReenrollProduct,
                     updateSelectedReenrollPlan,
                     applySelectedUpsaleProduct,
                     updateSelectedUpsalePlan,
                     toggleParticipant: toggleParticipantHandler,
+                    toggleRenewalParticipant: toggleRenewalParticipantHandler,
                     toggleReenrollParticipant: toggleReenrollParticipantHandler,
                     toggleUpsaleParticipant: toggleUpsaleParticipantHandler,
                     toggleEditedParticipant: toggleEditedParticipantHandler,
                     formatTodayISO,
                     renderDetail,
+                    fetchSubscriptionQuote: (...args) => this._fetchSubscriptionQuote(...args),
+                    _t,
                 }
             );
         });
@@ -2244,7 +2319,7 @@ patch(ControlButtons.prototype, {
             }
             if (shouldRender) {
                 renderDetailPreservingFocus(currentDetail);
-                if (["participant_search", "reenroll_participant_search", "upsale_participant_search", "edit_participant_search"].includes(field)) {
+                if (["participant_search", "renewal_participant_search", "reenroll_participant_search", "upsale_participant_search", "edit_participant_search"].includes(field)) {
                     scheduleParticipantRowsLoad(target.value || "");
                 }
             }
@@ -2320,9 +2395,10 @@ patch(ControlButtons.prototype, {
         });
     },
 
-    _getDefaultNewSubscriptionForm(partnerId) {
+    _getDefaultNewSubscriptionForm(partnerId, businessDate = false) {
         return getDefaultNewSubscriptionForm(partnerId, {
             buildChargeBreakdown,
+            businessDate,
             formatTodayISO,
         });
     },

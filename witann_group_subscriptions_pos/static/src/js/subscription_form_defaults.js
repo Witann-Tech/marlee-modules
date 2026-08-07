@@ -10,7 +10,7 @@ function getNormalizedParticipantIds(item, holderPartnerId = false) {
     return participantIds;
 }
 
-export function getDefaultNewSubscriptionForm(partnerId, { formatTodayISO }) {
+export function getDefaultNewSubscriptionForm(partnerId, { businessDate = false, formatTodayISO }) {
     const participantIds = [];
     if (partnerId) {
         participantIds.push(Number(partnerId));
@@ -26,7 +26,7 @@ export function getDefaultNewSubscriptionForm(partnerId, { formatTodayISO }) {
         discountPercent: "",
         supervisorPin: "",
         authorizedDiscount: null,
-        startDate: formatTodayISO(),
+        startDate: businessDate || formatTodayISO(),
         maxParticipantsTotal: 1,
         participantIds,
         participantSearch: "",
