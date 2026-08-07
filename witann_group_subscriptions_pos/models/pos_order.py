@@ -1216,8 +1216,12 @@ class PosOrder(models.Model):
                 raise UserError(_('La orden origen no corresponde a una suscripción válida.'))
             contract = source_order.wgs_domiciliation_contract_id
             if contract and contract.state == 'active':
+                if product and product != contract.product_id:
+                    raise UserError(
+                        _('Los contratos domiciliados no permiten cambiar de paquete desde Renovar.')
+                    )
                 if not contract.wgs_get_operational_status().get('can_renew'):
-                    raise UserError(_('El contrato domiciliado no tiene mensualidades exigibles para cobrar.'))
+                    raise UserError(_('El contrato domiciliado no tiene mensualidades pendientes para cobrar.'))
             elif not self._wgs_is_subscription_order_active_for_upsell(source_order):
                 raise UserError(_('La suscripción origen no está activa para renovación.'))
 
@@ -1292,6 +1296,7 @@ class PosOrder(models.Model):
                     product_id=product.id if product else False,
                     preferred_plan_id=preferred_plan_id,
                     preferred_pricing_id=preferred_pricing_id,
+                    fallback=fallback,
                     is_renewal=True,
                     is_reenroll=False,
                 )
@@ -1336,6 +1341,7 @@ class PosOrder(models.Model):
                 product_id=product.id if product else False,
                 preferred_plan_id=preferred_plan_id,
                 preferred_pricing_id=preferred_pricing_id,
+                fallback=fallback,
                 is_renewal=normalized_flow == 'renewal',
                 is_reenroll=False,
             )
@@ -2657,9 +2663,23 @@ class PosOrder(models.Model):
         if not recurring_lines:
             raise UserError(_('La suscripción origen no tiene líneas recurrentes configuradas.'))
 
-        source_line = recurring_lines.filtered(lambda so_line: so_line.product_id.id == line.product_id.id)[:1]
-        if not source_line:
-            source_line = recurring_lines.sorted(key=lambda so_line: so_line.id)[:1]
+        source_line = recurring_lines.sorted(key=lambda so_line: so_line.id)[:1]
+        target_product = line.product_id
+        package_changed = source_line.product_id != target_product
+        previous_access_partner_ids = (
+            source_order._wgs_get_access_related_partner_ids()
+            if package_changed and hasattr(source_order, '_wgs_get_access_related_partner_ids')
+            else set()
+        )
+        participant_ids = []
+        if package_changed:
+            holder_partner = self.partner_id or source_order.partner_id
+            participant_ids = self._wgs_resolve_subscription_participant_ids_for_pos_line(
+                line=line,
+                holder_partner=holder_partner,
+                product=target_product,
+                qty=abs(line.qty or 0.0) or 1.0,
+            )
 
         today = self._wgs_get_subscription_business_today_for_pos(company=source_order.company_id)
         renewal_schedule = self._wgs_get_subscription_renewal_schedule(
@@ -2670,15 +2690,38 @@ class PosOrder(models.Model):
         next_billing_date = renewal_schedule['next_billing_date']
         subscription_end_date = renewal_schedule['subscription_end_date']
 
-        values = {}
-        next_field = self._wgs_find_subscription_next_invoice_date_field(source_order)
-        if next_field:
-            values[next_field] = next_billing_date
-        end_field = self._wgs_find_subscription_end_date_field(source_order)
-        if end_field:
-            values[end_field] = subscription_end_date
-        if values:
-            source_order.write(values)
+        if package_changed:
+            pricing_state = self._wgs_get_persisted_subscription_pricing_from_pos_line(line)
+            source_line = self._wgs_apply_subscription_recurring_line_values_for_pos(
+                source_order=source_order,
+                source_line=source_line,
+                pos_line=line,
+                product=target_product,
+                qty=abs(line.qty or 0.0) or 1.0,
+                recurring_price_unit=pricing_state['price_unit'],
+                recurring_plan_id=pricing_state['plan_id'],
+                recurring_pricing_id=pricing_state['pricing_id'],
+            )
+            self._wgs_sync_subscription_metadata(
+                sale_order=source_order,
+                participant_ids=participant_ids,
+                subscription_end_date=subscription_end_date,
+                next_billing_date=next_billing_date,
+            )
+            self._wgs_finalize_subscription_access_for_pos(
+                source_order,
+                extra_partner_ids=previous_access_partner_ids,
+            )
+        else:
+            values = {}
+            next_field = self._wgs_find_subscription_next_invoice_date_field(source_order)
+            if next_field:
+                values[next_field] = next_billing_date
+            end_field = self._wgs_find_subscription_end_date_field(source_order)
+            if end_field:
+                values[end_field] = subscription_end_date
+            if values:
+                source_order.write(values)
 
         self._wgs_link_pos_and_sale_records(
             pos_line=line,
@@ -2704,10 +2747,11 @@ class PosOrder(models.Model):
             )
 
         _logger.info(
-            'WGS POS: renewal payment synced for subscription %s from POS %s line %s (next=%s, amount=%s)',
+            'WGS POS: renewal payment synced for subscription %s from POS %s line %s (package_changed=%s next=%s, amount=%s)',
             source_order.name,
             self.pos_reference or self.name,
             line.id,
+            package_changed,
             next_billing_date,
             amount_paid,
         )
@@ -2785,7 +2829,7 @@ class PosOrder(models.Model):
             source_line = source_lines[:1]
         if not source_line:
             raise UserError(_('La suscripción origen no tiene líneas recurrentes para aplicar la reinscripción.'))
-        source_line = self._wgs_apply_reenroll_source_line_values(
+        source_line = self._wgs_apply_subscription_recurring_line_values_for_pos(
             source_order=source_order,
             source_line=source_line,
             pos_line=line,
@@ -2814,7 +2858,7 @@ class PosOrder(models.Model):
         )
         if single_day_term:
             self._wgs_clear_subscription_next_billing_date(source_order)
-        self._wgs_finalize_reenroll_subscription_access_for_pos(
+        self._wgs_finalize_subscription_access_for_pos(
             source_order,
             extra_partner_ids=previous_access_partner_ids,
         )
@@ -2928,7 +2972,7 @@ class PosOrder(models.Model):
     def _wgs_sale_order_line_has_positive_qty_for_pos(self, line):
         return self._wgs_get_sale_line_qty_for_pos(line) > 0
 
-    def _wgs_apply_reenroll_source_line_values(
+    def _wgs_apply_subscription_recurring_line_values_for_pos(
         self,
         *,
         source_order,
@@ -2942,7 +2986,7 @@ class PosOrder(models.Model):
     ):
         source_order.ensure_one()
         source_line.ensure_one()
-        line_values = self._wgs_build_reenroll_source_line_values(
+        line_values = self._wgs_build_subscription_recurring_line_values_for_pos(
             source_line=source_line,
             pos_line=pos_line,
             product=product,
@@ -2978,7 +3022,7 @@ class PosOrder(models.Model):
         })
         source_order.invalidate_recordset(['order_line'])
         _logger.info(
-            'WGS POS: reenroll replaced recurring line %s with %s on subscription %s (%s -> %s)',
+            'WGS POS: replaced recurring line %s with %s on subscription %s (%s -> %s)',
             source_line.id,
             new_line.id,
             source_order.name,
@@ -2987,7 +3031,7 @@ class PosOrder(models.Model):
         )
         return new_line
 
-    def _wgs_build_reenroll_source_line_values(
+    def _wgs_build_subscription_recurring_line_values_for_pos(
         self,
         *,
         source_line,
@@ -3039,7 +3083,7 @@ class PosOrder(models.Model):
             )
         return values
 
-    def _wgs_finalize_reenroll_subscription_access_for_pos(self, source_order, extra_partner_ids=False):
+    def _wgs_finalize_subscription_access_for_pos(self, source_order, extra_partner_ids=False):
         source_order.ensure_one()
         source_order.invalidate_recordset([
             field_name
@@ -4051,6 +4095,7 @@ class PosOrder(models.Model):
         product_id=False,
         preferred_plan_id=False,
         preferred_pricing_id=False,
+        fallback=0.0,
         is_renewal=False,
         is_reenroll=False,
     ):
@@ -4059,6 +4104,7 @@ class PosOrder(models.Model):
             flow='renewal' if is_renewal else 'reenroll' if is_reenroll else 'renewal',
             source_order=source_order,
             product=self._wgs_browse_product_for_pos(product_id) if product_id else False,
+            fallback=fallback,
             preferred_plan_id=preferred_plan_id,
             preferred_pricing_id=preferred_pricing_id,
         )
@@ -4079,6 +4125,10 @@ class PosOrder(models.Model):
             'interval_label': snapshot.get('interval_label') or '',
             'interval_value': int(snapshot.get('interval_value') or 1),
             'interval_unit': snapshot.get('interval_unit') or 'month',
+            'subscription_start_date': snapshot.get('subscription_start_date') or False,
+            'subscription_end_date': snapshot.get('subscription_end_date') or False,
+            'next_billing_date': snapshot.get('next_billing_date') or False,
+            'first_period_alignment': bool(snapshot.get('first_period_alignment')),
             'is_upgrade': False,
             'is_renewal': bool(is_renewal),
             'is_reenroll': bool(is_reenroll),

@@ -83,15 +83,16 @@ class TestPosSubscriptionPricing(TransactionCase):
             order.write(order_updates)
         return order
 
-    def _create_subscription_pricing(self, plan, price=100.0, name='Pricing POS'):
+    def _create_subscription_pricing(self, plan, price=100.0, name='Pricing POS', product=False):
         if 'sale.subscription.pricing' not in self.env.registry:
             self.skipTest('sale.subscription.pricing no existe en este runtime.')
 
         pricing_model = self.env['sale.subscription.pricing']
+        product = product or self.product
         pricing_vals = {}
         for field_name in ('product_tmpl_id', 'product_template_id'):
             if field_name in pricing_model._fields:
-                pricing_vals[field_name] = self.product.product_tmpl_id.id
+                pricing_vals[field_name] = product.product_tmpl_id.id
                 break
         for field_name in ('plan_id', 'subscription_plan_id', 'recurring_plan_id'):
             if field_name in pricing_model._fields:
@@ -108,6 +109,62 @@ class TestPosSubscriptionPricing(TransactionCase):
             return pricing_model.create(pricing_vals)
         except Exception:
             self.skipTest('No se pudo crear sale.subscription.pricing en este runtime.')
+
+    def test_renewal_package_change_uses_target_price_and_source_period(self):
+        target_product = self.env['product.product'].create(
+            {
+                'name': 'Paquete destino renovación POS',
+                'detailed_type': 'service',
+                'list_price': 120.0,
+                'sale_ok': True,
+                'available_in_pos': True,
+                'recurring_invoice': True,
+                'taxes_id': [(6, 0, [self.tax_16.id])],
+            }
+        )
+        target_plan = self.env['sale.subscription.plan'].create(
+            {
+                'name': 'Plan destino renovación POS',
+                'recurring_interval': 12,
+                'recurring_rule_type': 'month',
+            }
+        )
+        self._create_subscription_pricing(
+            target_plan,
+            price=120.0,
+            name='Tarifa destino renovación POS',
+            product=target_product,
+        )
+        source_order = self._create_subscription_like_order(start_date='2026-05-01')
+        source_line = source_order._get_recurring_lines()[:1]
+        expected_schedule = self.PosOrder._wgs_get_subscription_renewal_schedule(
+            source_order,
+            today=self.PosOrder._wgs_get_subscription_business_today_for_pos(
+                company=source_order.company_id
+            ),
+            preferred_line=source_line,
+        )
+
+        snapshot = self.PosOrder._wgs_resolve_subscription_pricing_snapshot(
+            flow='renewal',
+            product=target_product,
+            partner=self.partner,
+            company=source_order.company_id,
+            source_order=source_order,
+            fallback=120.0,
+        )
+
+        self.assertEqual(snapshot['product_id'], target_product.id)
+        self.assertEqual(snapshot['price_unit'], 120.0)
+        self.assertEqual(snapshot['display_price_unit'], 139.2)
+        self.assertEqual(
+            snapshot['subscription_end_date'],
+            fields.Date.to_string(expected_schedule['subscription_end_date']),
+        )
+        self.assertEqual(
+            snapshot['next_billing_date'],
+            fields.Date.to_string(expected_schedule['next_billing_date']),
+        )
 
     def test_price_with_taxes_for_pos_uses_product_taxes(self):
         total = self.PosOrder._wgs_get_price_with_taxes_for_pos(self.product, 100.0, partner=self.partner)
@@ -652,7 +709,7 @@ class TestPosSubscriptionPricing(TransactionCase):
             qty=1,
         )
         source_line = order._get_recurring_lines()[:1]
-        new_line = self.PosOrder._wgs_apply_reenroll_source_line_values(
+        new_line = self.PosOrder._wgs_apply_subscription_recurring_line_values_for_pos(
             source_order=order,
             source_line=source_line,
             pos_line=pos_line,
@@ -670,7 +727,7 @@ class TestPosSubscriptionPricing(TransactionCase):
             next_billing_date=fields.Date.to_date('2026-08-01'),
         )
         self.PosOrder._wgs_reactivate_subscription_order_for_pos(order)
-        self.PosOrder._wgs_finalize_reenroll_subscription_access_for_pos(
+        self.PosOrder._wgs_finalize_subscription_access_for_pos(
             order,
             extra_partner_ids={self.partner.id, participant_a.id, participant_b.id},
         )

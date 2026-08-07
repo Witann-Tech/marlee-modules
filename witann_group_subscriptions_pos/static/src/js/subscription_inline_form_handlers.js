@@ -782,7 +782,9 @@ function buildSubscriptionInlineActionHandlers({
                     metadata: {
                         flow: "renewal",
                         partner_id: holderPartnerId || false,
-                        participant_ids: [],
+                        participant_ids: Array.isArray(state.renewalForm.participantIds)
+                            ? state.renewalForm.participantIds
+                            : [],
                         plan_id: Number(pricingSnapshot.plan_id || 0) || false,
                         pricing_id: Number(pricingSnapshot.pricing_id || 0) || false,
                         start_date: false,
@@ -928,11 +930,13 @@ async function handleSubscriptionInlineFieldChange({ field, target }, {
     clearFeedback,
     applySelectedProduct,
     updateSelectedPlan,
+    applySelectedRenewalProduct,
     applySelectedReenrollProduct,
     updateSelectedReenrollPlan,
     applySelectedUpsaleProduct,
     updateSelectedUpsalePlan,
     toggleParticipant,
+    toggleRenewalParticipant,
     toggleReenrollParticipant,
     toggleUpsaleParticipant,
     toggleEditedParticipant,
@@ -969,6 +973,10 @@ async function handleSubscriptionInlineFieldChange({ field, target }, {
         }
     } else if (state.formMode === "new" && field === "participant_toggle") {
         toggleParticipant(target.value, target.checked);
+    } else if (state.formMode === "renewal" && field === "renewal_product_id") {
+        await applySelectedRenewalProduct(target.value);
+    } else if (state.formMode === "renewal" && field === "renewal_participant_toggle") {
+        toggleRenewalParticipant(target.value, target.checked);
     } else if (state.formMode === "reenroll" && field === "reenroll_product_id") {
         await applySelectedReenrollProduct(target.value);
     } else if (state.formMode === "reenroll" && field === "reenroll_plan_choice") {
@@ -1081,6 +1089,10 @@ function handleSubscriptionInlineFieldInput({ field, target }, {
         return true;
     }
     if (state.formMode === "reenroll" && field === "reenroll_participant_search") {
+        state.renewalForm.participantSearch = target.value || "";
+        return true;
+    }
+    if (state.formMode === "renewal" && field === "renewal_participant_search") {
         state.renewalForm.participantSearch = target.value || "";
         return true;
     }
