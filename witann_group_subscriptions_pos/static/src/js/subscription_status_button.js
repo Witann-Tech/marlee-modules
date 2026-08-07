@@ -1254,6 +1254,24 @@ patch(ControlButtons.prototype, {
             });
         };
 
+        const focusInlineSubscriptionForm = () => {
+            window.requestAnimationFrame(() => {
+                const form = detailPane.querySelector(".wgs-inline-form-card");
+                if (!form) {
+                    return;
+                }
+                const formTop = form.getBoundingClientRect().top;
+                const paneTop = detailPane.getBoundingClientRect().top;
+                detailPane.scrollTo({
+                    top: Math.max(0, detailPane.scrollTop + formTop - paneTop - 12),
+                    behavior: "smooth",
+                });
+                form.querySelector("select:not(:disabled), input:not(:disabled)")?.focus({
+                    preventScroll: true,
+                });
+            });
+        };
+
         const getSelectedPlan = () => {
             const planKey = String(getCurrentPlanChoice(newSubscriptionForm) || "");
             return (newSubscriptionForm.plans || []).find((item) => {
@@ -1280,6 +1298,7 @@ patch(ControlButtons.prototype, {
                 fetchSubscriptionProductCatalog: (searchTerm) => this._fetchSubscriptionProductCatalog(searchTerm),
                 _t,
             });
+            focusInlineSubscriptionForm();
         };
 
         const openNewPartnerForm = () => {
@@ -1319,6 +1338,7 @@ patch(ControlButtons.prototype, {
                 && Number(renewalForm.maxParticipantsTotal || 1) > 1) {
                 void loadParticipantRows(renewalForm.participantSearch || "");
             }
+            focusInlineSubscriptionForm();
         };
 
         const openReenrollForm = async (item) => {
@@ -1333,6 +1353,7 @@ patch(ControlButtons.prototype, {
             if (renewalForm && Number(renewalForm.maxParticipantsTotal || 1) > 1) {
                 void loadParticipantRows(renewalForm.participantSearch || "");
             }
+            focusInlineSubscriptionForm();
         };
 
         const recalculateNewSubscriptionCharge = async (product, preferredPlan = null, domiciliationInstallmentSequences = false) => {
