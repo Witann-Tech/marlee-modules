@@ -971,8 +971,7 @@ class PosOrder(models.Model):
         preferred_plan_id=False,
         preferred_pricing_id=False,
         start_date=False,
-        domiciliation_months_to_pay=False,
-        domiciliation_include_terminal_prepayment=False,
+        domiciliation_installment_sequences=False,
     ):
         product.ensure_one()
         source_order = source_order.exists() if source_order else self.env['sale.order']
@@ -1010,32 +1009,37 @@ class PosOrder(models.Model):
                 monthly_amount=float(snapshot.get('price_unit') or 0.0),
                 term_months=plan.wgs_domiciliation_term_months,
             )
-            initial_installment_sequences = [1]
-            if domiciliation_include_terminal_prepayment:
-                initial_installment_sequences.append(schedule['term_months'])
+            selected_installment_sequences = (
+                self.env['wgs.subscription.domiciliation.contract']._wgs_validate_initial_installment_sequences(
+                    domiciliation_installment_sequences,
+                    schedule['term_months'],
+                )
+                if domiciliation_installment_sequences is not False
+                else [1]
+            )
             installments_by_sequence = {
                 installment['sequence']: installment for installment in schedule['installments']
             }
-            initial_charge = round(sum(
+            selected_charge = round(sum(
                 float(installments_by_sequence[sequence]['amount'])
-                for sequence in initial_installment_sequences
+                for sequence in selected_installment_sequences
             ), 2)
-            initial_display_charge = self._wgs_get_price_with_taxes_for_pos(
+            selected_display_charge = self._wgs_get_price_with_taxes_for_pos(
                 product,
-                initial_charge,
+                selected_charge,
                 partner=partner or False,
                 company=pricing_company or False,
                 fiscal_position=pricing_fiscal_position or False,
             )
             domiciliation = {
                 'is_domiciliation': True,
+                'selection_mode': 'initial',
                 'term_months': int(schedule['term_months']),
                 'term_start_date': fields.Date.to_string(schedule['term_start_date']),
                 'term_end_date': fields.Date.to_string(schedule['term_end_date']),
-                'initial_installment_sequences': initial_installment_sequences,
-                'include_terminal_prepayment': bool(domiciliation_include_terminal_prepayment),
-                'initial_charge': initial_charge,
-                'initial_display_charge': float(initial_display_charge),
+                'selected_installment_sequences': selected_installment_sequences,
+                'selected_charge': selected_charge,
+                'selected_display_charge': float(selected_display_charge),
                 'installments': [
                     {
                         **installment,
@@ -1047,9 +1051,9 @@ class PosOrder(models.Model):
                 ],
             }
             snapshot.update({
-                'charge_now': initial_charge,
-                'ticket_charge_now': initial_charge,
-                'display_charge_now': float(initial_display_charge),
+                'charge_now': selected_charge,
+                'ticket_charge_now': selected_charge,
+                'display_charge_now': float(selected_display_charge),
                 'subscription_start_date': fields.Date.to_string(schedule['access_start_date']),
                 'subscription_end_date': fields.Date.to_string(schedule['term_end_date']),
                 'next_billing_date': fields.Date.to_string(schedule['installments'][1]['due_date']),
@@ -1205,8 +1209,7 @@ class PosOrder(models.Model):
         preferred_pricing_id=False,
         include_offers=False,
         start_date=False,
-        domiciliation_months_to_pay=False,
-        domiciliation_include_terminal_prepayment=False,
+        domiciliation_installment_sequences=False,
     ):
         request_data = self._wgs_prepare_subscription_pricing_request_for_pos(
             partner_id=partner_id,
@@ -1231,7 +1234,7 @@ class PosOrder(models.Model):
                 preferred_plan_id=preferred_plan_id,
                 preferred_pricing_id=preferred_pricing_id,
                 start_date=start_date,
-                domiciliation_include_terminal_prepayment=domiciliation_include_terminal_prepayment,
+                domiciliation_installment_sequences=domiciliation_installment_sequences,
             )
             pricing['flow'] = normalized_flow
             pricing['is_upgrade'] = bool(source_order) if normalized_flow == 'upsale' else False
@@ -1248,7 +1251,7 @@ class PosOrder(models.Model):
                     is_reenroll=False,
                 )
                 domiciliation_quote = contract.wgs_get_renewal_quote(
-                    months_to_pay=domiciliation_months_to_pay,
+                    installment_sequences=domiciliation_installment_sequences,
                 )
                 pricing.update({
                     'charge_now': domiciliation_quote['amount_due_total'],
@@ -1262,6 +1265,7 @@ class PosOrder(models.Model):
                     ),
                     'domiciliation': {
                         'is_domiciliation': True,
+                        'selection_mode': 'renewal',
                         **domiciliation_quote,
                         'term_months': contract.term_months,
                         'term_start_date': fields.Date.to_string(contract.term_start_date),
@@ -1289,7 +1293,7 @@ class PosOrder(models.Model):
                 preferred_plan_id=preferred_plan_id,
                 preferred_pricing_id=preferred_pricing_id,
                 start_date=start_date,
-                domiciliation_include_terminal_prepayment=domiciliation_include_terminal_prepayment,
+                domiciliation_installment_sequences=domiciliation_installment_sequences,
             )
             pricing['flow'] = normalized_flow
             pricing['is_upgrade'] = False
@@ -1316,8 +1320,7 @@ class PosOrder(models.Model):
         preferred_plan_id=False,
         preferred_pricing_id=False,
         start_date=False,
-        domiciliation_months_to_pay=False,
-        domiciliation_include_terminal_prepayment=False,
+        domiciliation_installment_sequences=False,
     ):
         self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar pricing de suscripción desde Punto de Venta.'))
         return self._wgs_build_subscription_quote_payload_for_pos(
@@ -1331,8 +1334,7 @@ class PosOrder(models.Model):
             preferred_pricing_id=preferred_pricing_id,
             include_offers=False,
             start_date=start_date,
-            domiciliation_months_to_pay=domiciliation_months_to_pay,
-            domiciliation_include_terminal_prepayment=domiciliation_include_terminal_prepayment,
+            domiciliation_installment_sequences=domiciliation_installment_sequences,
         )['pricing']
 
     @api.model
@@ -1347,8 +1349,7 @@ class PosOrder(models.Model):
         preferred_plan_id=False,
         preferred_pricing_id=False,
         start_date=False,
-        domiciliation_months_to_pay=False,
-        domiciliation_include_terminal_prepayment=False,
+        domiciliation_installment_sequences=False,
     ):
         self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para consultar cotizaciones de suscripción desde Punto de Venta.'))
         return self._wgs_build_subscription_quote_payload_for_pos(
@@ -1362,8 +1363,7 @@ class PosOrder(models.Model):
             preferred_pricing_id=preferred_pricing_id,
             include_offers=True,
             start_date=start_date,
-            domiciliation_months_to_pay=domiciliation_months_to_pay,
-            domiciliation_include_terminal_prepayment=domiciliation_include_terminal_prepayment,
+            domiciliation_installment_sequences=domiciliation_installment_sequences,
         )
 
     @api.model
@@ -2569,14 +2569,16 @@ class PosOrder(models.Model):
             raise UserError(_('La orden origen no corresponde a una suscripción válida para renovación.'))
         contract = source_order.wgs_domiciliation_contract_id
         if contract and contract.state == 'active':
-            if not contract.wgs_get_operational_status().get('can_renew'):
-                raise UserError(_('El contrato domiciliado no tiene mensualidades exigibles para cobrar.'))
             snapshot = self._wgs_get_persisted_subscription_pricing_from_pos_line(line).get('snapshot') or {}
             domiciliation = snapshot.get('domiciliation') if isinstance(snapshot, dict) else {}
             sequences = domiciliation.get('selected_installment_sequences') if isinstance(domiciliation, dict) else []
             if not sequences:
-                sequences = contract.wgs_get_due_installments().mapped('sequence')
-            contract.wgs_apply_pos_payment(line, installment_sequences=sequences)
+                raise UserError(_('La renovación domiciliada no contiene una selección válida de mensualidades.'))
+            contract.wgs_apply_pos_payment(
+                line,
+                installment_sequences=sequences,
+                selection_mode='renewal',
+            )
             self._wgs_link_pos_and_sale_records(pos_line=line, sale_order=source_order)
             line.write({
                 'wgs_sale_order_id': source_order.id,
@@ -3320,7 +3322,7 @@ class PosOrder(models.Model):
         discount = max(min(float(line.discount or 0.0), 100.0), 0.0)
         monthly_amount = round(float(pricing_state['price_unit'] or 0.0) * (1 - discount / 100.0), 2)
         domiciliation = pricing_state.get('snapshot', {}).get('domiciliation') or {}
-        initial_installment_sequences = domiciliation.get('initial_installment_sequences')
+        selected_installment_sequences = domiciliation.get('selected_installment_sequences')
         contract = self.env['wgs.subscription.domiciliation.contract'].wgs_create_for_subscription(
             sale_order,
             product=line.product_id,
@@ -3329,7 +3331,7 @@ class PosOrder(models.Model):
             monthly_amount=monthly_amount,
             pos_line=line,
             restart=restart,
-            initial_installment_sequences=initial_installment_sequences,
+            selected_installment_sequences=selected_installment_sequences,
         )
         if contract:
             sale_order.with_context(access_sync_priority=True)._wgs_sync_access_control_people()

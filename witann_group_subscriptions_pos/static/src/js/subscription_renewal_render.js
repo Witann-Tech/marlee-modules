@@ -4,6 +4,7 @@ import {
     getDiscountedDisplayAmount,
     renderDiscountAuthorizationSection,
 } from "./subscription_discount_render";
+import { renderDomiciliationInstallmentSelector } from "./subscription_domiciliation_render";
 import { buildChargeFromSnapshot } from "./subscription_pricing_snapshot";
 
 function renderRenewalForm({
@@ -55,36 +56,13 @@ function renderRenewalForm({
         renewalForm
     );
     const domiciliation = renewalForm.pricingSnapshot && renewalForm.pricingSnapshot.domiciliation;
-    const dueCount = Number(domiciliation && domiciliation.due_installment_count || 0) || 0;
-    const selectedMonths = Number(renewalForm.domiciliationMonthsToPay || dueCount) || dueCount;
-    const dueInstallments = Array.isArray(domiciliation && domiciliation.installments)
-        ? domiciliation.installments
-        : [];
-    const domiciliationChoices = Array.from({ length: dueCount }, (_, index) => index + 1)
-        .map((months) => {
-            const installments = dueInstallments.slice(0, months);
-            const firstInstallment = installments[0];
-            const lastInstallment = installments.at(-1);
-            const periodLabel = firstInstallment && lastInstallment
-                ? `${formatDateDisplay(firstInstallment.period_start_date)} - ${formatDateDisplay(lastInstallment.period_end_date)}`
-                : "-";
-            const countLabel = months === 1
-                ? _t("1 mensualidad")
-                : _t("%(count)s mensualidades").replace("%(count)s", String(months));
-            return `<option value="${months}" ${months === selectedMonths ? "selected" : ""}>${escapeHtml(`${countLabel}: ${periodLabel}`)}</option>`;
-        })
-        .join("");
-    const terminalInstallment = Array.isArray(domiciliation && domiciliation.installments)
-        ? domiciliation.installments.find((installment) => installment.kind === "terminal_prepayment")
-        : false;
-    const terminalPrepaymentOption = isReenroll && domiciliation && domiciliation.is_domiciliation && terminalInstallment
-        ? `
-            <label class="wgs-checkbox-option">
-                <input type="checkbox" data-field="domiciliation_include_terminal_prepayment" ${renewalForm.domiciliationIncludeTerminalPrepayment ? "checked" : ""} />
-                <span>${escapeHtml(_t("Cobrar último mes por anticipado"))}: ${escapeHtml(formatDateDisplay(terminalInstallment.period_start_date) || "-")} - ${escapeHtml(formatDateDisplay(terminalInstallment.period_end_date) || "-")}</span>
-            </label>
-        `
-        : "";
+    const domiciliationSelector = renderDomiciliationInstallmentSelector({
+        domiciliation,
+        escapeHtml,
+        formatDateDisplay,
+        formatMoney,
+        _t,
+    });
     const participantOptions = isReenroll && Number(renewalForm.maxParticipantsTotal || 1) > 1
         ? (filteredParticipants || [])
             .map((row) => {
@@ -151,10 +129,9 @@ function renderRenewalForm({
                     <div><span>${escapeHtml(_t("Producto"))}</span><strong>${escapeHtml(renewalForm.productName || "-")}</strong></div>
                     <div><span>${escapeHtml(dateLabel)}</span><strong>${escapeHtml(dateValue || "-")}</strong></div>
                     <div><span>${escapeHtml(_t("Importe a cobrar"))}</span><strong>${escapeHtml(formatMoney(chargeDisplayAmount))}</strong></div>
-                    ${dueCount ? `<label><span>${escapeHtml(_t("Mensualidades a pagar"))}</span><select data-field="domiciliation_months_to_pay">${domiciliationChoices}</select></label>` : ""}
                 </div>
             `}
-            ${terminalPrepaymentOption}
+            ${domiciliationSelector}
             ${renderDiscountAuthorizationSection({
                 form: renewalForm,
                 formError,

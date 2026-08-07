@@ -122,9 +122,38 @@ class WgsSubscriptionDomiciliationContract(models.Model):
             'term_end_date': installments[-1]['period_end_date'],
             'term_months': term_months,
             'installments': installments,
-            'initial_installment_sequences': [1, term_months],
-            'initial_charge': round(installments[0]['amount'] + installments[-1]['amount'], 2),
         }
+
+    @api.model
+    def _wgs_normalize_installment_sequences(self, installment_sequences):
+        normalized = set()
+        for sequence in installment_sequences or []:
+            try:
+                sequence = int(sequence)
+            except (TypeError, ValueError):
+                raise ValidationError(_('La selección de mensualidades no es válida.'))
+            if sequence < 1:
+                raise ValidationError(_('La selección de mensualidades no es válida.'))
+            normalized.add(sequence)
+        return sorted(normalized)
+
+    @api.model
+    def _wgs_validate_initial_installment_sequences(self, installment_sequences, term_months):
+        """Allow the initial proration plus either contiguous months or the terminal prepayment."""
+        term_months = int(term_months or 0)
+        selected = self._wgs_normalize_installment_sequences(installment_sequences)
+        if not selected:
+            raise ValidationError(_('Selecciona el mes proporcional inicial para contratar el plan domiciliado.'))
+        if selected[0] != 1 or selected[-1] > term_months:
+            raise ValidationError(_('La selección inicial no pertenece al plazo domiciliado.'))
+
+        terminal_only = selected == [1, term_months]
+        contiguous = selected == list(range(1, selected[-1] + 1))
+        if not terminal_only and not contiguous:
+            raise ValidationError(_(
+                'La contratación domiciliada permite el mes inicial, meses consecutivos o el último mes anticipado.'
+            ))
+        return selected
 
     @api.model
     def wgs_create_for_subscription(
@@ -137,7 +166,7 @@ class WgsSubscriptionDomiciliationContract(models.Model):
         monthly_amount,
         pos_line=False,
         restart=False,
-        initial_installment_sequences=False,
+        selected_installment_sequences=False,
     ):
         """Create the contract only after the POS sale has become paid and synchronized."""
         subscription.ensure_one()
@@ -154,20 +183,12 @@ class WgsSubscriptionDomiciliationContract(models.Model):
             monthly_amount=monthly_amount,
             term_months=plan.wgs_domiciliation_term_months,
         )
-        default_sequences = list(schedule['initial_installment_sequences'])
-        selected_sequences = sorted({
-            int(sequence)
-            for sequence in (initial_installment_sequences or default_sequences)
-            if int(sequence) > 0
-        })
-        allowed_initial_sequences = {1, schedule['term_months']}
-        if (
-            1 not in selected_sequences
-            or not set(selected_sequences).issubset(allowed_initial_sequences)
-        ):
-            raise ValidationError(_(
-                'La contratación domiciliada debe cobrar el proporcional inicial y opcionalmente el último mes anticipado.'
-            ))
+        # Older POS lines did not persist a selection and always charged both ends.
+        # New snapshots always send an explicit selection, beginning with month one.
+        selected_sequences = self._wgs_validate_initial_installment_sequences(
+            selected_installment_sequences if selected_installment_sequences is not False else [1, schedule['term_months']],
+            schedule['term_months'],
+        )
         contract_values = {
             'subscription_id': subscription.id,
             'product_id': product.id,
@@ -191,7 +212,7 @@ class WgsSubscriptionDomiciliationContract(models.Model):
             contract.wgs_apply_pos_payment(
                 pos_line,
                 installment_sequences=selected_sequences,
-                allow_terminal_prepayment=True,
+                selection_mode='initial',
             )
         return contract
 
@@ -208,24 +229,65 @@ class WgsSubscriptionDomiciliationContract(models.Model):
             key=lambda installment: installment.sequence
         )
 
-    def wgs_get_renewal_quote(self, months_to_pay=False, today=False):
+    def _wgs_get_renewal_payment_installments(self, installment_sequences=False, today=False):
+        """Return a contiguous unpaid sequence starting with the first unpaid month."""
+        self.ensure_one()
+        installments = self.installment_ids.sorted(key=lambda installment: installment.sequence)
+        unpaid = installments.filtered(lambda installment: installment.state != 'paid')
+        if not unpaid:
+            return self.env['wgs.subscription.domiciliation.installment']
+
+        if installment_sequences is False:
+            selected_sequences = self.wgs_get_due_installments(today=today).mapped('sequence')
+        else:
+            selected_sequences = self._wgs_normalize_installment_sequences(installment_sequences)
+        if not selected_sequences:
+            raise ValidationError(_('Selecciona al menos una mensualidad domiciliada para cobrar.'))
+
+        installments_by_sequence = {installment.sequence: installment for installment in installments}
+        if any(sequence not in installments_by_sequence for sequence in selected_sequences):
+            raise ValidationError(_('La selección de mensualidades no pertenece al contrato domiciliado.'))
+        if any(installments_by_sequence[sequence].state == 'paid' for sequence in selected_sequences):
+            raise ValidationError(_('Una mensualidad seleccionada ya está pagada.'))
+
+        first_unpaid_sequence = unpaid[0].sequence
+        if selected_sequences[0] != first_unpaid_sequence:
+            raise ValidationError(_('La cobranza debe iniciar con la primera mensualidad pendiente.'))
+
+        settled_sequences = set(installments.filtered(lambda installment: installment.state == 'paid').mapped('sequence'))
+        settled_sequences.update(selected_sequences)
+        expected_sequences = set(range(first_unpaid_sequence, selected_sequences[-1] + 1))
+        if not expected_sequences.issubset(settled_sequences):
+            raise ValidationError(_('Las mensualidades a cobrar deben ser consecutivas.'))
+        return installments.filtered(lambda installment: installment.sequence in selected_sequences)
+
+    def wgs_get_renewal_quote(self, installment_sequences=False, today=False):
         self.ensure_one()
         due_installments = self.wgs_get_due_installments(today=today)
-        if months_to_pay:
-            months_to_pay = max(1, min(int(months_to_pay), len(due_installments)))
-            selected = due_installments[:months_to_pay]
-        else:
-            selected = due_installments
+        selected = self._wgs_get_renewal_payment_installments(
+            installment_sequences=installment_sequences,
+            today=today,
+        ) if due_installments else self.env['wgs.subscription.domiciliation.installment']
+        settled_sequences = set(self.installment_ids.filtered(
+            lambda installment: installment.state == 'paid'
+        ).mapped('sequence'))
+        settled_sequences.update(selected.mapped('sequence'))
+        due_sequences = set(due_installments.mapped('sequence'))
+        business_today = fields.Date.to_date(today) or self.env['sale.order']._wgs_get_subscription_business_today(
+            company=self.company_id
+        )
         return {
             'contract_id': self.id,
             'due_installment_count': len(due_installments),
             'selected_installment_sequences': selected.mapped('sequence'),
             'amount_due_total': round(sum(selected.mapped('amount')), 2),
             'access_restored': bool(
-                selected and len(selected) == len(due_installments)
-                and self.access_start_date <= (fields.Date.to_date(today) or self.env['sale.order']._wgs_get_subscription_business_today()) <= self.term_end_date
+                due_sequences.issubset(settled_sequences)
+                and self.access_start_date <= business_today <= self.term_end_date
             ),
-            'installments': [installment.wgs_as_payload() for installment in due_installments],
+            'installments': [installment.wgs_as_payload() for installment in self.installment_ids.sorted(
+                key=lambda installment: installment.sequence
+            )],
         }
 
     def wgs_get_operational_status(self, today=False):
@@ -271,25 +333,29 @@ class WgsSubscriptionDomiciliationContract(models.Model):
             'reason': reason,
         }
 
-    def wgs_apply_pos_payment(self, pos_line, *, installment_sequences, allow_terminal_prepayment=False):
-        """Mark exactly the quoted full monthly installments paid, once per POS line."""
+    def wgs_apply_pos_payment(self, pos_line, *, installment_sequences, selection_mode='renewal'):
+        """Mark exactly the centrally quoted installments paid, once per POS line."""
         self.ensure_one()
         pos_line.ensure_one()
-        sequences = sorted({int(sequence) for sequence in (installment_sequences or []) if int(sequence) > 0})
-        if not sequences:
-            raise ValidationError(_('Selecciona al menos una mensualidad domiciliada para cobrar.'))
-        installments = self.installment_ids.filtered(lambda installment: installment.sequence in sequences).sorted(
-            key=lambda installment: installment.sequence
-        )
+        sequences = self._wgs_normalize_installment_sequences(installment_sequences)
+        if selection_mode == 'initial':
+            sequences = self._wgs_validate_initial_installment_sequences(sequences, self.term_months)
+            installments = self.installment_ids.filtered(lambda installment: installment.sequence in sequences)
+        elif selection_mode == 'renewal':
+            existing = self.installment_ids.filtered(lambda installment: installment.sequence in sequences)
+            if existing and len(existing) == len(sequences) and all(
+                installment.state == 'paid' and installment.paid_pos_line_id == pos_line
+                for installment in existing
+            ):
+                return existing
+            installments = self._wgs_get_renewal_payment_installments(
+                installment_sequences=sequences,
+            )
+        else:
+            raise ValidationError(_('El tipo de cobranza domiciliada no es válido.'))
+        installments = installments.sorted(key=lambda installment: installment.sequence)
         if len(installments) != len(sequences):
             raise ValidationError(_('La selección de mensualidades no pertenece al contrato domiciliado.'))
-        due_sequences = set(self.wgs_get_due_installments().mapped('sequence'))
-        allowed_sequences = due_sequences
-        if allow_terminal_prepayment:
-            terminal = self.installment_ids.filtered(lambda installment: installment.kind == 'terminal_prepayment')
-            allowed_sequences |= set(terminal.mapped('sequence'))
-        if not set(sequences).issubset(allowed_sequences):
-            raise ValidationError(_('Solo se pueden cobrar mensualidades vencidas o exigibles del contrato domiciliado.'))
         already_paid = installments.filtered(lambda installment: installment.state == 'paid')
         if already_paid:
             if all(installment.paid_pos_line_id == pos_line for installment in installments):

@@ -226,7 +226,7 @@ class TestPosSubscriptionPricing(TransactionCase):
         self.assertTrue(charge['domiciliation']['is_domiciliation'])
         self.assertEqual(charge['subscription_start_date'], '2026-02-12')
         self.assertEqual(charge['subscription_end_date'], '2027-01-31')
-        self.assertEqual(charge['domiciliation']['initial_installment_sequences'], [1])
+        self.assertEqual(charge['domiciliation']['selected_installment_sequences'], [1])
         self.assertEqual(charge['ticket_charge_now'], round(100.0 * 17 / 28, 2))
 
         charge_with_terminal_prepayment = self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
@@ -236,16 +236,35 @@ class TestPosSubscriptionPricing(TransactionCase):
             fallback=100.0,
             preferred_plan_id=self.plan.id,
             start_date='2026-02-12',
-            domiciliation_include_terminal_prepayment=True,
+            domiciliation_installment_sequences=[1, 12],
         )
 
         self.assertEqual(
-            charge_with_terminal_prepayment['domiciliation']['initial_installment_sequences'],
+            charge_with_terminal_prepayment['domiciliation']['selected_installment_sequences'],
             [1, 12],
         )
         self.assertEqual(
             charge_with_terminal_prepayment['ticket_charge_now'],
             round(100.0 + (100.0 * 17 / 28), 2),
+        )
+
+        charge_with_consecutive_months = self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
+            partner_id=self.partner.id,
+            product_id=self.product.id,
+            flow='new',
+            fallback=100.0,
+            preferred_plan_id=self.plan.id,
+            start_date='2026-02-12',
+            domiciliation_installment_sequences=[1, 2, 3],
+        )
+
+        self.assertEqual(
+            charge_with_consecutive_months['domiciliation']['selected_installment_sequences'],
+            [1, 2, 3],
+        )
+        self.assertEqual(
+            charge_with_consecutive_months['ticket_charge_now'],
+            round((100.0 * 17 / 28) + 100.0 + 100.0, 2),
         )
 
     def test_aligned_monthly_plan_charges_first_period_proportionally(self):
