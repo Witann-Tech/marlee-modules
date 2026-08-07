@@ -2689,9 +2689,9 @@ class PosOrder(models.Model):
         )
         next_billing_date = renewal_schedule['next_billing_date']
         subscription_end_date = renewal_schedule['subscription_end_date']
+        pricing_state = self._wgs_get_persisted_subscription_pricing_from_pos_line(line)
 
         if package_changed:
-            pricing_state = self._wgs_get_persisted_subscription_pricing_from_pos_line(line)
             source_line = self._wgs_apply_subscription_recurring_line_values_for_pos(
                 source_order=source_order,
                 source_line=source_line,
@@ -2713,6 +2713,16 @@ class PosOrder(models.Model):
                 extra_partner_ids=previous_access_partner_ids,
             )
         else:
+            source_line = self._wgs_apply_subscription_recurring_line_values_for_pos(
+                source_order=source_order,
+                source_line=source_line,
+                pos_line=line,
+                product=target_product,
+                qty=abs(line.qty or 0.0) or 1.0,
+                recurring_price_unit=pricing_state['price_unit'],
+                recurring_plan_id=pricing_state['plan_id'],
+                recurring_pricing_id=pricing_state['pricing_id'],
+            )
             values = {}
             next_field = self._wgs_find_subscription_next_invoice_date_field(source_order)
             if next_field:
@@ -3064,7 +3074,8 @@ class PosOrder(models.Model):
         if 'price_unit' in line_fields:
             values['price_unit'] = recurring_price_unit
         if 'discount' in line_fields:
-            values['discount'] = pos_line.discount
+            # A WGS authorization belongs to the paid POS event, never to the recurring contract.
+            values['discount'] = 0.0
         if recurring_plan_id:
             self._wgs_assign_many2one_value(
                 values=values,
@@ -3420,8 +3431,7 @@ class PosOrder(models.Model):
         start_date = pricing_state.get('subscription_start_date') or line.wgs_get_subscription_start_date()
         if not start_date:
             start_date = self._wgs_get_subscription_business_today_for_pos(company=sale_order.company_id)
-        discount = max(min(float(line.discount or 0.0), 100.0), 0.0)
-        monthly_amount = round(float(pricing_state['price_unit'] or 0.0) * (1 - discount / 100.0), 2)
+        monthly_amount = round(float(pricing_state['price_unit'] or 0.0), 2)
         domiciliation = pricing_state.get('snapshot', {}).get('domiciliation') or {}
         selected_installment_sequences = domiciliation.get('selected_installment_sequences')
         contract = self.env['wgs.subscription.domiciliation.contract'].wgs_create_for_subscription(
@@ -3526,7 +3536,7 @@ class PosOrder(models.Model):
         if 'price_unit' in sale_order_line_fields:
             line_values['price_unit'] = recurring_price_unit
         if 'discount' in sale_order_line_fields:
-            line_values['discount'] = line.discount
+            line_values['discount'] = 0.0
 
         if recurring_plan_id:
             for field_name in ('subscription_plan_id', 'plan_id', 'recurring_plan_id'):

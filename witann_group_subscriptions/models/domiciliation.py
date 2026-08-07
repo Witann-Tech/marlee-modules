@@ -372,15 +372,13 @@ class WgsSubscriptionDomiciliationContract(models.Model):
             raise ValidationError(_('Una mensualidad domiciliada ya fue aplicada a otro pago.'))
 
         expected_amount = round(sum(installments.mapped('amount')), 2)
-        discount = max(min(float(getattr(pos_line, 'discount', 0.0) or 0.0), 100.0), 0.0)
-        paid_amount = round(
-            abs(float(pos_line.qty or 0.0) * float(pos_line.price_unit or 0.0)) * (1 - discount / 100.0),
-            2,
-        )
-        if abs(expected_amount - paid_amount) > 0.01:
+        # The installment schedule is authoritative at its base price. A WGS
+        # discount reduces only this POS payment, not the contract balance.
+        ticket_base_amount = round(abs(float(pos_line.qty or 0.0) * float(pos_line.price_unit or 0.0)), 2)
+        if abs(expected_amount - ticket_base_amount) > 0.01:
             raise ValidationError(_(
                 'El importe del ticket (%(ticket).2f) no coincide con la cartera domiciliada (%(expected).2f).'
-            ) % {'ticket': paid_amount, 'expected': expected_amount})
+            ) % {'ticket': ticket_base_amount, 'expected': expected_amount})
         paid_at = fields.Datetime.now()
         installments.write({
             'state': 'paid',
