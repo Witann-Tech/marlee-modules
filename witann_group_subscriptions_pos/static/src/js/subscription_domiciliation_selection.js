@@ -45,6 +45,8 @@ function getRenewalInstallmentRows(installments, selectedSequences) {
             sequence,
             isSelected: isPaid || isSelected,
             isFixed: isPaid,
+            // The first unpaid month must remain selected, but it is not paid.
+            isRequiredSelection: !isPaid && isSelected && selectedSequences.length === 1,
             isToggleable: !isPaid && !(isSelected && selectedSequences.length === 1),
         };
     });

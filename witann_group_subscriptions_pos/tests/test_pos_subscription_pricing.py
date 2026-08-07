@@ -228,6 +228,9 @@ class TestPosSubscriptionPricing(TransactionCase):
         self.assertEqual(charge['subscription_end_date'], '2027-01-31')
         self.assertEqual(charge['domiciliation']['selected_installment_sequences'], [1])
         self.assertEqual(charge['ticket_charge_now'], round(100.0 * 17 / 28, 2))
+        first_installment = charge['domiciliation']['installments'][0]
+        self.assertEqual(first_installment['display_period_start_date'], '2026-02-12')
+        self.assertEqual(first_installment['display_amount'], 70.42)
 
         charge_with_terminal_prepayment = self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
             partner_id=self.partner.id,

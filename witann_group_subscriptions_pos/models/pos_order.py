@@ -960,6 +960,52 @@ class PosOrder(models.Model):
             'free_trial_day': free_trial_day,
         }
 
+    def _wgs_get_domiciliation_installment_payloads_for_pos(
+        self,
+        installments,
+        *,
+        product,
+        partner=False,
+        company=False,
+        fiscal_position=False,
+        access_start_date=False,
+    ):
+        """Project contract installments for POS without duplicating fiscal rules.
+
+        The contract deliberately stores its schedule in untaxed amounts and by
+        calendar month.  POS must display the commercial amount and, for the
+        first prorated month, the actual access start date.
+        """
+        access_start_date = fields.Date.to_date(access_start_date)
+        payloads = []
+        for installment in installments or []:
+            payload = dict(installment)
+            period_start_date = fields.Date.to_date(payload.get('period_start_date'))
+            period_end_date = fields.Date.to_date(payload.get('period_end_date'))
+            due_date = fields.Date.to_date(payload.get('due_date'))
+            display_period_start_date = period_start_date
+            if payload.get('kind') == 'initial_proration' and access_start_date:
+                display_period_start_date = access_start_date
+
+            payload.update({
+                'period_start_date': fields.Date.to_string(period_start_date) if period_start_date else False,
+                'period_end_date': fields.Date.to_string(period_end_date) if period_end_date else False,
+                'due_date': fields.Date.to_string(due_date) if due_date else False,
+                'display_period_start_date': (
+                    fields.Date.to_string(display_period_start_date)
+                    if display_period_start_date else False
+                ),
+                'display_amount': float(self._wgs_get_price_with_taxes_for_pos(
+                    product,
+                    float(payload.get('amount') or 0.0),
+                    partner=partner,
+                    company=company,
+                    fiscal_position=fiscal_position,
+                )),
+            })
+            payloads.append(payload)
+        return payloads
+
     def _wgs_build_product_pricing_payload_for_pos(
         self,
         product,
@@ -1040,15 +1086,14 @@ class PosOrder(models.Model):
                 'selected_installment_sequences': selected_installment_sequences,
                 'selected_charge': selected_charge,
                 'selected_display_charge': float(selected_display_charge),
-                'installments': [
-                    {
-                        **installment,
-                        'period_start_date': fields.Date.to_string(installment['period_start_date']),
-                        'period_end_date': fields.Date.to_string(installment['period_end_date']),
-                        'due_date': fields.Date.to_string(installment['due_date']),
-                    }
-                    for installment in schedule['installments']
-                ],
+                'installments': self._wgs_get_domiciliation_installment_payloads_for_pos(
+                    schedule['installments'],
+                    product=product,
+                    partner=partner or False,
+                    company=pricing_company or False,
+                    fiscal_position=pricing_fiscal_position or False,
+                    access_start_date=schedule['access_start_date'],
+                ),
             }
             snapshot.update({
                 'charge_now': selected_charge,
@@ -1253,6 +1298,17 @@ class PosOrder(models.Model):
                 domiciliation_quote = contract.wgs_get_renewal_quote(
                     installment_sequences=domiciliation_installment_sequences,
                 )
+                domiciliation_installments = self._wgs_get_domiciliation_installment_payloads_for_pos(
+                    domiciliation_quote['installments'],
+                    product=product or contract.product_id,
+                    partner=partner or source_order.partner_id,
+                    company=source_order.company_id,
+                    fiscal_position=(
+                        source_order.fiscal_position_id
+                        if 'fiscal_position_id' in source_order._fields else False
+                    ),
+                    access_start_date=contract.access_start_date,
+                )
                 pricing.update({
                     'charge_now': domiciliation_quote['amount_due_total'],
                     'ticket_charge_now': domiciliation_quote['amount_due_total'],
@@ -1267,6 +1323,7 @@ class PosOrder(models.Model):
                         'is_domiciliation': True,
                         'selection_mode': 'renewal',
                         **domiciliation_quote,
+                        'installments': domiciliation_installments,
                         'term_months': contract.term_months,
                         'term_start_date': fields.Date.to_string(contract.term_start_date),
                         'term_end_date': fields.Date.to_string(contract.term_end_date),

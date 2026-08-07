@@ -30,7 +30,9 @@ function renderDomiciliationInstallmentSelector({
     const choices = rows.map((installment) => {
         const stateClass = installment.isFixed
             ? "wgs-domiciliation-installment-fixed"
-            : (installment.isToggleable ? "" : "wgs-domiciliation-installment-locked");
+            : (installment.isRequiredSelection
+                ? "wgs-domiciliation-installment-required"
+                : (installment.isToggleable ? "" : "wgs-domiciliation-installment-locked"));
         const stateLabel = installment.state === "paid" ? ` · ${_t("Pagada")}` : "";
         return `
             <label class="wgs-domiciliation-installment ${stateClass}">
@@ -43,7 +45,7 @@ function renderDomiciliationInstallmentSelector({
                 />
                 <span class="wgs-domiciliation-installment-copy">
                     <strong>${escapeHtml(`${_t("Mes")} ${installment.sequence}: ${getInstallmentKindLabel(installment, _t)}${stateLabel}`)}</strong>
-                    <small>${escapeHtml(`${formatDateDisplay(installment.period_start_date) || "-"} - ${formatDateDisplay(installment.period_end_date) || "-"} · ${formatMoney(installment.amount || 0)}`)}</small>
+                    <small>${escapeHtml(`${formatDateDisplay(installment.display_period_start_date || installment.period_start_date) || "-"} - ${formatDateDisplay(installment.period_end_date) || "-"} · ${formatMoney(installment.display_amount !== undefined ? installment.display_amount : (installment.amount || 0))}`)}</small>
                 </span>
             </label>
         `;
