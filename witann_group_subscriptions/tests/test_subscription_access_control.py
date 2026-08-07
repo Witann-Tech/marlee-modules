@@ -130,6 +130,51 @@ class TestSubscriptionAccessControl(TransactionCase):
         with self.assertRaises(ValidationError):
             contract.wgs_get_renewal_quote(installment_sequences=[3], today='2026-08-05')
 
+    def test_domiciliation_current_contract_can_prepay_next_month(self):
+        plan = self.env['sale.subscription.plan'].create({
+            'name': 'Domiciliado prepago',
+            'wgs_domiciliation_enabled': True,
+            'wgs_domiciliation_term_months': 12,
+        })
+        order = self._create_subscription_order()
+        schedule = self.env['wgs.subscription.domiciliation.contract'].wgs_build_initial_schedule(
+            start_date='2026-02-15', monthly_amount=100.0, term_months=12,
+        )
+        contract = self.env['wgs.subscription.domiciliation.contract'].create({
+            'subscription_id': order.id,
+            'product_id': self.product.id,
+            'plan_id': plan.id,
+            'monthly_amount': 100.0,
+            'access_start_date': schedule['access_start_date'],
+            'term_start_date': schedule['term_start_date'],
+            'term_end_date': schedule['term_end_date'],
+            'term_months': schedule['term_months'],
+            'installment_ids': [
+                Command.create({
+                    **installment,
+                    'state': 'paid' if installment['sequence'] <= 7 else 'due',
+                })
+                for installment in schedule['installments']
+            ],
+        })
+        order.write({'wgs_domiciliation_contract_id': contract.id})
+
+        status = contract.wgs_get_operational_status(today='2026-08-05')
+        quote = contract.wgs_get_renewal_quote(today='2026-08-05')
+
+        self.assertEqual(status['state_key'], 'progress')
+        self.assertEqual(status['access_state'], 'enabled')
+        self.assertTrue(status['can_renew'])
+        self.assertEqual(status['due_installment_count'], 0)
+        self.assertEqual(quote['selected_installment_sequences'], [8])
+        self.assertEqual(quote['amount_due_total'], 100.0)
+        self.assertTrue(quote['access_restored'])
+
+        quote = contract.wgs_get_renewal_quote(installment_sequences=[8, 9], today='2026-08-05')
+        self.assertEqual(quote['selected_installment_sequences'], [8, 9])
+        with self.assertRaises(ValidationError):
+            contract.wgs_get_renewal_quote(installment_sequences=[9], today='2026-08-05')
+
     def _create_subscription_order_for_product(self, product):
         order = self.env['sale.order'].create(
             {

@@ -230,7 +230,7 @@ class WgsSubscriptionDomiciliationContract(models.Model):
         )
 
     def _wgs_get_renewal_payment_installments(self, installment_sequences=False, today=False):
-        """Return a contiguous unpaid sequence starting with the first unpaid month."""
+        """Return a contiguous payment sequence beginning with the first unpaid month."""
         self.ensure_one()
         installments = self.installment_ids.sorted(key=lambda installment: installment.sequence)
         unpaid = installments.filtered(lambda installment: installment.state != 'paid')
@@ -239,6 +239,9 @@ class WgsSubscriptionDomiciliationContract(models.Model):
 
         if installment_sequences is False:
             selected_sequences = self.wgs_get_due_installments(today=today).mapped('sequence')
+            if not selected_sequences:
+                # A current contract may pay its next future month in advance.
+                selected_sequences = [unpaid[0].sequence]
         else:
             selected_sequences = self._wgs_normalize_installment_sequences(installment_sequences)
         if not selected_sequences:
@@ -267,7 +270,7 @@ class WgsSubscriptionDomiciliationContract(models.Model):
         selected = self._wgs_get_renewal_payment_installments(
             installment_sequences=installment_sequences,
             today=today,
-        ) if due_installments else self.env['wgs.subscription.domiciliation.installment']
+        )
         settled_sequences = set(self.installment_ids.filtered(
             lambda installment: installment.state == 'paid'
         ).mapped('sequence'))
@@ -307,6 +310,10 @@ class WgsSubscriptionDomiciliationContract(models.Model):
             and self.access_start_date <= today <= self.term_end_date
         )
         due_installments = self.wgs_get_due_installments(today=today) if within_term else self.browse()
+        unpaid_installments = self.installment_ids.filtered(
+            lambda installment: installment.state != 'paid'
+        ).sorted(key=lambda installment: installment.sequence)
+        next_payment_installment = due_installments[:1] or unpaid_installments[:1]
         is_current = bool(within_term and not due_installments)
 
         if today < self.access_start_date and self.state == 'active':
@@ -319,7 +326,9 @@ class WgsSubscriptionDomiciliationContract(models.Model):
             ) % {'count': len(due_installments)}
         elif within_term:
             state_key = 'progress'
-            reason = _('Contrato domiciliado al corriente.')
+            reason = _(
+                'Contrato domiciliado al corriente. Puede adelantar la siguiente mensualidad pendiente.'
+            ) if unpaid_installments else _('Contrato domiciliado al corriente.')
         else:
             state_key = 'closed'
             reason = _('El plazo forzoso del contrato domiciliado concluyó o fue cancelado.')
@@ -327,9 +336,9 @@ class WgsSubscriptionDomiciliationContract(models.Model):
         return {
             'state_key': state_key,
             'access_state': 'enabled' if is_current else ('suspended' if within_term else False),
-            'can_renew': bool(within_term and due_installments),
+            'can_renew': bool(within_term and unpaid_installments),
             'due_installment_count': len(due_installments),
-            'next_due_date': due_installments[:1].due_date if due_installments else False,
+            'next_due_date': next_payment_installment.due_date or False,
             'reason': reason,
         }
 
