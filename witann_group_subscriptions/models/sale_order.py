@@ -852,10 +852,16 @@ class SaleOrder(models.Model):
         if not partners:
             return {}
         Person = self.env['access_control.person'].sudo().with_context(active_test=False)
-        return {
-            person.partner_id.id: person
-            for person in Person.search([('partner_id', 'in', partners.ids)])
-        }
+        people_by_partner = {}
+        # Reuse the currently enabled physical identity. If a partner only has
+        # archived history, prefer the record that retains a global device ID.
+        people = Person.search(
+            [('partner_id', 'in', partners.ids)],
+            order='partner_id asc, active desc, global_user_id desc, id desc',
+        )
+        for person in people:
+            people_by_partner.setdefault(person.partner_id.id, person)
+        return people_by_partner
 
     @api.model
     def _wgs_assign_missing_access_global_ids(self, profiles, people_by_partner):
