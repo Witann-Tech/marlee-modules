@@ -454,6 +454,27 @@ class TestSubscriptionAccessControl(TransactionCase):
         self.assertFalse(owner_person.active)
         self.assertFalse(participant_person.active)
 
+    def test_sync_reactivates_existing_inactive_managed_person(self):
+        order = self._create_subscription_order()
+        progress_state = self._find_subscription_state_value('progress', 'en progreso')
+        cancel_state = self._find_subscription_state_value('cancel', 'churn', 'close')
+        Person = self.env['access_control.person'].with_context(active_test=False)
+
+        order.write({'subscription_state': progress_state})
+        person = Person.search([('partner_id', '=', self.owner.id)], limit=1)
+        self.assertTrue(person)
+
+        order.write({'subscription_state': cancel_state})
+        person.invalidate_recordset(['active', 'global_user_id'])
+        self.assertFalse(person.active)
+        self.assertFalse(person.global_user_id)
+
+        order.write({'subscription_state': progress_state})
+        reactivated_person = Person.search([('partner_id', '=', self.owner.id)], limit=1)
+        self.assertEqual(reactivated_person, person)
+        self.assertTrue(reactivated_person.active)
+        self.assertTrue(reactivated_person.global_user_id)
+
     def test_cron_deactivates_stale_managed_person_without_valid_subscription(self):
         person = self.env['access_control.person'].create(
             {

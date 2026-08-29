@@ -744,11 +744,19 @@ class SaleOrder(models.Model):
     def _wgs_get_related_subscription_orders_for_partner(self, partner):
         if not partner:
             return self.browse()
+        return self._wgs_get_related_subscription_orders_for_partners(partner)
+
+    @api.model
+    def _wgs_get_related_subscription_orders_for_partners(self, partners):
+        """Fetch every relevant subscription once for a bounded partner batch."""
+        partners = partners.exists()
+        if not partners:
+            return self.browse()
         domain = [
             ('state', 'in', ['sale', 'done']),
             '|',
-            ('partner_id', '=', partner.id),
-            ('participant_ids', 'in', partner.id),
+            ('partner_id', 'in', partners.ids),
+            ('participant_ids', 'in', partners.ids),
         ]
         if 'order_line' in self._fields:
             domain.append(('order_line.product_id.product_tmpl_id.recurring_invoice', '=', True))
@@ -756,7 +764,7 @@ class SaleOrder(models.Model):
         return orders.filtered(lambda order: order._wgs_is_confirmed_access_subscription_order())
 
     @api.model
-    def _wgs_get_access_profile_for_partner(self, partner):
+    def _wgs_build_access_profile_from_orders(self, partner, orders):
         profile = {
             'access_state': False,
             'site_ids': [],
@@ -764,7 +772,6 @@ class SaleOrder(models.Model):
             'blocked': False,
             'block_reason': False,
         }
-        orders = self._wgs_get_related_subscription_orders_for_partner(partner)
         if not orders:
             if getattr(partner, 'wgs_access_blocked', False):
                 profile['blocked'] = True
@@ -806,13 +813,73 @@ class SaleOrder(models.Model):
         return profile
 
     @api.model
-    def _wgs_sync_access_control_partner(self, partner):
+    def _wgs_get_access_profiles_for_partners(self, partners):
+        """Resolve access profiles without a subscription query per partner."""
+        partners = partners.exists()
+        if not partners:
+            return {}
+
+        partner_ids = set(partners.ids)
+        order_ids_by_partner_id = {partner_id: [] for partner_id in partner_ids}
+        orders = self._wgs_get_related_subscription_orders_for_partners(partners)
+        for order in orders:
+            for partner_id in partner_ids.intersection(order._wgs_get_access_related_partner_ids()):
+                order_ids_by_partner_id[partner_id].append(order.id)
+
+        return {
+            partner.id: self._wgs_build_access_profile_from_orders(
+                partner,
+                orders.browse(order_ids_by_partner_id[partner.id]),
+            )
+            for partner in partners
+        }
+
+    @api.model
+    def _wgs_get_access_profile_for_partner(self, partner):
+        if not partner:
+            return {
+                'access_state': False,
+                'site_ids': [],
+                'order_ids': [],
+                'blocked': False,
+                'block_reason': False,
+            }
+        return self._wgs_get_access_profiles_for_partners(partner).get(partner.id, {})
+
+    @api.model
+    def _wgs_get_access_people_by_partner(self, partners):
+        partners = partners.exists()
+        if not partners:
+            return {}
+        Person = self.env['access_control.person'].sudo().with_context(active_test=False)
+        return {
+            person.partner_id.id: person
+            for person in Person.search([('partner_id', 'in', partners.ids)])
+        }
+
+    @api.model
+    def _wgs_assign_missing_access_global_ids(self, profiles, people_by_partner):
+        """Assign SpeedFace IDs once per batch before re-enabling access."""
+        Person = self.env['access_control.person'].sudo().with_context(active_test=False)
+        people = Person.browse([
+            person.id
+            for partner_id, person in people_by_partner.items()
+            if person
+            and not person.global_user_id
+            and profiles.get(partner_id, {}).get('access_state') == 'enabled'
+        ])
+        if people:
+            people.action_assign_global_user_id()
+        return people
+
+    @api.model
+    def _wgs_sync_access_control_partner(self, partner, profile=None, person=None):
         if not partner:
             return False
 
-        profile = self._wgs_get_access_profile_for_partner(partner)
-        Person = self.env['access_control.person'].sudo()
-        person = Person.search([('partner_id', '=', partner.id)], limit=1)
+        profile = profile if profile is not None else self._wgs_get_access_profile_for_partner(partner)
+        if person is None:
+            person = self._wgs_get_access_people_by_partner(partner).get(partner.id)
         access_state = profile['access_state']
         site_ids = profile['site_ids']
 
@@ -908,8 +975,15 @@ class SaleOrder(models.Model):
         if not partner_ids:
             return
         partners = self.env['res.partner'].sudo().browse(sorted(partner_ids)).exists()
+        profiles = self._wgs_get_access_profiles_for_partners(partners)
+        people_by_partner = self._wgs_get_access_people_by_partner(partners)
+        self._wgs_assign_missing_access_global_ids(profiles, people_by_partner)
         for partner in partners:
-            self._wgs_sync_access_control_partner(partner)
+            self._wgs_sync_access_control_partner(
+                partner,
+                profile=profiles[partner.id],
+                person=people_by_partner.get(partner.id),
+            )
 
     def _wgs_sync_access_control_people_if_not_deferred(self, extra_partner_ids=None):
         if self.env.context.get(self._WGS_DEFER_ACCESS_SYNC_CONTEXT_KEY):
@@ -975,7 +1049,7 @@ class SaleOrder(models.Model):
         for order in orders:
             partner_ids.update(order._wgs_get_access_related_partner_ids())
 
-        Person = self.env['access_control.person'].sudo()
+        Person = self.env['access_control.person'].sudo().with_context(active_test=False)
         managed_people, next_person_after_id = self._wgs_search_rotating_id_page(Person, [
             ('managed_by_subscription', '=', True),
             ('partner_id', '!=', False),
@@ -992,10 +1066,10 @@ class SaleOrder(models.Model):
         }
 
     @api.model
-    def _wgs_build_subscription_access_audit_line(self, partner):
-        profile = self._wgs_get_access_profile_for_partner(partner)
-        Person = self.env['access_control.person'].sudo()
-        person = Person.search([('partner_id', '=', partner.id)], limit=1)
+    def _wgs_build_subscription_access_audit_line(self, partner, profile=None, person=None):
+        profile = profile if profile is not None else self._wgs_get_access_profile_for_partner(partner)
+        if person is None:
+            person = self._wgs_get_access_people_by_partner(partner).get(partner.id)
         expected_state = profile.get('access_state') or False
         expected_site_ids = set(profile.get('site_ids') or [])
         expected_timezone_id = profile.get('access_timezone_id') or False
@@ -1086,16 +1160,26 @@ class SaleOrder(models.Model):
                 'next_person_after_id': person_after_id,
             }
         partners = self.env['res.partner'].sudo().browse(partner_ids).exists()
+        profiles = self._wgs_get_access_profiles_for_partners(partners)
+        people_by_partner = self._wgs_get_access_people_by_partner(partners)
+        if repair:
+            self._wgs_assign_missing_access_global_ids(profiles, people_by_partner)
         lines = []
         repaired_partner_ids = []
 
         for partner in partners:
-            line = self._wgs_build_subscription_access_audit_line(partner)
+            profile = profiles[partner.id]
+            person = people_by_partner.get(partner.id)
+            line = self._wgs_build_subscription_access_audit_line(
+                partner,
+                profile=profile,
+                person=person,
+            )
             if not line:
                 continue
             lines.append(line)
             if repair:
-                self._wgs_sync_access_control_partner(partner)
+                self._wgs_sync_access_control_partner(partner, profile=profile, person=person)
                 repaired_partner_ids.append(partner.id)
 
         issue_counts = {}
