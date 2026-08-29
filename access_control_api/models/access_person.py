@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from odoo import models, fields, api
-from odoo.exceptions import ValidationError
+from odoo.exceptions import AccessError, ValidationError
 
 
 class AccessPerson(models.Model):
@@ -181,6 +181,78 @@ class AccessPerson(models.Model):
             )
             if duplicate:
                 raise ValidationError("Solo puede existir una persona de control de acceso por contacto.")
+
+    @api.model
+    def wgs_consolidate_duplicate_people_for_partner(self, partner_id, canonical_person_id):
+        """Consolidate inactive duplicate people into one active access record.
+
+        Historical duplicates can predate the unique-partner validation. They
+        block every later write because the validation runs with
+        ``active_test=False`` during subscription synchronization. This repair
+        is intentionally administrator-only and fail-closed: it never chooses
+        a canonical record or deletes an active duplicate automatically.
+        """
+        if not self.env.user.has_group('base.group_system'):
+            raise AccessError("Solo un administrador puede consolidar personas de control de acceso.")
+
+        try:
+            partner_id = int(partner_id or 0)
+            canonical_person_id = int(canonical_person_id or 0)
+        except (TypeError, ValueError):
+            raise ValidationError("Debes indicar un contacto y una persona canónica válidos.")
+        Partner = self.env['res.partner'].sudo()
+        partner = Partner.browse(partner_id).exists()
+        canonical = self.sudo().with_context(active_test=False).browse(canonical_person_id).exists()
+        if not partner or not canonical or canonical.partner_id != partner:
+            raise ValidationError("La persona canónica no corresponde al contacto indicado.")
+        if not canonical.active:
+            raise ValidationError("La persona canónica debe estar activa.")
+
+        people = self.sudo().with_context(active_test=False).search([
+            ('partner_id', '=', partner.id),
+        ], order='id asc')
+        duplicates = people - canonical
+        active_duplicates = duplicates.filtered('active')
+        if active_duplicates:
+            raise ValidationError(
+                "No se pueden consolidar personas duplicadas activas: %s."
+                % ', '.join(map(str, active_duplicates.ids))
+            )
+        if not duplicates:
+            return {
+                'partner_id': partner.id,
+                'canonical_person_id': canonical.id,
+                'removed_person_ids': [],
+                'migrated_references': {},
+            }
+
+        duplicate_ids = duplicates.ids
+        migrated_references = {}
+        reference_models = (
+            'access_control.access_event',
+            'access_control.device_audit_line',
+            'access_control.sync_change',
+        )
+        for model_name in reference_models:
+            if model_name not in self.env.registry:
+                continue
+            model = self.env[model_name].sudo()
+            if 'person_id' not in model._fields:
+                continue
+            references = model.search([('person_id', 'in', duplicate_ids)])
+            if references:
+                references.write({'person_id': canonical.id})
+                migrated_references[model_name] = len(references)
+
+        # Duplicates are required to be inactive, so unlink does not enqueue
+        # a device delete for a currently enabled physical access identity.
+        duplicates.unlink()
+        return {
+            'partner_id': partner.id,
+            'canonical_person_id': canonical.id,
+            'removed_person_ids': duplicate_ids,
+            'migrated_references': migrated_references,
+        }
 
     @api.model_create_multi
     def create(self, vals_list):
