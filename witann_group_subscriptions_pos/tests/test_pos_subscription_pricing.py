@@ -166,6 +166,47 @@ class TestPosSubscriptionPricing(TransactionCase):
             fields.Date.to_string(expected_schedule['next_billing_date']),
         )
 
+    def test_renewal_quote_ignores_historical_transaction_discount(self):
+        self._create_subscription_pricing(
+            self.plan,
+            price=100.0,
+            name='Tarifa normal renovación POS',
+        )
+        source_order = self._create_subscription_like_order()
+        source_order.order_line[:1].write({'discount': 35.0})
+
+        snapshot = self.PosOrder._wgs_resolve_subscription_pricing_snapshot(
+            flow='renewal',
+            product=self.product,
+            partner=self.partner,
+            company=source_order.company_id,
+            source_order=source_order,
+        )
+
+        self.assertEqual(snapshot['price_unit'], 100.0)
+        self.assertEqual(snapshot['display_price_unit'], 116.0)
+
+    def test_recurring_line_never_persists_pos_transaction_discount(self):
+        source_order = self._create_subscription_like_order()
+        source_line = source_order.order_line[:1]
+        pos_line = self.env['pos.order.line'].new({
+            'product_id': self.product.id,
+            'qty': 1,
+            'price_unit': 100.0,
+            'discount': 25.0,
+        })
+
+        values = self.PosOrder._wgs_build_subscription_recurring_line_values_for_pos(
+            source_line=source_line,
+            pos_line=pos_line,
+            product=self.product,
+            qty=1,
+            recurring_price_unit=100.0,
+            recurring_plan_id=self.plan.id,
+        )
+
+        self.assertEqual(values['discount'], 0.0)
+
     def test_price_with_taxes_for_pos_uses_product_taxes(self):
         total = self.PosOrder._wgs_get_price_with_taxes_for_pos(self.product, 100.0, partner=self.partner)
         self.assertEqual(total, 116.0)

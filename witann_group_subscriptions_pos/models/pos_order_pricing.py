@@ -619,42 +619,27 @@ class PosOrderPricingMixin(models.Model):
                 break
         return plan_id, pricing_id
 
-    def _wgs_build_subscription_line_pricing_snapshot(
+    def _wgs_build_subscription_renewal_snapshot(
         self,
         source_order,
         *,
-        flow='renewal',
-        product_id=False,
+        product=False,
+        fallback=0.0,
         preferred_plan_id=False,
         preferred_pricing_id=False,
     ):
+        """Quote a renewal from current product pricing, never a prior POS discount."""
         source_order.ensure_one()
         recurring_lines = source_order.order_line.filtered(lambda so_line: self._wgs_is_recurring_so_line(so_line))
-        if not recurring_lines:
-            raise ValueError('Source order has no recurring lines.')
-
-        try:
-            preferred_product_id = int(product_id or 0)
-        except (TypeError, ValueError):
-            preferred_product_id = 0
-        recurring_line = self.env['sale.order.line']
-        if preferred_product_id > 0:
-            recurring_line = recurring_lines.filtered(lambda so_line: so_line.product_id.id == preferred_product_id)[:1]
+        recurring_line = recurring_lines.sorted(key=lambda so_line: so_line.id)[:1]
         if not recurring_line:
-            recurring_line = recurring_lines.sorted(key=lambda so_line: so_line.id)[:1]
-        if not recurring_line:
-            raise ValueError('Source order has no recurring line after selection.')
+            raise ValueError('Source order has no recurring line.')
 
-        recurring_price = self._wgs_get_order_recurring_total_amount(source_order)
-        display_recurring_price = self._wgs_get_order_recurring_total_amount(source_order, include_taxes=True)
-        qty = abs(self._wgs_get_so_line_qty(recurring_line))
-        discount = float(recurring_line.discount or 0.0) if 'discount' in recurring_line._fields else 0.0
-        recurring_price = qty * float(recurring_line.price_unit or 0.0) * (1 - (discount / 100.0))
-        display_recurring_price = self._wgs_get_sale_order_line_total_with_tax(recurring_line, qty_override=qty)
-        recurring_price = round(max(float(recurring_price or 0.0), 0.0), 2)
-        display_recurring_price = round(max(float(display_recurring_price or 0.0), 0.0), 2)
+        target_product = product.exists() if product else recurring_line.product_id
+        if not target_product:
+            raise ValueError('Source order has no recurring product.')
 
-        plan_id, pricing_id = self._wgs_extract_subscription_ids_from_line(recurring_line)
+        source_plan_id, source_pricing_id = self._wgs_extract_subscription_ids_from_line(recurring_line)
         try:
             preferred_plan_id = int(preferred_plan_id or 0)
         except (TypeError, ValueError):
@@ -663,58 +648,20 @@ class PosOrderPricingMixin(models.Model):
             preferred_pricing_id = int(preferred_pricing_id or 0)
         except (TypeError, ValueError):
             preferred_pricing_id = 0
-        resolved_plan_id = preferred_plan_id or plan_id or False
-        resolved_pricing_id = preferred_pricing_id or pricing_id or False
-        resolved_plan_record = self._wgs_find_plan_record_by_id(resolved_plan_id) if resolved_plan_id else self._wgs_extract_plan_record_from_sale_order(source_order)
-        interval_value, interval_unit = self._wgs_extract_interval_from_plan(resolved_plan_record)
-        renewal_schedule = self._wgs_get_subscription_renewal_schedule(
+        source_product_selected = target_product == recurring_line.product_id
+        return self._wgs_build_subscription_product_renewal_snapshot(
             source_order,
-            today=self._wgs_get_subscription_business_today_for_pos(company=source_order.company_id),
-            preferred_line=recurring_line,
+            product=target_product,
+            fallback=float(fallback or target_product.list_price or 0.0),
+            preferred_plan_id=preferred_plan_id or (source_plan_id if source_product_selected else False),
+            preferred_pricing_id=preferred_pricing_id or (source_pricing_id if source_product_selected else False),
+            partner=source_order.partner_id,
+            company=source_order.company_id,
+            fiscal_position=(
+                source_order.fiscal_position_id
+                if 'fiscal_position_id' in source_order._fields else False
+            ),
         )
-        return {
-            'mode': 'subscription',
-            'flow': flow,
-            'product_id': recurring_line.product_id.id,
-            'product_name': recurring_line.product_id.display_name,
-            'plan_id': resolved_plan_id,
-            'plan_name': resolved_plan_record.display_name if resolved_plan_record else False,
-            'pricing_id': resolved_pricing_id,
-            'price_unit': float(recurring_price),
-            'display_price_unit': float(display_recurring_price),
-            'ticket_price_unit': float(recurring_price),
-            'credit_amount': 0.0,
-            'display_credit_amount': 0.0,
-            'ticket_credit_amount': 0.0,
-            'charge_now': float(recurring_price),
-            'display_charge_now': float(display_recurring_price),
-            'ticket_charge_now': float(recurring_price),
-            'subscription_start_date': fields.Date.to_string(renewal_schedule['renewal_anchor']),
-            'subscription_end_date': fields.Date.to_string(renewal_schedule['subscription_end_date']),
-            'next_billing_date': fields.Date.to_string(renewal_schedule['next_billing_date']),
-            'first_period_alignment': bool(renewal_schedule.get('period_aligned')),
-            'interval_value': int(interval_value or 1),
-            'interval_unit': interval_unit or 'month',
-            'interval_label': f'{int(interval_value or 1)} {interval_unit or "month"}',
-            'candidates': [],
-            'choice': {
-                'plan_id': resolved_plan_id,
-                'pricing_id': resolved_pricing_id,
-                'price': float(recurring_price),
-            },
-            'source': {
-                'type': 'subscription_line',
-                'id': recurring_line.id,
-                'subscription_id': source_order.id,
-                'subscription_name': source_order.name,
-            },
-            'context': {
-                'preferred_plan_id': int(preferred_plan_id or 0),
-                'preferred_pricing_id': int(preferred_pricing_id or 0),
-            },
-            'source_order': source_order,
-            'source_line': recurring_line,
-        }
 
     def _wgs_build_subscription_product_renewal_snapshot(
         self,
@@ -759,7 +706,11 @@ class PosOrderPricingMixin(models.Model):
             plan_id=snapshot.get('plan_id'),
             pricing_id=snapshot.get('pricing_id'),
         )
-        if target_plan and getattr(target_plan, 'wgs_domiciliation_enabled', False):
+        if (
+            target_plan
+            and getattr(target_plan, 'wgs_domiciliation_enabled', False)
+            and not source_order.wgs_domiciliation_contract_id
+        ):
             raise UserError(
                 _('Los paquetes domiciliados no se pueden seleccionar desde una renovación normal.')
             )
@@ -810,27 +761,10 @@ class PosOrderPricingMixin(models.Model):
         if flow == 'renewal':
             if not source_order:
                 raise ValueError('Subscription snapshot requires source order.')
-            if product:
-                recurring_lines = source_order.order_line.filtered(
-                    lambda so_line: self._wgs_is_recurring_so_line(so_line)
-                    and self._wgs_sale_order_line_has_positive_qty_for_pos(so_line)
-                )
-                source_line = recurring_lines.sorted(key=lambda so_line: so_line.id)[:1]
-                if source_line and source_line.product_id != product:
-                    return self._wgs_build_subscription_product_renewal_snapshot(
-                        source_order,
-                        product=product,
-                        fallback=fallback,
-                        preferred_plan_id=preferred_plan_id,
-                        preferred_pricing_id=preferred_pricing_id,
-                        partner=partner,
-                        company=company,
-                        fiscal_position=fiscal_position,
-                    )
-            return self._wgs_build_subscription_line_pricing_snapshot(
+            return self._wgs_build_subscription_renewal_snapshot(
                 source_order,
-                flow=flow,
-                product_id=product.id if product else False,
+                product=product,
+                fallback=fallback,
                 preferred_plan_id=preferred_plan_id,
                 preferred_pricing_id=preferred_pricing_id,
             )
