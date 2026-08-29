@@ -150,10 +150,6 @@ class AccessPerson(models.Model):
         "unique(global_user_id)",
         "El ID global debe ser único.",
     )
-    _partner_id_uniq = models.Constraint(
-        "unique(partner_id)",
-        "Solo puede existir una persona de control de acceso por contacto.",
-    )
     _global_user_id_range = models.Constraint(
         "CHECK(global_user_id IS NULL OR (global_user_id >= 1 AND global_user_id <= 10000))",
         "El ID global debe estar entre 1 y 10000.",
@@ -167,14 +163,21 @@ class AccessPerson(models.Model):
             if rec.active and not rec.site_ids:
                 raise ValidationError("Las personas activas deben estar asignadas a al menos un sitio.")
 
-    @api.constrains("partner_id")
+    @api.constrains("partner_id", "active")
     def _check_unique_partner_id(self):
+        """Allow archived history, but never two physical identities in use.
+
+        A deactivated record is historical access evidence. It must not block
+        reusing the active identity on a later subscription cycle. The access
+        device invariant is therefore one *active* person per contact.
+        """
         for rec in self:
-            if not rec.partner_id:
+            if not rec.partner_id or not rec.active:
                 continue
-            duplicate = self.search(
+            duplicate = self.with_context(active_test=False).search(
                 [
                     ("partner_id", "=", rec.partner_id.id),
+                    ("active", "=", True),
                     ("id", "!=", rec.id),
                 ],
                 limit=1,

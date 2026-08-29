@@ -793,8 +793,8 @@ class TestFaceSyncDelta(TransactionCase):
         normalized = self.Partner._normalize_image_b64(original.encode())
         self.assertEqual(normalized, self.Partner._normalize_image_b64(original))
 
-    def test_person_is_unique_per_partner(self):
-        partner = self.Partner.create({"name": "Partner único"})
+    def test_person_allows_inactive_history_but_rejects_duplicate_active_identity(self):
+        partner = self.Partner.create({"name": "Partner con historial"})
         self.Person.create(
             {
                 "partner_id": partner.id,
@@ -802,12 +802,22 @@ class TestFaceSyncDelta(TransactionCase):
                 "active": False,
             }
         )
+        current = self.Person.create(
+            {
+                "partner_id": partner.id,
+                "global_user_id": 9992,
+                "active": True,
+                "site_ids": [(6, 0, [self.site.id])],
+            }
+        )
+        current.write({'access_state': 'suspended'})
         with self.assertRaises(ValidationError):
             self.Person.create(
                 {
                     "partner_id": partner.id,
-                    "global_user_id": 9992,
-                    "active": False,
+                    "global_user_id": 9993,
+                    "active": True,
+                    "site_ids": [(6, 0, [self.site.id])],
                 }
             )
 
