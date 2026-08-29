@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from unittest.mock import patch
 
 from odoo import fields
 from odoo.exceptions import ValidationError
@@ -470,6 +471,37 @@ class TestSubscriptionAccessControl(TransactionCase):
         self.assertFalse(person.active)
         self.assertEqual(person.access_state, 'suspended')
 
+    def test_access_audit_source_rotates_managed_people_in_bounded_pages(self):
+        first_partner = self.env['res.partner'].create({'name': 'Auditoría página uno'})
+        second_partner = self.env['res.partner'].create({'name': 'Auditoría página dos'})
+        Person = self.env['access_control.person']
+        first_person = Person.create({
+            'partner_id': first_partner.id,
+            'active': True,
+            'access_state': 'enabled',
+            'site_ids': [Command.set([self.site.id])],
+            'managed_by_subscription': True,
+        })
+        second_person = Person.create({
+            'partner_id': second_partner.id,
+            'active': True,
+            'access_state': 'enabled',
+            'site_ids': [Command.set([self.site.id])],
+            'managed_by_subscription': True,
+        })
+
+        first_page = self.env['sale.order']._wgs_get_subscription_access_audit_partner_ids(
+            batch_limit=1,
+            person_after_id=first_person.id - 1,
+        )
+        second_page = self.env['sale.order']._wgs_get_subscription_access_audit_partner_ids(
+            batch_limit=1,
+            person_after_id=first_page['next_person_after_id'],
+        )
+
+        self.assertEqual(first_page['next_person_after_id'], first_person.id)
+        self.assertEqual(second_page['next_person_after_id'], second_person.id)
+
     def test_audit_reports_and_repairs_stale_managed_person_without_valid_subscription(self):
         person = self.env['access_control.person'].create(
             {
@@ -564,6 +596,47 @@ class TestSubscriptionAccessControl(TransactionCase):
         owner_person.invalidate_recordset(['active', 'access_state'])
         self.assertFalse(owner_person.active)
         self.assertEqual(owner_person.access_state, 'suspended')
+
+    def test_auto_close_cron_ignores_future_subscriptions_and_syncs_closed_batch_once(self):
+        due_order = self._create_subscription_order()
+        future_order = self._create_subscription_order()
+        progress_state = self._find_subscription_state_value('progress', 'en progreso')
+        renew_state = self._find_subscription_state_value('renew', 'to renew', 'por renovar')
+        next_field = next(
+            (
+                field_name
+                for field_name in self.env['sale.order']._WGS_SUBSCRIPTION_NEXT_INVOICE_DATE_FIELDS
+                if field_name in due_order._fields
+            ),
+            False,
+        )
+        if not next_field:
+            self.skipTest('No existe campo de próxima fecha de cobro en este runtime.')
+
+        self._set_auto_close_plan(due_order, days=3)
+        self._set_auto_close_plan(future_order, days=3)
+        today = self.env['sale.order']._wgs_get_subscription_business_today()
+        due_order.write({
+            'subscription_state': renew_state,
+            next_field: today - timedelta(days=3),
+        })
+        future_order.write({
+            'subscription_state': progress_state,
+            next_field: today + timedelta(days=1),
+        })
+
+        candidates = self.env['sale.order'].search(
+            self.env['sale.order']._wgs_get_subscription_auto_close_candidate_domain(today),
+        )
+        self.assertIn(due_order, candidates)
+        self.assertNotIn(future_order, candidates)
+
+        sale_order_class = type(self.env['sale.order'])
+        with patch.object(sale_order_class, '_wgs_sync_access_control_people', autospec=True) as sync_people:
+            closed_count = self.env['sale.order']._cron_wgs_close_overdue_subscriptions(limit=10)
+
+        self.assertGreaterEqual(closed_count, 1)
+        self.assertEqual(sync_people.call_count, 1)
 
     def test_access_is_aggregated_across_multiple_subscriptions(self):
         progress_state = self._find_subscription_state_value('progress', 'en progreso')
