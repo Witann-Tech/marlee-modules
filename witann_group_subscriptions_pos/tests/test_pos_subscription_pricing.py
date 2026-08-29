@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 
 from odoo import Command, fields
@@ -206,6 +207,54 @@ class TestPosSubscriptionPricing(TransactionCase):
         )
 
         self.assertEqual(values['discount'], 0.0)
+
+    def test_subscription_config_is_extracted_from_odoo_data_envelope(self):
+        payload = {
+            'uuid': 'pos-wrapper-uuid',
+            'data': {
+                'uuid': 'pos-data-envelope-uuid',
+                'wgs_subscription_configs': [{
+                    'product_id': self.product.id,
+                    'qty': 1,
+                    'wgs_subscription_config': {
+                        'flow': 'renewal',
+                        'source_subscription_id': 42,
+                        'plan_id': self.plan.id,
+                        'pricing_snapshot': {'price_unit': 100.0},
+                    },
+                }],
+            },
+        }
+
+        self.assertEqual(
+            self.PosOrder._wgs_get_order_uuids(payload),
+            ['pos-wrapper-uuid', 'pos-data-envelope-uuid'],
+        )
+        configs = self.PosOrder._wgs_extract_ui_subscription_line_configs(payload)
+        self.assertEqual(len(configs), 1)
+        self.assertEqual(configs[0]['product_id'], self.product.id)
+        self.assertEqual(configs[0]['flow'], 'renewal')
+        self.assertEqual(configs[0]['source_subscription_id'], 42)
+
+    def test_buffered_subscription_config_uses_any_serialized_order_uuid(self):
+        self.env['wgs.pos.subscription.buffer'].create({
+            'order_uuid': 'pos-data-envelope-uuid',
+            'payload_json': json.dumps([{
+                'product_id': self.product.id,
+                'flow': 'renewal',
+                'source_subscription_id': 42,
+                'plan_id': self.plan.id,
+            }]),
+        })
+
+        configs = self.PosOrder._wgs_get_buffered_subscription_configs([
+            'pos-wrapper-uuid',
+            'pos-data-envelope-uuid',
+        ])
+
+        self.assertEqual(len(configs), 1)
+        self.assertEqual(configs[0]['product_id'], self.product.id)
+        self.assertEqual(configs[0]['flow'], 'renewal')
 
     def test_price_with_taxes_for_pos_uses_product_taxes(self):
         total = self.PosOrder._wgs_get_price_with_taxes_for_pos(self.product, 100.0, partner=self.partner)
