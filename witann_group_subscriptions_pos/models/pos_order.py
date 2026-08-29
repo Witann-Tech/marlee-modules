@@ -1898,58 +1898,91 @@ class PosOrder(models.Model):
         if draft:
             return pos_order_id
 
-        order_uuid = self._wgs_extract_order_uuid(order)
+        order_uuids = pos_order._wgs_get_order_uuids(order)
         ui_configs = pos_order._wgs_extract_ui_subscription_line_configs(order)
-        if not ui_configs and order_uuid:
-            ui_configs = pos_order._wgs_get_buffered_subscription_configs(order_uuid)
+        if not ui_configs and order_uuids:
+            ui_configs = pos_order._wgs_get_buffered_subscription_configs(order_uuids)
 
         if ui_configs:
             pos_order._wgs_apply_subscription_line_configs(ui_configs)
         else:
             pos_order._wgs_apply_ui_subscription_line_config(order)
         pos_order._wgs_align_partner_from_subscription_lines()
+        pos_order._wgs_ensure_recurring_lines_are_configured_for_pos()
         pos_order._wgs_sync_subscription_sales()
+        pos_order._wgs_clear_buffered_subscription_configs(order_uuids)
         return pos_order_id
 
     @api.model
-    def _wgs_extract_order_uuid(self, ui_order):
+    def _wgs_get_ui_order_containers(self, ui_order):
+        """Return every Odoo POS envelope that can hold serialized order data."""
         if not isinstance(ui_order, dict):
-            return False
-        for key in ('uuid', 'uid', 'order_uuid', 'orderUid'):
-            value = ui_order.get(key)
-            if value:
-                return str(value).strip()
-        return False
+            return []
+        containers = [ui_order]
+        data = ui_order.get('data')
+        if isinstance(data, dict):
+            containers.append(data)
+        return containers
 
-    def _wgs_get_buffered_subscription_configs(self, order_uuid):
-        order_uuid = (order_uuid or '').strip()
-        if not order_uuid:
+    @api.model
+    def _wgs_get_order_uuids(self, ui_order):
+        order_uuids = []
+        for container in self._wgs_get_ui_order_containers(ui_order):
+            for key in ('uuid', 'uid', 'order_uuid', 'orderUid'):
+                value = str(container.get(key) or '').strip()
+                if value:
+                    order_uuids.append(value)
+        return list(dict.fromkeys(order_uuids))
+
+    def _wgs_normalize_order_uuids(self, order_uuids):
+        values = order_uuids if isinstance(order_uuids, (list, tuple, set)) else [order_uuids]
+        return list(dict.fromkeys(
+            str(value or '').strip()
+            for value in values
+            if str(value or '').strip()
+        ))
+
+    def _wgs_get_buffered_subscription_configs(self, order_uuids):
+        order_uuids = self._wgs_normalize_order_uuids(order_uuids)
+        if not order_uuids:
             return []
         if not self._wgs_is_subscription_buffer_ready():
             return []
 
         try:
             buffer_model = self.env['wgs.pos.subscription.buffer'].sudo()
-            buffer_record = buffer_model.search([('order_uuid', '=', order_uuid)], limit=1, order='id desc')
-            if not buffer_record:
-                return []
-            try:
-                payload = json.loads(buffer_record.payload_json or '[]')
-            except (TypeError, ValueError):
-                payload = []
-            buffer_record.unlink()
+            buffer_records = buffer_model.search([
+                ('order_uuid', 'in', order_uuids),
+            ], order='id desc')
         except Exception as error:
             _logger.warning(
-                'WGS POS: could not recover subscription buffer for uuid=%s (%s)',
-                order_uuid,
+                'WGS POS: could not recover subscription buffer for uuids=%s (%s)',
+                order_uuids,
                 error,
             )
             return []
 
-        if not isinstance(payload, list):
-            return []
-        _logger.info('WGS POS: recovered %s buffered subscription configs for uuid=%s', len(payload), order_uuid)
-        return payload
+        for buffer_record in buffer_records:
+            try:
+                payload = json.loads(buffer_record.payload_json or '[]')
+            except (TypeError, ValueError):
+                continue
+            if isinstance(payload, list):
+                _logger.info(
+                    'WGS POS: recovered %s buffered subscription configs for uuid=%s',
+                    len(payload),
+                    buffer_record.order_uuid,
+                )
+                return payload
+        return []
+
+    def _wgs_clear_buffered_subscription_configs(self, order_uuids):
+        order_uuids = self._wgs_normalize_order_uuids(order_uuids)
+        if not order_uuids or not self._wgs_is_subscription_buffer_ready():
+            return
+        self.env['wgs.pos.subscription.buffer'].sudo().search([
+            ('order_uuid', 'in', order_uuids),
+        ]).unlink()
 
     def _wgs_apply_ui_subscription_line_config(self, ui_order):
         self.ensure_one()
@@ -2097,16 +2130,19 @@ class PosOrder(models.Model):
     @api.model
     def _wgs_extract_ui_subscription_line_configs(self, ui_order):
         output = []
-        if not isinstance(ui_order, dict):
+        containers = self._wgs_get_ui_order_containers(ui_order)
+        if not containers:
             return output
 
-        raw_root_configs = ui_order.get('wgs_subscription_configs')
-        if isinstance(raw_root_configs, str):
-            try:
-                raw_root_configs = json.loads(raw_root_configs)
-            except (TypeError, ValueError):
-                raw_root_configs = []
-        if isinstance(raw_root_configs, list):
+        for container in containers:
+            raw_root_configs = container.get('wgs_subscription_configs')
+            if isinstance(raw_root_configs, str):
+                try:
+                    raw_root_configs = json.loads(raw_root_configs)
+                except (TypeError, ValueError):
+                    raw_root_configs = []
+            if not isinstance(raw_root_configs, list):
+                continue
             for item in raw_root_configs:
                 if not isinstance(item, dict):
                     continue
@@ -2118,33 +2154,33 @@ class PosOrder(models.Model):
                 _logger.info('WGS POS: extracted %s root subscription configs from UI order.', len(output))
                 return output
 
-        raw_lines = ui_order.get('lines')
-        if not isinstance(raw_lines, list):
-            return output
-
-        for raw_line in raw_lines:
-            payload = self._wgs_find_best_payload_dict(raw_line)
-            if not isinstance(payload, dict):
+        for container in containers:
+            raw_lines = container.get('lines')
+            if not isinstance(raw_lines, list):
                 continue
-            config = self._wgs_extract_subscription_config_payload(payload)
-            has_renewal_metadata = (
-                str(config.get('flow') or '').strip().lower() in ('renewal', 'reenroll', 'pending_charge')
-                or self._wgs_to_int(config.get('source_subscription_id')) > 0
-                or self._wgs_to_int(config.get('pending_move_id')) > 0
-            )
-            if not (
-                config.get('participant_ids')
-                or config.get('plan_id')
-                or config.get('pricing_id')
-                or config.get('start_date')
-                or config.get('end_date')
-                or has_renewal_metadata
-            ):
-                continue
+            for raw_line in raw_lines:
+                payload = self._wgs_find_best_payload_dict(raw_line)
+                if not isinstance(payload, dict):
+                    continue
+                config = self._wgs_extract_subscription_config_payload(payload)
+                has_renewal_metadata = (
+                    str(config.get('flow') or '').strip().lower() in ('renewal', 'reenroll', 'pending_charge')
+                    or self._wgs_to_int(config.get('source_subscription_id')) > 0
+                    or self._wgs_to_int(config.get('pending_move_id')) > 0
+                )
+                if not (
+                    config.get('participant_ids')
+                    or config.get('plan_id')
+                    or config.get('pricing_id')
+                    or config.get('start_date')
+                    or config.get('end_date')
+                    or has_renewal_metadata
+                ):
+                    continue
 
-            config['product_id'] = self._wgs_to_int(payload.get('product_id') or payload.get('productId'))
-            config['quantity'] = self._wgs_to_float(payload.get('qty') or payload.get('quantity') or payload.get('qty_ordered'))
-            output.append(config)
+                config['product_id'] = self._wgs_to_int(payload.get('product_id') or payload.get('productId'))
+                config['quantity'] = self._wgs_to_float(payload.get('qty') or payload.get('quantity') or payload.get('qty_ordered'))
+                output.append(config)
         return output
 
     @api.model
@@ -2218,6 +2254,25 @@ class PosOrder(models.Model):
             if filtered:
                 candidates = filtered
         return candidates[:1]
+
+    def _wgs_ensure_recurring_lines_are_configured_for_pos(self):
+        """Prevent paid POS tickets from creating unactionable subscription sales."""
+        for pos_order in self:
+            missing_config = pos_order.lines.filtered(
+                lambda line: (
+                    line.qty > 0
+                    and line.product_id
+                    and line.product_id.product_tmpl_id.recurring_invoice
+                    and not line.wgs_has_subscription_configuration()
+                )
+            )
+            if not missing_config:
+                continue
+            product_names = ', '.join(missing_config.mapped('product_id.display_name'))
+            raise UserError(_(
+                'No se pudo registrar la configuración de suscripción para %(products)s. '
+                'El ticket no se procesó; vuelve a abrir la operación y cobra nuevamente.'
+            ) % {'products': product_names})
 
     def _wgs_sync_subscription_sales(self):
         for pos_order in self:
@@ -2519,6 +2574,17 @@ class PosOrder(models.Model):
         source_order = line.wgs_subscription_source_id.exists()
         linked_order = line.wgs_sale_order_id.exists()
         base_issue = self._wgs_build_paid_subscription_pos_line_issue(line)
+
+        if not line.wgs_has_subscription_configuration() and not linked_order:
+            return dict(
+                base_issue,
+                issue='paid_recurring_line_without_wgs_configuration',
+                safe_to_repair=False,
+                reason=(
+                    'La línea recurrente pagada no conservó metadata WGS; no es seguro inferir si era '
+                    'alta, renovación, reinscripción o cambio de paquete.'
+                ),
+            )
 
         if flow in ('renewal', 'reenroll', 'pending_charge') and source_order:
             source_closed = self._wgs_is_subscription_order_closed_for_reenroll(source_order)
