@@ -879,6 +879,72 @@ class PosOrder(models.Model):
         )
 
     @api.model
+    def _wgs_validate_subscription_line_plan_for_pos(self, product, config_payload):
+        """Reject stale or incompatible plan metadata before it reaches a POS line.
+
+        The browser sends the selected plan together with a pricing snapshot.  That
+        payload is useful for preserving the price quoted at the POS, but it must
+        never allow a daily plan to turn a regular recurring product into a
+        one-day subscription.
+        """
+        product = product.exists() if hasattr(product, 'exists') else product
+        if not product or not isinstance(config_payload, dict):
+            return
+
+        snapshot = config_payload.get('pricing_snapshot')
+        snapshot = snapshot if isinstance(snapshot, dict) else {}
+        plan_id = self._wgs_to_int(config_payload.get('plan_id'))
+        pricing_id = self._wgs_to_int(config_payload.get('pricing_id'))
+        snapshot_plan_id = self._wgs_to_int(snapshot.get('plan_id'))
+        snapshot_pricing_id = self._wgs_to_int(snapshot.get('pricing_id'))
+
+        if plan_id and snapshot_plan_id and plan_id != snapshot_plan_id:
+            raise UserError(_(
+                'El plan seleccionado no coincide con la cotización de la suscripción. '
+                'Actualiza la operación antes de cobrar.'
+            ))
+        if pricing_id and snapshot_pricing_id and pricing_id != snapshot_pricing_id:
+            raise UserError(_(
+                'La tarifa seleccionada no coincide con la cotización de la suscripción. '
+                'Actualiza la operación antes de cobrar.'
+            ))
+
+        plan_id = plan_id or snapshot_plan_id
+        pricing_id = pricing_id or snapshot_pricing_id
+        if not plan_id and not pricing_id:
+            return
+
+        candidates = self._wgs_get_recurring_pricing_candidates(product)
+        selected_candidates = list(candidates)
+        if pricing_id:
+            selected_candidates = [
+                candidate for candidate in selected_candidates
+                if self._wgs_to_int(candidate.get('pricing_id')) == pricing_id
+            ]
+        if plan_id:
+            selected_candidates = [
+                candidate for candidate in selected_candidates
+                if self._wgs_to_int(candidate.get('plan_id')) == plan_id
+            ]
+        if candidates and not selected_candidates:
+            raise UserError(_(
+                'El plan o tarifa seleccionada ya no está disponible para este paquete. '
+                'Actualiza la operación y selecciona una opción vigente.'
+            ))
+
+        resolved_plan = self._wgs_resolve_plan_record(
+            product,
+            plan_id=plan_id,
+            pricing_id=pricing_id,
+        )
+        _interval_value, interval_unit = self._wgs_extract_interval_from_plan(resolved_plan)
+        if interval_unit == 'day' and not self._wgs_product_has_single_day_term(product):
+            raise UserError(_(
+                'Un paquete de vigencia recurrente no puede cobrarse con un plan diario. '
+                'Selecciona el plan mensual, quincenal o anual que corresponda.'
+            ))
+
+    @api.model
     def _wgs_is_subscription_buffer_ready(self):
         model_name = 'wgs.pos.subscription.buffer'
         if model_name not in self.env.registry:
@@ -1511,6 +1577,12 @@ class PosOrder(models.Model):
         config_payload = self._wgs_extract_subscription_config_payload(ui_line)
         has_subscription_config = self._wgs_has_subscription_line_config_payload(config_payload)
 
+        if has_subscription_config:
+            product = self.env['product.product'].browse(
+                self._wgs_to_int(values.get('product_id'))
+            ).exists()
+            self._wgs_validate_subscription_line_plan_for_pos(product, config_payload)
+
         participant_ids = config_payload.get('participant_ids')
         if isinstance(participant_ids, list):
             cleaned = []
@@ -2007,6 +2079,7 @@ class PosOrder(models.Model):
             target_line = self._wgs_match_pos_line_for_ui_config(unmatched_lines, config)
             if not target_line:
                 continue
+            self._wgs_validate_subscription_line_plan_for_pos(target_line.product_id, config)
             write_values = {}
 
             participant_ids = config.get('participant_ids') or []
