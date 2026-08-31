@@ -2,6 +2,7 @@ import json
 from datetime import datetime
 
 from odoo import Command, fields
+from odoo.exceptions import UserError
 from odoo.tests.common import TransactionCase
 
 
@@ -343,6 +344,45 @@ class TestPosSubscriptionPricing(TransactionCase):
 
         self.assertEqual(threshold, fields.Date.to_date('2026-03-27'))
         self.assertEqual(period_end, fields.Date.to_date('2026-03-26'))
+
+    def test_regular_subscription_product_rejects_daily_plan_snapshot(self):
+        daily_plan = self.env['sale.subscription.plan'].create(
+            {
+                'name': 'Plan diario inválido para mensualidad POS',
+                'recurring_interval': 1,
+                'recurring_rule_type': 'week',
+                'wgs_single_day_plan': True,
+            }
+        )
+        daily_pricing = self._create_subscription_pricing(
+            daily_plan,
+            price=100.0,
+            name='Tarifa diaria inválida para mensualidad POS',
+        )
+
+        with self.assertRaises(UserError):
+            self.PosOrder._wgs_validate_subscription_line_plan_for_pos(
+                self.product,
+                {
+                    'plan_id': daily_plan.id,
+                    'pricing_id': daily_pricing.id,
+                    'pricing_snapshot': {
+                        'plan_id': daily_plan.id,
+                        'pricing_id': daily_pricing.id,
+                    },
+                },
+            )
+
+    def test_explicit_unavailable_plan_does_not_fall_back_to_another_price(self):
+        self._create_subscription_pricing(self.plan, price=100.0)
+        candidates = self.PosOrder._wgs_get_recurring_pricing_candidates(self.product)
+
+        self.assertTrue(candidates)
+        with self.assertRaises(UserError):
+            self.PosOrder._wgs_select_recurring_pricing_choice(
+                candidates,
+                preferred_plan_id=self.plan.id + 999999,
+            )
 
     def test_aligned_monthly_first_period_schedule_is_calendar_based(self):
         schedule = self.PosOrder._wgs_get_aligned_monthly_first_period_schedule('2026-05-12')

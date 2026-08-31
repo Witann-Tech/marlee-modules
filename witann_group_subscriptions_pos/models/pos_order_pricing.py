@@ -846,11 +846,19 @@ class PosOrderPricingMixin(models.Model):
             matching = [row for row in candidates if int(row.get('pricing_id') or 0) == preferred_pricing_id]
             if matching:
                 return matching[0]
+            raise UserError(_(
+                'La tarifa recurrente seleccionada ya no está disponible para este paquete. '
+                'Actualiza la operación y selecciona una tarifa vigente.'
+            ))
         if preferred_plan_id:
             matching = [row for row in candidates if int(row.get('plan_id') or 0) == preferred_plan_id]
             if matching:
                 matching.sort(key=lambda row: (row['sequence'], row.get('pricing_id') or 0))
                 return matching[0]
+            raise UserError(_(
+                'El plan recurrente seleccionado ya no está disponible para este paquete. '
+                'Actualiza la operación y selecciona un plan vigente.'
+            ))
 
         candidates.sort(key=lambda row: (row['sequence'], row.get('pricing_id') or 0))
         return candidates[0]
