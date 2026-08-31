@@ -883,6 +883,7 @@ class SaleOrder(models.Model):
         if not partner:
             return False
 
+        Person = self.env['access_control.person'].sudo().with_context(active_test=False)
         profile = profile if profile is not None else self._wgs_get_access_profile_for_partner(partner)
         if person is None:
             person = self._wgs_get_access_people_by_partner(partner).get(partner.id)
