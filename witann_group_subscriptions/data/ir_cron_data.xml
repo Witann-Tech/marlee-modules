@@ -21,4 +21,16 @@
       <field name="active">True</field>
     </record>
   </data>
+
+  <!--
+    Membership renewals and expiry are POS/WGS-owned.  The native subscription
+    invoicing cron closes an order at the start of its inclusive end_date,
+    which revokes access before the day is over.  WGS closes subscriptions from
+    next_invoice_date plus the plan grace period instead.
+  -->
+  <data noupdate="0">
+    <record id="sale_subscription.account_analytic_cron_for_invoice" model="ir.cron">
+      <field name="active">False</field>
+    </record>
+  </data>
 </odoo>
