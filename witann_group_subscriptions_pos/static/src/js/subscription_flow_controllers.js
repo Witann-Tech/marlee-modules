@@ -59,6 +59,11 @@ async function openNewSubscriptionForm(state, {
     if (!state.selectedPartnerId) {
         return;
     }
+    // Refresh first: the previously selected partner may have had no history.
+    // Validating stale detail data could briefly expose the new-subscription flow.
+    if (loadDetail) {
+        await loadDetail(state.selectedPartnerId, { force: true });
+    }
     if (!canOpenNewSubscription(state.currentDetail)) {
         state.formMode = null;
         state.formError = _t("Nueva suscripción solo aplica para personas sin historial. Usa Renovar, Reinscribir o Cambiar paquete.");
@@ -75,9 +80,6 @@ async function openNewSubscriptionForm(state, {
     state.participantEditForm = null;
     state.newPartnerForm = null;
     state.partnerPhotoForm = null;
-    if (loadDetail) {
-        await loadDetail(state.selectedPartnerId, { force: true });
-    }
     state.newSubscriptionForm = createNewSubscriptionForm(state.selectedPartnerId, state.businessDate);
     renderDetail(state.currentDetail);
     if (state.productCatalog.length || state.catalogLoading) {
