@@ -35,6 +35,24 @@ class ResPartner(models.Model):
     def _wgs_access_block_param_key(self, partner_id, suffix):
         return '%s.%s.%s' % (self._WGS_ACCESS_BLOCK_PARAM_PREFIX, int(partner_id or 0), suffix)
 
+    @api.model
+    def _wgs_get_access_blocked_partner_ids(self):
+        """Read only active block flags from the existing parameter storage."""
+        prefix = self._WGS_ACCESS_BLOCK_PARAM_PREFIX + '.'
+        suffix = '.blocked'
+        flags = self.env['ir.config_parameter'].sudo().search_read(
+            [('key', '=like', prefix + '%' + suffix), ('value', '=', '1')],
+            ['key'],
+        )
+        partner_ids = set()
+        for flag in flags:
+            key = flag['key']
+            if key.startswith(prefix) and key.endswith(suffix):
+                identifier = key[len(prefix):-len(suffix)]
+                if identifier.isdecimal() and int(identifier) > 0:
+                    partner_ids.add(int(identifier))
+        return sorted(partner_ids)
+
     @api.depends_context('uid')
     def _compute_wgs_access_block(self):
         ICP = self.env['ir.config_parameter'].sudo()

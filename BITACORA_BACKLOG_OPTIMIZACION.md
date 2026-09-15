@@ -7,6 +7,24 @@ Este backlog registra mejoras de confiabilidad, rendimiento, seguridad y
 mantenibilidad detectadas en los addons actuales. No autoriza retirar ni
 modificar reglas operativas sin una historia funcional aprobada.
 
+## Correccion 2026-09-15 - Activaciones al iniciar vigencia
+
+- Una venta con inicio futuro no genera acceso activo al cobrar. El cron
+  recorria 200 contratos por ID cada hora, por lo que una alta que empezaba hoy
+  podia permanecer sin acceso hasta alcanzar su pagina historica.
+- Se agrega una seleccion prioritaria y acotada de contratos en progreso,
+  con fechas compatibles con hoy y titulares o participantes sin persona
+  habilitada. Se excluyen los bloqueados usando su almacenamiento existente.
+- La auditoria central sigue resolviendo la autorizacion efectiva y encola las
+  activaciones con prioridad. El recorrido historico conserva sus cursores;
+  la verificacion posterior incluye las dos fases.
+- Version: `witann_group_subscriptions` `19.0.1.1.56`.
+- Validacion: consulta aceptada por Odoo 19 mediante API de solo lectura;
+  diez pruebas locales de seleccion y validacion de sintaxis aprobadas.
+  Se agregaron pruebas ORM para alta futura de pareja, limite de lote,
+  reactivacion de persona archivada e idempotencia. Estas pruebas integradas
+  requieren ejecutarse en staging: no hay un runtime Odoo local.
+
 ## Sprint 1 - Integridad y Seguridad Operativa
 
 Objetivo: evitar que una venta, una identidad de acceso o una operacion
