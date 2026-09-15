@@ -781,6 +781,37 @@ class TestPosSubscriptionPricing(TransactionCase):
 
         self.assertFalse(inherited_plan_id)
 
+    def test_reenroll_discards_retired_source_plan_preference(self):
+        current_plan = self.env['sale.subscription.plan'].create(
+            {
+                'name': 'Plan vigente para reinscripción POS',
+                'recurring_interval': 1,
+                'recurring_rule_type': 'month',
+            }
+        )
+        self._create_subscription_pricing(
+            current_plan,
+            price=125.0,
+            name='Tarifa vigente para reinscripción POS',
+        )
+        order = self._create_subscription_like_order()
+        if 'subscription_state' in order._fields:
+            order.write({'subscription_state': 'closed'})
+
+        # Simulates an outdated POS client that sends the source plan on the
+        # initial reenrollment quote after that plan was removed from product.
+        quote = self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
+            partner_id=self.partner.id,
+            product_id=self.product.id,
+            flow='reenroll',
+            source_subscription_id=order.id,
+            preferred_plan_id=self.plan.id,
+            preferred_pricing_id=False,
+        )
+
+        self.assertEqual(quote['plan_id'], current_plan.id)
+        self.assertEqual(quote['recurring_price'], 125.0)
+
     def test_reenroll_to_single_package_replaces_product_participants_and_access_snapshot(self):
         site_old = self.env['access_control.site'].create(
             {

@@ -1311,6 +1311,92 @@ class PosOrder(models.Model):
             'source_order': source_order if source_order else False,
         }
 
+    def _wgs_sanitize_reenroll_pricing_preference(
+        self,
+        *,
+        source_order,
+        product,
+        preferred_plan_id=False,
+        preferred_pricing_id=False,
+    ):
+        """Ignore only a retired pricing preference inherited from the source.
+
+        A reenrollment is priced from the package currently selected by the
+        cashier. Older POS assets used to submit the source subscription's
+        plan/pricing as an implicit preference on the first quote. When that
+        historical option was removed from the package, the quote failed
+        before the cashier could choose a current plan.
+
+        Explicit stale selections remain invalid: this fallback applies only
+        when the submitted preference matches the source line itself and is
+        no longer available for the target package.
+        """
+        source_order = source_order.exists()
+        product = product.exists()
+        if not source_order or not product:
+            return preferred_plan_id, preferred_pricing_id
+
+        try:
+            preferred_plan_id = int(preferred_plan_id or 0)
+        except (TypeError, ValueError):
+            preferred_plan_id = 0
+        try:
+            preferred_pricing_id = int(preferred_pricing_id or 0)
+        except (TypeError, ValueError):
+            preferred_pricing_id = 0
+        if not preferred_plan_id and not preferred_pricing_id:
+            return False, False
+
+        recurring_lines = source_order.order_line.filtered(
+            lambda line: (
+                self._wgs_is_recurring_so_line(line)
+                and self._wgs_sale_order_line_has_positive_qty_for_pos(line)
+                and line.product_id == product
+            )
+        )
+        source_line = recurring_lines.sorted(key=lambda line: line.id)[:1]
+        if not source_line:
+            return preferred_plan_id or False, preferred_pricing_id or False
+
+        source_plan_id = False
+        source_pricing_id = False
+        for field_name in ('subscription_plan_id', 'plan_id', 'recurring_plan_id'):
+            if field_name in source_line._fields and source_line[field_name]:
+                source_plan_id = source_line[field_name].id
+                break
+        for field_name in ('subscription_pricing_id', 'pricing_id', 'recurring_pricing_id'):
+            if field_name in source_line._fields and source_line[field_name]:
+                source_pricing_id = source_line[field_name].id
+                break
+
+        inherited_preference = (
+            bool(source_pricing_id and preferred_pricing_id == source_pricing_id)
+            or bool(not source_pricing_id and source_plan_id and preferred_plan_id == source_plan_id)
+        )
+        if not inherited_preference:
+            return preferred_plan_id or False, preferred_pricing_id or False
+
+        candidates = self._wgs_get_recurring_pricing_candidates(product)
+        matching_candidates = [
+            candidate for candidate in candidates
+            if (
+                (not preferred_plan_id or int(candidate.get('plan_id') or 0) == preferred_plan_id)
+                and (not preferred_pricing_id or int(candidate.get('pricing_id') or 0) == preferred_pricing_id)
+            )
+        ]
+        if matching_candidates:
+            return preferred_plan_id or False, preferred_pricing_id or False
+
+        _logger.info(
+            'WGS POS: discarded retired inherited reenroll pricing preference '
+            'subscription=%s product=%s plan=%s pricing=%s',
+            source_order.id,
+            product.id,
+            preferred_plan_id,
+            preferred_pricing_id,
+        )
+        return False, False
+
     def _wgs_build_subscription_quote_payload_for_pos(
         self,
         *,
@@ -1338,6 +1424,14 @@ class PosOrder(models.Model):
         product = request_data['product']
         source_order = request_data['source_order']
         offers = []
+
+        if normalized_flow == 'reenroll':
+            preferred_plan_id, preferred_pricing_id = self._wgs_sanitize_reenroll_pricing_preference(
+                source_order=source_order,
+                product=product,
+                preferred_plan_id=preferred_plan_id,
+                preferred_pricing_id=preferred_pricing_id,
+            )
 
         if normalized_flow in ('new', 'upsale'):
             pricing = self._wgs_build_product_pricing_payload_for_pos(

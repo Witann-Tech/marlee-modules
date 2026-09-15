@@ -183,6 +183,15 @@ async function openRenewalForm(state, item, {
     }
     try {
         const flow = mode === "reenroll" ? "reenroll" : "renewal";
+        // A reenrollment starts a new commercial period. The source plan can be
+        // retired or no longer belong to the selected package, so only a plan
+        // explicitly chosen from the current package's catalog may be pinned.
+        const preferredPlanId = mode === "reenroll"
+            ? false
+            : (Number(item.renewal_plan_id || 0) || false);
+        const preferredPricingId = mode === "reenroll"
+            ? false
+            : (Number(item.renewal_pricing_id || 0) || false);
         const quote = await fetchSubscriptionQuote(
             state.renewalForm.holderPartnerId || false,
             state.renewalForm.productId || false,
@@ -190,8 +199,8 @@ async function openRenewalForm(state, item, {
             state.renewalForm.subscriptionId,
             false,
             0,
-            Number(item.renewal_plan_id || 0) || false,
-            Number(item.renewal_pricing_id || 0) || false,
+            preferredPlanId,
+            preferredPricingId,
             state.renewalForm.startDate || false,
             false
         );
