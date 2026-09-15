@@ -8,6 +8,7 @@ import { onMounted, onPatched } from "@odoo/owl";
 
 const STYLE_ID = "wgs-pos-invoice-lock-style";
 const INVOICE_TEXT_RE = /(invoice|factur|to_invoice)/i;
+const PRODUCT_INFORMATION_ACTION_RE = /(?:product.*info|info.*product)/i;
 const CONTROL_SELECTOR = "button, .button, [role='button'], .control-button, .payment-button, .js_invoice";
 let invoiceGuardObserver = null;
 let invoiceGuardEventsInstalled = false;
@@ -89,6 +90,18 @@ function isInvoiceControl(element) {
     return INVOICE_TEXT_RE.test(elementInvoiceHaystack(element));
 }
 
+function isProductInformationControl(element) {
+    if (!element) {
+        return false;
+    }
+    const label = (element.textContent || "").trim().toLocaleLowerCase();
+    return (
+        label === "informacion" ||
+        label === "información" ||
+        PRODUCT_INFORMATION_ACTION_RE.test(elementInvoiceHaystack(element))
+    );
+}
+
 function disableInvoiceControl(control) {
     if (!isInvoiceControl(control)) {
         return;
@@ -101,25 +114,40 @@ function disableInvoiceControl(control) {
     }
 }
 
+function disableProductInformationControl(control) {
+    if (!isProductInformationControl(control)) {
+        return;
+    }
+    control.classList.add("wgs-pos-invoice-disabled");
+    control.setAttribute("aria-disabled", "true");
+    control.setAttribute("title", _t("La edición de productos está deshabilitada en POS."));
+    if ("disabled" in control) {
+        control.disabled = true;
+    }
+}
+
 function disableInvoiceControls(root) {
     const scope = root || document;
     if (scope.nodeType === Node.ELEMENT_NODE && scope.matches(CONTROL_SELECTOR)) {
         disableInvoiceControl(scope);
+        disableProductInformationControl(scope);
     }
     if (!scope.querySelectorAll) {
         return;
     }
     for (const control of scope.querySelectorAll(CONTROL_SELECTOR)) {
         disableInvoiceControl(control);
+        disableProductInformationControl(control);
     }
 }
 
 function blockInvoiceControlEvent(event) {
     const control = event.target?.closest?.(CONTROL_SELECTOR);
-    if (!isInvoiceControl(control)) {
+    if (!isInvoiceControl(control) && !isProductInformationControl(control)) {
         return;
     }
     disableInvoiceControl(control);
+    disableProductInformationControl(control);
     event.preventDefault();
     event.stopImmediatePropagation();
 }
