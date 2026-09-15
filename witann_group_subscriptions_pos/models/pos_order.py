@@ -2940,6 +2940,7 @@ class PosOrder(models.Model):
                 participant_ids=participant_ids,
                 subscription_end_date=subscription_end_date,
                 next_billing_date=next_billing_date,
+                recurring_plan_id=pricing_state['plan_id'],
             )
             self._wgs_finalize_subscription_access_for_pos(
                 source_order,
@@ -2956,15 +2957,13 @@ class PosOrder(models.Model):
                 recurring_plan_id=pricing_state['plan_id'],
                 recurring_pricing_id=pricing_state['pricing_id'],
             )
-            values = {}
-            next_field = self._wgs_find_subscription_next_invoice_date_field(source_order)
-            if next_field:
-                values[next_field] = next_billing_date
-            end_field = self._wgs_find_subscription_end_date_field(source_order)
-            if end_field:
-                values[end_field] = subscription_end_date
-            if values:
-                source_order.write(values)
+            self._wgs_sync_subscription_metadata(
+                sale_order=source_order,
+                participant_ids=None,
+                subscription_end_date=subscription_end_date,
+                next_billing_date=next_billing_date,
+                recurring_plan_id=pricing_state['plan_id'],
+            )
 
         self._wgs_link_pos_and_sale_records(
             pos_line=line,
@@ -3091,6 +3090,7 @@ class PosOrder(models.Model):
             subscription_end_date=subscription_end_date,
             next_billing_date=next_billing_date,
             clear_next_billing_date=single_day_term,
+            recurring_plan_id=recurring_plan_id,
         )
         self._wgs_reactivate_subscription_order_for_pos(source_order)
         self._wgs_apply_domiciliation_contract_from_pos_line(
@@ -3930,6 +3930,7 @@ class PosOrder(models.Model):
                 subscription_end_date=subscription_end_date,
                 next_billing_date=next_billing_date,
                 clear_next_billing_date=self._wgs_product_has_single_day_term(product),
+                recurring_plan_id=recurring_plan_id,
             )
             if self._wgs_is_order_recognized_as_subscription(upsell_order):
                 self._wgs_close_source_subscription_after_upgrade(
@@ -4029,6 +4030,7 @@ class PosOrder(models.Model):
             subscription_end_date=subscription_end_date,
             next_billing_date=next_billing_date,
             clear_next_billing_date=self._wgs_product_has_single_day_term(product),
+            recurring_plan_id=recurring_plan_id,
         )
         self._wgs_apply_domiciliation_contract_from_pos_line(sale_order, line, pricing_state)
 
@@ -4816,18 +4818,20 @@ class PosOrder(models.Model):
     def _wgs_sync_subscription_metadata(
         self,
         sale_order,
-        participant_ids,
+        participant_ids=None,
         contract_date=False,
         subscription_start_date=False,
         subscription_end_date=False,
         next_billing_date=False,
         clear_next_billing_date=False,
+        recurring_plan_id=False,
     ):
+        recurring_plan_id = self._wgs_to_int(recurring_plan_id) or False
         target_orders = self._wgs_get_subscription_orders_from_base(sale_order)
         for target_order in target_orders:
             values = {}
             participant_field = self._wgs_find_partner_multi_field(target_order)
-            if participant_field:
+            if participant_field and participant_ids is not None:
                 values[participant_field] = [Command.set(participant_ids)]
             if contract_date:
                 contract_field = self._wgs_find_subscription_contract_date_field(target_order)
@@ -4854,16 +4858,25 @@ class PosOrder(models.Model):
             elif clear_next_billing_date:
                 for next_field in next_fields:
                     values[next_field] = False
+            if recurring_plan_id:
+                self._wgs_assign_many2one_value(
+                    values=values,
+                    fields_map=target_order._fields,
+                    value_id=recurring_plan_id,
+                    preferred_field_names=('plan_id', 'subscription_plan_id', 'recurring_plan_id'),
+                    comodel_checker=self._wgs_is_plan_model_name,
+                )
             if values:
                 target_order.write(values)
                 _logger.info(
-                    'WGS POS: synced metadata on subscription order %s (participants=%s contract_date=%s start_date=%s end_date=%s next=%s)',
+                    'WGS POS: synced metadata on subscription order %s (participants=%s contract_date=%s start_date=%s end_date=%s next=%s plan=%s)',
                     target_order.name,
                     participant_ids,
                     contract_date or False,
                     subscription_start_date or False,
                     subscription_end_date or False,
                     next_billing_date or False,
+                    recurring_plan_id,
                 )
 
     def _wgs_clear_subscription_next_billing_date(self, sale_order):
