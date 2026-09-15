@@ -4,10 +4,14 @@ import { PaymentScreen } from "@point_of_sale/app/screens/payment_screen/payment
 import { _t } from "@web/core/l10n/translation";
 import { useService } from "@web/core/utils/hooks";
 import { patch } from "@web/core/utils/patch";
-import { onMounted, onPatched, onWillUnmount } from "@odoo/owl";
+import { onMounted, onPatched } from "@odoo/owl";
 
 const STYLE_ID = "wgs-pos-invoice-lock-style";
 const INVOICE_TEXT_RE = /(invoice|factur|to_invoice)/i;
+const PRODUCT_INFORMATION_ACTION_RE = /(?:product.*info|info.*product)/i;
+const CONTROL_SELECTOR = "button, .button, [role='button'], .control-button, .payment-button, .js_invoice";
+let invoiceGuardObserver = null;
+let invoiceGuardEventsInstalled = false;
 
 function ensureInvoiceLockStyle() {
     if (document.getElementById(STYLE_ID)) {
@@ -16,7 +20,7 @@ function ensureInvoiceLockStyle() {
     const style = document.createElement("style");
     style.id = STYLE_ID;
     style.textContent = `
-        .payment-screen .wgs-pos-invoice-disabled {
+        .wgs-pos-invoice-disabled {
             opacity: 0.45 !important;
             cursor: not-allowed !important;
             pointer-events: none !important;
@@ -86,19 +90,105 @@ function isInvoiceControl(element) {
     return INVOICE_TEXT_RE.test(elementInvoiceHaystack(element));
 }
 
+function isProductInformationControl(element) {
+    if (!element) {
+        return false;
+    }
+    const label = (element.textContent || "").trim().toLocaleLowerCase();
+    return (
+        label === "informacion" ||
+        label === "información" ||
+        PRODUCT_INFORMATION_ACTION_RE.test(elementInvoiceHaystack(element))
+    );
+}
+
+function disableInvoiceControl(control) {
+    if (!isInvoiceControl(control)) {
+        return;
+    }
+    control.classList.add("wgs-pos-invoice-disabled");
+    control.setAttribute("aria-disabled", "true");
+    control.setAttribute("title", _t("Facturación deshabilitada en POS. Emite solo ticket."));
+    if ("disabled" in control) {
+        control.disabled = true;
+    }
+}
+
+function disableProductInformationControl(control) {
+    if (!isProductInformationControl(control)) {
+        return;
+    }
+    control.classList.add("wgs-pos-invoice-disabled");
+    control.setAttribute("aria-disabled", "true");
+    control.setAttribute("title", _t("La edición de productos está deshabilitada en POS."));
+    if ("disabled" in control) {
+        control.disabled = true;
+    }
+}
+
 function disableInvoiceControls(root) {
-    const scope = root || document.querySelector(".payment-screen") || document;
-    const controls = scope.querySelectorAll("button, .button, [role='button'], .control-button, .payment-button, .js_invoice");
-    for (const control of controls) {
-        if (!isInvoiceControl(control)) {
-            continue;
-        }
-        control.classList.add("wgs-pos-invoice-disabled");
-        control.setAttribute("aria-disabled", "true");
-        control.setAttribute("title", _t("Facturación deshabilitada en POS. Emite solo ticket."));
-        if ("disabled" in control) {
-            control.disabled = true;
-        }
+    const scope = root || document;
+    if (scope.nodeType === Node.ELEMENT_NODE && scope.matches(CONTROL_SELECTOR)) {
+        disableInvoiceControl(scope);
+        disableProductInformationControl(scope);
+    }
+    if (!scope.querySelectorAll) {
+        return;
+    }
+    for (const control of scope.querySelectorAll(CONTROL_SELECTOR)) {
+        disableInvoiceControl(control);
+        disableProductInformationControl(control);
+    }
+}
+
+function blockInvoiceControlEvent(event) {
+    const control = event.target?.closest?.(CONTROL_SELECTOR);
+    if (!isInvoiceControl(control) && !isProductInformationControl(control)) {
+        return;
+    }
+    disableInvoiceControl(control);
+    disableProductInformationControl(control);
+    event.preventDefault();
+    event.stopImmediatePropagation();
+}
+
+function installInvoiceControlGuard() {
+    if (typeof document === "undefined") {
+        return;
+    }
+    ensureInvoiceLockStyle();
+    disableInvoiceControls(document);
+    if (!invoiceGuardEventsInstalled) {
+        invoiceGuardEventsInstalled = true;
+        document.addEventListener("click", blockInvoiceControlEvent, true);
+        document.addEventListener("keydown", (event) => {
+            if (event.key === "Enter" || event.key === " ") {
+                blockInvoiceControlEvent(event);
+            }
+        }, true);
+    }
+    if (!invoiceGuardObserver && typeof MutationObserver !== "undefined" && document.body) {
+        invoiceGuardObserver = new MutationObserver((mutations) => {
+            for (const mutation of mutations) {
+                for (const node of mutation.addedNodes) {
+                    if (node.nodeType === Node.ELEMENT_NODE) {
+                        disableInvoiceControls(node);
+                    }
+                }
+            }
+        });
+        invoiceGuardObserver.observe(document.body, {
+            childList: true,
+            subtree: true,
+        });
+    }
+}
+
+if (typeof document !== "undefined") {
+    if (document.body) {
+        installInvoiceControlGuard();
+    } else {
+        document.addEventListener("DOMContentLoaded", installInvoiceControlGuard, { once: true });
     }
 }
 
@@ -106,30 +196,14 @@ patch(PaymentScreen.prototype, {
     setup() {
         super.setup(...arguments);
         this.notification = this.notification || useService("notification");
-        ensureInvoiceLockStyle();
+        installInvoiceControlGuard();
         onMounted(() => this.wgsDisableInvoiceControls());
         onPatched(() => this.wgsDisableInvoiceControls());
-        onWillUnmount(() => {
-            if (this.wgsInvoiceLockObserver) {
-                this.wgsInvoiceLockObserver.disconnect();
-                this.wgsInvoiceLockObserver = null;
-            }
-        });
     },
 
     wgsDisableInvoiceControls() {
         clearInvoiceFlag(getOrderFromPaymentScreen(this));
-        disableInvoiceControls(this.el || document.querySelector(".payment-screen") || document);
-        if (!this.wgsInvoiceLockObserver && typeof MutationObserver !== "undefined") {
-            this.wgsInvoiceLockObserver = new MutationObserver(() => {
-                clearInvoiceFlag(getOrderFromPaymentScreen(this));
-                disableInvoiceControls(this.el || document.querySelector(".payment-screen") || document);
-            });
-            this.wgsInvoiceLockObserver.observe(this.el || document.body, {
-                childList: true,
-                subtree: true,
-            });
-        }
+        disableInvoiceControls(this.el || document);
     },
 
     toggleIsToInvoice() {

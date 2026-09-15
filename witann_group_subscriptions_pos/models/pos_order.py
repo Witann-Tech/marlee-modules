@@ -164,6 +164,10 @@ class PosOrder(models.Model):
         'upsell',
     )
 
+    def action_pos_order_invoice(self):
+        """POS is ticket-only; invoices must not be issued from its history views."""
+        raise UserError(_('La facturación está deshabilitada en Punto de Venta. Emite solo ticket.'))
+
     @api.model
     def _wgs_ensure_pos_user_for_pos(self, error_message):
         if not self.env.user.has_group('point_of_sale.group_pos_user'):
