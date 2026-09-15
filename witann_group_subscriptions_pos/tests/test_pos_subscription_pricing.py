@@ -904,6 +904,31 @@ class TestPosSubscriptionPricing(TransactionCase):
         self.assertEqual(item['native_state_key'], 'progress')
         self.assertEqual(item['access_state'], 'enabled')
 
+    def test_subscription_metadata_sync_updates_the_order_plan(self):
+        daily_plan = self.plan
+        monthly_plan = self.env['sale.subscription.plan'].create(
+            {
+                'name': 'Plan mensual destino POS',
+                'recurring_interval': 1,
+                'recurring_rule_type': 'month',
+            }
+        )
+        order = self._create_subscription_like_order()
+        order.write({'plan_id': daily_plan.id})
+        self.assertEqual(order.plan_id, daily_plan)
+
+        self.PosOrder._wgs_sync_subscription_metadata(
+            sale_order=order,
+            participant_ids=None,
+            subscription_end_date=fields.Date.to_date('2026-04-25'),
+            next_billing_date=fields.Date.to_date('2026-04-26'),
+            recurring_plan_id=monthly_plan.id,
+        )
+
+        order.invalidate_recordset(['plan_id', 'order_line'])
+        self.assertEqual(order.plan_id, monthly_plan)
+        self.assertEqual(order.order_line[:1].subscription_plan_id, monthly_plan)
+
     def test_reenroll_single_package_ignores_previous_partner_participants(self):
         previous_holder = self.env['res.partner'].create({'name': 'Titular pareja anterior POS'})
         selected_partner = self.env['res.partner'].create({'name': 'Socio reinscrito POS'})
