@@ -489,24 +489,23 @@ class SaleOrder(models.Model):
         if not recurring_lines:
             return False
         primary_recurring_line = recurring_lines.sorted(key=lambda line: line.id)[:1]
-        start_date = self._wgs_get_first_access_date_value(
-            self._WGS_SUBSCRIPTION_START_DATE_FIELDS
-        )
-        next_invoice_date = self._wgs_get_first_access_date_value(
-            self._WGS_SUBSCRIPTION_NEXT_INVOICE_DATE_FIELDS
-        )
-        hard_end_date = self._wgs_get_first_access_date_value(
-            ('date_end', 'end_date', 'subscription_end_date', 'recurring_end_date')
-        )
-        if start_date and (not next_invoice_date or next_invoice_date <= start_date):
-            next_invoice_date = start_date + self._wgs_get_subscription_recurrence_delta(
-                primary_recurring_line=primary_recurring_line
-            )
-        next_invoice_date = self._wgs_normalize_next_invoice_date_for_access(next_invoice_date, hard_end_date)
         return self._wgs_get_subscription_auto_close_deadline(
-            next_invoice_date=next_invoice_date,
+            next_invoice_date=self._wgs_get_subscription_access_period()['next_invoice_date'],
             primary_recurring_line=primary_recurring_line,
         )
+
+    def _wgs_get_subscription_access_period(self):
+        """Read persisted boundaries for access, closing and POS without extending them."""
+        self.ensure_one()
+        start = self._wgs_get_first_access_date_value(self._WGS_SUBSCRIPTION_START_DATE_FIELDS)
+        end = self._wgs_get_first_access_date_value(self._WGS_SUBSCRIPTION_END_DATE_FIELDS)
+        next_date = self._wgs_get_first_access_date_value(self._WGS_SUBSCRIPTION_NEXT_INVOICE_DATE_FIELDS)
+        next_date = self._wgs_normalize_next_invoice_date_for_access(next_date, end)
+        if not next_date and end:
+            next_date = end + timedelta(days=1)
+        if next_date:
+            end = min(end, next_date - timedelta(days=1)) if end else next_date - timedelta(days=1)
+        return {'start_date': start, 'valid_until': end, 'next_invoice_date': next_date}
 
     @api.model
     def _wgs_combine_or_domains(self, domains):
@@ -722,19 +721,13 @@ class SaleOrder(models.Model):
             return False
 
         today = self._wgs_get_subscription_business_today(company=self.company_id)
-        start_date = self._wgs_get_first_access_date_value(
-            self._WGS_SUBSCRIPTION_START_DATE_FIELDS
-        )
+        period = self._wgs_get_subscription_access_period()
+        start_date = period['start_date']
         if start_date and start_date > today:
             return False
 
-        next_invoice_date = self._wgs_get_first_access_date_value(
-            self._WGS_SUBSCRIPTION_NEXT_INVOICE_DATE_FIELDS
-        )
-        hard_end_date = self._wgs_get_first_access_date_value(
-            self._WGS_SUBSCRIPTION_END_DATE_FIELDS
-        )
-        next_invoice_date = self._wgs_normalize_next_invoice_date_for_access(next_invoice_date, hard_end_date)
+        next_invoice_date = period['next_invoice_date']
+        hard_end_date = period['valid_until']
         if next_invoice_date and next_invoice_date <= today:
             return False
 
@@ -980,6 +973,8 @@ class SaleOrder(models.Model):
         return person
 
     def _wgs_sync_access_control_people(self, extra_partner_ids=None):
+        if self.env.context.get(self._WGS_DEFER_ACCESS_SYNC_CONTEXT_KEY):
+            return
         partner_ids = set(extra_partner_ids or [])
         partner_ids.update(self._wgs_get_access_related_partner_ids())
         if not partner_ids:

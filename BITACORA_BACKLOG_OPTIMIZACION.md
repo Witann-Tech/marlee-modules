@@ -181,6 +181,34 @@ Objetivo: reducir el radio de impacto de cada cambio funcional.
   Criterio de salida: una regresion como pago POS sin vigencia o acceso no
   vuelve a llegar a produccion sin una prueba que falle previamente.
 
+## Avance 2026-09-28 - Refactor Comercial en Staging
+
+Estado: codigo local en `staging`; sin despliegue ni escrituras en produccion.
+No dar por terminados los sprints ni el hallazgo H9 de validacion integral.
+
+- Implementados contrato de cotizacion firmado, identidad UUID por linea,
+  comprobante de aplicacion idempotente y periodo calculado con el plan destino.
+- Separadas aplicacion comercial y proyeccion de acceso; el fallo de proyeccion
+  queda pendiente para reintentar solo acceso, sin repetir cobros ni vigencias.
+- Renovacion con cambio de paquete programada al terminar el periodo pagado;
+  participantes explicitos por periodo y continuidad de renovaciones futuras.
+- Confirmadas e implementadas reglas de prorrateo en ambas reinscripciones y
+  reembolso exclusivamente total de membresias.
+- Conservados ciclos/propietarios/cuotas de domiciliacion historica. Eliminados
+  helpers obsoletos de reparacion inferida, asociacion aproximada por producto,
+  inferencia del titular por orden de participantes y recalculo JS de vigencias.
+- Reparacion historica separada: propuesta explicita, dry_run y aprobacion
+  invalidada ante cambios. No se ejecuto ninguna reparacion de datos.
+- Resultado local: 18 pruebas Python y 13 JavaScript aprobadas, mas sintaxis.
+  Hay 14 pruebas comerciales ORM preparadas, NO ejecutadas en este entorno.
+- Pendiente obligatorio: upgrade y suite completa Odoo 19 Enterprise, pruebas
+  POS reales, dos workers, pagos con respuesta perdida, fallo/reintento de acceso,
+  ciclos domiciliados y regresion multisede/horarios/bloqueos. Falta validar
+  entrega a dispositivo de prueba antes de considerar liberacion.
+
+Plan operativo, versiones, limites y matriz:
+`REFACTOR_SUSCRIPCIONES_STAGING.md`.
+
 ## Criterios Generales
 
 - Todo cambio de este backlog debe conservar las funcionalidades actuales:

@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import uuid
 from datetime import date, datetime, time, timedelta
 
@@ -2654,29 +2655,11 @@ class SaleOrder(models.Model):
         access_state = self._classify_subscription_access_state_for_pos()
         native_state_key, native_state_label = self._get_native_subscription_state_info_for_pos()
 
-        start_date = self._get_first_available_date(
-            ('wgs_effective_start_date', 'start_date', 'date_start', 'subscription_start_date', 'date_order')
-        )
-        next_invoice_date = self._get_first_available_date(
-            ('recurring_next_date', 'next_invoice_date', 'recurring_next_invoice_date')
-        )
-        hard_end_date = self._get_first_available_date(
-            ('date_end', 'end_date', 'subscription_end_date', 'recurring_end_date')
-        )
-        recurrence_delta = self._get_recurrence_delta(primary_recurring_line=primary_recurring_line)
-
-        if start_date and (not next_invoice_date or next_invoice_date <= start_date):
-            next_invoice_date = start_date + recurrence_delta
-        if hasattr(self, '_wgs_normalize_next_invoice_date_for_access'):
-            next_invoice_date = self._wgs_normalize_next_invoice_date_for_access(next_invoice_date, hard_end_date)
-
-        period_start = False
-        valid_until = False
-        if next_invoice_date:
-            period_start = next_invoice_date - recurrence_delta
-            valid_until = next_invoice_date - relativedelta(days=1)
-        if hard_end_date and (not valid_until or hard_end_date < valid_until):
-            valid_until = hard_end_date
+        period = self._wgs_get_subscription_access_period()
+        start_date = period['start_date']
+        next_invoice_date = period['next_invoice_date']
+        valid_until = period['valid_until']
+        period_start = start_date
 
         close_deadline = self._wgs_get_subscription_auto_close_deadline(
             next_invoice_date=next_invoice_date,
@@ -2758,34 +2741,12 @@ class SaleOrder(models.Model):
         access_state = self._classify_subscription_access_state_for_pos()
         native_state_key, native_state_label = self._get_native_subscription_state_info_for_pos()
 
-        start_date = self._get_first_available_date(
-            ('wgs_effective_start_date', 'start_date', 'date_start', 'subscription_start_date', 'date_order')
-        )
-        next_invoice_date = self._get_first_available_date(
-            ('recurring_next_date', 'next_invoice_date', 'recurring_next_invoice_date')
-        )
-        hard_end_date = self._get_first_available_date(
-            ('date_end', 'end_date', 'subscription_end_date', 'recurring_end_date')
-        )
+        period = self._wgs_get_subscription_access_period()
+        start_date = period['start_date']
+        next_invoice_date = period['next_invoice_date']
+        valid_until = period['valid_until']
+        period_start = start_date
         has_replacement_subscription = self._wgs_has_replacement_subscription_for_pos()
-
-        recurrence_delta = self._get_recurrence_delta(primary_recurring_line=primary_recurring_line)
-        # POS flow treats the first period as paid at checkout. When Odoo still has
-        # next invoice unset (or equal to start date), infer the next cycle boundary.
-        if start_date and (not next_invoice_date or next_invoice_date <= start_date):
-            next_invoice_date = start_date + recurrence_delta
-        if hasattr(self, '_wgs_normalize_next_invoice_date_for_access'):
-            next_invoice_date = self._wgs_normalize_next_invoice_date_for_access(next_invoice_date, hard_end_date)
-
-        period_start = False
-        valid_until = False
-
-        if next_invoice_date:
-            period_start = next_invoice_date - recurrence_delta
-            valid_until = next_invoice_date - relativedelta(days=1)
-
-        if hard_end_date and (not valid_until or hard_end_date < valid_until):
-            valid_until = hard_end_date
 
         should_mark_for_renewal = bool(next_invoice_date and next_invoice_date <= today)
         close_deadline = self._wgs_get_subscription_auto_close_deadline(
@@ -3535,7 +3496,7 @@ class SaleOrder(models.Model):
         if not value:
             return False
         if isinstance(value, datetime):
-            return value.date()
+            return self._wgs_get_subscription_business_date_from_datetime(value)
         if isinstance(value, date):
             return value
         return fields.Date.to_date(value)

@@ -918,6 +918,18 @@ class PosOrder(models.Model):
         if not plan_id and not pricing_id:
             return
 
+        quote = snapshot.get('commercial_quote') or {}
+        if quote:
+            payload = quote.get('payload') or {}
+            self._wgs_verify_commercial_quote(
+                snapshot, product_id=product.id, partner_id=payload.get('partner_id'),
+                company_id=payload.get('company_id'), flow=config_payload.get('flow') or 'new',
+                source_id=self._wgs_to_int(config_payload.get('source_subscription_id')),
+            )
+            if plan_id != payload['pricing'].get('plan_id') or pricing_id != self._wgs_to_int(payload['pricing'].get('pricing_id')):
+                raise UserError(_('El plan del ticket difiere de la cotizacion firmada.'))
+            return
+
         candidates = self._wgs_get_recurring_pricing_candidates(product)
         selected_candidates = list(candidates)
         if pricing_id:
@@ -969,7 +981,7 @@ class PosOrder(models.Model):
         return bool(row and row[0])
 
     @api.model
-    def wgs_stage_subscription_config_for_uuid(self, order_uuid, configs):
+    def wgs_stage_subscription_config_for_uuid(self, order_uuid, configs, options=False):
         self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para guardar configuración de suscripción desde Punto de Venta.'))
 
         order_uuid = (order_uuid or '').strip()
@@ -985,26 +997,49 @@ class PosOrder(models.Model):
             )
             return {'ok': False, 'reason': 'buffer_not_ready'}
 
-        try:
-            buffer_model = self.env['wgs.pos.subscription.buffer'].sudo()
-            existing = buffer_model.search([('order_uuid', '=', order_uuid)], limit=1, order='id desc')
-            if not configs:
-                if existing:
-                    existing.unlink()
-                return {'ok': True, 'cleared': True}
-
-            payload_json = json.dumps(configs)
-            if existing:
-                existing.write({'payload_json': payload_json})
-            else:
-                buffer_model.create({'order_uuid': order_uuid, 'payload_json': payload_json})
-        except Exception as error:
-            _logger.warning(
-                'WGS POS: could not stage subscription buffer for uuid=%s (%s)',
-                order_uuid,
-                error,
+        options = options or {}
+        company_id = self._wgs_to_int(options.get('company_id')) or self.env.company.id
+        if company_id not in self.env.companies.ids:
+            raise UserError(_('No tienes acceso a la empresa de este ticket.'))
+        partner_id = self._wgs_to_int(options.get('partner_id'))
+        paid_order = self.search([
+            ('uuid', '=', order_uuid), ('company_id', '=', company_id),
+            ('state', 'in', ['paid', 'done', 'invoiced']),
+        ], limit=1)
+        applied_by_uuid = {line.uuid: line for line in paid_order.lines if line.wgs_application_state}
+        normalized = []
+        seen = set()
+        for config in configs:
+            line_uuid = config.get('line_uuid')
+            if not line_uuid or line_uuid in seen:
+                raise UserError(_('El ticket requiere identificadores unicos por linea de suscripcion.'))
+            seen.add(line_uuid)
+            applied_line = applied_by_uuid.get(line_uuid)
+            if paid_order and not applied_line:
+                raise UserError(_('No se pueden agregar operaciones a un ticket ya pagado.'))
+            normalized_config = self._wgs_normalize_commercial_config(
+                config, partner_id=partner_id, company_id=company_id,
+                check_source=not applied_line,
             )
-            return {'ok': False, 'reason': 'buffer_error'}
+            if applied_line:
+                self._wgs_check_applied_config_replay(applied_line, normalized_config)
+            normalized.append(normalized_config)
+        self._wgs_validate_ticket_memberships(options.get('lines') or [], normalized)
+        if paid_order:
+            return {'ok': True, 'already_applied': True, 'pos_order_id': paid_order.id}
+        # The transaction-scoped lock serializes buffer upserts without another cursor.
+        self.env.cr.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))', ['wgs-buffer:' + order_uuid])
+        buffer_model = self.env['wgs.pos.subscription.buffer'].sudo()
+        existing = buffer_model.search([('order_uuid', '=', order_uuid)], order='id desc')
+        if not normalized:
+            existing.unlink()
+            return {'ok': True, 'cleared': True}
+        payload_json = json.dumps(normalized)
+        if existing:
+            existing[:1].write({'payload_json': payload_json})
+            existing[1:].unlink()
+        else:
+            buffer_model.create({'order_uuid': order_uuid, 'payload_json': payload_json})
         return {'ok': True}
 
     def _wgs_get_subscription_product_flags_for_pos(self, product):
@@ -1315,7 +1350,7 @@ class PosOrder(models.Model):
             'source_order': source_order if source_order else False,
         }
 
-    def _wgs_sanitize_reenroll_pricing_preference(
+    def _wgs_sanitize_inherited_pricing_preference(
         self,
         *,
         source_order,
@@ -1325,11 +1360,9 @@ class PosOrder(models.Model):
     ):
         """Ignore only a retired pricing preference inherited from the source.
 
-        A reenrollment is priced from the package currently selected by the
-        cashier. Older POS assets used to submit the source subscription's
-        plan/pricing as an implicit preference on the first quote. When that
-        historical option was removed from the package, the quote failed
-        before the cashier could choose a current plan.
+        Renewals and reenrollments use the selected package's current pricing.
+        POS clients can submit the source subscription's plan/pricing as an
+        implicit preference on the first quote, even after it was retired.
 
         Explicit stale selections remain invalid: this fallback applies only
         when the submitted preference matches the source line itself and is
@@ -1362,16 +1395,7 @@ class PosOrder(models.Model):
         if not source_line:
             return preferred_plan_id or False, preferred_pricing_id or False
 
-        source_plan_id = False
-        source_pricing_id = False
-        for field_name in ('subscription_plan_id', 'plan_id', 'recurring_plan_id'):
-            if field_name in source_line._fields and source_line[field_name]:
-                source_plan_id = source_line[field_name].id
-                break
-        for field_name in ('subscription_pricing_id', 'pricing_id', 'recurring_pricing_id'):
-            if field_name in source_line._fields and source_line[field_name]:
-                source_pricing_id = source_line[field_name].id
-                break
+        source_plan_id, source_pricing_id = self._wgs_extract_subscription_ids_from_line(source_line)
 
         inherited_preference = (
             bool(source_pricing_id and preferred_pricing_id == source_pricing_id)
@@ -1392,7 +1416,7 @@ class PosOrder(models.Model):
             return preferred_plan_id or False, preferred_pricing_id or False
 
         _logger.info(
-            'WGS POS: discarded retired inherited reenroll pricing preference '
+            'WGS POS: discarded retired inherited pricing preference '
             'subscription=%s product=%s plan=%s pricing=%s',
             source_order.id,
             product.id,
@@ -1430,7 +1454,7 @@ class PosOrder(models.Model):
         offers = []
 
         if normalized_flow == 'reenroll':
-            preferred_plan_id, preferred_pricing_id = self._wgs_sanitize_reenroll_pricing_preference(
+            preferred_plan_id, preferred_pricing_id = self._wgs_sanitize_inherited_pricing_preference(
                 source_order=source_order,
                 product=product,
                 preferred_plan_id=preferred_plan_id,
@@ -1499,6 +1523,7 @@ class PosOrder(models.Model):
                     },
                 })
                 pricing['flow'] = normalized_flow
+                pricing = self._wgs_seal_pricing_payload(pricing, request_data)
                 return {'flow': normalized_flow, 'pricing': pricing, 'offers': offers}
             pricing = self._wgs_build_subscription_recurring_charge_payload(
                 source_order,
@@ -1509,6 +1534,17 @@ class PosOrder(models.Model):
                 is_renewal=normalized_flow == 'renewal',
                 is_reenroll=False,
             )
+            plan = self.env['sale.subscription.plan'].browse(pricing.get('plan_id') or []).exists()
+            if plan and plan.wgs_domiciliation_enabled and not source_order.wgs_domiciliation_contract_id:
+                legacy_product = product or source_order._get_recurring_lines()[:1].product_id
+                pricing = self._wgs_build_product_pricing_payload_for_pos(
+                    legacy_product, flow='reenroll', partner=partner or source_order.partner_id,
+                    source_order=source_order, preferred_plan_id=plan.id,
+                    preferred_pricing_id=pricing.get('pricing_id'),
+                    start_date=pricing['subscription_start_date'],
+                    domiciliation_installment_sequences=domiciliation_installment_sequences,
+                )
+                pricing['legacy_transition'] = True
             pricing['flow'] = normalized_flow
         elif normalized_flow == 'reenroll':
             pricing = self._wgs_build_product_pricing_payload_for_pos(
@@ -1529,6 +1565,7 @@ class PosOrder(models.Model):
         else:
             raise UserError(_('No se pudo resolver el flujo de pricing solicitado.'))
 
+        pricing = self._wgs_seal_pricing_payload(pricing, request_data)
         return {
             'flow': normalized_flow,
             'pricing': pricing,
@@ -1669,136 +1706,6 @@ class PosOrder(models.Model):
         return output
 
     @api.model
-    def _order_line_fields(self, line, session_id=None):
-        values = super()._order_line_fields(line, session_id=session_id)
-        ui_line = self._wgs_extract_ui_line_payload(line)
-        config_payload = self._wgs_extract_subscription_config_payload(ui_line)
-        has_subscription_config = self._wgs_has_subscription_line_config_payload(config_payload)
-
-        if has_subscription_config:
-            product = self.env['product.product'].browse(
-                self._wgs_to_int(values.get('product_id'))
-            ).exists()
-            self._wgs_validate_subscription_line_plan_for_pos(product, config_payload)
-
-        participant_ids = config_payload.get('participant_ids')
-        if isinstance(participant_ids, list):
-            cleaned = []
-            for value in participant_ids:
-                try:
-                    participant_id = int(value)
-                except (TypeError, ValueError):
-                    continue
-                if participant_id > 0:
-                    cleaned.append(participant_id)
-            values['wgs_participant_ids_json'] = json.dumps(list(dict.fromkeys(cleaned)))
-
-        pricing_snapshot = config_payload.get('pricing_snapshot')
-        if isinstance(pricing_snapshot, dict):
-            values['wgs_pricing_snapshot_json'] = json.dumps(pricing_snapshot)
-
-        for field_name in ('wgs_subscription_plan_id', 'wgs_subscription_pricing_id'):
-            if field_name == 'wgs_subscription_plan_id':
-                value = config_payload.get('plan_id')
-            else:
-                value = config_payload.get('pricing_id')
-            try:
-                int_value = int(value)
-            except (TypeError, ValueError):
-                int_value = 0
-            if int_value > 0:
-                values[field_name] = int_value
-
-        raw_end_date = config_payload.get('end_date')
-        if raw_end_date:
-            end_date = fields.Date.to_date(raw_end_date)
-            if end_date:
-                values['wgs_subscription_end_date'] = end_date
-        raw_start_date = config_payload.get('start_date')
-        if raw_start_date:
-            start_date = fields.Date.to_date(raw_start_date)
-            if start_date:
-                values['wgs_subscription_start_date'] = start_date
-
-        flow_value = str(config_payload.get('flow') or 'new').strip().lower()
-        values['wgs_subscription_flow'] = flow_value if flow_value in ('renewal', 'reenroll', 'upsale', 'pending_charge', 'cancellation_refund') else 'new'
-
-        source_subscription_id = self._wgs_to_int(config_payload.get('source_subscription_id'))
-        if source_subscription_id > 0:
-            values['wgs_subscription_source_id'] = source_subscription_id
-        pending_move_id = self._wgs_to_int(config_payload.get('pending_move_id'))
-        if pending_move_id > 0:
-            values['wgs_subscription_pending_move_id'] = pending_move_id
-        refund_origin_line_id = self._wgs_to_int(config_payload.get('refund_origin_line_id'))
-        if refund_origin_line_id > 0:
-            values['wgs_subscription_refund_origin_line_id'] = refund_origin_line_id
-
-        discount_percent = self._wgs_to_float(config_payload.get('discount_percent'))
-        if discount_percent > 0:
-            values['wgs_discount_percent'] = discount_percent
-        discount_fixed_amount = self._wgs_to_float(config_payload.get('discount_fixed_amount'))
-        if discount_fixed_amount > 0:
-            values['wgs_discount_fixed_amount'] = discount_fixed_amount
-        discount_code = str(config_payload.get('discount_code') or '').strip()
-        if discount_code:
-            values['wgs_discount_code'] = discount_code
-        discount_label = str(config_payload.get('discount_label') or '').strip()
-        if discount_label:
-            values['wgs_discount_label'] = discount_label
-        authorized_employee_id = self._wgs_to_int(config_payload.get('discount_authorized_employee_id'))
-        if authorized_employee_id > 0:
-            values['wgs_discount_authorized_employee_id'] = authorized_employee_id
-        authorized_by = str(config_payload.get('discount_authorized_by') or '').strip()
-        if authorized_by:
-            values['wgs_discount_authorized_by'] = authorized_by
-        authorized_at = fields.Datetime.to_datetime(config_payload.get('discount_authorized_at'))
-        if authorized_at:
-            values['wgs_discount_authorized_at'] = fields.Datetime.to_string(authorized_at)
-        birthday_year = self._wgs_to_int(config_payload.get('discount_birthday_year'))
-        if birthday_year > 0:
-            values['wgs_discount_birthday_year'] = birthday_year
-
-        if has_subscription_config:
-            locked_values = self._wgs_get_locked_subscription_line_price_values_for_pos(
-                config_payload,
-                fallback_price=values.get('price_unit'),
-            )
-            if locked_values.get('price_unit') is not False and 'price_unit' in values:
-                values['price_unit'] = locked_values['price_unit']
-            if 'discount' in values:
-                values['discount'] = locked_values['discount']
-        elif 'discount' in values:
-            values['discount'] = 0
-
-        return values
-
-    @api.model
-    def _wgs_has_subscription_line_config_payload(self, config_payload):
-        if not isinstance(config_payload, dict):
-            return False
-        pricing_snapshot = config_payload.get('pricing_snapshot')
-        if isinstance(pricing_snapshot, dict) and pricing_snapshot:
-            return True
-        participant_ids = config_payload.get('participant_ids')
-        if isinstance(participant_ids, list) and participant_ids:
-            return True
-        for key in (
-            'plan_id',
-            'pricing_id',
-            'start_date',
-            'end_date',
-            'source_subscription_id',
-            'pending_move_id',
-            'refund_origin_line_id',
-            'discount_code',
-            'discount_authorized_employee_id',
-            'pricing_lock',
-        ):
-            if config_payload.get(key):
-                return True
-        return False
-
-    @api.model
     def _wgs_get_locked_subscription_line_price_values_for_pos(self, config_payload, fallback_price=False):
         config_payload = config_payload if isinstance(config_payload, dict) else {}
         snapshot = config_payload.get('pricing_snapshot')
@@ -1842,26 +1749,9 @@ class PosOrder(models.Model):
         }
 
     @api.model
-    def _wgs_extract_ui_line_payload(self, line):
-        payload = {}
-
-        def _collect(node, depth=0):
-            if depth > 5:
-                return
-            if isinstance(node, dict):
-                payload.update(node)
-                for value in node.values():
-                    _collect(value, depth + 1)
-            elif isinstance(node, (list, tuple)):
-                for value in node:
-                    _collect(value, depth + 1)
-
-        _collect(line)
-        return payload
-
-    @api.model
     def _wgs_extract_subscription_config_payload(self, ui_line):
         data = {
+            'line_uuid': str(ui_line.get('line_uuid') or ui_line.get('uuid') or '') if isinstance(ui_line, dict) else '',
             'participant_ids': [],
             'pricing_snapshot': False,
             'plan_id': False,
@@ -1885,14 +1775,14 @@ class PosOrder(models.Model):
         if not isinstance(ui_line, dict):
             return data
 
-        raw_config = ui_line.get('wgs_subscription_config') or ui_line.get('wgsSubscriptionConfig')
+        raw_config = ui_line.get('wgs_operation_config_json') or ui_line.get('wgs_subscription_config') or ui_line.get('wgsSubscriptionConfig')
         if isinstance(raw_config, str):
             try:
                 raw_config = json.loads(raw_config)
             except (TypeError, ValueError):
                 raw_config = {}
         if not isinstance(raw_config, dict):
-            raw_config = {}
+            raw_config = ui_line
 
         pricing_snapshot = raw_config.get('pricing_snapshot') or raw_config.get('pricingSnapshot') or False
         if isinstance(pricing_snapshot, str):
@@ -2049,39 +1939,58 @@ class PosOrder(models.Model):
         return data
 
     @api.model
-    def _process_order(self, order, draft, *args, **kwargs):
-        order = self._wgs_disable_invoice_request_for_pos_order_payload(order)
-        existing_order = kwargs.get('existing_order', False)
-        if args:
-            existing_order = args[0]
-        super_process_order = super()._process_order
-        try:
-            pos_order_id = super_process_order(order, draft, existing_order)
-        except TypeError as error:
-            # Keep compatibility with Odoo variants where _process_order only accepts (order, draft).
-            if '_process_order' in str(error) and 'positional arguments' in str(error):
-                pos_order_id = super_process_order(order, draft)
-            else:
-                raise
-        pos_order = self.browse(pos_order_id)
+    def _process_order(self, order, existing_order):
+        """Odoo 19 passes an existing record, not a draft boolean.
 
+        Capture metadata before core consumes UUID/line commands. Both payment
+        persistence and its commercial application share Odoo's transaction.
+        """
+        order = self._wgs_disable_invoice_request_for_pos_order_payload(order)
+        draft = order.get('state') == 'draft'
+        order_uuids = self._wgs_get_order_uuids(order)
+        ui_configs = self._wgs_extract_ui_subscription_line_configs(order)
+        if not ui_configs and order_uuids:
+            ui_configs = self._wgs_get_buffered_subscription_configs(order_uuids)
+        order.pop('wgs_subscription_configs', None)
+        if not draft:
+            self._wgs_validate_native_order_configuration(order, existing_order, ui_configs)
+        pos_order_id = super()._process_order(order, existing_order)
         if draft:
             return pos_order_id
-
-        order_uuids = pos_order._wgs_get_order_uuids(order)
-        ui_configs = pos_order._wgs_extract_ui_subscription_line_configs(order)
-        if not ui_configs and order_uuids:
-            ui_configs = pos_order._wgs_get_buffered_subscription_configs(order_uuids)
-
+        pos_order = self.browse(pos_order_id)
         if ui_configs:
             pos_order._wgs_apply_subscription_line_configs(ui_configs)
-        else:
-            pos_order._wgs_apply_ui_subscription_line_config(order)
-        pos_order._wgs_align_partner_from_subscription_lines()
         pos_order._wgs_ensure_recurring_lines_are_configured_for_pos()
         pos_order._wgs_sync_subscription_sales()
         pos_order._wgs_clear_buffered_subscription_configs(order_uuids)
         return pos_order_id
+
+    def _wgs_validate_native_order_configuration(self, order, existing_order, configs):
+        """Reject mismatched commercial amounts before native payment processing."""
+        by_uuid = {config.get('line_uuid'): config for config in configs}
+        for command in order.get('lines') or []:
+            if len(command) < 3 or not isinstance(command[2], dict):
+                continue
+            values = command[2]
+            product = self.env['product.product'].browse(self._wgs_to_int(values.get('product_id'))).exists()
+            if not product or not product.recurring_invoice or float(values.get('qty') or 0) <= 0:
+                continue
+            line_uuid = values.get('uuid')
+            config = by_uuid.get(line_uuid)
+            already_applied = existing_order and existing_order.lines.filtered(
+                lambda line: line.uuid == line_uuid and line.wgs_sale_order_id
+            )
+            if already_applied:
+                continue
+            if not config:
+                raise UserError(_('Falta la configuracion de una membresia del ticket. Reabre el flujo antes de cobrar.'))
+            snapshot = config.get('pricing_snapshot') or {}
+            quote = snapshot.get('commercial_quote') or {}
+            price = (quote.get('payload') or {}).get('pricing') or snapshot
+            if abs(float(values.get('price_unit') or 0) - float(price.get('ticket_charge_now') or 0)) > 0.01:
+                raise UserError(_('El importe enviado a cobro difiere de la cotizacion de la membresia.'))
+            if abs(float(values.get('discount') or 0) - float(config.get('discount_percent') or 0)) > 0.00001:
+                raise UserError(_('El descuento del ticket difiere del evento autorizado.'))
 
     @api.model
     def _wgs_get_ui_order_containers(self, ui_order):
@@ -2154,13 +2063,6 @@ class PosOrder(models.Model):
             ('order_uuid', 'in', order_uuids),
         ]).unlink()
 
-    def _wgs_apply_ui_subscription_line_config(self, ui_order):
-        self.ensure_one()
-        ui_configs = self._wgs_extract_ui_subscription_line_configs(ui_order)
-        if not ui_configs:
-            return
-        self._wgs_apply_subscription_line_configs(ui_configs)
-
     def _wgs_apply_subscription_line_configs(self, ui_configs):
         self.ensure_one()
         if not ui_configs:
@@ -2177,6 +2079,13 @@ class PosOrder(models.Model):
             target_line = self._wgs_match_pos_line_for_ui_config(unmatched_lines, config)
             if not target_line:
                 continue
+            if target_line.wgs_application_state or target_line.wgs_sale_order_id:
+                unmatched_lines -= target_line
+                continue
+            config = self._wgs_normalize_commercial_config(
+                config, partner_id=self.partner_id.id, company_id=self.company_id.id,
+                check_source=False,
+            )
             self._wgs_validate_subscription_line_plan_for_pos(target_line.product_id, config)
             write_values = {}
 
@@ -2274,30 +2183,6 @@ class PosOrder(models.Model):
                 )
             unmatched_lines -= target_line
 
-    def _wgs_align_partner_from_subscription_lines(self):
-        self.ensure_one()
-
-        partner_ids = set()
-        for line in self.lines.filtered(lambda item: item.qty > 0 and item.wgs_has_subscription_configuration()):
-            participant_ids = line.wgs_get_participant_ids()
-            if participant_ids:
-                partner_ids.add(int(participant_ids[0]))
-                continue
-            source_order = line.wgs_subscription_source_id
-            if source_order and source_order.partner_id:
-                partner_ids.add(source_order.partner_id.id)
-
-        if not partner_ids:
-            return
-        if len(partner_ids) > 1:
-            raise UserError(
-                _('La orden POS contiene configuraciones de suscripción para más de un cliente. Usa un solo titular por ticket.')
-            )
-
-        partner = self.env['res.partner'].browse(next(iter(partner_ids))).exists()
-        if partner and self.partner_id != partner:
-            self.partner_id = partner.id
-
     @api.model
     def _wgs_extract_ui_subscription_line_configs(self, ui_order):
         output = []
@@ -2317,6 +2202,8 @@ class PosOrder(models.Model):
             for item in raw_root_configs:
                 if not isinstance(item, dict):
                     continue
+                if float(item.get('quantity') or item.get('qty') or 0) <= 0:
+                    continue
                 config = self._wgs_extract_subscription_config_payload(item)
                 config['product_id'] = self._wgs_to_int(item.get('product_id') or item.get('productId'))
                 config['quantity'] = self._wgs_to_float(item.get('quantity') or item.get('qty'))
@@ -2332,6 +2219,8 @@ class PosOrder(models.Model):
             for raw_line in raw_lines:
                 payload = self._wgs_find_best_payload_dict(raw_line)
                 if not isinstance(payload, dict):
+                    continue
+                if float(payload.get('qty') or payload.get('quantity') or payload.get('qty_ordered') or 0) <= 0:
                     continue
                 config = self._wgs_extract_subscription_config_payload(payload)
                 has_renewal_metadata = (
@@ -2393,7 +2282,7 @@ class PosOrder(models.Model):
                     score += 3
                 if any(key in node for key in ('qty', 'quantity', 'qty_ordered')):
                     score += 2
-                if any(key in node for key in ('wgs_subscription_config', 'wgs_participant_ids', 'wgsParticipantIds')):
+                if any(key in node for key in ('wgs_operation_config_json', 'wgs_subscription_config', 'wgs_participant_ids', 'wgsParticipantIds')):
                     score += 4
                 if score > best.get('__score__', -1):
                     best = dict(node)
@@ -2410,21 +2299,19 @@ class PosOrder(models.Model):
 
     @api.model
     def _wgs_match_pos_line_for_ui_config(self, lines, config):
-        if not lines:
-            return self.env['pos.order.line']
-
-        product_id = int(config.get('product_id') or 0)
-        quantity = float(config.get('quantity') or 0.0)
-        candidates = lines
-        if product_id > 0:
-            filtered = lines.filtered(lambda line: line.product_id.id == product_id)
-            if filtered:
-                candidates = filtered
-        if quantity > 0:
-            filtered = candidates.filtered(lambda line: abs(abs(line.qty) - quantity) < 0.0001)
-            if filtered:
-                candidates = filtered
-        return candidates[:1]
+        line_uuid = config.get('line_uuid')
+        product_id = self._wgs_to_int(config.get('product_id'))
+        quantity = self._wgs_to_float(config.get('quantity'))
+        if not line_uuid or not product_id or quantity <= 0:
+            raise UserError(_('La configuracion debe identificar UUID, producto y cantidad de la linea.'))
+        candidates = lines.filtered(lambda line: (
+            line.uuid == line_uuid
+            and line.product_id.id == product_id
+            and abs(line.qty - quantity) < 0.0001
+        ))
+        if len(candidates) != 1:
+            raise UserError(_('No se puede asociar de forma unica la configuracion a su linea del ticket.'))
+        return candidates
 
     def _wgs_ensure_recurring_lines_are_configured_for_pos(self):
         """Prevent paid POS tickets from creating unactionable subscription sales."""
@@ -2442,61 +2329,8 @@ class PosOrder(models.Model):
             product_names = ', '.join(missing_config.mapped('product_id.display_name'))
             raise UserError(_(
                 'No se pudo registrar la configuración de suscripción para %(products)s. '
-                'El ticket no se procesó; vuelve a abrir la operación y cobra nuevamente.'
+                'Revisa el estado del pago antes de reintentar; no vuelvas a cobrar automaticamente.'
             ) % {'products': product_names})
-
-    def _wgs_sync_subscription_sales(self):
-        for pos_order in self:
-            if not pos_order.partner_id:
-                subscription_lines = pos_order.lines.filtered(
-                    lambda line: (
-                        line.qty > 0
-                        and line.product_id
-                        and line.product_id.product_tmpl_id.recurring_invoice
-                        and line.wgs_has_subscription_configuration()
-                    )
-                )
-                if subscription_lines:
-                    raise UserError(
-                        _('Debes seleccionar un cliente para vender productos de suscripción desde Punto de Venta.')
-                    )
-
-            # 1) Create subscription sales for normal/positive subscription lines.
-            for line in pos_order.lines.filtered(
-                lambda item: (
-                    item.qty > 0
-                    and item.product_id
-                    and item.product_id.product_tmpl_id.recurring_invoice
-                    and item.wgs_has_subscription_configuration()
-                )
-            ):
-                if line.wgs_subscription_flow == 'renewal':
-                    if line.wgs_subscription_source_id and line.wgs_sale_order_id == line.wgs_subscription_source_id:
-                        continue
-                    pos_order._wgs_process_subscription_renewal_line(line)
-                    continue
-                if line.wgs_subscription_flow == 'reenroll':
-                    if (
-                        line.wgs_subscription_source_id
-                        and line.wgs_sale_order_id == line.wgs_subscription_source_id
-                        and not pos_order._wgs_is_subscription_order_closed_for_reenroll(line.wgs_subscription_source_id)
-                    ):
-                        continue
-                    pos_order._wgs_process_subscription_reenroll_line(line)
-                    continue
-                if line.wgs_subscription_flow == 'pending_charge':
-                    pos_order._wgs_process_subscription_pending_charge_line(line)
-                    continue
-                if line.wgs_sale_order_id:
-                    continue
-                sale_order = pos_order._wgs_create_subscription_sale_order_from_line(line)
-                line.wgs_sale_order_id = sale_order.id
-
-            # 2) Cancel subscription sale orders when POS line is a refund.
-            for line in pos_order.lines.filtered(
-                lambda item: item.qty < 0 and item.product_id and item.product_id.product_tmpl_id.recurring_invoice
-            ):
-                pos_order._wgs_cancel_subscription_from_refund_line(line)
 
     @api.model
     def wgs_audit_paid_subscription_pos_sync_issues(self, date_from=False, date_to=False, limit=5000):
@@ -2522,43 +2356,9 @@ class PosOrder(models.Model):
         if dry_run:
             return issues
 
-        repaired = []
-        skipped = []
-        lines_by_id = {
-            line.id: line
-            for line in self._wgs_find_paid_subscription_pos_lines_for_audit(
-                date_from=date_from,
-                date_to=date_to,
-                limit=limit,
-            )
-        }
-        for issue in issues:
-            line = lines_by_id.get(issue.get('line_id'))
-            if not line:
-                skipped.append(dict(issue, repair_status='missing_line'))
-                continue
-            issue_type = issue.get('issue')
-            try:
-                if issue_type in ('explicit_flow_not_applied', 'configured_line_missing_sale_order'):
-                    sale_order = self._wgs_repair_paid_subscription_pos_line_sync_issue(line)
-                    repaired.append(
-                        dict(
-                            issue,
-                            repair_status='repaired_by_line_sync',
-                            repaired_sale_order_id=sale_order.id or False,
-                            repaired_sale_order_name=sale_order.name or False,
-                        )
-                    )
-                    continue
-            except Exception as error:
-                skipped.append(dict(issue, repair_status='error', error=str(error)))
-                continue
-            skipped.append(dict(issue, repair_status='not_safe'))
-
-        return {
-            'repaired': repaired,
-            'skipped': skipped,
-        }
+        raise UserError(_(
+            'La reparacion masiva por inferencia esta deshabilitada. Revisa la auditoria y aprueba periodos por linea con wgs_repair_paid_subscription_pos_line_ids.'
+        ))
 
     @api.model
     def wgs_repair_paid_subscription_pos_line_ids(self, line_ids, options_by_line=False, dry_run=True):
@@ -2568,6 +2368,8 @@ class PosOrder(models.Model):
         touches caller-selected lines and requires a paid POS order, a positive
         recurring product line and a POS customer.
         """
+        if not self.env.user.has_group('point_of_sale.group_pos_manager'):
+            raise UserError(_('La reparacion historica requiere permisos de responsable POS.'))
         options_by_line = options_by_line or {}
         if not isinstance(options_by_line, dict):
             options_by_line = {}
@@ -2585,15 +2387,14 @@ class PosOrder(models.Model):
             try:
                 with self.env.cr.savepoint():
                     if dry_run:
-                        repaired.append(
-                            self._wgs_build_targeted_subscription_repair_result(
-                                line,
-                                'dry_run',
-                                self._wgs_resolve_targeted_subscription_repair_action(line, options),
-                            )
-                        )
+                        proposal = self._wgs_prepare_period_repair(line, options)
+                        repaired.append({
+                            **self._wgs_build_targeted_subscription_repair_result(line, 'dry_run', 'Periodo propuesto; sin escrituras.'),
+                            'proposal': proposal,
+                            'approval_digest': self._wgs_period_repair_digest(proposal),
+                        })
                         continue
-                    sale_order = self._wgs_repair_single_paid_subscription_pos_line(line, options)
+                    sale_order = self._wgs_apply_approved_period_repair(line, options)
                     repaired.append(
                         self._wgs_build_targeted_subscription_repair_result(
                             line,
@@ -2623,14 +2424,6 @@ class PosOrder(models.Model):
             return _('La línea POS no corresponde a un producto recurrente.')
         return False
 
-    def _wgs_resolve_targeted_subscription_repair_action(self, line, options):
-        flow = self._wgs_resolve_targeted_subscription_repair_flow(line, options)
-        if flow == 'new' and line.wgs_sale_order_id:
-            return _('La línea ya está ligada a %(subscription)s.') % {'subscription': line.wgs_sale_order_id.name}
-        if flow in ('renewal', 'reenroll', 'pending_charge') and not self._wgs_resolve_targeted_subscription_repair_source(line, options):
-            return _('Falta source_subscription_id para reparar flujo %(flow)s.') % {'flow': flow}
-        return _('Repararía la línea como flujo %(flow)s.') % {'flow': flow}
-
     def _wgs_build_targeted_subscription_repair_result(self, line, status, message, sale_order=False):
         linked_order = sale_order or line.wgs_sale_order_id
         return {
@@ -2649,62 +2442,11 @@ class PosOrder(models.Model):
             'linked_order_name': linked_order.name or False,
         }
 
-    def _wgs_repair_single_paid_subscription_pos_line(self, line, options):
-        line.ensure_one()
-        order = line.order_id
-        flow = self._wgs_resolve_targeted_subscription_repair_flow(line, options)
-        values = {}
-
-        source_order = self._wgs_resolve_targeted_subscription_repair_source(line, options)
-        if source_order:
-            values['wgs_subscription_source_id'] = source_order.id
-        if flow:
-            values['wgs_subscription_flow'] = flow
-
-        start_date = self._wgs_resolve_targeted_subscription_repair_date(line, options, 'start_date')
-        end_date = self._wgs_resolve_targeted_subscription_repair_date(line, options, 'end_date')
-        if start_date:
-            values['wgs_subscription_start_date'] = start_date
-        if end_date:
-            values['wgs_subscription_end_date'] = end_date
-        if values:
-            line.write(values)
-
-        if flow == 'renewal':
-            return order._wgs_process_subscription_renewal_line(line)
-        if flow == 'reenroll':
-            return order.with_context(wgs_allow_reenroll_repair_active_source=True)._wgs_process_subscription_reenroll_line(line)
-        if flow == 'pending_charge':
-            return order._wgs_process_subscription_pending_charge_line(line)
-        if flow == 'upsale':
-            raise UserError(_('La reparación dirigida de cambio de plan requiere revisión manual.'))
-        if line.wgs_sale_order_id:
-            return line.wgs_sale_order_id
-        sale_order = order._wgs_create_subscription_sale_order_from_line(line)
-        line.wgs_sale_order_id = sale_order.id
-        return sale_order
-
-    def _wgs_resolve_targeted_subscription_repair_flow(self, line, options):
-        flow = str(options.get('flow') or line.wgs_subscription_flow or 'new').strip().lower()
-        if flow not in ('new', 'renewal', 'reenroll', 'pending_charge', 'upsale'):
-            flow = 'new'
-        return flow
-
     def _wgs_resolve_targeted_subscription_repair_source(self, line, options):
         source_id = self._wgs_to_int(options.get('source_subscription_id') or options.get('source_order_id'))
         if source_id > 0:
             return self.env['sale.order'].sudo().browse(source_id).exists()
         return line.wgs_subscription_source_id.exists()
-
-    def _wgs_resolve_targeted_subscription_repair_date(self, line, options, key):
-        raw_value = options.get(key)
-        if raw_value:
-            return fields.Date.to_date(raw_value)
-        if key == 'start_date':
-            return line.wgs_get_subscription_start_date() or fields.Date.to_date(line.order_id.date_order)
-        if key == 'end_date':
-            return line.wgs_get_subscription_end_date()
-        return False
 
     @api.model
     def _wgs_find_paid_subscription_pos_lines_for_audit(self, date_from=False, date_to=False, limit=5000):
@@ -2718,25 +2460,6 @@ class PosOrder(models.Model):
         if date_to:
             domain.append(('order_id.date_order', '<=', date_to))
         return self.env['pos.order.line'].sudo().search(domain, order='id asc', limit=int(limit or 5000))
-
-    def _wgs_repair_paid_subscription_pos_line_sync_issue(self, line):
-        line.ensure_one()
-        pos_order = line.order_id
-        pos_order.ensure_one()
-
-        flow = (line.wgs_subscription_flow or 'new').strip().lower()
-        if flow == 'renewal':
-            return pos_order._wgs_process_subscription_renewal_line(line)
-        if flow == 'reenroll':
-            return pos_order._wgs_process_subscription_reenroll_line(line)
-        if flow == 'pending_charge':
-            return pos_order._wgs_process_subscription_pending_charge_line(line)
-        if line.wgs_sale_order_id:
-            return line.wgs_sale_order_id
-
-        sale_order = pos_order._wgs_create_subscription_sale_order_from_line(line)
-        line.wgs_sale_order_id = sale_order.id
-        return sale_order
 
     def _wgs_classify_paid_subscription_pos_line_sync_issue(self, line):
         line.ensure_one()
@@ -2758,12 +2481,11 @@ class PosOrder(models.Model):
             )
 
         if flow in ('renewal', 'reenroll', 'pending_charge') and source_order:
-            source_closed = self._wgs_is_subscription_order_closed_for_reenroll(source_order)
-            if not linked_order or linked_order != source_order or source_closed:
+            if not linked_order or linked_order != source_order:
                 return dict(
                     base_issue,
                     issue='explicit_flow_not_applied',
-                    safe_to_repair=True,
+                    safe_to_repair=False,
                     reason='La línea tiene flujo explícito y suscripción origen, pero no quedó aplicada sobre esa suscripción.',
                 )
 
@@ -2789,31 +2511,11 @@ class PosOrder(models.Model):
             return dict(
                 base_issue,
                 issue='configured_line_missing_sale_order',
-                safe_to_repair=True,
+                safe_to_repair=False,
                 reason='La línea tiene metadata WGS pero no quedó ligada a una suscripción.',
             )
 
-        if linked_order and self._wgs_is_subscription_order_closed_for_reenroll(linked_order):
-            later_line = self._wgs_find_later_paid_subscription_line_for_same_subscription_customer(line)
-            if later_line:
-                return dict(
-                    base_issue,
-                    issue='linked_closed_has_later_payment',
-                    safe_to_repair=False,
-                    reason='La línea está ligada a una suscripción cerrada, pero existe un pago posterior del mismo cliente.',
-                    later_pos_order_id=later_line.order_id.id,
-                    later_pos_order_name=later_line.order_id.name,
-                    later_pos_reference=later_line.order_id.pos_reference or False,
-                    later_line_id=later_line.id,
-                    later_linked_order=later_line.wgs_sale_order_id.name or False,
-                )
-            return dict(
-                base_issue,
-                issue='linked_closed_requires_manual_review',
-                safe_to_repair=False,
-                reason='La línea está ligada a una suscripción cerrada sin flujo explícito. Puede ser reinscripción o venta nueva diferente; requiere decisión manual.',
-            )
-
+        # Closure after a payment is normal lifecycle, not evidence of a lost payment.
         return False
 
     def _wgs_build_paid_subscription_pos_line_issue(self, line):
@@ -2849,6 +2551,7 @@ class PosOrder(models.Model):
             ('id', '!=', line.id),
             ('order_id.state', 'in', ['paid', 'done', 'invoiced']),
             ('order_id.partner_id', '=', partner.id),
+            ('order_id.company_id', '=', line.order_id.company_id.id),
             ('product_id.product_tmpl_id.recurring_invoice', '=', True),
             ('qty', '>', 0),
         ]
@@ -2903,13 +2606,14 @@ class PosOrder(models.Model):
         source_line = recurring_lines.sorted(key=lambda so_line: so_line.id)[:1]
         target_product = line.product_id
         package_changed = source_line.product_id != target_product
+        apply_participants = package_changed or line.wgs_application_state == 'scheduled'
         previous_access_partner_ids = (
             source_order._wgs_get_access_related_partner_ids()
-            if package_changed and hasattr(source_order, '_wgs_get_access_related_partner_ids')
+            if apply_participants and hasattr(source_order, '_wgs_get_access_related_partner_ids')
             else set()
         )
         participant_ids = []
-        if package_changed:
+        if apply_participants:
             holder_partner = self.partner_id or source_order.partner_id
             participant_ids = self._wgs_resolve_subscription_participant_ids_for_pos_line(
                 line=line,
@@ -2918,55 +2622,50 @@ class PosOrder(models.Model):
                 qty=abs(line.qty or 0.0) or 1.0,
             )
 
-        today = self._wgs_get_subscription_business_today_for_pos(company=source_order.company_id)
-        renewal_schedule = self._wgs_get_subscription_renewal_schedule(
-            source_order,
-            today=today,
-            preferred_line=source_line,
-        )
-        next_billing_date = renewal_schedule['next_billing_date']
-        subscription_end_date = renewal_schedule['subscription_end_date']
         pricing_state = self._wgs_get_persisted_subscription_pricing_from_pos_line(line)
+        next_billing_date = pricing_state['next_billing_date']
+        subscription_end_date = pricing_state['subscription_end_date']
+        effective_date = pricing_state['subscription_start_date']
+        if not effective_date or not subscription_end_date:
+            raise UserError(_('La renovacion no conserva su periodo contratado; requiere revision historica.'))
+        pending_changes = self._wgs_pending_package_changes(source_order).filtered(lambda item: item != line)
+        initial_contract = bool((pricing_state['snapshot'].get('domiciliation') or {}).get('selection_mode') == 'initial')
+        if (package_changed or pending_changes or initial_contract) and effective_date > self._wgs_get_subscription_business_today_for_pos(company=source_order.company_id):
+            line.write({
+                'wgs_sale_order_id': source_order.id,
+                'wgs_application_state': 'scheduled',
+                'wgs_application_date': effective_date,
+            })
+            self._wgs_link_pos_and_sale_records(pos_line=line, sale_order=source_order)
+            source_order.message_post(body=_(
+                'Cambio de paquete pagado en POS; se aplicara el %s al terminar el periodo actual.'
+            ) % fields.Date.to_string(effective_date))
+            return source_order
 
-        if package_changed:
-            source_line = self._wgs_apply_subscription_recurring_line_values_for_pos(
-                source_order=source_order,
-                source_line=source_line,
-                pos_line=line,
-                product=target_product,
-                qty=abs(line.qty or 0.0) or 1.0,
-                recurring_price_unit=pricing_state['price_unit'],
-                recurring_plan_id=pricing_state['plan_id'],
-                recurring_pricing_id=pricing_state['pricing_id'],
-            )
-            self._wgs_sync_subscription_metadata(
-                sale_order=source_order,
-                participant_ids=participant_ids,
-                subscription_end_date=subscription_end_date,
-                next_billing_date=next_billing_date,
-                recurring_plan_id=pricing_state['plan_id'],
-            )
+        source_line = self._wgs_apply_subscription_recurring_line_values_for_pos(
+            source_order=source_order,
+            source_line=source_line,
+            pos_line=line,
+            product=target_product,
+            qty=abs(line.qty or 0.0) or 1.0,
+            recurring_price_unit=pricing_state['price_unit'],
+            recurring_plan_id=pricing_state['plan_id'],
+            recurring_pricing_id=pricing_state['pricing_id'],
+        )
+        self._wgs_sync_subscription_metadata(
+            sale_order=source_order,
+            participant_ids=participant_ids if apply_participants else None,
+            subscription_end_date=subscription_end_date,
+            next_billing_date=next_billing_date,
+            clear_next_billing_date=pricing_state['snapshot'].get('single_day_term', False),
+            recurring_plan_id=pricing_state['plan_id'],
+        )
+        if initial_contract:
+            self._wgs_apply_domiciliation_contract_from_pos_line(source_order, line, pricing_state)
+        if apply_participants:
             self._wgs_finalize_subscription_access_for_pos(
                 source_order,
                 extra_partner_ids=previous_access_partner_ids,
-            )
-        else:
-            source_line = self._wgs_apply_subscription_recurring_line_values_for_pos(
-                source_order=source_order,
-                source_line=source_line,
-                pos_line=line,
-                product=target_product,
-                qty=abs(line.qty or 0.0) or 1.0,
-                recurring_price_unit=pricing_state['price_unit'],
-                recurring_plan_id=pricing_state['plan_id'],
-                recurring_pricing_id=pricing_state['pricing_id'],
-            )
-            self._wgs_sync_subscription_metadata(
-                sale_order=source_order,
-                participant_ids=None,
-                subscription_end_date=subscription_end_date,
-                next_billing_date=next_billing_date,
-                recurring_plan_id=pricing_state['plan_id'],
             )
 
         self._wgs_link_pos_and_sale_records(
@@ -3012,12 +2711,7 @@ class PosOrder(models.Model):
             raise UserError(_('No se encontró la suscripción origen para aplicar la reinscripción en POS.'))
         if not self._wgs_order_has_subscription_signal(source_order):
             raise UserError(_('La orden origen no corresponde a una suscripción válida para reinscripción.'))
-        allow_active_repair = bool(
-            self.env.context.get('wgs_allow_reenroll_repair_active_source')
-            and line.wgs_sale_order_id
-            and line.wgs_sale_order_id == source_order
-        )
-        if not self._wgs_is_subscription_order_closed_for_reenroll(source_order) and not allow_active_repair:
+        if not self._wgs_is_subscription_order_closed_for_reenroll(source_order):
             raise UserError(_('La suscripción origen no está cerrada/cancelada para reinscripción.'))
 
         holder_partner = self.partner_id or source_order.partner_id
@@ -3050,7 +2744,7 @@ class PosOrder(models.Model):
         recurring_plan_id = pricing_state['plan_id']
         recurring_pricing_id = pricing_state['pricing_id']
         plan_record = pricing_state['plan_record']
-        today = self._wgs_get_subscription_business_today_for_pos(company=self.company_id)
+        today = self._wgs_to_date(self.date_order)
         subscription_start_date = (
             pricing_state.get('subscription_start_date')
             or line.wgs_get_subscription_start_date()
@@ -3061,13 +2755,9 @@ class PosOrder(models.Model):
             or line.wgs_get_subscription_end_date()
         )
         next_billing_date = pricing_state.get('next_billing_date') or False
-        subscription_end_date, next_billing_date, single_day_term = self._wgs_normalize_subscription_period_for_pos(
-            product=product,
-            plan_record=plan_record,
-            subscription_start_date=subscription_start_date,
-            subscription_end_date=subscription_end_date,
-            next_billing_date=next_billing_date,
-        )
+        single_day_term = pricing_state['snapshot'].get('single_day_term', False)
+        if not subscription_end_date:
+            raise UserError(_('La reinscripcion no conserva su vigencia contratada. Requiere una cotizacion completa.'))
 
         source_lines = source_order.order_line.filtered(lambda so_line: self._wgs_is_recurring_so_line(so_line))
         source_line = source_lines.filtered(lambda so_line: self._wgs_sale_order_line_has_positive_qty_for_pos(so_line))[:1]
@@ -3155,21 +2845,20 @@ class PosOrder(models.Model):
         subscription_end_date=False,
         next_billing_date=False,
     ):
-        subscription_start_date = fields.Date.to_date(subscription_start_date) or self._wgs_get_subscription_business_today_for_pos()
-        subscription_end_date = fields.Date.to_date(subscription_end_date) if subscription_end_date else False
-        next_billing_date = fields.Date.to_date(next_billing_date) if next_billing_date else False
-        single_day_term = self._wgs_product_has_single_day_term(product)
-        if single_day_term:
+        subscription_start_date = fields.Date.to_date(subscription_start_date)
+        if not subscription_start_date or not plan_record:
+            raise UserError(_('Se requiere inicio y plan explicitamente para reconstruir una vigencia.'))
+        interval, unit = self._wgs_extract_interval_from_plan(plan_record)
+        if (interval, unit) == (1, 'day'):
             return subscription_start_date, False, True
-
-        if plan_record and (
-            not subscription_end_date
-            or subscription_end_date <= subscription_start_date
-        ):
-            subscription_end_date = self._wgs_get_plan_period_end_date(plan_record, subscription_start_date)
-        if plan_record and not next_billing_date:
-            next_billing_date = self._wgs_get_plan_min_end_threshold(plan_record, subscription_start_date)
-        return subscription_end_date, next_billing_date, False
+        if self._wgs_should_align_plan_to_calendar_month(plan_record):
+            schedule = self._wgs_get_aligned_monthly_first_period_schedule(subscription_start_date)
+            return schedule['subscription_end_date'], schedule['next_billing_date'], False
+        return (
+            self._wgs_get_plan_period_end_date(plan_record, subscription_start_date),
+            self._wgs_get_plan_min_end_threshold(plan_record, subscription_start_date),
+            False,
+        )
 
     def _wgs_resolve_subscription_participant_ids_for_pos_line(self, *, line, holder_partner, product, qty=1.0):
         product = product.exists()
@@ -3559,13 +3248,19 @@ class PosOrder(models.Model):
         if not isinstance(snapshot, dict):
             snapshot = {}
 
+        if snapshot.get('commercial_quote'):
+            payload = self._wgs_verify_commercial_quote(
+                snapshot, product_id=product.id, partner_id=self.partner_id.id,
+                company_id=self.company_id.id, flow=line.wgs_subscription_flow,
+                source_id=line.wgs_subscription_source_id.id,
+            )
+            snapshot = {**payload['pricing'], 'commercial_quote': snapshot['commercial_quote']}
+
         recurring_price_unit = round(
             max(
                 abs(
                     float(
-                        snapshot.get('recurring_price')
-                        or line.price_unit
-                        or 0.0
+                        snapshot['recurring_price'] if 'recurring_price' in snapshot else (line.price_unit or 0.0)
                     )
                 ),
                 0.0,
@@ -3598,7 +3293,7 @@ class PosOrder(models.Model):
                 source_order = self._wgs_resolve_upsell_source_order_for_line(line)
             if not credit_amount:
                 credit_amount = round(max(float(self._wgs_get_upsale_source_recurring_amount(source_order) or 0.0), 0.0), 2)
-            if not snapshot.get('recurring_price'):
+            if 'recurring_price' not in snapshot:
                 recurring_price_unit = round(max(recurring_price_unit + credit_amount, 0.0), 2)
             if not (persisted_subscription_start_date and persisted_subscription_end_date):
                 upsale_schedule = self._wgs_get_upsale_schedule_from_source(source_order)
@@ -3663,13 +3358,16 @@ class PosOrder(models.Model):
     def _wgs_apply_domiciliation_contract_from_pos_line(self, sale_order, line, pricing_state, restart=False):
         """Persist a new/restarted contract after its immutable POS line is paid."""
         plan = pricing_state.get('plan_record')
-        if not plan or not plan.wgs_domiciliation_enabled:
+        domiciliation = pricing_state.get('snapshot', {}).get('domiciliation') or {}
+        if not domiciliation.get('is_domiciliation'):
+            if restart and sale_order.wgs_domiciliation_contract_id:
+                sale_order.wgs_domiciliation_contract_id.write({'state': 'cancelled'})
+                sale_order.write({'wgs_domiciliation_contract_id': False})
             return self.env['wgs.subscription.domiciliation.contract']
         start_date = pricing_state.get('subscription_start_date') or line.wgs_get_subscription_start_date()
-        if not start_date:
-            start_date = self._wgs_get_subscription_business_today_for_pos(company=sale_order.company_id)
+        if not start_date or not plan or not plan.wgs_domiciliation_enabled:
+            raise UserError(_('El contrato domiciliado requiere su inicio y plan cotizados.'))
         monthly_amount = round(float(pricing_state['price_unit'] or 0.0), 2)
-        domiciliation = pricing_state.get('snapshot', {}).get('domiciliation') or {}
         selected_installment_sequences = domiciliation.get('selected_installment_sequences')
         contract = self.env['wgs.subscription.domiciliation.contract'].wgs_create_for_subscription(
             sale_order,
@@ -3680,6 +3378,7 @@ class PosOrder(models.Model):
             pos_line=line,
             restart=restart,
             selected_installment_sequences=selected_installment_sequences,
+            term_months=domiciliation['term_months'],
         )
         if contract:
             sale_order.with_context(access_sync_priority=True)._wgs_sync_access_control_people()
@@ -3730,7 +3429,7 @@ class PosOrder(models.Model):
         recurring_plan_id = pricing_state['plan_id']
         recurring_pricing_id = pricing_state['pricing_id']
         plan_record = pricing_state['plan_record']
-        today = self._wgs_get_subscription_business_today_for_pos(company=self.company_id)
+        today = self._wgs_to_date(self.date_order)
         subscription_start_date = (
             pricing_state.get('subscription_start_date')
             or line.wgs_get_subscription_start_date()
@@ -3798,7 +3497,7 @@ class PosOrder(models.Model):
                 comodel_checker=self._wgs_is_pricing_model_name,
             )
 
-        contract_date = self._wgs_get_subscription_business_today_for_pos(company=self.company_id)
+        contract_date = self._wgs_to_date(self.date_order)
         upsell_source_order = self.env['sale.order']
         if line.wgs_subscription_flow == 'upsale':
             upsell_source_order = pricing_state['source_order'] or self._wgs_resolve_upsell_source_order_for_line(line)
@@ -3829,13 +3528,9 @@ class PosOrder(models.Model):
                 subscription_start_date = sale_start_date
                 subscription_end_date = upsale_schedule['subscription_end_date']
                 next_billing_date = upsale_schedule['next_billing_date']
-        elif plan_record:
-            next_billing_date = self._wgs_get_plan_min_end_threshold(plan_record, sale_start_date)
-            subscription_end_date = self._wgs_get_plan_period_end_date(plan_record, sale_start_date)
-        if self._wgs_product_has_single_day_term(product):
-            subscription_start_date = sale_start_date
-            subscription_end_date = sale_start_date
-            next_billing_date = False
+        elif not subscription_end_date:
+            raise UserError(_('La venta no conserva su vigencia contratada. Requiere una cotizacion completa.'))
+        single_day_term = pricing_state['snapshot'].get('single_day_term', False)
         if upsell_source_order:
             recurring_total = max(0.0, float(recurring_price_unit or 0.0) * float(qty or 0.0))
             paid_total = max(0.0, float(line.price_unit or 0.0) * float(qty or 0.0))
@@ -3933,7 +3628,7 @@ class PosOrder(models.Model):
                 subscription_start_date=sale_start_date,
                 subscription_end_date=subscription_end_date,
                 next_billing_date=next_billing_date,
-                clear_next_billing_date=self._wgs_product_has_single_day_term(product),
+                clear_next_billing_date=single_day_term,
                 recurring_plan_id=recurring_plan_id,
             )
             if self._wgs_is_order_recognized_as_subscription(upsell_order):
@@ -4033,7 +3728,7 @@ class PosOrder(models.Model):
             subscription_start_date=subscription_start_date,
             subscription_end_date=subscription_end_date,
             next_billing_date=next_billing_date,
-            clear_next_billing_date=self._wgs_product_has_single_day_term(product),
+            clear_next_billing_date=single_day_term,
             recurring_plan_id=recurring_plan_id,
         )
         self._wgs_apply_domiciliation_contract_from_pos_line(sale_order, line, pricing_state)
@@ -4830,93 +4525,31 @@ class PosOrder(models.Model):
         clear_next_billing_date=False,
         recurring_plan_id=False,
     ):
-        recurring_plan_id = self._wgs_to_int(recurring_plan_id) or False
-        target_orders = self._wgs_get_subscription_orders_from_base(sale_order)
-        for target_order in target_orders:
-            values = {}
-            participant_field = self._wgs_find_partner_multi_field(target_order)
-            if participant_field and participant_ids is not None:
-                values[participant_field] = [Command.set(participant_ids)]
-            if contract_date:
-                contract_field = self._wgs_find_subscription_contract_date_field(target_order)
-                if contract_field:
-                    values[contract_field] = self._wgs_convert_date_for_field_value(
-                        contract_date,
-                        target_order._fields.get(contract_field),
-                    )
-                if 'date_order' in target_order._fields and 'date_order' not in values:
-                    values['date_order'] = self._wgs_convert_date_for_field_value(
-                        contract_date,
-                        target_order._fields.get('date_order'),
-                    )
-            if subscription_start_date:
-                for start_field in self._wgs_find_subscription_start_date_fields(target_order):
-                    values[start_field] = subscription_start_date
-            if subscription_end_date:
-                for end_field in self._wgs_find_subscription_end_date_fields(target_order):
-                    values[end_field] = subscription_end_date
-            next_fields = self._wgs_find_subscription_next_invoice_date_fields(target_order)
-            if next_billing_date:
-                for next_field in next_fields:
-                    values[next_field] = next_billing_date
-            elif clear_next_billing_date:
-                for next_field in next_fields:
-                    values[next_field] = False
-            if recurring_plan_id:
-                self._wgs_assign_many2one_value(
-                    values=values,
-                    fields_map=target_order._fields,
-                    value_id=recurring_plan_id,
-                    preferred_field_names=('plan_id', 'subscription_plan_id', 'recurring_plan_id'),
-                    comodel_checker=self._wgs_is_plan_model_name,
-                )
-            if values:
-                target_order.write(values)
-                _logger.info(
-                    'WGS POS: synced metadata on subscription order %s (participants=%s contract_date=%s start_date=%s end_date=%s next=%s plan=%s)',
-                    target_order.name,
-                    participant_ids,
-                    contract_date or False,
-                    subscription_start_date or False,
-                    subscription_end_date or False,
-                    next_billing_date or False,
-                    recurring_plan_id,
-                )
+        """Update only the contracted Odoo 19 order, never its historical relatives."""
+        sale_order.ensure_one()
+        values = {}
+        if participant_ids is not None:
+            values['participant_ids'] = [Command.set(participant_ids)]
+        if contract_date:
+            values['date_order'] = self._wgs_convert_date_for_field_value(
+                contract_date, sale_order._fields['date_order'],
+            )
+        if subscription_start_date:
+            values.update(start_date=subscription_start_date, wgs_effective_start_date=subscription_start_date)
+        if subscription_end_date:
+            values['end_date'] = subscription_end_date
+        if next_billing_date:
+            values['next_invoice_date'] = next_billing_date
+        elif clear_next_billing_date:
+            values['next_invoice_date'] = False
+        if recurring_plan_id:
+            values['plan_id'] = self._wgs_to_int(recurring_plan_id)
+        if values:
+            sale_order.write(values)
 
     def _wgs_clear_subscription_next_billing_date(self, sale_order):
-        target_orders = self._wgs_get_subscription_orders_from_base(sale_order)
-        for target_order in target_orders:
-            values = {
-                field_name: False
-                for field_name in self._wgs_find_subscription_next_invoice_date_fields(target_order)
-            }
-            if values:
-                target_order.write(values)
-
-    def _wgs_get_subscription_orders_from_base(self, sale_order):
-        orders = sale_order
-        fields_map = sale_order._fields
-
-        for field_name, field in fields_map.items():
-            if getattr(field, 'comodel_name', '') != 'sale.order':
-                continue
-            normalized_name = (field_name or '').lower()
-            if 'subscription' not in normalized_name and 'recurr' not in normalized_name:
-                continue
-            value = sale_order[field_name]
-            if field.type == 'many2one' and value:
-                orders |= value
-            elif field.type in ('one2many', 'many2many'):
-                orders |= value
-
-        recurring_orders = orders.filtered(
-            lambda order: bool(
-                order.order_line.filtered(
-                    lambda line: line.product_id and line.product_id.product_tmpl_id.recurring_invoice
-                )
-            )
-        )
-        return recurring_orders or sale_order
+        sale_order.ensure_one()
+        sale_order.write({'next_invoice_date': False})
 
     def _wgs_find_partner_multi_field(self, sale_order):
         fields_map = sale_order._fields
@@ -5114,17 +4747,8 @@ class PosOrder(models.Model):
             original_line = line.wgs_subscription_refund_origin_line_id
 
         sale_order = original_line.wgs_sale_order_id if original_line else line.wgs_sale_order_id
-        original_flow = original_line.wgs_subscription_flow if original_line else line.wgs_subscription_flow
-
         if not sale_order:
-            return
-        if (
-            original_flow in ('renewal', 'pending_charge')
-            and line.wgs_subscription_flow != 'cancellation_refund'
-        ):
-            # Renewal/pending-charge refunds should not cancel the underlying subscription contract.
-            line.wgs_sale_order_id = sale_order.id
-            return
+            raise UserError(_('La compra original no esta ligada a una suscripcion; revisa antes de reembolsar.'))
 
         if sale_order.state == 'cancel':
             line.wgs_sale_order_id = sale_order.id
