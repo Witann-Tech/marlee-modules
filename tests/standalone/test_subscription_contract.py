@@ -29,6 +29,10 @@ class Dates:
             return False
         return date.fromisoformat(value) if isinstance(value, str) else value
 
+    @staticmethod
+    def to_string(value):
+        return value.isoformat() if value else False
+
 
 def method(file, name):
     tree = ast.parse((ROOT / file).read_text())
@@ -39,7 +43,7 @@ def method(file, name):
     ns = {'fields': SimpleNamespace(Date=Dates), 'UserError': UserError, '_': lambda value: value,
           'RULES_VERSION': contract.RULES_VERSION, 'hmac': hmac, 'hashlib': hashlib,
           'canonical_json': contract.canonical_json, 'fingerprint': contract.fingerprint,
-          'json': json, 'timedelta': timedelta}
+          'json': json, 'timedelta': timedelta, 'period': contract.period}
     exec(compile(ast.Module(body=[node], type_ignores=[]), str(file), 'exec'), ns)
     return ns[name]
 
@@ -47,6 +51,59 @@ POS = 'witann_group_subscriptions_pos/models/pos_order.py'
 OPS = 'witann_group_subscriptions_pos/models/subscription_operation.py'
 
 class ContractTests(unittest.TestCase):
+    def test_package_change_quotes_target_term_after_source_paid_period(self):
+        pricing_file = 'witann_group_subscriptions_pos/models/pos_order_pricing.py'
+        build = method(pricing_file, '_wgs_build_subscription_product_renewal_snapshot')
+        schedule = method(pricing_file, '_wgs_get_subscription_renewal_schedule')
+        threshold = method(pricing_file, '_wgs_get_plan_min_end_threshold')
+        interval = method(pricing_file, '_wgs_extract_interval_from_plan')
+        source, product = Mock(), Mock()
+        source.id, source.name = 1303, 'Semester source'
+        source._fields = {}
+        # Odoo slices return a recordset that still exposes fields.
+        class Lines(list):
+            @property
+            def product_id(self):
+                return self[0].product_id
+
+            def __getitem__(self, key):
+                value = super().__getitem__(key)
+                return Lines(value) if isinstance(key, slice) else value
+
+        source.order_line.filtered.return_value.sorted.return_value = Lines([Mock()])
+        for unit, expected_end in [('day', '2026-11-14'), ('month', '2026-12-13')]:
+            with self.subTest(target_unit=unit):
+                plan = SimpleNamespace(
+                    _fields={'billing_period_value', 'billing_period_unit'},
+                    billing_period_value=1, billing_period_unit=unit, ensure_one=lambda: None,
+                )
+                owner = Mock()
+                owner._wgs_build_product_pricing_snapshot.return_value = {
+                    'plan_id': 9, 'pricing_id': False, 'price_unit': 688.79,
+                    'display_price_unit': 799.0,
+                }
+                owner._wgs_resolve_plan_record.return_value = plan
+                owner._wgs_get_subscription_business_today_for_pos.return_value = date(2026, 9, 28)
+                owner._wgs_get_first_date_from_order.side_effect = [date(2026, 11, 14), date(2026, 11, 13)]
+                source._wgs_normalize_next_invoice_date_for_access.side_effect = lambda next_date, end: next_date
+                owner._wgs_pending_package_changes.return_value = []
+                owner._wgs_should_align_plan_to_calendar_month.return_value = False
+                owner._wgs_extract_interval_from_plan.side_effect = lambda p: interval(owner, p)
+                owner._wgs_get_plan_min_end_threshold.side_effect = lambda p, start: threshold(owner, p, start)
+                owner._wgs_get_subscription_renewal_schedule.side_effect = lambda *a, **kw: schedule(owner, *a, **kw)
+
+                snapshot = build(owner, source, product=product)
+
+                self.assertEqual(snapshot['subscription_start_date'], '2026-11-14')
+                self.assertEqual(snapshot['subscription_end_date'], expected_end)
+                self.assertEqual(snapshot['plan_id'], 9)
+                self.assertEqual(snapshot['display_price_unit'], 799.0)
+                owner._wgs_get_subscription_renewal_schedule.assert_called_once_with(
+                    source, plan=plan, today=date(2026, 9, 28),
+                )
+                owner._wgs_get_order_recurrence_delta.assert_not_called()
+                source.write.assert_not_called()
+
     def test_applied_and_legacy_linked_lines_never_reenter_commercial_handlers(self):
         class Lines(list):
             def sorted(self, _key): return self

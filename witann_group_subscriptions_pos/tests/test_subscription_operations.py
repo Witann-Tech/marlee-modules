@@ -50,7 +50,7 @@ class TestSubscriptionOperations(CommonPosTest):
         return self.Pos.wgs_get_subscription_pricing_for_pos(
             partner_id=self.holder.id, product_id=product.id, flow=flow,
             source_subscription_id=source.id if source else False,
-            preferred_plan_id=plan.id, start_date=start,
+            preferred_plan_id=plan.id if plan else False, start_date=start,
             domiciliation_installment_sequences=months,
         )
 
@@ -151,6 +151,42 @@ class TestSubscriptionOperations(CommonPosTest):
         self.assertEqual(subscription._get_recurring_lines().product_id, self.pair)
         self.assertIn(self.member, subscription.participant_ids)
         self.assertEqual(subscription.end_date, fields.Date.to_date('2026-11-14'))
+
+    def test_semester_to_month_uses_catalog_plan_and_defers_application(self):
+        semester = self.env['sale.subscription.plan'].create({
+            'name': 'Semester contract test', 'billing_period_value': 6, 'billing_period_unit': 'month',
+        })
+        semester_product = self._product('Semester', semester, 600)
+        _initial, subscription = self._paid(semester_product, semester, start='2026-05-14')
+        # Changing package in the POS sends no inherited plan/pricing preference.
+        quote = self.Pos.wgs_get_subscription_quote_for_pos(
+            partner_id=self.holder.id, product_id=self.solo.id, flow='renewal',
+            source_subscription_id=subscription.id,
+        )['pricing']
+        self.assertEqual(quote['plan_id'], self.month.id)
+        self.assertEqual(quote['interval_value'], 1)
+        self.assertEqual(quote['interval_unit'], 'month')
+        self.assertEqual(quote['ticket_charge_now'], 100)
+        self.assertEqual(quote['subscription_start_date'], '2026-11-14')
+        self.assertEqual(quote['subscription_end_date'], '2026-12-13')
+        self.assertEqual(quote['next_billing_date'], '2026-12-14')
+        self.assertTrue(quote['commercial_quote']['signature'])
+
+        renewal, result = self._paid(self.solo, False, 'renewal', subscription)
+        self.assertEqual(result, subscription)
+        self.assertEqual(renewal.lines.wgs_application_state, 'scheduled')
+        self.assertEqual(subscription.plan_id, semester)
+        self.assertEqual(subscription._get_recurring_lines().product_id, semester_product)
+        self.assertEqual(subscription.end_date, fields.Date.to_date('2026-11-13'))
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 11, 14, 12)):
+            self.Pos._wgs_apply_due_package_changes()
+            self.Pos._wgs_apply_due_package_changes()
+        self.assertEqual(renewal.lines.wgs_application_state, 'applied')
+        self.assertEqual(subscription.plan_id, self.month)
+        self.assertEqual(subscription._get_recurring_lines().product_id, self.solo)
+        self.assertEqual(subscription.end_date, fields.Date.to_date('2026-12-13'))
+        renewal._wgs_sync_subscription_sales()
+        self.assertEqual(subscription.end_date, fields.Date.to_date('2026-12-13'))
 
     def test_aligned_reenrollment_prorates_same_and_other_package(self):
         _order, subscription = self._paid(self.solo, self.month)
