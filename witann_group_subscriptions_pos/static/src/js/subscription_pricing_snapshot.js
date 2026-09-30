@@ -6,6 +6,10 @@ function buildPricingSnapshotFromCharge(charge, {
     sourceSubscriptionName = false,
 } = {}) {
     return {
+        commercial_quote: charge?.commercial_quote || false,
+        product_id: charge?.commercial_quote?.payload?.product_id || charge?.product_id || false,
+        company_id: charge?.commercial_quote?.payload?.company_id || false,
+        partner_id: charge?.commercial_quote?.payload?.partner_id || false,
         flow,
         plan_id: Number(charge && charge.plan_id !== undefined ? charge.plan_id : 0) || false,
         plan_name: charge && charge.plan_name ? charge.plan_name : "",

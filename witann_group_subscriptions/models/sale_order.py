@@ -69,6 +69,9 @@ class SaleOrder(models.Model):
         'subscription_start_date',
         'date_order',
     )
+    _WGS_SUBSCRIPTION_END_DATE_FIELDS = (
+        'date_end', 'end_date', 'subscription_end_date', 'recurring_end_date',
+    )
     _WGS_AUTO_CLOSE_CRON_BATCH_SIZE = 200
     _WGS_ACCESS_AUDIT_CRON_BATCH_SIZE = 200
     _WGS_DEFER_ACCESS_SYNC_CONTEXT_KEY = 'wgs_defer_access_sync'
@@ -486,24 +489,23 @@ class SaleOrder(models.Model):
         if not recurring_lines:
             return False
         primary_recurring_line = recurring_lines.sorted(key=lambda line: line.id)[:1]
-        start_date = self._wgs_get_first_access_date_value(
-            self._WGS_SUBSCRIPTION_START_DATE_FIELDS
-        )
-        next_invoice_date = self._wgs_get_first_access_date_value(
-            self._WGS_SUBSCRIPTION_NEXT_INVOICE_DATE_FIELDS
-        )
-        hard_end_date = self._wgs_get_first_access_date_value(
-            ('date_end', 'end_date', 'subscription_end_date', 'recurring_end_date')
-        )
-        if start_date and (not next_invoice_date or next_invoice_date <= start_date):
-            next_invoice_date = start_date + self._wgs_get_subscription_recurrence_delta(
-                primary_recurring_line=primary_recurring_line
-            )
-        next_invoice_date = self._wgs_normalize_next_invoice_date_for_access(next_invoice_date, hard_end_date)
         return self._wgs_get_subscription_auto_close_deadline(
-            next_invoice_date=next_invoice_date,
+            next_invoice_date=self._wgs_get_subscription_access_period()['next_invoice_date'],
             primary_recurring_line=primary_recurring_line,
         )
+
+    def _wgs_get_subscription_access_period(self):
+        """Read persisted boundaries for access, closing and POS without extending them."""
+        self.ensure_one()
+        start = self._wgs_get_first_access_date_value(self._WGS_SUBSCRIPTION_START_DATE_FIELDS)
+        end = self._wgs_get_first_access_date_value(self._WGS_SUBSCRIPTION_END_DATE_FIELDS)
+        next_date = self._wgs_get_first_access_date_value(self._WGS_SUBSCRIPTION_NEXT_INVOICE_DATE_FIELDS)
+        next_date = self._wgs_normalize_next_invoice_date_for_access(next_date, end)
+        if not next_date and end:
+            next_date = end + timedelta(days=1)
+        if next_date:
+            end = min(end, next_date - timedelta(days=1)) if end else next_date - timedelta(days=1)
+        return {'start_date': start, 'valid_until': end, 'next_invoice_date': next_date}
 
     @api.model
     def _wgs_combine_or_domains(self, domains):
@@ -719,19 +721,13 @@ class SaleOrder(models.Model):
             return False
 
         today = self._wgs_get_subscription_business_today(company=self.company_id)
-        start_date = self._wgs_get_first_access_date_value(
-            ('wgs_effective_start_date', 'start_date', 'date_start', 'subscription_start_date', 'date_order')
-        )
+        period = self._wgs_get_subscription_access_period()
+        start_date = period['start_date']
         if start_date and start_date > today:
             return False
 
-        next_invoice_date = self._wgs_get_first_access_date_value(
-            ('recurring_next_date', 'next_invoice_date', 'recurring_next_invoice_date')
-        )
-        hard_end_date = self._wgs_get_first_access_date_value(
-            ('date_end', 'end_date', 'subscription_end_date', 'recurring_end_date')
-        )
-        next_invoice_date = self._wgs_normalize_next_invoice_date_for_access(next_invoice_date, hard_end_date)
+        next_invoice_date = period['next_invoice_date']
+        hard_end_date = period['valid_until']
         if next_invoice_date and next_invoice_date <= today:
             return False
 
@@ -977,6 +973,8 @@ class SaleOrder(models.Model):
         return person
 
     def _wgs_sync_access_control_people(self, extra_partner_ids=None):
+        if self.env.context.get(self._WGS_DEFER_ACCESS_SYNC_CONTEXT_KEY):
+            return
         partner_ids = set(extra_partner_ids or [])
         partner_ids.update(self._wgs_get_access_related_partner_ids())
         if not partner_ids:
@@ -1245,11 +1243,67 @@ class SaleOrder(models.Model):
         return len(closed)
 
     @api.model
+    def _wgs_get_pending_access_activation_domain(self, today):
+        """Shortlist due memberships with a holder/member awaiting activation.
+
+        Dates only narrow the query; the existing access profile remains the
+        authority for billing, blocks, domiciliation and site entitlements.
+        """
+        progress_values = [
+            value
+            for value, _label in self._fields['subscription_state']._description_selection(self.env)
+            if self._wgs_get_subscription_state_category_from_value(value) == 'progress'
+        ]
+        domain = Domain([
+            ('state', 'in', ['sale', 'done']),
+            ('is_subscription', '=', True),
+            ('subscription_state', 'in', progress_values),
+            ('wgs_access_site_ids', '!=', False),
+            ('order_line.product_id.product_tmpl_id.recurring_invoice', '=', True),
+        ])
+        for field_names, operator in (
+            (self._WGS_SUBSCRIPTION_START_DATE_FIELDS, '<='),
+            (self._WGS_SUBSCRIPTION_END_DATE_FIELDS, '>='),
+            (self._WGS_SUBSCRIPTION_NEXT_INVOICE_DATE_FIELDS, '>='),
+        ):
+            matching, missing = self._wgs_get_resolved_date_candidate_domain(
+                field_names, operator, today,
+            )
+            if matching is not None:
+                domain &= matching | missing
+
+        enabled_person = Domain([
+            ('active', '=', True),
+            ('access_state', '=', 'enabled'),
+            ('global_user_id', '!=', False),
+        ])
+        pending_partner = (
+            Domain('id', 'not in', self.env['res.partner']._wgs_get_access_blocked_partner_ids())
+            & Domain('access_person_ids', 'not any', enabled_person)
+        )
+        return domain & (
+            Domain('partner_id', 'any', pending_partner)
+            | Domain('participant_ids', 'any', pending_partner)
+        )
+
+    @api.model
     def _cron_wgs_sync_subscription_access_control(self, batch_limit=None):
+        limit = max(1, int(batch_limit or self._WGS_ACCESS_AUDIT_CRON_BATCH_SIZE))
+        # Future-start sales deliberately create no active person at checkout.
+        # When they become due they must not wait for the historical ID cursor.
+        pending_orders = self.sudo().with_context(active_test=False).search(
+            self._wgs_get_pending_access_activation_domain(self._wgs_get_subscription_business_today()),
+            order='id asc',
+            limit=limit,
+        )
+        activation_summary = self.with_context(access_sync_priority=True).wgs_audit_subscription_access_control(
+            repair=True,
+            partner_ids=sorted(pending_orders._wgs_get_access_related_partner_ids()),
+        )
         cursors = self._wgs_get_access_audit_cron_cursors()
         repair_summary = self.wgs_audit_subscription_access_control(
             repair=True,
-            batch_limit=max(1, int(batch_limit or self._WGS_ACCESS_AUDIT_CRON_BATCH_SIZE)),
+            batch_limit=limit,
             **cursors,
         )
         self._wgs_set_access_audit_cron_cursors(
@@ -1258,8 +1312,11 @@ class SaleOrder(models.Model):
         )
         verification_summary = self.wgs_audit_subscription_access_control(
             repair=False,
-            partner_ids=repair_summary['repaired_partner_ids'],
+            partner_ids=sorted(set(
+                activation_summary['repaired_partner_ids'] + repair_summary['repaired_partner_ids']
+            )),
         )
+        repair_summary['pending_activation'] = activation_summary
         _logger.info(
             'WGS ACCESS: post-sync verification checked_partners=%s remaining_issues=%s issue_counts=%s',
             verification_summary.get('checked_partners'),

@@ -14,19 +14,14 @@ class WgsSubscriptionDomiciliationContract(models.Model):
     _description = 'Contrato domiciliado WGS'
     _order = 'term_start_date desc, id desc'
 
-    _subscription_uniq = models.Constraint(
-        'unique(subscription_id)',
-        'Una suscripción solo puede tener un contrato domiciliado WGS.',
-    )
-
     subscription_id = fields.Many2one(
         'sale.order', required=True, ondelete='cascade', index=True, string='Suscripción'
     )
-    company_id = fields.Many2one(related='subscription_id.company_id', store=True, index=True)
-    partner_id = fields.Many2one(related='subscription_id.partner_id', store=True, index=True)
+    company_id = fields.Many2one('res.company', required=True, readonly=True, index=True)
+    partner_id = fields.Many2one('res.partner', required=True, readonly=True, index=True)
     product_id = fields.Many2one('product.product', required=True, ondelete='restrict', string='Paquete')
     plan_id = fields.Many2one('sale.subscription.plan', required=True, ondelete='restrict', string='Plan recurrente')
-    currency_id = fields.Many2one(related='subscription_id.currency_id', store=True)
+    currency_id = fields.Many2one('res.currency', required=True, readonly=True)
     monthly_amount = fields.Monetary(required=True, currency_field='currency_id', string='Mensualidad')
     access_start_date = fields.Date(required=True, index=True, string='Inicio de acceso')
     term_start_date = fields.Date(required=True, index=True, string='Inicio de plazo')
@@ -42,6 +37,27 @@ class WgsSubscriptionDomiciliationContract(models.Model):
     paid_through_date = fields.Date(compute='_compute_payment_summary', string='Pagado hasta')
     overdue_installment_count = fields.Integer(compute='_compute_payment_summary', string='Mensualidades exigibles pendientes')
     is_access_current = fields.Boolean(compute='_compute_payment_summary', string='Acceso al corriente')
+    _one_active_cycle = models.UniqueIndex("(subscription_id) WHERE state = 'active'")
+
+    def init(self):
+        # Upgrade the old one-contract-ever invariant without deleting history.
+        self.env.cr.execute('ALTER TABLE wgs_subscription_domiciliation_contract DROP CONSTRAINT IF EXISTS wgs_subscription_domiciliation_contract_subscription_uniq')
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        # Snapshot ownership once; reenrolling must not rewrite an earlier cycle.
+        values_list = [dict(values) for values in vals_list]
+        subscriptions = self.env['sale.order'].browse([
+            values['subscription_id'] for values in values_list if values.get('subscription_id')
+        ])
+        by_id = {subscription.id: subscription for subscription in subscriptions}
+        for values in values_list:
+            subscription = by_id.get(values.get('subscription_id'))
+            if subscription:
+                values.setdefault('company_id', subscription.company_id.id)
+                values.setdefault('partner_id', subscription.partner_id.id)
+                values.setdefault('currency_id', subscription.currency_id.id)
+        return super().create(values_list)
 
     @api.constrains('plan_id', 'term_months', 'term_start_date', 'term_end_date', 'access_start_date')
     def _check_contract_dates(self):
@@ -167,21 +183,23 @@ class WgsSubscriptionDomiciliationContract(models.Model):
         pos_line=False,
         restart=False,
         selected_installment_sequences=False,
+        term_months=False,
     ):
         """Create the contract only after the POS sale has become paid and synchronized."""
         subscription.ensure_one()
-        existing = self.search([('subscription_id', '=', subscription.id)], limit=1)
+        subscription.flush_recordset()
+        self.env.cr.execute('SELECT id FROM sale_order WHERE id = %s FOR UPDATE', [subscription.id])
+        existing = subscription.wgs_domiciliation_contract_id
         if existing:
             if not restart and existing.state == 'active' and existing.term_end_date >= fields.Date.to_date(start_date):
                 return existing
-            existing.installment_ids.unlink()
         if not plan.wgs_domiciliation_enabled:
             return self.browse()
 
         schedule = self.wgs_build_initial_schedule(
             start_date=start_date,
             monthly_amount=monthly_amount,
-            term_months=plan.wgs_domiciliation_term_months,
+            term_months=term_months or plan.wgs_domiciliation_term_months,
         )
         # Older POS lines did not persist a selection and always charged both ends.
         # New snapshots always send an explicit selection, beginning with month one.
@@ -191,6 +209,9 @@ class WgsSubscriptionDomiciliationContract(models.Model):
         )
         contract_values = {
             'subscription_id': subscription.id,
+            'company_id': subscription.company_id.id,
+            'partner_id': subscription.partner_id.id,
+            'currency_id': subscription.currency_id.id,
             'product_id': product.id,
             'plan_id': plan.id,
             'monthly_amount': monthly_amount,
@@ -204,9 +225,9 @@ class WgsSubscriptionDomiciliationContract(models.Model):
                 for installment in schedule['installments']
             ],
         }
-        contract = existing or self.create(contract_values)
         if existing:
-            existing.write(contract_values)
+            existing.write({'state': 'completed' if existing.term_end_date < schedule['access_start_date'] else 'cancelled'})
+        contract = self.create(contract_values)
         subscription.write({'wgs_domiciliation_contract_id': contract.id})
         if pos_line:
             contract.wgs_apply_pos_payment(

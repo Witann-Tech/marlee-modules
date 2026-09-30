@@ -16,7 +16,7 @@ class TestPosSubscriptionPricing(TransactionCase):
                 'amount': 16.0,
                 'amount_type': 'percent',
                 'type_tax_use': 'sale',
-                'price_include': False,
+                'price_include_override': 'tax_excluded',
                 'company_id': self.env.company.id,
             }
         )
@@ -24,7 +24,7 @@ class TestPosSubscriptionPricing(TransactionCase):
         self.product = self.env['product.product'].create(
             {
                 'name': 'Plan POS',
-                'detailed_type': 'service',
+                'type': 'service',
                 'list_price': 100.0,
                 'sale_ok': True,
                 'available_in_pos': True,
@@ -35,8 +35,8 @@ class TestPosSubscriptionPricing(TransactionCase):
         self.plan = self.env['sale.subscription.plan'].create(
             {
                 'name': 'Plan Mensual POS',
-                'recurring_interval': 1,
-                'recurring_rule_type': 'month',
+                'billing_period_value': 1,
+                'billing_period_unit': 'month',
             }
         )
 
@@ -44,6 +44,7 @@ class TestPosSubscriptionPricing(TransactionCase):
         order = self.env['sale.order'].create(
             {
                 'partner_id': self.partner.id,
+                'plan_id': self.plan.id,
                 'order_line': [
                     Command.create(
                         {
@@ -56,6 +57,7 @@ class TestPosSubscriptionPricing(TransactionCase):
                 ],
             }
         )
+        order.action_confirm()
         order_line = order.order_line[:1]
         line_fields = order_line._fields
         line_updates = {}
@@ -72,7 +74,7 @@ class TestPosSubscriptionPricing(TransactionCase):
                 break
         for field_name in ('subscription_state',):
             if field_name in order._fields:
-                order_updates[field_name] = 'progress'
+                order_updates[field_name] = '3_progress'
         for field_name in ('recurring_next_date', 'next_invoice_date'):
             if field_name in order._fields:
                 order_updates[field_name] = '2026-04-26'
@@ -87,7 +89,7 @@ class TestPosSubscriptionPricing(TransactionCase):
 
     def _create_subscription_pricing(self, plan, price=100.0, name='Pricing POS', product=False):
         if 'sale.subscription.pricing' not in self.env.registry:
-            self.skipTest('sale.subscription.pricing no existe en este runtime.')
+            self.fail('sale.subscription.pricing no existe en este runtime.')
 
         pricing_model = self.env['sale.subscription.pricing']
         product = product or self.product
@@ -107,16 +109,13 @@ class TestPosSubscriptionPricing(TransactionCase):
         if 'name' in pricing_model._fields:
             pricing_vals['name'] = name
 
-        try:
-            return pricing_model.create(pricing_vals)
-        except Exception:
-            self.skipTest('No se pudo crear sale.subscription.pricing en este runtime.')
+        return pricing_model.create(pricing_vals)
 
     def test_renewal_package_change_uses_target_price_and_source_period(self):
         target_product = self.env['product.product'].create(
             {
                 'name': 'Paquete destino renovación POS',
-                'detailed_type': 'service',
+                'type': 'service',
                 'list_price': 120.0,
                 'sale_ok': True,
                 'available_in_pos': True,
@@ -127,8 +126,8 @@ class TestPosSubscriptionPricing(TransactionCase):
         target_plan = self.env['sale.subscription.plan'].create(
             {
                 'name': 'Plan destino renovación POS',
-                'recurring_interval': 12,
-                'recurring_rule_type': 'month',
+                'billing_period_value': 12,
+                'billing_period_unit': 'month',
             }
         )
         self._create_subscription_pricing(
@@ -138,13 +137,12 @@ class TestPosSubscriptionPricing(TransactionCase):
             product=target_product,
         )
         source_order = self._create_subscription_like_order(start_date='2026-05-01')
-        source_line = source_order._get_recurring_lines()[:1]
         expected_schedule = self.PosOrder._wgs_get_subscription_renewal_schedule(
             source_order,
             today=self.PosOrder._wgs_get_subscription_business_today_for_pos(
                 company=source_order.company_id
             ),
-            preferred_line=source_line,
+            plan=target_plan,
         )
 
         snapshot = self.PosOrder._wgs_resolve_subscription_pricing_snapshot(
@@ -273,6 +271,7 @@ class TestPosSubscriptionPricing(TransactionCase):
         self.assertEqual(date_order_day, fields.Date.to_date('2026-05-12'))
 
     def test_subscription_pricing_for_pos_returns_tax_included_display_price(self):
+        self._create_subscription_pricing(self.plan, price=100.0)
         charge = self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
             partner_id=self.partner.id,
             product_id=self.product.id,
@@ -298,7 +297,7 @@ class TestPosSubscriptionPricing(TransactionCase):
         hidden_product = self.env['product.product'].create(
             {
                 'name': 'Plan oculto en grid POS',
-                'detailed_type': 'service',
+                'type': 'service',
                 'list_price': 150.0,
                 'sale_ok': True,
                 'available_in_pos': False,
@@ -310,6 +309,7 @@ class TestPosSubscriptionPricing(TransactionCase):
         self.assertTrue(item)
 
     def test_subscription_pricing_payload_exposes_display_price_with_taxes(self):
+        self._create_subscription_pricing(self.plan, price=100.0)
         payload = self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
             partner_id=self.partner.id,
             product_id=self.product.id,
@@ -332,8 +332,8 @@ class TestPosSubscriptionPricing(TransactionCase):
         daily_plan = self.env['sale.subscription.plan'].create(
             {
                 'name': 'Plan Diario POS',
-                'recurring_interval': 1,
-                'recurring_rule_type': 'week',
+                'billing_period_value': 1,
+                'billing_period_unit': 'week',
                 'wgs_single_day_plan': True,
             }
         )
@@ -349,8 +349,8 @@ class TestPosSubscriptionPricing(TransactionCase):
         daily_plan = self.env['sale.subscription.plan'].create(
             {
                 'name': 'Plan diario inválido para mensualidad POS',
-                'recurring_interval': 1,
-                'recurring_rule_type': 'week',
+                'billing_period_value': 1,
+                'billing_period_unit': 'week',
                 'wgs_single_day_plan': True,
             }
         )
@@ -460,7 +460,7 @@ class TestPosSubscriptionPricing(TransactionCase):
     def test_aligned_monthly_plan_charges_first_period_proportionally(self):
         alignment_field = self.PosOrder._wgs_get_period_alignment_field_name(self.plan)
         if not alignment_field:
-            self.skipTest('El runtime no expone el campo nativo de alineación de periodo.')
+            self.fail('El runtime no expone el campo nativo de alineación de periodo.')
 
         self.plan.write({alignment_field: True})
         self._create_subscription_pricing(self.plan, price=100.0, name='Pricing mensual alineado POS')
@@ -482,7 +482,7 @@ class TestPosSubscriptionPricing(TransactionCase):
         self.assertEqual(charge['display_charge_now'], 74.84)
         self.assertEqual(charge['ticket_charge_now'], 64.52)
         self.assertEqual(charge['ticket_recurring_price'], 100.0)
-        self.assertEqual(charge['subscription_start_date'], '2026-05-01')
+        self.assertEqual(charge['subscription_start_date'], '2026-05-12')
         self.assertEqual(charge['first_period_access_start_date'], '2026-05-12')
         self.assertEqual(charge['subscription_end_date'], '2026-05-31')
         self.assertEqual(charge['next_billing_date'], '2026-06-01')
@@ -493,13 +493,13 @@ class TestPosSubscriptionPricing(TransactionCase):
     def test_aligned_annual_plan_charges_first_period_proportionally_for_new_sale(self):
         alignment_field = self.PosOrder._wgs_get_period_alignment_field_name(self.plan)
         if not alignment_field:
-            self.skipTest('El runtime no expone el campo nativo de alineación de periodo.')
+            self.fail('El runtime no expone el campo nativo de alineación de periodo.')
 
         annual_plan = self.env['sale.subscription.plan'].create(
             {
                 'name': 'Plan anual domiciliado POS',
-                'recurring_interval': 1,
-                'recurring_rule_type': 'year',
+                'billing_period_value': 1,
+                'billing_period_unit': 'year',
             }
         )
         annual_plan.write({alignment_field: True})
@@ -521,7 +521,7 @@ class TestPosSubscriptionPricing(TransactionCase):
         self.assertEqual(charge['charge_now'], 64.52)
         self.assertEqual(charge['display_charge_now'], 74.84)
         self.assertEqual(charge['ticket_charge_now'], 64.52)
-        self.assertEqual(charge['subscription_start_date'], '2026-05-01')
+        self.assertEqual(charge['subscription_start_date'], '2026-05-12')
         self.assertEqual(charge['first_period_access_start_date'], '2026-05-12')
         self.assertEqual(charge['subscription_end_date'], '2026-05-31')
         self.assertEqual(charge['next_billing_date'], '2026-06-01')
@@ -530,7 +530,7 @@ class TestPosSubscriptionPricing(TransactionCase):
     def test_subscription_pricing_beats_generic_pricelist_candidate(self):
         pricing_model_name = 'sale.subscription.pricing'
         if pricing_model_name not in self.env.registry:
-            self.skipTest('sale.subscription.pricing no existe en este runtime.')
+            self.fail('sale.subscription.pricing no existe en este runtime.')
 
         self.product.write({'list_price': 90.0})
 
@@ -562,10 +562,7 @@ class TestPosSubscriptionPricing(TransactionCase):
             if field_name in pricing_model._fields and field_name not in pricing_vals:
                 pricing_vals[field_name] = 'Pricing recurrente POS'
 
-        try:
-            pricing_model.create(pricing_vals)
-        except Exception:
-            self.skipTest('No se pudo crear sale.subscription.pricing en este runtime.')
+        pricing_model.create(pricing_vals)
 
         charge = self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
             partner_id=self.partner.id,
@@ -583,7 +580,7 @@ class TestPosSubscriptionPricing(TransactionCase):
     def test_pricing_payload_plan_list_prefers_subscription_pricing_over_generic_candidate(self):
         pricing_model_name = 'sale.subscription.pricing'
         if pricing_model_name not in self.env.registry:
-            self.skipTest('sale.subscription.pricing no existe en este runtime.')
+            self.fail('sale.subscription.pricing no existe en este runtime.')
 
         self.product.write({'list_price': 90.0})
 
@@ -614,10 +611,7 @@ class TestPosSubscriptionPricing(TransactionCase):
         if 'name' in pricing_model._fields:
             pricing_vals['name'] = 'Pricing visible POS'
 
-        try:
-            pricing_model.create(pricing_vals)
-        except Exception:
-            self.skipTest('No se pudo crear sale.subscription.pricing en este runtime.')
+        pricing_model.create(pricing_vals)
 
         payload = self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
             partner_id=self.partner.id,
@@ -668,9 +662,10 @@ class TestPosSubscriptionPricing(TransactionCase):
         )
 
     def test_reenroll_charge_allows_closed_subscription(self):
+        self._create_subscription_pricing(self.plan, price=100.0)
         order = self._create_subscription_like_order()
         if 'subscription_state' in order._fields:
-            order.write({'subscription_state': 'closed'})
+            order.write({'subscription_state': '6_churn'})
 
         charge = self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
             partner_id=False,
@@ -688,9 +683,10 @@ class TestPosSubscriptionPricing(TransactionCase):
         self.assertTrue(charge['is_reenroll'])
 
     def test_reenroll_charge_allows_churned_subscription(self):
+        self._create_subscription_pricing(self.plan, price=100.0)
         order = self._create_subscription_like_order()
         if 'subscription_state' in order._fields:
-            order.write({'subscription_state': 'churned'})
+            order.write({'subscription_state': '6_churn'})
 
         charge = self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
             partner_id=False,
@@ -707,14 +703,15 @@ class TestPosSubscriptionPricing(TransactionCase):
         self.assertEqual(charge['display_recurring_price'], 116.0)
         self.assertTrue(charge['is_reenroll'])
 
-    def test_reenroll_aligned_plan_charges_full_package_not_prorated(self):
+    def test_reenroll_aligned_plan_prorates_same_package(self):
+        self._create_subscription_pricing(self.plan, price=100.0)
         alignment_field = self.PosOrder._wgs_get_period_alignment_field_name(self.plan)
         if not alignment_field:
-            self.skipTest('El runtime no expone el campo nativo de alineación de periodo.')
+            self.fail('El runtime no expone el campo nativo de alineación de periodo.')
         self.plan.write({alignment_field: True})
         order = self._create_subscription_like_order()
         if 'subscription_state' in order._fields:
-            order.write({'subscription_state': 'closed'})
+            order.write({'subscription_state': '6_churn'})
 
         charge = self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
             partner_id=False,
@@ -729,12 +726,12 @@ class TestPosSubscriptionPricing(TransactionCase):
         )
 
         self.assertEqual(charge['recurring_price'], 100.0)
-        self.assertEqual(charge['charge_now'], 100.0)
-        self.assertEqual(charge['display_charge_now'], 116.0)
-        self.assertEqual(charge['ticket_charge_now'], 100.0)
-        self.assertFalse(charge['first_period_alignment'])
-        self.assertFalse(charge['subscription_start_date'])
-        self.assertFalse(charge['subscription_end_date'])
+        self.assertEqual(charge['charge_now'], 64.52)
+        self.assertEqual(charge['display_charge_now'], 74.84)
+        self.assertEqual(charge['ticket_charge_now'], 64.52)
+        self.assertTrue(charge['first_period_alignment'])
+        self.assertEqual(charge['subscription_start_date'], '2026-05-12')
+        self.assertEqual(charge['subscription_end_date'], '2026-05-31')
         self.assertTrue(charge['is_reenroll'])
 
     def test_reenroll_reactivation_resolves_progress_state(self):
@@ -744,7 +741,7 @@ class TestPosSubscriptionPricing(TransactionCase):
 
         self.assertTrue(progress_state)
         if 'subscription_state' in order._fields:
-            order.write({'subscription_state': 'closed'})
+            order.write({'subscription_state': '6_churn'})
             self.PosOrder._wgs_reactivate_subscription_order_for_pos(order)
             self.assertEqual(order.subscription_state, progress_state)
 
@@ -766,7 +763,7 @@ class TestPosSubscriptionPricing(TransactionCase):
         target_product = self.env['product.product'].create(
             {
                 'name': 'Plan POS reinscripcion diferente',
-                'detailed_type': 'service',
+                'type': 'service',
                 'list_price': 150.0,
                 'sale_ok': True,
                 'available_in_pos': True,
@@ -785,8 +782,8 @@ class TestPosSubscriptionPricing(TransactionCase):
         current_plan = self.env['sale.subscription.plan'].create(
             {
                 'name': 'Plan vigente para reinscripción POS',
-                'recurring_interval': 1,
-                'recurring_rule_type': 'month',
+                'billing_period_value': 1,
+                'billing_period_unit': 'month',
             }
         )
         self._create_subscription_pricing(
@@ -796,7 +793,7 @@ class TestPosSubscriptionPricing(TransactionCase):
         )
         order = self._create_subscription_like_order()
         if 'subscription_state' in order._fields:
-            order.write({'subscription_state': 'closed'})
+            order.write({'subscription_state': '6_churn'})
 
         # Simulates an outdated POS client that sends the source plan on the
         # initial reenrollment quote after that plan was removed from product.
@@ -836,7 +833,7 @@ class TestPosSubscriptionPricing(TransactionCase):
         target_product = self.env['product.product'].create(
             {
                 'name': 'Plan POS individual destino',
-                'detailed_type': 'service',
+                'type': 'service',
                 'list_price': 120.0,
                 'sale_ok': True,
                 'available_in_pos': True,
@@ -849,7 +846,7 @@ class TestPosSubscriptionPricing(TransactionCase):
         order = self._create_subscription_like_order(start_date='2026-05-01')
         order.write({
             'participant_ids': [Command.set([self.partner.id, participant_a.id, participant_b.id])],
-            'subscription_state': 'closed',
+            'subscription_state': '6_churn',
         })
         order._wgs_update_access_snapshot(force=True)
         self.assertEqual(set(order.wgs_access_site_ids.ids), {site_old.id})
@@ -909,8 +906,8 @@ class TestPosSubscriptionPricing(TransactionCase):
         monthly_plan = self.env['sale.subscription.plan'].create(
             {
                 'name': 'Plan mensual destino POS',
-                'recurring_interval': 1,
-                'recurring_rule_type': 'month',
+                'billing_period_value': 1,
+                'billing_period_unit': 'month',
             }
         )
         order = self._create_subscription_like_order()
@@ -936,7 +933,7 @@ class TestPosSubscriptionPricing(TransactionCase):
         target_product = self.env['product.product'].create(
             {
                 'name': 'Plan POS personal sin pareja',
-                'detailed_type': 'service',
+                'type': 'service',
                 'list_price': 120.0,
                 'sale_ok': True,
                 'available_in_pos': True,
@@ -993,8 +990,8 @@ class TestPosSubscriptionPricing(TransactionCase):
     def test_churned_subscription_is_not_marked_for_renewal_by_due_date(self):
         order = self._create_subscription_like_order()
         if 'subscription_state' not in order._fields:
-            self.skipTest('subscription_state field is not available')
-        order.write({'subscription_state': 'churned'})
+            self.fail('subscription_state field is not available')
+        order.write({'subscription_state': '6_churn'})
 
         item = order._build_pos_subscription_status_item(fields.Date.to_date('2026-05-12'))
 

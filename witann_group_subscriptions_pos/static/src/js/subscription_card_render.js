@@ -47,6 +47,17 @@ function renderSubscriptionCard({
                 <div><span>${escapeHtml(_t("Vencimiento"))}</span><strong>${escapeHtml(formatDateDisplay(item.valid_until) || "-")}</strong></div>
                 <div><span>${escapeHtml(_t("Participantes"))}</span><strong>${escapeHtml(String(item.participant_count || 0))}</strong></div>
             </div>
+            ${(item.scheduled_changes || []).map((change) => `
+                <div class="wgs-access-origin-notice">
+                    <strong>${escapeHtml(change.state === "review" ? _t("Cambio pagado: requiere revision") : _t("Cambio de paquete pagado y programado"))}</strong>
+                    <span>${escapeHtml(change.product)}: ${escapeHtml(formatDateDisplay(change.start))} - ${escapeHtml(formatDateDisplay(change.end))}</span>
+                </div>
+            `).join("")}
+            ${item.access_application_pending ? `
+                <div class="wgs-inline-notice">
+                    ${escapeHtml(_t("Pago aplicado; sincronizacion de acceso pendiente de verificacion. No vuelvas a cobrar. Usa Resincronizar acceso o solicita revision administrativa."))}
+                </div>
+            ` : ""}
             <div class="wgs-subscription-participants">
                 <span>${escapeHtml(_t("Listado de participantes"))}</span>
                 <p>${participantNames}</p>

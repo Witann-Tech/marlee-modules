@@ -1,6 +1,10 @@
 /** @odoo-module **/
 
-export function createSubscriptionPosApi(orm) {
+export function createSubscriptionPosApi(orm, getCompanyId = () => false) {
+    const quoteContext = () => {
+        const companyId = Number(getCompanyId() || 0);
+        return companyId ? { context: { allowed_company_ids: [companyId] } } : {};
+    };
     return {
         async fetchPartnerDirectorySummary(options = {}) {
             return orm.call("pos.order", "wgs_get_partner_directory_summary_for_pos", [{
@@ -83,14 +87,16 @@ export function createSubscriptionPosApi(orm) {
             return orm.call(
                 "pos.order",
                 "wgs_validate_subscription_product_eligibility_for_pos",
-                [partnerId, productId, flow || "new", sourceSubscriptionId || false]
+                [partnerId, productId, flow || "new", sourceSubscriptionId || false],
+                quoteContext()
             );
         },
         async authorizeSubscriptionDiscount(partnerId, productId, flow = "new", discountPercent = 0, supervisorPin = false, sourceSubscriptionId = false) {
             return orm.call(
                 "pos.order",
                 "wgs_authorize_subscription_discount_for_pos",
-                [partnerId, productId, flow || "new", discountPercent || 0, supervisorPin || false, sourceSubscriptionId || false]
+                [partnerId, productId, flow || "new", discountPercent || 0, supervisorPin || false, sourceSubscriptionId || false],
+                quoteContext()
             );
         },
         async updatePartnerPhoto(partnerId, imageBase64) {
@@ -103,14 +109,16 @@ export function createSubscriptionPosApi(orm) {
             return orm.call(
                 "pos.order",
                 "wgs_get_subscription_pricing_for_pos",
-                [partnerId || false, productId || false, flow || "new", sourceSubscriptionId || false, pendingMoveId || false, fallback || 0, planId || false, pricingId || false, startDate || false, domiciliationInstallmentSequences || false]
+                [partnerId || false, productId || false, flow || "new", sourceSubscriptionId || false, pendingMoveId || false, fallback || 0, planId || false, pricingId || false, startDate || false, domiciliationInstallmentSequences || false],
+                quoteContext()
             );
         },
         async fetchSubscriptionQuote(partnerId = false, productId = false, flow = "new", sourceSubscriptionId = false, pendingMoveId = false, fallback = 0, planId = false, pricingId = false, startDate = false, domiciliationInstallmentSequences = false) {
             return orm.call(
                 "pos.order",
                 "wgs_get_subscription_quote_for_pos",
-                [partnerId || false, productId || false, flow || "new", sourceSubscriptionId || false, pendingMoveId || false, fallback || 0, planId || false, pricingId || false, startDate || false, domiciliationInstallmentSequences || false]
+                [partnerId || false, productId || false, flow || "new", sourceSubscriptionId || false, pendingMoveId || false, fallback || 0, planId || false, pricingId || false, startDate || false, domiciliationInstallmentSequences || false],
+                quoteContext()
             );
         },
         async saveSubscriptionParticipants(subscriptionId, participantIds) {

@@ -360,7 +360,19 @@ function hasLinePricingDrift(line, lock) {
     );
 }
 
+function restoreSubscriptionConfig(line) {
+    if (line && !line.wgsSubscriptionConfig && line.wgs_operation_config_json) {
+        try {
+            line.wgsSubscriptionConfig = JSON.parse(line.wgs_operation_config_json);
+        } catch {
+            // Keep the malformed payload for diagnosis; payment preflight will reject it.
+            return;
+        }
+    }
+}
+
 function getProtectedLinePriceLock(line) {
+    restoreSubscriptionConfig(line);
     if (!line) {
         return null;
     }
@@ -393,6 +405,7 @@ function getProtectedLinePriceLock(line) {
 }
 
 function getSubscriptionLinePriceLock(line) {
+    restoreSubscriptionConfig(line);
     if (!line) {
         return null;
     }
@@ -532,6 +545,10 @@ function lockSubscriptionLinePricing(line, metadata, priceUnit, discount) {
         discount_percent: lock.discount,
     };
     line.wgsSubscriptionConfig = metadata;
+    const serialized = JSON.stringify(metadata);
+    if (line.wgs_operation_config_json !== serialized) {
+        line.update({ wgs_operation_config_json: serialized });
+    }
     line.wgsSubscriptionPriceLock = lock;
     line.wgsPosPriceLock = lock;
     patchSubscriptionLinePricingPrototype(line);
@@ -1015,10 +1032,12 @@ export function getAllLocalPosProducts(source) {
 export function collectSubscriptionConfigsFromOrder(order) {
     const output = [];
     for (const line of getOrderLines(order)) {
-        if (!line || !line.wgsSubscriptionConfig) {
+        restoreSubscriptionConfig(line);
+        if (!line || getLineQty(line) <= 0 || !line.wgsSubscriptionConfig) {
             continue;
         }
         const config = { ...line.wgsSubscriptionConfig };
+        config.line_uuid = line.uuid || line.uid || false;
         config.product_id = getProductIdFromLine(line) || config.product_id || false;
         config.quantity = Math.abs(getLineQty(line) || 1);
         output.push(config);
@@ -1039,4 +1058,14 @@ export function getSubscriptionPartnerIdsFromOrder(order) {
 
 export function waitForNextTick() {
     return new Promise((resolve) => window.setTimeout(resolve, 0));
+}
+
+export function collectMembershipRefundsFromOrder(order) {
+    return getOrderLines(order).filter((line) => getLineQty(line) < 0).map((line) => {
+        const original = line.refunded_orderline_id || line.wgsSubscriptionConfig?.refund_origin_line_id;
+        return {
+            original_line_id: Number(original?.id || (Array.isArray(original) ? original[0] : original) || 0),
+            qty: getLineQty(line), price_unit: getLinePriceUnit(line), discount: getLineDiscount(line),
+        };
+    }).filter((line) => line.original_line_id);
 }

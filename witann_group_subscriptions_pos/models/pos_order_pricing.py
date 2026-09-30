@@ -6,6 +6,8 @@ from dateutil.relativedelta import relativedelta
 from odoo import _, fields, models
 from odoo.exceptions import UserError
 
+from ..subscription_contract import period
+
 _logger = logging.getLogger(__name__)
 
 
@@ -282,8 +284,8 @@ class PosOrderPricingMixin(models.Model):
 
     def _wgs_resolve_plan_record(self, product, plan_id=False, pricing_id=False):
         product.ensure_one()
-        resolved_plan = False
-        if pricing_id and 'sale.subscription.pricing' in self.env.registry:
+        resolved_plan = self._wgs_find_plan_record_by_id(int(plan_id)) if plan_id else False
+        if not resolved_plan and pricing_id and 'sale.subscription.pricing' in self.env.registry:
             pricing = self.env['sale.subscription.pricing'].browse(int(pricing_id)).exists()
             if pricing:
                 resolved_plan = self._wgs_extract_plan_record_from_pricing(pricing)
@@ -296,38 +298,14 @@ class PosOrderPricingMixin(models.Model):
     def _wgs_find_plan_record_by_id(self, plan_id):
         if not plan_id:
             return False
-        candidate_model_names = set()
-
-        for model_name in ('sale.order', 'sale.order.line', 'product.product', 'product.template'):
-            if model_name not in self.env.registry:
-                continue
-            for field in self.env[model_name]._fields.values():
-                if field.type != 'many2one':
-                    continue
-                comodel_name = getattr(field, 'comodel_name', '')
-                if self._wgs_is_plan_model_name(comodel_name):
-                    candidate_model_names.add(comodel_name)
-
-        for model_name in sorted(candidate_model_names):
-            if model_name not in self.env.registry:
-                continue
-            record = self.env[model_name].browse(plan_id).exists()
-            if record:
-                return record
-        return False
+        return self.env['sale.subscription.plan'].browse(int(plan_id)).exists()
 
     def _wgs_get_plan_min_end_threshold(self, plan, start_date, periods_count=1):
         start_date = fields.Date.to_date(start_date) or self._wgs_get_subscription_business_today_for_pos()
         interval_value, interval_unit = self._wgs_extract_interval_from_plan(plan)
         multiplier = max(1, int(periods_count or 1))
         interval_value = interval_value * multiplier
-        if interval_unit == 'day':
-            return start_date + timedelta(days=interval_value)
-        if interval_unit == 'week':
-            return start_date + relativedelta(weeks=interval_value)
-        if interval_unit == 'year':
-            return start_date + relativedelta(years=interval_value)
-        return start_date + relativedelta(months=interval_value)
+        return period(start_date, interval_value, interval_unit)[2]
 
     def _wgs_get_plan_period_end_date(self, plan, start_date, periods_count=1):
         next_threshold = self._wgs_get_plan_min_end_threshold(plan, start_date, periods_count=periods_count)
@@ -389,21 +367,31 @@ class PosOrderPricingMixin(models.Model):
             'proration_ratio': min(charge_days, period_days) / float(period_days),
         }
 
-    def _wgs_get_subscription_renewal_schedule(self, source_order, today=False, preferred_line=False):
+    def _wgs_get_subscription_renewal_schedule(self, source_order, *, plan, today=False):
+        """Keep the paid-through anchor, but extend using the purchased plan."""
         source_order.ensure_one()
+        if not plan:
+            raise UserError(_('No se pudo resolver el plan contratado para calcular la renovación.'))
+        plan.ensure_one()
         today = fields.Date.to_date(today) or self._wgs_get_subscription_business_today_for_pos(
             company=source_order.company_id,
         )
-        preferred_line = preferred_line.exists() if preferred_line else self.env['sale.order.line']
-        plan = self._wgs_extract_plan_record_from_subscription_line(preferred_line)
-        if not plan:
-            plan = self._wgs_extract_plan_record_from_sale_order(source_order)
-
-        _period_start, period_end = self._wgs_get_current_subscription_period_bounds(
-            source_order,
-            today=today,
-            preferred_line=preferred_line,
+        period_end = self._wgs_get_first_date_from_order(
+            source_order, ('recurring_next_date', 'next_invoice_date'),
         )
+        inclusive_end = self._wgs_get_first_date_from_order(
+            source_order, ('end_date', 'date_end', 'subscription_end_date', 'recurring_end_date'),
+        )
+        period_end = source_order._wgs_normalize_next_invoice_date_for_access(period_end, inclusive_end)
+        if not period_end and inclusive_end:
+            period_end = inclusive_end + timedelta(days=1)
+        if not period_end:
+            raise UserError(_('La suscripción no tiene una vigencia definida para calcular la renovación.'))
+        scheduled = self._wgs_pending_package_changes(source_order)
+        if scheduled:
+            last_snapshot = scheduled[-1].order_id._wgs_get_persisted_subscription_pricing_from_pos_line(scheduled[-1])
+            scheduled_next = last_snapshot['subscription_end_date'] + timedelta(days=1)
+            period_end = max(period_end, scheduled_next)
         renewal_anchor = period_end if period_end and today < period_end else today
 
         if self._wgs_should_align_plan_to_calendar_month(plan):
@@ -415,10 +403,7 @@ class PosOrderPricingMixin(models.Model):
                 'period_aligned': True,
             }
 
-        next_billing_date = renewal_anchor + self._wgs_get_order_recurrence_delta(
-            source_order,
-            preferred_line=preferred_line,
-        )
+        next_billing_date = self._wgs_get_plan_min_end_threshold(plan, renewal_anchor)
         return {
             'renewal_anchor': renewal_anchor,
             'subscription_end_date': fields.Date.to_date(next_billing_date) - timedelta(days=1),
@@ -538,14 +523,20 @@ class PosOrderPricingMixin(models.Model):
                 plan_id=choice.get('plan_id') or preferred_plan_id,
                 pricing_id=choice.get('pricing_id') or preferred_pricing_id,
             )
-            if flow == 'new' and self._wgs_should_align_plan_to_calendar_month(resolved_plan):
+            if flow in ('new', 'reenroll') and self._wgs_should_align_plan_to_calendar_month(resolved_plan):
                 first_period_alignment = self._wgs_get_aligned_monthly_first_period_schedule(
                     start_date or self._wgs_get_subscription_business_today_for_pos(company=company)
                 )
-                subscription_start_date = first_period_alignment['subscription_start_date']
+                subscription_start_date = first_period_alignment['access_start_date']
                 subscription_end_date = first_period_alignment['subscription_end_date']
                 next_billing_date = first_period_alignment['next_billing_date']
                 charge_now = round(max(recurring_price * first_period_alignment['proration_ratio'], 0.0), 2)
+            if not subscription_end_date:
+                if not resolved_plan:
+                    raise UserError(_('El paquete no tiene un plan recurrente valido.'))
+                subscription_start_date = fields.Date.to_date(start_date) or self._wgs_get_subscription_business_today_for_pos(company=company)
+                subscription_end_date = self._wgs_get_plan_period_end_date(resolved_plan, subscription_start_date)
+                next_billing_date = subscription_end_date + timedelta(days=1)
             display_charge_now = self._wgs_get_price_with_taxes_for_pos(
                 product,
                 charge_now,
@@ -630,7 +621,10 @@ class PosOrderPricingMixin(models.Model):
     ):
         """Quote a renewal from current product pricing, never a prior POS discount."""
         source_order.ensure_one()
-        recurring_lines = source_order.order_line.filtered(lambda so_line: self._wgs_is_recurring_so_line(so_line))
+        recurring_lines = source_order.order_line.filtered(
+            lambda so_line: self._wgs_is_recurring_so_line(so_line)
+            and self._wgs_sale_order_line_has_positive_qty_for_pos(so_line)
+        )
         recurring_line = recurring_lines.sorted(key=lambda so_line: so_line.id)[:1]
         if not recurring_line:
             raise ValueError('Source order has no recurring line.')
@@ -649,12 +643,20 @@ class PosOrderPricingMixin(models.Model):
         except (TypeError, ValueError):
             preferred_pricing_id = 0
         source_product_selected = target_product == recurring_line.product_id
+        if source_product_selected and not preferred_plan_id and not preferred_pricing_id:
+            preferred_plan_id, preferred_pricing_id = source_plan_id, source_pricing_id
+        preferred_plan_id, preferred_pricing_id = self._wgs_sanitize_inherited_pricing_preference(
+            source_order=source_order,
+            product=target_product,
+            preferred_plan_id=preferred_plan_id,
+            preferred_pricing_id=preferred_pricing_id,
+        )
         return self._wgs_build_subscription_product_renewal_snapshot(
             source_order,
             product=target_product,
             fallback=float(fallback or target_product.list_price or 0.0),
-            preferred_plan_id=preferred_plan_id or (source_plan_id if source_product_selected else False),
-            preferred_pricing_id=preferred_pricing_id or (source_pricing_id if source_product_selected else False),
+            preferred_plan_id=preferred_plan_id,
+            preferred_pricing_id=preferred_pricing_id,
             partner=source_order.partner_id,
             company=source_order.company_id,
             fiscal_position=(
@@ -675,7 +677,7 @@ class PosOrderPricingMixin(models.Model):
         company=False,
         fiscal_position=False,
     ):
-        """Quote a replacement package while retaining the source renewal period."""
+        """Quote the selected package after the source's already paid period."""
         source_order.ensure_one()
         product.ensure_one()
         recurring_lines = source_order.order_line.filtered(
@@ -710,6 +712,7 @@ class PosOrderPricingMixin(models.Model):
             target_plan
             and getattr(target_plan, 'wgs_domiciliation_enabled', False)
             and not source_order.wgs_domiciliation_contract_id
+            and product != source_line.product_id
         ):
             raise UserError(
                 _('Los paquetes domiciliados no se pueden seleccionar desde una renovación normal.')
@@ -717,8 +720,8 @@ class PosOrderPricingMixin(models.Model):
 
         renewal_schedule = self._wgs_get_subscription_renewal_schedule(
             source_order,
+            plan=target_plan,
             today=self._wgs_get_subscription_business_today_for_pos(company=source_order.company_id),
-            preferred_line=source_line,
         )
         snapshot.update({
             'mode': 'subscription_product_change',

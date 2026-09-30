@@ -1,5 +1,7 @@
 /** @odoo-module **/
 
+import { beginPricingRequest, capturePricingSelection } from "./subscription_quote_request";
+
 import { getRequestedDiscountPercent } from "./subscription_discount_render";
 import { getToggledDomiciliationInstallmentSequences } from "./subscription_domiciliation_selection";
 import {
@@ -134,6 +136,7 @@ async function authorizeDiscountForForm(state, form, { partnerId, productId, flo
 }
 
 async function ensurePartnerAssignedToOrder(order, targetPartnerId, {
+    isCurrent = () => true,
     partnerName = "",
     state,
     renderDetail,
@@ -179,6 +182,9 @@ async function ensurePartnerAssignedToOrder(order, targetPartnerId, {
     } catch (error) {
         console.error("Error al cargar cliente POS para asociarlo al ticket", error);
     }
+    if (!isCurrent()) {
+        return false;
+    }
     if (!partnerRecord || !setPartnerOnCurrentOrder(partnerRecord)) {
         state.formError = partnerName
             ? _t("No se pudo cargar el cliente %(name)s en la sesión local del POS para asociarlo al ticket.").replace("%(name)s", partnerName)
@@ -207,7 +213,6 @@ function buildSubscriptionInlineActionHandlers({
     getCurrentSubscriptionItem,
     getSelectedPlan,
     getSelectedUpsalePlan,
-    getPlanPeriodEndDate,
     buildChargeBreakdown,
     addConfiguredProductLineToOrder,
     getCurrentOrder,
@@ -224,7 +229,7 @@ function buildSubscriptionInlineActionHandlers({
     formatTodayISO,
     _t,
 }) {
-    return {
+    const handlers = {
         "open-renewal": async ({ actionButton }) => {
             await openRenewalForm(getCurrentSubscriptionItem(actionButton));
         },
@@ -387,6 +392,7 @@ function buildSubscriptionInlineActionHandlers({
             );
         },
         "save-new": async () => {
+            const selection = capturePricingSelection(state, "newSubscriptionForm");
             state.formError = "";
             state.formNotice = "";
             const pricingSnapshot = getPricingSnapshot(state.newSubscriptionForm);
@@ -441,11 +447,7 @@ function buildSubscriptionInlineActionHandlers({
                 renderDetail(state.currentDetail);
                 return;
             }
-            const automaticEndDate = pricingSnapshot.subscription_end_date || getPlanPeriodEndDate(
-                state.newSubscriptionForm.startDate,
-                Number(pricingSnapshot.interval_value || 1) || 1,
-                pricingSnapshot.interval_unit || "month"
-            );
+            const automaticEndDate = pricingSnapshot.subscription_end_date;
             if (!automaticEndDate) {
                 state.formError = _t("No se pudo calcular la fecha de fin automática para el plan seleccionado.");
                 renderDetail(state.currentDetail);
@@ -457,6 +459,7 @@ function buildSubscriptionInlineActionHandlers({
                 return;
             }
             if (!(await ensurePartnerAssignedToOrder(order, state.selectedPartnerId, {
+                isCurrent: () => selection.isCurrent() && getCurrentOrder() === order,
                 partnerName: String(state.currentDetail && state.currentDetail.partner_name ? state.currentDetail.partner_name : "").trim(),
                 state,
                 renderDetail,
@@ -469,7 +472,9 @@ function buildSubscriptionInlineActionHandlers({
             }))) {
                 return;
             }
+            if (!selection.isCurrent() || getCurrentOrder() !== order) { return; }
             const productRecord = await ensureProductLoadedInPos(state.newSubscriptionForm.productId);
+            if (!selection.isCurrent() || getCurrentOrder() !== order) { return; }
             if (!productRecord) {
                 state.formError = _t("El producto seleccionado no está cargado en la sesión actual del POS.");
                 renderDetail(state.currentDetail);
@@ -511,6 +516,7 @@ function buildSubscriptionInlineActionHandlers({
             }))) {
                 return;
             }
+            if (!selection.isCurrent() || getCurrentOrder() !== order) { return; }
             if (hasPendingDiscountAuthorization(state.newSubscriptionForm)) {
                 state.formError = getPendingAuthorizationMessage(state.newSubscriptionForm, _t);
                 renderDetail(state.currentDetail);
@@ -554,6 +560,7 @@ function buildSubscriptionInlineActionHandlers({
                 renderDetail(state.currentDetail);
                 return;
             }
+            if (!selection.isCurrent()) { return; }
             state.formMode = null;
             state.formError = "";
             state.formNotice = _t("Suscripcion agregada al ticket. Puedes continuar al cobro normal del POS.");
@@ -598,6 +605,7 @@ function buildSubscriptionInlineActionHandlers({
             }
         },
         "save-upsale": async () => {
+            const selection = capturePricingSelection(state, "upsaleForm");
             state.formError = "";
             state.formNotice = "";
             if (!state.upsaleForm || !state.upsaleForm.subscriptionId || !state.upsaleForm.productId) {
@@ -639,6 +647,7 @@ function buildSubscriptionInlineActionHandlers({
                 return;
             }
             if (!(await ensurePartnerAssignedToOrder(order, holderPartnerId, {
+                isCurrent: () => selection.isCurrent() && getCurrentOrder() === order,
                 partnerName: String(state.upsaleForm.holderPartnerName || "").trim(),
                 state,
                 renderDetail,
@@ -651,7 +660,9 @@ function buildSubscriptionInlineActionHandlers({
             }))) {
                 return;
             }
+            if (!selection.isCurrent() || getCurrentOrder() !== order) { return; }
             const productRecord = await ensureProductLoadedInPos(state.upsaleForm.productId);
+            if (!selection.isCurrent() || getCurrentOrder() !== order) { return; }
             if (!productRecord) {
                 state.formError = _t("El producto destino no está cargado en la sesión actual del POS.");
                 renderDetail(state.currentDetail);
@@ -666,6 +677,7 @@ function buildSubscriptionInlineActionHandlers({
             }))) {
                 return;
             }
+            if (!selection.isCurrent() || getCurrentOrder() !== order) { return; }
             if (hasPendingDiscountAuthorization(state.upsaleForm)) {
                 state.formError = getPendingAuthorizationMessage(state.upsaleForm, _t);
                 renderDetail(state.currentDetail);
@@ -710,6 +722,7 @@ function buildSubscriptionInlineActionHandlers({
                 renderDetail(state.currentDetail);
                 return;
             }
+            if (!selection.isCurrent()) { return; }
             state.formMode = null;
             state.formError = "";
             state.formNotice = _t("Upsale agregado al ticket. Puedes continuar al cobro normal del POS.");
@@ -719,6 +732,7 @@ function buildSubscriptionInlineActionHandlers({
             renderDetail(state.currentDetail);
         },
         "save-renewal": async () => {
+            const selection = capturePricingSelection(state, "renewalForm");
             state.formError = "";
             state.formNotice = "";
             const pricingSnapshot = getPricingSnapshot(state.renewalForm);
@@ -735,6 +749,7 @@ function buildSubscriptionInlineActionHandlers({
             }
             const holderPartnerId = Number(state.renewalForm.holderPartnerId || 0) || false;
             if (!(await ensurePartnerAssignedToOrder(order, holderPartnerId, {
+                isCurrent: () => selection.isCurrent() && getCurrentOrder() === order,
                 partnerName: String(state.renewalForm.holderPartnerName || "").trim(),
                 state,
                 renderDetail,
@@ -747,7 +762,9 @@ function buildSubscriptionInlineActionHandlers({
             }))) {
                 return;
             }
+            if (!selection.isCurrent() || getCurrentOrder() !== order) { return; }
             const productRecord = await ensureProductLoadedInPos(state.renewalForm.productId);
+            if (!selection.isCurrent() || getCurrentOrder() !== order) { return; }
             if (!productRecord) {
                 state.formError = _t("El producto recurrente de esta suscripción no está cargado en la sesión actual del POS.");
                 renderDetail(state.currentDetail);
@@ -762,6 +779,7 @@ function buildSubscriptionInlineActionHandlers({
             }))) {
                 return;
             }
+            if (!selection.isCurrent() || getCurrentOrder() !== order) { return; }
             if (hasPendingDiscountAuthorization(state.renewalForm)) {
                 state.formError = getPendingAuthorizationMessage(state.renewalForm, _t);
                 renderDetail(state.currentDetail);
@@ -813,6 +831,7 @@ function buildSubscriptionInlineActionHandlers({
                 renderDetail(state.currentDetail);
                 return;
             }
+            if (!selection.isCurrent()) { return; }
             state.formMode = null;
             state.formError = "";
             state.formNotice = _t("Renovación agregada al ticket. Puedes continuar al cobro normal del POS.");
@@ -822,6 +841,7 @@ function buildSubscriptionInlineActionHandlers({
             renderDetail(state.currentDetail);
         },
         "save-reenroll": async () => {
+            const selection = capturePricingSelection(state, "renewalForm");
             state.formError = "";
             state.formNotice = "";
             const pricingSnapshot = getPricingSnapshot(state.renewalForm);
@@ -838,6 +858,7 @@ function buildSubscriptionInlineActionHandlers({
             }
             const holderPartnerId = Number(state.renewalForm.holderPartnerId || 0) || false;
             if (!(await ensurePartnerAssignedToOrder(order, holderPartnerId, {
+                isCurrent: () => selection.isCurrent() && getCurrentOrder() === order,
                 partnerName: String(state.renewalForm.holderPartnerName || "").trim(),
                 state,
                 renderDetail,
@@ -850,7 +871,9 @@ function buildSubscriptionInlineActionHandlers({
             }))) {
                 return;
             }
+            if (!selection.isCurrent() || getCurrentOrder() !== order) { return; }
             const productRecord = await ensureProductLoadedInPos(state.renewalForm.productId);
+            if (!selection.isCurrent() || getCurrentOrder() !== order) { return; }
             if (!productRecord) {
                 state.formError = _t("El producto recurrente de esta suscripción no está cargado en la sesión actual del POS.");
                 renderDetail(state.currentDetail);
@@ -865,6 +888,7 @@ function buildSubscriptionInlineActionHandlers({
             }))) {
                 return;
             }
+            if (!selection.isCurrent() || getCurrentOrder() !== order) { return; }
             if (hasPendingDiscountAuthorization(state.renewalForm)) {
                 state.formError = getPendingAuthorizationMessage(state.renewalForm, _t);
                 renderDetail(state.currentDetail);
@@ -914,6 +938,7 @@ function buildSubscriptionInlineActionHandlers({
                 renderDetail(state.currentDetail);
                 return;
             }
+            if (!selection.isCurrent()) { return; }
             state.formMode = null;
             state.formError = "";
             state.formNotice = _t("Reinscripción agregada al ticket. Puedes continuar al cobro normal del POS.");
@@ -923,6 +948,21 @@ function buildSubscriptionInlineActionHandlers({
             renderDetail(state.currentDetail);
         },
     };
+    for (const action of ["save-new", "save-renewal", "save-reenroll", "save-upsale"]) {
+        const submit = handlers[action];
+        handlers[action] = async (...args) => {
+            if (state.subscriptionTicketPending) {
+                return;
+            }
+            state.subscriptionTicketPending = true;
+            try {
+                return await submit(...args);
+            } finally {
+                state.subscriptionTicketPending = false;
+            }
+        };
+    }
+    return handlers;
 }
 
 async function handleSubscriptionInlineFieldChange({ field, target }, {
@@ -1012,6 +1052,7 @@ async function handleSubscriptionInlineFieldChange({ field, target }, {
             target.value,
             target.checked,
         );
+        const request = beginPricingRequest(state, "renewalForm");
         form.loading = true;
         renderDetail(state.currentDetail);
         try {
@@ -1027,6 +1068,7 @@ async function handleSubscriptionInlineFieldChange({ field, target }, {
                 false,
                 sequences,
             );
+            if (!request.isCurrent()) { return false; }
             const pricing = quote && quote.pricing ? quote.pricing : {};
             form.pricingSnapshot = buildPricingSnapshotFromCharge(pricing, {
                 flow: "renewal",
@@ -1034,9 +1076,10 @@ async function handleSubscriptionInlineFieldChange({ field, target }, {
                 sourceSubscriptionName: form.subscriptionName,
             });
         } catch (error) {
+            if (!request.isCurrent()) { return false; }
             state.formError = (error && error.message) || _t("No se pudo recalcular las mensualidades domiciliadas.");
         } finally {
-            form.loading = false;
+            if (request.isCurrent()) { form.loading = false; }
         }
     } else if ((state.formMode === "renewal" || state.formMode === "reenroll") && field === "renewal_discount_percent") {
         state.renewalForm.discountPercent = target.value || "";

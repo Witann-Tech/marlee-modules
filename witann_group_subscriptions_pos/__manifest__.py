@@ -1,6 +1,6 @@
 {
     'name': 'Witann Group Subscriptions POS',
-    'version': '19.0.1.5.263',
+    'version': '19.0.1.6.0',
     'summary': 'Directorio y detalle de suscripciones nativas en Punto de Venta',
     'category': 'Point of Sale',
     'author': 'Witann Technologies',
@@ -24,6 +24,7 @@
             'witann_group_subscriptions_pos/static/src/js/subscription_discount_render.js',
             'witann_group_subscriptions_pos/static/src/js/subscription_pos_api.js',
             'witann_group_subscriptions_pos/static/src/js/subscription_pricing_snapshot.js',
+            'witann_group_subscriptions_pos/static/src/js/subscription_quote_request.js',
             'witann_group_subscriptions_pos/static/src/js/subscription_domiciliation_selection.js',
             'witann_group_subscriptions_pos/static/src/js/subscription_domiciliation_render.js',
             'witann_group_subscriptions_pos/static/src/js/subscription_ticket.js',
