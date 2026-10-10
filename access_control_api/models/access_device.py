@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 import requests
 
 from odoo import _, api, models, fields
-from odoo.exceptions import UserError
+from odoo.exceptions import UserError, ValidationError
 from odoo.tools import config as odoo_config
 
 
@@ -29,6 +29,65 @@ class AccessControlDevice(models.Model):
 
     user_capacity = fields.Integer(string="Capacidad de usuarios", default=10000)
 
+    local_admin_partner_ids = fields.Many2many(
+        "res.partner", "access_device_admin_partner_rel", "device_id", "partner_id",
+        string="Administradores locales", groups="base.group_system",
+        help="Contactos con rostro registrado que pueden administrar este equipo.",
+    )
+    local_admin_person_ids = fields.Many2many(
+        "access_control.person", "access_device_admin_person_rel", "device_id", "person_id",
+        string="Identidades de administradores", readonly=True, groups="base.group_system",
+    )
+
+    def _sync_local_admins(self):
+        Person = self.env["access_control.person"].sudo().with_context(active_test=False)
+        for device in self:
+            previous = device._local_admin_people()
+            people = Person.browse()
+            for partner in device.local_admin_partner_ids:
+                if not partner.active:
+                    raise ValidationError(_("El administrador debe ser un contacto activo: %s") % partner.display_name)
+                person = previous.filtered(lambda p: p.partner_id == partner)[:1]
+                if not person:
+                    person = Person.search([("partner_id", "=", partner.id)], order="active desc, id desc", limit=1)
+                source = (person.face_pic_b64 or person.face_image) if person else False
+                source = source or partner.image_1920
+                face = partner._prepare_biometric_face_b64(source, log_context="device_admin:%s" % device.id)
+                if not face:
+                    raise ValidationError(_("Registra un rostro válido para el contacto %s antes de asignarlo como administrador.") % partner.display_name)
+                if not person:
+                    person = Person.create({"partner_id": partner.id, "active": False, "face_image": face})
+                else:
+                    person.with_context(skip_access_sync_queue=True).write({"face_image": face})
+                    person.action_assign_global_user_id()
+                people |= person
+            device.local_admin_person_ids = [(6, 0, people.ids)]
+            device._queue_local_admin_people(previous | people)
+
+    def _queue_local_admin_people(self, people=None):
+        Change = self.env["access_control.sync_change"].sudo()
+        for device in self:
+            for person in (people if people is not None else device._local_admin_people()):
+                if person.global_user_id:
+                    Change.create({
+                        "site_id": device.site_id.id, "device_id": device.id,
+                        "person_id": person.id, "global_user_id": person.global_user_id,
+                        "action": "upsert", "priority": True, "include_face_pic": True,
+                        "reason": "device_local_admin_update",
+                    })
+
+    def _local_admin_people(self):
+        self.ensure_one()
+        return self.sudo().with_context(active_test=False).local_admin_person_ids
+
+    def _sync_people_domain(self):
+        self.ensure_one()
+        return [
+            ("global_user_id", "!=", False), "|",
+            ("id", "in", self._local_admin_people().ids),
+            "&", ("active", "=", True), ("site_ids", "in", [self.site_id.id]),
+        ]
+
     # Telemetría (actualizada por middleware/ADMS)
     last_heartbeat_at = fields.Datetime(string="Último heartbeat", readonly=True)
     last_sync_at = fields.Datetime(string="Última sincronización", readonly=True)
@@ -47,9 +106,12 @@ class AccessControlDevice(models.Model):
     def create(self, vals_list):
         records = super().create(vals_list)
         records.filtered(lambda rec: rec.active)._queue_active_timezones_for_device_sites("device_create")
+        records.sudo().filtered(lambda rec: rec.local_admin_partner_ids)._sync_local_admins()
         return records
 
     def write(self, vals):
+        if {"site_id", "device_serial"}.intersection(vals) and self.sudo().with_context(active_test=False).mapped("local_admin_person_ids"):
+            raise ValidationError(_("Retira y sincroniza los administradores antes de cambiar el sitio o serial del equipo."))
         before = {rec.id: (rec.active, rec.site_id.id) for rec in self}
         res = super().write(vals)
         if {"active", "site_id"}.intersection(vals):
@@ -58,6 +120,10 @@ class AccessControlDevice(models.Model):
             )
             if to_sync:
                 to_sync._queue_active_timezones_for_device_sites("device_write")
+        if "local_admin_partner_ids" in vals:
+            self._sync_local_admins()
+        elif vals.get("active"):
+            self._queue_local_admin_people()
         return res
 
     def _queue_active_timezones_for_device_sites(self, reason):
@@ -65,6 +131,11 @@ class AccessControlDevice(models.Model):
         if not site_ids or "access_control.timezone" not in self.env.registry:
             return False
         return self.env["access_control.timezone"].sudo().queue_active_timezones_for_sites(site_ids=site_ids, reason=reason)
+
+    def unlink(self):
+        if self.sudo().with_context(active_test=False).mapped("local_admin_person_ids"):
+            raise ValidationError(_("Retira y sincroniza los administradores antes de borrar el equipo."))
+        return super().unlink()
 
     def action_run_inventory_audit(self):
         runs = self.env["access_control.device_audit_run"].sudo().run_for_devices(self)
@@ -87,6 +158,8 @@ class AccessControlDevice(models.Model):
         site_ids = sorted(set(devices.filtered(lambda rec: rec.site_id).mapped("site_id").ids))
         if not site_ids:
             raise UserError(_("Selecciona al menos un SpeedFace con sitio configurado."))
+
+        devices._queue_local_admin_people()
 
         Change = self.env["access_control.sync_change"].sudo()
         Person = self.env["access_control.person"].sudo()

@@ -287,9 +287,24 @@ class AccessPerson(models.Model):
     def write(self, vals):
         vals = self._normalize_face_vals(vals)
         vals = self._fill_face_from_partner(vals)
+        admin_devices = self._local_admin_devices()
+        if vals.get("active") is False and admin_devices and len(self) > 1:
+            for person in self:
+                person.write(vals)
+            return True
+        if admin_devices:
+            if "global_user_id" in vals or "partner_id" in vals:
+                for person in self:
+                    if person._local_admin_devices() and (
+                        ("global_user_id" in vals and vals["global_user_id"] != person.global_user_id)
+                        or ("partner_id" in vals and vals["partner_id"] != person.partner_id.id)
+                    ):
+                        raise ValidationError("Retira primero las asignaciones de administrador local antes de cambiar la identidad.")
+            if "face_pic_b64" in vals and not self.env["res.partner"]._prepare_biometric_face_b64(vals["face_pic_b64"]):
+                raise ValidationError("No puedes quitar el rostro de un administrador local de SpeedFace.")
         skip_sync_queue = self.env.context.get("skip_access_sync_queue")
         # Al dar de baja, se libera el ID global para reutilización futura.
-        if vals.get("active") is False and "global_user_id" not in vals:
+        if vals.get("active") is False and "global_user_id" not in vals and not admin_devices:
             vals["global_user_id"] = False
         before = {}
         if not skip_sync_queue:
@@ -306,6 +321,11 @@ class AccessPerson(models.Model):
             }
 
         res = super().write(vals)
+        if admin_devices and not skip_sync_queue and {
+            "active", "access_state", "site_ids", "face_image", "face_pic_b64", "access_timezone_id",
+        }.intersection(vals):
+            for device in admin_devices:
+                device._queue_local_admin_people(self & device._local_admin_people())
         if skip_sync_queue:
             return res
 
@@ -369,6 +389,8 @@ class AccessPerson(models.Model):
         return res
 
     def unlink(self):
+        if self._local_admin_devices():
+            raise ValidationError("Retira primero las asignaciones de administrador local del SpeedFace.")
         before = [
             {
                 "global_user_id": rec.global_user_id,
@@ -390,6 +412,11 @@ class AccessPerson(models.Model):
                 )
 
         return res
+
+    def _local_admin_devices(self):
+        return self.env["access_control.device"].sudo().with_context(active_test=False).search([
+            ("local_admin_person_ids", "in", self.ids),
+        ])
 
     def action_assign_global_user_id(self):
         """Asigna el ID global disponible más bajo (1..10000)."""
