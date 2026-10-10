@@ -91,6 +91,88 @@ class TestFaceSyncDelta(TransactionCase):
             with patch.object(self.controller, "_is_valid_user_api_key", return_value=False):
                 return self.controller._auth_ok()
 
+    def _admin_delta(self, device, cursor):
+        params = {"siteCode": self.site.code, "deviceSerial": device.device_serial, "cursor": cursor}
+        fake_request = SimpleNamespace(env=self.env, params=params, jsonrequest={"params": params})
+        with patch("odoo.addons.access_control_api.controllers.main.request", fake_request), patch.object(
+            self.controller, "_auth_ok", return_value=(True, None)
+        ):
+            return self.controller.sync_delta()
+
+    def test_local_admin_requires_face(self):
+        partner = self.Partner.create({"name": "Admin sin rostro"})
+        with self.assertRaises(ValidationError), self.env.cr.savepoint():
+            self.device.write({"local_admin_partner_ids": [(4, partner.id)]})
+
+    def test_local_admin_without_subscription_is_device_scoped(self):
+        partner = self.Partner.create({"name": "Admin local", "image_1920": self._make_image_b64()})
+        other = self.Device.create({"name": "Otra puerta", "device_serial": "DEV-OTHER", "site_id": self.site.id})
+        self.device.write({"local_admin_partner_ids": [(4, partner.id)]})
+        person = self.device._local_admin_people()
+        self.assertEqual(len(person), 1)
+        self.assertFalse(person.active)
+        self.assertFalse(person.site_ids)
+        self.assertTrue(person.global_user_id)
+        for device, expected in [(self.device, 14), (other, 0)]:
+            payload = self.controller._person_sync_payload(person, device=device)
+            self.assertEqual(payload["privilege"], expected)
+        snapshot = self._admin_delta(self.device, 0)
+        self.assertEqual(snapshot["upserts"][0]["privilege"], 14)
+        self.assertTrue(snapshot["upserts"][0]["facePicB64"])
+        self.assertFalse(self._admin_delta(other, 0)["upserts"])
+        cursor = snapshot["nextCursor"]
+        self.device._queue_local_admin_people()
+        delta = self._admin_delta(other, cursor)
+        self.assertFalse(delta["upserts"])
+        self.assertFalse(delta["deletes"])
+        self.assertGreater(delta["nextCursor"], cursor)
+        delta = self._admin_delta(self.device, cursor)
+        self.assertEqual(delta["upserts"][0]["privilege"], 14)
+        self.assertTrue(delta["upserts"][0]["priority"])
+        self.assertIn(str(person.global_user_id), self.env["access_control.device_audit_run"].create({
+            "device_id": self.device.id,
+        })._expected_inventory())
+
+    def test_local_admin_removal_restores_regular_access(self):
+        partner, person = self._make_person(self._make_image_b64())
+        self.device.write({"local_admin_partner_ids": [(4, partner.id)]})
+        cursor = self.controller._site_change_max_cursor(self.site)
+        self.device.write({"local_admin_partner_ids": [(5, 0, 0)]})
+        delta = self._admin_delta(self.device, cursor)
+        self.assertEqual(delta["upserts"][0]["privilege"], 0)
+        self.assertTrue(person.active)
+        self.assertTrue(delta["upserts"][0]["priority"])
+
+    def test_local_admin_survives_subscription_deactivation_then_is_removed(self):
+        partner, person = self._make_person(self._make_image_b64())
+        self.device.write({"local_admin_partner_ids": [(4, partner.id)]})
+        pin = person.global_user_id
+        cursor = self.controller._site_change_max_cursor(self.site)
+        person.write({"active": False, "access_state": "suspended"})
+        self.assertEqual(person.global_user_id, pin)
+        delta = self._admin_delta(self.device, cursor)
+        self.assertFalse(delta["deletes"])
+        self.assertEqual(delta["upserts"][0]["privilege"], 14)
+        cursor = delta["nextCursor"]
+        self.device.write({"local_admin_partner_ids": [(5, 0, 0)]})
+        delta = self._admin_delta(self.device, cursor)
+        self.assertFalse(delta["upserts"])
+        self.assertEqual(delta["deletes"], [{"globalUserId": pin, "priority": True}])
+
+    def test_local_admin_face_updates_and_cannot_be_removed(self):
+        partner = self.Partner.create({"name": "Admin", "image_1920": self._make_image_b64()})
+        self.device.write({"local_admin_partner_ids": [(4, partner.id)]})
+        person = self.device._local_admin_people()
+        old_face = person.face_pic_b64
+        cursor = self.controller._site_change_max_cursor(self.site)
+        partner.write({"image_1920": self._make_image_b64(color=(0, 0, 200))})
+        self.assertNotEqual(person.face_pic_b64, old_face)
+        self.assertTrue(self._admin_delta(self.device, cursor)["upserts"][0]["facePicB64"])
+        with self.assertRaises(ValidationError), self.env.cr.savepoint():
+            partner.write({"image_1920": False})
+        with self.assertRaises(ValidationError), self.env.cr.savepoint():
+            person.unlink()
+
     def test_auth_accepts_canonical_access_control_api_token(self):
         self.assertEqual(
             self._auth_result(

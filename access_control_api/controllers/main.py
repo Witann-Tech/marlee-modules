@@ -69,6 +69,10 @@ class AccessControlApi(http.Controller):
             ("global_user_id", "!=", False),
             ("site_ids", "in", site.id),
         ]
+        device = self._sync_device(site, device_serial)
+        if device:
+            Person = Person.with_context(active_test=False)
+            domain = device._sync_people_domain()
         if cursor < 0:
             snapshot_cursor, offset = self._bootstrap_cursor_decode(cursor)
         else:
@@ -82,6 +86,7 @@ class AccessControlApi(http.Controller):
                 person,
                 include_face_pic=bool(include_biophoto and person.face_pic_b64),
                 clear_face_pic=bool(include_biophoto and not person.face_pic_b64),
+                device=device,
             )
             for person in persons
         ]
@@ -114,6 +119,10 @@ class AccessControlApi(http.Controller):
             ("site_ids", "in", site.id),
             ("face_pic_b64", "!=", False),
         ]
+        device = self._sync_device(site, device_serial)
+        if device:
+            Person = Person.with_context(active_test=False)
+            domain = device._sync_people_domain() + [("face_pic_b64", "!=", False)]
         if cursor < 0:
             snapshot_cursor, offset = self._bootstrap_cursor_decode(cursor)
         else:
@@ -127,6 +136,7 @@ class AccessControlApi(http.Controller):
                 person,
                 include_face_pic=True,
                 clear_face_pic=False,
+                device=device,
             )
             for person in persons
         ]
@@ -445,13 +455,22 @@ class AccessControlApi(http.Controller):
                 _logger.exception("sync_delta facePicB64 backfill failed pin=%s person_id=%s", person.global_user_id, person.id)
         return face_b64
 
-    def _person_sync_payload(self, person, include_face_pic=True, clear_face_pic=False, priority=False):
+    def _sync_device(self, site, serial):
+        if not serial:
+            return False
+        return site.env["access_control.device"].sudo().search([
+            ("site_id", "=", site.id), ("device_serial", "=", serial), ("active", "=", True),
+        ], limit=1)
+
+    def _person_sync_payload(self, person, include_face_pic=True, clear_face_pic=False, priority=False, device=None):
+        is_admin = bool(device and person in device._local_admin_people())
         payload = {
             "globalUserId": person.global_user_id,
             "name": person.name or "",
-            "active": bool(person.active),
-            "accessGroup": 0 if person.access_state == "suspended" else 1,
-            "authorizeTimezoneId": int(person.authorize_timezone_id or 1),
+            "active": bool(person.active or is_admin),
+            "privilege": 14 if is_admin else 0,
+            "accessGroup": 1 if is_admin else (0 if person.access_state == "suspended" else 1),
+            "authorizeTimezoneId": 1 if is_admin else int(person.authorize_timezone_id or 1),
             "authorizeDoorId": 1,
             "authorizeDevId": 1,
         }
@@ -649,6 +668,12 @@ class AccessControlApi(http.Controller):
             }
 
         device = False
+        if not device_serial and request.env["access_control.device"].sudo().search_count([
+            ("site_id", "=", site.id), ("active", "=", True),
+            ("local_admin_person_ids", "!=", False),
+        ]):
+            return {"ok": False, "reason": "missing_device_serial", "cursor": cursor,
+                    "nextCursor": cursor, "upserts": [], "deletes": [], "commands": []}
         if device_serial:
             Device = request.env["access_control.device"].sudo()
             device = Device.search(
@@ -747,6 +772,9 @@ class AccessControlApi(http.Controller):
         latest_by_gid = {}
         command_changes = Change.browse()
         for ch in changes:
+            # Advance the site cursor across other devices' changes without delivering them.
+            if ch.device_id and (not device or ch.device_id != device):
+                continue
             if ch.action == "command":
                 if ch.command_type != "open_door":
                     command_changes |= ch
@@ -782,7 +810,11 @@ class AccessControlApi(http.Controller):
         synced_people = Person.browse()
         for gid, state in sorted(latest_by_gid.items()):
             change = state["change"]
-            if change.action == "delete":
+            person = change.person_id
+            if not person.exists() or person.global_user_id != gid:
+                person = Person.with_context(active_test=False).search([("global_user_id", "=", gid)], limit=1)
+            is_admin = bool(device and person in device._local_admin_people())
+            if change.action == "delete" and not is_admin:
                 payload = {"globalUserId": gid}
                 if state["priority"]:
                     payload["priority"] = True
@@ -795,10 +827,7 @@ class AccessControlApi(http.Controller):
                         synced_people |= person
                 continue
 
-            person = change.person_id
-            if not person.exists():
-                person = Person.search([("global_user_id", "=", gid)], limit=1)
-            if not person.exists() or not person.active or not person.global_user_id or site.id not in person.site_ids.ids:
+            if not is_admin and (not person.exists() or not person.active or not person.global_user_id or site.id not in person.site_ids.ids):
                 payload = {"globalUserId": gid}
                 if state["priority"]:
                     payload["priority"] = True
@@ -810,9 +839,10 @@ class AccessControlApi(http.Controller):
             upserts.append(
                 self._person_sync_payload(
                     person,
-                    include_face_pic=bool(include_biophoto and state["include_face_pic"]),
-                    clear_face_pic=bool(include_biophoto and state["clear_face_pic"]),
+                    include_face_pic=bool(include_biophoto and (state["include_face_pic"] or is_admin)),
+                    clear_face_pic=bool(include_biophoto and state["clear_face_pic"] and not is_admin),
                     priority=bool(state["priority"]),
+                    device=device,
                 )
             )
             synced_people |= person

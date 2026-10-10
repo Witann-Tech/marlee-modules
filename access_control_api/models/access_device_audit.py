@@ -129,24 +129,21 @@ class AccessControlDeviceAuditRun(models.Model):
     def _expected_inventory(self):
         self.ensure_one()
         Person = self.env["access_control.person"].sudo()
-        people = Person.search(
-            [
-                ("active", "=", True),
-                ("global_user_id", "!=", False),
-                ("site_ids", "in", [self.site_id.id]),
-            ],
+        people = Person.with_context(active_test=False).search(
+            self.device_id._sync_people_domain(),
             order="global_user_id asc",
         )
         expected = {}
         for person in people:
+            is_admin = person in self.device_id._local_admin_people()
             pin = str(int(person.global_user_id))
             expected[pin] = {
                 "person": person,
                 "pin": pin,
                 "name": person.name or "",
-                "group": 0 if person.access_state == "suspended" else 1,
+                "group": 1 if is_admin else (0 if person.access_state == "suspended" else 1),
                 "disable": 0,
-                "authorize_timezone_id": int(person.authorize_timezone_id or 1),
+                "authorize_timezone_id": 1 if is_admin else int(person.authorize_timezone_id or 1),
                 "authorize_door_id": 1,
                 "dev_id": 1,
             }

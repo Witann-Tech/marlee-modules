@@ -5,6 +5,7 @@ import io
 import logging
 import re
 from odoo import models, fields, api
+from odoo.exceptions import ValidationError
 
 try:
     from PIL import Image, ImageOps
@@ -191,6 +192,12 @@ class ResPartner(models.Model):
         Person = self.env["access_control.person"].sudo()
         for partner in self:
             people = Person.search([("partner_id", "=", partner.id)])
+            devices = self.env["access_control.device"].sudo().with_context(active_test=False).search([
+                ("local_admin_partner_ids", "in", [partner.id]),
+            ])
+            people |= devices.with_context(active_test=False).mapped("local_admin_person_ids").filtered(
+                lambda person: person.partner_id == partner
+            )
             if not people:
                 continue
             img = self._prepare_biometric_face_b64(partner.image_1920, log_context=f"partner_write:{partner.id}")
@@ -224,10 +231,21 @@ class ResPartner(models.Model):
 
     def write(self, vals):
         data = dict(vals or {})
+        if vals.get("active") is False:
+            devices = self.env["access_control.device"].sudo().with_context(active_test=False).search([
+                ("local_admin_partner_ids", "in", self.ids),
+            ])
+            if devices:
+                raise ValidationError("Retira primero las asignaciones de administrador local antes de archivar el contacto.")
         if "image_1920" in data:
             data["image_1920"] = self._normalize_image_b64(data.get("image_1920"))
 
         res = super().write(data)
         if "image_1920" in data:
             self._sync_access_person_face()
+        elif "name" in data:
+            devices = self.env["access_control.device"].sudo().with_context(active_test=False).search([
+                ("local_admin_partner_ids", "in", self.ids),
+            ])
+            devices._queue_local_admin_people()
         return res
