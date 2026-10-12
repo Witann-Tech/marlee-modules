@@ -1,0 +1,3 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_witann_bank_import,Importación bancaria sin duplicados,model_witann_bank_import,account.group_account_basic,1,1,1,1
+access_witann_bank_import_result,Detalle importación bancaria,model_witann_bank_import_result,account.group_account_basic,1,1,1,1

@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="bank_import_form" model="ir.ui.view">
+        <field name="name">witann.bank.import.form</field>
+        <field name="model">witann.bank.import</field>
+        <field name="arch" type="xml">
+            <form string="Importar movimientos sin duplicados">
+                <field name="state" invisible="1"/>
+                <group>
+                    <field name="company_id" invisible="1"/>
+                    <field name="journal_id" readonly="state == 'done'" options="{'no_create': True, 'no_open': True}"/>
+                    <field name="filename" invisible="1"/>
+                    <field name="file_data" filename="filename" readonly="state == 'done'" options="{'accepted_file_extensions': '.csv,.xlsx'}"/>
+                </group>
+                <div class="alert alert-info" role="alert" invisible="state != 'draft'">
+                    FECHA: DD/MM/AAAA. MOVIMIENTO identifica la operación dentro del diario.
+                    El importe se calcula automáticamente: DEPÓSITOS menos RETIROS.
+                    Analizar no crea movimientos contables.
+                </div>
+                <group invisible="state == 'draft'">
+                    <group>
+                        <field name="read_count"/>
+                        <field name="new_count"/>
+                        <field name="existing_count"/>
+                        <field name="duplicate_count"/>
+                    </group>
+                    <group>
+                        <field name="conflict_count"/>
+                        <field name="invalid_count"/>
+                        <field name="created_count" invisible="state != 'done'"/>
+                        <field name="skipped_count"/>
+                    </group>
+                </group>
+                <field name="message" nolabel="1" invisible="not message"/>
+                <div class="alert alert-warning" role="alert" invisible="not legacy_warning">
+                    <field name="legacy_warning" nolabel="1"/>
+                </div>
+                <field name="result_ids" nolabel="1" invisible="state == 'draft'">
+                    <list create="0" edit="0" delete="0" decoration-danger="status in ('conflict', 'invalid')" decoration-muted="status in ('existing', 'duplicate')" decoration-success="status == 'created'">
+                        <field name="row_number"/>
+                        <field name="movement"/>
+                        <field name="date"/>
+                        <field name="amount"/>
+                        <field name="status"/>
+                        <field name="message"/>
+                    </list>
+                </field>
+                <footer>
+                    <button name="action_analyze" string="Analizar" type="object" class="btn-secondary" invisible="state == 'done'"/>
+                    <button name="action_import" string="Importar nuevos" type="object" class="btn-primary" invisible="state != 'analyzed' or conflict_count or invalid_count"/>
+                    <button name="action_open_created" string="Abrir movimientos creados" type="object" class="btn-primary" invisible="state != 'done' or not created_count"/>
+                    <button string="Cerrar" special="cancel" class="btn-secondary"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+</odoo>

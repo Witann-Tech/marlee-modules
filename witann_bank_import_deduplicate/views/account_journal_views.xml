@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="account_journal_form_bank_import" model="ir.ui.view">
+        <field name="name">account.journal.form.witann.bank.import</field>
+        <field name="model">account.journal</field>
+        <field name="inherit_id" ref="account.view_account_journal_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//div[@name='button_box']" position="inside">
+                <button name="action_witann_bank_import" type="object" string="Importar movimientos sin duplicados" class="oe_stat_button" icon="fa-upload" groups="account.group_account_basic" invisible="type != 'bank'"/>
+            </xpath>
+        </field>
+    </record>
+    <record id="account_journal_dashboard_bank_import" model="ir.ui.view">
+        <field name="name">account.journal.dashboard.witann.bank.import</field>
+        <field name="model">account.journal</field>
+        <field name="inherit_id" ref="account.account_journal_dashboard_kanban_view"/>
+        <field name="arch" type="xml">
+            <xpath expr="//div[@name='bank_customer_payment']" position="before">
+                <div t-if="journal_type == 'bank'">
+                    <a name="action_witann_bank_import" type="object" role="menuitem" groups="account.group_account_basic">Importar movimientos sin duplicados</a>
+                </div>
+            </xpath>
+        </field>
+    </record>
+</odoo>
