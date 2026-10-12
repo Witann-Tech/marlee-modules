@@ -55,9 +55,11 @@ def main():
     def new_wizard(start, stop):
         output = io.StringIO(newline='')
         writer = csv.writer(output)
-        writer.writerow(['FECHA', 'MONEDA', 'MOVIMIENTO', 'IMPORTE'])
+        writer.writerow(['FECHA', 'MONEDA', 'MOVIMIENTO', 'DEPÓSITOS', 'RETIROS'])
         for index in range(start, stop):
-            writer.writerow([args.date, currency, prefix + str(index), index + 1])
+            deposit = index + 1 if index % 2 == 0 else '-'
+            withdrawal = '-' if index % 2 == 0 else index + 1
+            writer.writerow([args.date, currency, prefix + str(index), deposit, withdrawal])
         return rpc('witann.bank.import', 'create', [{
             'journal_id': args.journal, 'filename': 'concurrency.csv',
             'file_data': base64.b64encode(output.getvalue().encode()).decode(),

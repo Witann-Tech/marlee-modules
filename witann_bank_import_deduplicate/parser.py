@@ -226,14 +226,16 @@ def parse_file(data, filename, *, currency):
             if normalize_currency(_value(cell('MONEDA'))) != normalize_currency(currency):
                 raise ValueError('MONEDA no corresponde a la moneda del diario.')
             row_date = parse_date(_value(cell('FECHA')))
-            if 'IMPORTE' in columns:
-                amount = parse_amount(_value(cell('IMPORTE')))
-            else:
+            # Use the bank's original columns even if a manually added IMPORTE
+            # is present. Credits are positive and debits are negative.
+            if {'DEPOSITOS', 'RETIROS'} <= columns.keys():
                 deposit = parse_amount(_value(cell('DEPOSITOS')), zero_if_empty=True)
                 withdrawal = parse_amount(_value(cell('RETIROS')), zero_if_empty=True)
                 if deposit < 0 or withdrawal < 0:
                     raise ValueError('DEPÓSITOS y RETIROS deben ser magnitudes positivas o cero.')
                 amount = deposit - withdrawal
+            else:
+                amount = parse_amount(_value(cell('IMPORTE')))
             reference = text(_value(cell('REFERENCIA')))
             label = ' / '.join(filter(None, (
                 text(_value(cell('DESCRIPCION'))),

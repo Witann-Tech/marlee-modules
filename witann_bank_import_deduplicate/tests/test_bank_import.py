@@ -129,6 +129,52 @@ class TestBankImport(AccountTestInvoicingCommon):
         self.assertEqual(second.skipped_count, 2)
         self.assertEqual(self._snapshot(lines), before)
 
+    def test_original_bank_csv_computes_signed_amounts_and_skips_history(self):
+        number = self._legacy_movement()
+        existing = self._line(movement=False, amount=-40.10)
+        self._xmlid(number, existing)
+        before = self._snapshot(existing)
+        currency = self.journal.currency_id or self.journal.company_id.currency_id
+
+        def bank_wizard(manual_column=False):
+            output = io.StringIO(newline='')
+            writer = csv.writer(output)
+            columns = ['FECHA', 'MONEDA', 'MOVIMIENTO', 'DEPÓSITOS', 'RETIROS']
+            writer.writerow(columns + (['IMPORTE'] if manual_column else []))
+            for movement, deposit, withdrawal in (
+                (number, '-', '$40.10'),
+                ('bank-credit', '$23,827.70', '-'),
+                ('bank-debit', '-', '$39,997.80'),
+            ):
+                row = ['12/10/2026', currency.name, movement, deposit, withdrawal]
+                writer.writerow(row + (['bad manual value'] if manual_column else []))
+            return self.Wizard.create({
+                'journal_id': self.journal.id, 'filename': 'original-bank.csv',
+                'file_data': base64.b64encode(output.getvalue().encode('utf-8-sig')),
+            })
+
+        wizard = bank_wizard()
+        with self._forbid_accounting_mutation():
+            wizard.action_analyze()
+        self.assertEqual(wizard.invalid_count, 0)
+        self.assertEqual(wizard.new_count, 2)
+        self.assertEqual(wizard.existing_count, 1)
+        wizard.action_import()
+        self.assertEqual(wizard.created_count, 2)
+        self.assertEqual({line.witann_bank_movement: line.amount for line in wizard.created_line_ids}, {
+            'bank-credit': 23827.70, 'bank-debit': -39997.80,
+        })
+        self.assertEqual(self._snapshot(existing), before)
+        all_lines = existing | wizard.created_line_ids
+        before = self._snapshot(all_lines)
+        for manual_column in (False, True):
+            repeated = bank_wizard(manual_column)
+            with self._forbid_accounting_mutation():
+                repeated.action_import()
+            self.assertEqual(repeated.created_count, 0)
+            self.assertEqual(repeated.skipped_count, 3)
+            self.assertEqual(self._snapshot(all_lines), before)
+
     def test_overlap_only_creates_difference_and_keeps_existing_intact(self):
         first = self._wizard([('1', 100), ('2', 200)])
         first.action_import()

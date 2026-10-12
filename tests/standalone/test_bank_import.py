@@ -77,10 +77,36 @@ class BankFileTests(unittest.TestCase):
         self.assertEqual([r.amount for r in parsed.rows], [Decimal('100.20'), Decimal('-40.10'), Decimal(0)])
         self.assertEqual([r.number for r in parsed.rows], [2, 4, 5])
 
-    def test_explicit_amount_wins_over_other_amount_columns_and_balance(self):
+    def test_bank_columns_override_manual_amount_and_balance(self):
         columns = ['CUENTA', 'FECHA', 'MONEDA', 'MOVIMIENTO', 'IMPORTE', 'DEPÓSITOS', 'RETIROS', 'SALDO']
-        parsed = self.parse(self.csv(columns=columns, rows=[['0176055262', '12/10/2026', 'MXN', '1', '25', 'bad', 'bad', '9999']]))
-        self.assertEqual(parsed.rows[0].amount, Decimal(25))
+        for manual in ('25', '', '-', 'bad', '999999'):
+            with self.subTest(manual=manual):
+                parsed = self.parse(self.csv(columns=columns, rows=[
+                    ['0176055262', '12/10/2026', 'MXN', '1', manual, '$100.20', '-', '9999'],
+                    ['0176055262', '12/10/2026', 'MXN', '2', manual, '-', '$40.10', '9999'],
+                ]))
+                self.assertEqual(parsed.issues, [])
+                self.assertEqual([r.amount for r in parsed.rows], [Decimal('100.20'), Decimal('-40.10')])
+
+    def test_invalid_bank_amount_cannot_fall_back_to_manual_amount(self):
+        parsed = self.parse(self.csv(
+            columns=['FECHA', 'MONEDA', 'MOVIMIENTO', 'IMPORTE', 'DEPÓSITOS', 'RETIROS'],
+            rows=[['12/10/2026', 'MXN', '1', '100', 'bad', '-']],
+        ))
+        self.assertEqual(len(parsed.issues), 1)
+        self.assertEqual(parsed.rows, [])
+
+    def test_xlsx_original_bank_amounts_without_manual_column(self):
+        from openpyxl import Workbook
+        workbook = Workbook()
+        workbook.active.append(['FECHA', 'MONEDA', 'MOVIMIENTO', 'DEPÓSITOS', 'RETIROS'])
+        workbook.active.append([date(2026, 10, 12), 'MXP', '1', 23827.70, '-'])
+        workbook.active.append([date(2026, 10, 12), 'MXP', '2', '-', 39997.80])
+        output = io.BytesIO()
+        workbook.save(output)
+        parsed = self.parse(output.getvalue(), 'bank.xlsx')
+        self.assertEqual(parsed.issues, [])
+        self.assertEqual([r.amount for r in parsed.rows], [Decimal('23827.70'), Decimal('-39997.80')])
 
     def test_complete_bank_format_uses_fecha_instead_of_operation_date(self):
         columns = ['CUENTA', 'FECHA DE OPERACIÓN', 'FECHA', 'REFERENCIA', 'DESCRIPCIÓN', 'COD. TRANSAC', 'SUCURSAL', 'DEPÓSITOS', 'RETIROS', 'SALDO', 'MONEDA', 'MOVIMIENTO', 'DESCRIPCIÓN DETALLADA', 'CHEQUE']

@@ -2,14 +2,22 @@
 
 ## Resultado local — 12 de octubre de 2026
 
-- 32 pruebas del lector/clasificador aprobadas, incluyendo CSV/XLSX reales,
+- 34 pruebas del lector/clasificador aprobadas, incluyendo CSV/XLSX reales,
   fechas, importes, CUENTA ignorada/opcional, MXP/MXN, conflictos, repeticiones
   y 280 filas XLSX con CUENTA vacía, numérica, CLABE y errores/fórmulas ignorados.
 - Sintaxis Python, XML y archivos del manifiesto verificados. El script de
   concurrencia inicia y muestra su ayuda sin requerir bibliotecas adicionales.
-- 24 pruebas ORM preparadas, **sin ejecutar**: no hay Odoo ni PostgreSQL locales.
+- 25 pruebas ORM preparadas, **sin ejecutar**: no hay Odoo ni PostgreSQL locales.
   La prueba RPC simultánea y los tiempos contables también están pendientes.
-- Corrección local 19.0.1.0.1; las pruebas ORM y RPC quedan pendientes de staging.
+- Corrección 19.0.1.0.2: DEPÓSITOS menos RETIROS tienen prioridad sobre IMPORTE.
+  El CSV original del banco proporcionado por el usuario se leyó completo:
+  280 filas, cero errores, 148 abonos positivos y 132 cargos negativos. Se
+  contrastó cada importe calculado con ambas columnas del archivo, sin modificarlo
+  ni incorporar el archivo ni datos de identificación bancaria al repositorio.
+- Las pruebas ORM y RPC quedan pendientes de staging. Se agregó cobertura ORM
+  de importación con depósitos/retiros sin IMPORTE, históricos con cargo negativo
+  y reimportación que ignora un IMPORTE manual. El script RPC usa el formato
+  original y alterna abonos/cargos.
 
 ## Permisos e identidad
 
