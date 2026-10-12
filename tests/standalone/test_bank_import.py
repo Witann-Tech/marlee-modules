@@ -44,14 +44,13 @@ class BankFileTests(unittest.TestCase):
         return output.getvalue().encode(encoding)
 
     def parse(self, data, filename='bank.csv'):
-        return parser.parse_file(data, filename, account='0176055262', currency='MXN')
+        return parser.parse_file(data, filename, currency='MXN')
 
     def test_csv_preserves_identifiers_date_reference_and_descriptions(self):
         parsed = self.parse(self.csv())
         self.assertEqual(parsed.issues, [])
         self.assertEqual(parsed.read_count, 1)
         row = parsed.rows[0]
-        self.assertEqual(row.account, '0176055262')
         self.assertEqual(row.movement, '0031984')
         self.assertEqual(row.date, date(2026, 4, 3))
         self.assertEqual(row.amount, Decimal('18872.11'))
@@ -131,21 +130,23 @@ class BankFileTests(unittest.TestCase):
             with self.subTest(columns=columns), self.assertRaises(parser.FileError):
                 self.parse(self.csv(columns=columns, rows=[]))
 
-    def test_missing_movement_account_and_wrong_currency_report_rows(self):
+    def test_missing_movement_and_wrong_currency_report_rows(self):
         base = ['0176055262', '12/10/2026', 'MXN', '1', '100']
-        for index, value in ((0, ''), (0, '176055262'), (2, 'USD'), (3, '')):
+        for index, value in ((2, 'USD'), (3, '')):
             row = base.copy()
             row[index] = value
             parsed = self.parse(self.csv(columns=['CUENTA', 'FECHA', 'MONEDA', 'MOVIMIENTO', 'IMPORTE'], rows=[row]))
             self.assertEqual(len(parsed.issues), 1)
             self.assertEqual(parsed.rows, [])
 
-    def test_multiple_accounts_rejected_even_if_one_account_matches(self):
+    def test_account_values_do_not_affect_import(self):
         parsed = self.parse(self.csv(columns=['CUENTA', 'FECHA', 'MONEDA', 'MOVIMIENTO', 'IMPORTE'], rows=[
             ['0176055262', '12/10/2026', 'MXN', '1', '100'],
             ['9999999999', '12/10/2026', 'MXN', '2', '100'],
+            ['', '12/10/2026', 'MXN', '3', '100'],
         ]))
-        self.assertTrue(any('varias cuentas' in i.message for i in parsed.issues))
+        self.assertEqual(parsed.issues, [])
+        self.assertEqual(len(parsed.rows), 3)
 
     def test_empty_files_unsupported_extension_and_overflow_columns(self):
         for data, filename in ((b'', 'a.csv'), (b'\n\n', 'a.csv'), (self.csv(rows=[]), 'a.csv'), (self.csv(), 'a.xls')):
@@ -154,10 +155,27 @@ class BankFileTests(unittest.TestCase):
         with self.assertRaises(parser.FileError):
             self.parse(self.csv(columns=['A'] * 101))
 
-    def test_missing_bank_configuration_is_empty(self):
-        self.assertEqual(parser.normalize_account(False), '')
-        self.assertEqual(parser.normalize_account(None), '')
-        self.assertEqual(parser.normalize_account(" '000 123 " ), '000123')
+    def test_account_column_is_optional(self):
+        parsed = self.parse(self.csv(
+            columns=['FECHA', 'MONEDA', 'MOVIMIENTO', 'IMPORTE'],
+            rows=[['12/10/2026', 'MXN', '1', '100']],
+        ))
+        self.assertEqual(parsed.issues, [])
+        self.assertEqual(parsed.rows[0].movement, '1')
+
+    def test_xlsx_account_column_is_ignored_for_280_rows(self):
+        from openpyxl import Workbook
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(['CUENTA', 'FECHA', 'MONEDA', 'MOVIMIENTO', 'IMPORTE'])
+        accounts = [None, 176055262, '072180017605526201', '=1+1', '#VALUE!']
+        for index in range(280):
+            sheet.append([accounts[index % len(accounts)], date(2026, 10, 12), 'MXN', str(31984 + index), 100])
+        output = io.BytesIO()
+        workbook.save(output)
+        parsed = self.parse(output.getvalue(), 'bank.xlsx')
+        self.assertEqual(parsed.issues, [])
+        self.assertEqual(len(parsed.rows), 280)
 
     def test_xlsx_text_accounts_numeric_amounts_and_real_dates(self):
         from openpyxl import Workbook
@@ -173,12 +191,11 @@ class BankFileTests(unittest.TestCase):
         parsed = self.parse(output.getvalue(), 'bank.xlsx')
         self.assertEqual(parsed.issues, [])
         self.assertEqual([r.movement for r in parsed.rows], ['0031984', '0031985'])
-        self.assertEqual(parsed.rows[1].account, '0176055262')
         self.assertEqual(parsed.rows[0].amount, Decimal('18872.11'))
 
-    def test_xlsx_rejects_ambiguous_account_long_numeric_id_and_formulas(self):
+    def test_xlsx_rejects_long_numeric_movement_and_used_formulas(self):
         from openpyxl import Workbook
-        for account, movement, amount in ((176055262, 1, 100), ('0176055262', 1234567890123456, 100), ('0176055262', 1, '=1+1')):
+        for account, movement, amount in (('0176055262', 1234567890123456, 100), ('0176055262', 1, '=1+1')):
             with self.subTest(account=account, movement=movement, amount=amount):
                 workbook = Workbook()
                 workbook.active.append(['CUENTA', 'FECHA', 'MONEDA', 'MOVIMIENTO', 'IMPORTE'])
@@ -222,7 +239,7 @@ class BankFileTests(unittest.TestCase):
 
 class ClassificationTests(unittest.TestCase):
     def setUp(self):
-        self.row = parser.Row(2, '31984', '0176055262', date(2026, 10, 12), Decimal('100.00'), 'REF', 'Pago')
+        self.row = parser.Row(2, '31984', date(2026, 10, 12), Decimal('100.00'), 'REF', 'Pago')
 
     def existing(self, **kwargs):
         return dedup.Existing(**dict(id=87, date=self.row.date, amount=100, **kwargs))

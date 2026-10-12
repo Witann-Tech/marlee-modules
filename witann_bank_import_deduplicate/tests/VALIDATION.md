@@ -2,13 +2,14 @@
 
 ## Resultado local — 12 de octubre de 2026
 
-- 31 pruebas del lector/clasificador aprobadas, incluyendo CSV/XLSX reales,
-  fechas, importes, cuenta, MXP/MXN, conflictos, repeticiones y 280 filas.
+- 32 pruebas del lector/clasificador aprobadas, incluyendo CSV/XLSX reales,
+  fechas, importes, CUENTA ignorada/opcional, MXP/MXN, conflictos, repeticiones
+  y 280 filas XLSX con CUENTA vacía, numérica, CLABE y errores/fórmulas ignorados.
 - Sintaxis Python, XML y archivos del manifiesto verificados. El script de
   concurrencia inicia y muestra su ayuda sin requerir bibliotecas adicionales.
-- 23 pruebas ORM preparadas, **sin ejecutar**: no hay Odoo ni PostgreSQL locales.
+- 24 pruebas ORM preparadas, **sin ejecutar**: no hay Odoo ni PostgreSQL locales.
   La prueba RPC simultánea y los tiempos contables también están pendientes.
-- Desarrollo local por indicación del usuario. Sin despliegue ni cambios remotos.
+- Corrección local 19.0.1.0.1; las pruebas ORM y RPC quedan pendientes de staging.
 
 ## Permisos e identidad
 
@@ -19,11 +20,12 @@ previamente autorizados; se reponen el entorno y permisos del usuario antes de
 leer los campos del candidato. Un registro oculto por reglas bloquea la operación
 en vez de clasificarse como nuevo. No se crean ni actualizan asientos con `sudo`.
 
-Los nombres históricos provienen del requisito y el módulo `__import__` se
-contrastó con el código del importador estándar. Su registro real en esta
-instalación sigue pendiente. Dos nombres históricos para el mismo registro se
-resuelven una sola vez; varios registros para una identidad o un registro que
-reclama varias identidades del archivo producen conflicto.
+La búsqueda histórica usa exclusivamente `__import__.MOVIMIENTO`, sin CUENTA
+ni prefijos de cuenta, conforme a la aclaración del usuario sobre su histórico.
+El módulo `__import__` se contrastó con el importador estándar. Varios registros
+para una identidad o un registro que reclama varias identidades producen
+conflicto. La suite ORM cubre históricos sin cuenta, un diario con CLABE y
+un diario sin cuenta bancaria configurada; no se ejecutó en este entorno.
 
 ## Transacciones
 
@@ -48,7 +50,8 @@ la identidad financiera del archivo.
 Desarrollado localmente por indicación del usuario. En este entorno no están
 instalados Odoo, Enterprise ni PostgreSQL. Se verificaron las APIs y XML IDs
 contra las fuentes oficiales de la rama `19.0`, **no contra la instalación de
-CloudPepper**. No se ha desplegado en staging ni producción.
+CloudPepper**. El usuario instaló la versión inicial en staging; esta corrección
+no se ha probado contra esa instalación. No se ha desplegado en producción.
 
 Pruebas locales del lector y clasificador (requieren `openpyxl`):
 
@@ -94,7 +97,7 @@ La prueba determinista ORM ejercita la colisión exacta aunque el planificador
 serialice las llamadas RPC. No se afirma rendimiento de Odoo hasta medirlo allí.
 
 Antes de instalar en staging: comprobar los campos `journal_id`, `company_id`,
-`date`, `amount`, `ref`, `payment_ref` y `bank_account_id.acc_number`; inspeccionar
+`date`, `amount`, `ref` y `payment_ref`; inspeccionar
 los módulos/nombres/modelos/res_id reales en `ir.model.data`; verificar ambas
 herencias de vistas con las personalizaciones Enterprise instaladas. Después:
 ejecutar la suite, prueba concurrente y una reimportación de un movimiento

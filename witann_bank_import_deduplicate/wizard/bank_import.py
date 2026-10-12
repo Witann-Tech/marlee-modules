@@ -10,7 +10,7 @@ from odoo.exceptions import AccessError, UserError
 from odoo.fields import Command
 
 from ..deduplicate import Existing, classify
-from ..parser import FileError, MAX_FILE_BYTES, normalize_account, parse_file
+from ..parser import FileError, MAX_FILE_BYTES, parse_file
 
 
 class BankImport(models.TransientModel):
@@ -67,9 +67,6 @@ class BankImport(models.TransientModel):
             raise UserError(_('Selecciona un diario bancario.'))
         if journal.company_id not in self.env.companies:
             raise AccessError(_('Activa la empresa del diario antes de importar.'))
-        account = normalize_account(journal.bank_account_id.acc_number)
-        if not account:
-            raise UserError(_('Configura el número de cuenta bancaria del diario antes de importar.'))
         currency = journal.currency_id or journal.company_id.currency_id
         if not journal.default_account_id or not journal.suspense_account_id:
             raise UserError(_('Configura las cuentas de banco y transitoria del diario.'))
@@ -82,9 +79,9 @@ class BankImport(models.TransientModel):
         }).with_company(journal.company_id)
         lines.check_access('read')
         lines.check_access('create')
-        return journal, account, currency, lines
+        return journal, currency, lines
 
-    def _existing(self, lines, journal, account, movements):
+    def _existing(self, lines, journal, movements):
         """Batch lookups. Never backfill identifiers on old accounting records."""
         if not movements:
             return {}
@@ -102,17 +99,13 @@ class BankImport(models.TransientModel):
                 line.id, line.date, line.amount, line.witann_bank_movement or '',
             )
 
-        names = defaultdict(set)
-        for movement in movements:
-            names[movement].add(movement)
-            names[f'banco_{account}_{movement}'].add(movement)
         # ir.model.data is not readable by ordinary accountants in Odoo 19.
         # Elevation is confined to exact __import__ metadata names for this model.
         # Target records must pass the caller's company and record rules.
         metadata = self.env['ir.model.data'].sudo().search_read([
             ('module', '=', '__import__'),
             ('model', '=', 'account.bank.statement.line'),
-            ('name', 'in', list(names)),
+            ('name', 'in', list(movements)),
         ], ['name', 'res_id'])
         legacy = lines.sudo().search(scope + [
             ('id', 'in', [item['res_id'] for item in metadata]),
@@ -123,10 +116,9 @@ class BankImport(models.TransientModel):
             line = by_id.get(item['res_id'])
             if line is None:
                 continue  # missing record or different journal/company
-            for movement in names[item['name']]:
-                found[movement].setdefault(line.id, Existing(
-                    line.id, line.date, line.amount, line.witann_bank_movement or '', True,
-                ))
+            found[item['name']].setdefault(line.id, Existing(
+                line.id, line.date, line.amount, line.witann_bank_movement or '', True,
+            ))
         identities = defaultdict(set)
         for movement, candidates in found.items():
             for line_id in candidates:
@@ -137,7 +129,7 @@ class BankImport(models.TransientModel):
         }
 
     def _analyze(self, configuration):
-        journal, account, currency, lines = configuration
+        journal, currency, lines = configuration
         encoded = self.with_context(bin_size=False).file_data
         if not encoded or not self.filename:
             raise FileError('Selecciona un archivo CSV o XLSX.')
@@ -147,8 +139,8 @@ class BankImport(models.TransientModel):
             data = base64.b64decode(encoded, validate=True)
         except (ValueError, binascii.Error) as exc:
             raise FileError('No se pudo decodificar el archivo.') from exc
-        parsed = parse_file(data, self.filename, account=account, currency=currency.name)
-        existing = self._existing(lines, journal, account, {row.movement for row in parsed.rows})
+        parsed = parse_file(data, self.filename, currency=currency.name)
+        existing = self._existing(lines, journal, {row.movement for row in parsed.rows})
         results = classify(parsed.rows, existing, currency.compare_amounts)
         return parsed, results
 
@@ -191,7 +183,7 @@ class BankImport(models.TransientModel):
             ),
             'legacy_warning': _(
                 'Los movimientos antiguos sin MOVIMIENTO sólo se reconocen mediante los IDs externos '
-                '__import__.MOVIMIENTO o __import__.banco_CUENTA_MOVIMIENTO, verificando el diario, '
+                '__import__.MOVIMIENTO, verificando el diario, '
                 'empresa, fecha e importe. Sin un identificador verificable no se pueden deduplicar; '
                 'no se infiere identidad por fecha e importe. Otros prefijos requieren revisión en staging.'
             ),
@@ -225,7 +217,7 @@ class BankImport(models.TransientModel):
             return self._show(error=str(exc))
         if parsed.issues or any(item.status == 'conflict' for item in results):
             return self._show(parsed, results)
-        journal, _account, currency, lines = configuration
+        journal, currency, lines = configuration
         new_rows = [item.row for item in results if item.status == 'new']
         values = [{
             'journal_id': journal.id,

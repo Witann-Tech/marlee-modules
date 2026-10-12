@@ -30,7 +30,7 @@ class TestBankImport(AccountTestInvoicingCommon):
         cls.Line = cls.env['account.bank.statement.line']
         cls.Wizard = cls.env['witann.bank.import']
 
-    def _csv(self, rows, journal=None):
+    def _csv(self, rows, journal=None, account='0176055262'):
         journal = journal or self.journal
         currency = journal.currency_id or journal.company_id.currency_id
         output = io.StringIO(newline='')
@@ -39,12 +39,12 @@ class TestBankImport(AccountTestInvoicingCommon):
         for row in rows:
             movement, amount, *dates = row
             writer.writerow([
-                journal.bank_account_id.acc_number, dates[0] if dates else '12/10/2026',
+                account, dates[0] if dates else '12/10/2026',
                 currency.name, movement, amount, 'REF-' + str(movement), 'Pago', 'Detalle', '999999',
             ])
         return base64.b64encode(output.getvalue().encode('utf-8-sig'))
 
-    def _wizard(self, rows, journal=None, user=None):
+    def _wizard(self, rows, journal=None, user=None, account='0176055262'):
         journal = journal or self.journal
         model = self.Wizard.with_company(journal.company_id)
         if user:
@@ -52,7 +52,7 @@ class TestBankImport(AccountTestInvoicingCommon):
         return model.create({
             'journal_id': journal.id,
             'filename': 'bank.csv',
-            'file_data': self._csv(rows, journal),
+            'file_data': self._csv(rows, journal, account),
         })
 
     def _line(self, movement='31984', amount=100, journal=None, **extra):
@@ -215,13 +215,14 @@ class TestBankImport(AccountTestInvoicingCommon):
         self.assertEqual(wizard.created_line_ids.journal_id, other)
 
     def test_legacy_ids_are_verified_without_backfill_or_accounting_writes(self):
-        for index in range(2):
-            number = self._legacy_movement(index)
-            name = number if index == 0 else 'banco_0176055262_' + number
-            existing = self._line(movement=False)
-            self._xmlid(name, existing)
-            before = self._snapshot(existing)
-            wizard = self._wizard([(number, 100)])
+        number = self._legacy_movement()
+        existing = self._line(movement=False)
+        self._xmlid(number, existing)
+        # Historical imports have MOVIMIENTO as external ID, without CUENTA.
+        self.journal.bank_account_id.acc_number = '072180017605526201'
+        before = self._snapshot(existing)
+        for account in ('176055262', '', 'different-account'):
+            wizard = self._wizard([(number, 100)], account=account)
             with self._forbid_accounting_mutation():
                 wizard.action_import()
             self.assertEqual(wizard.created_count, 0)
@@ -237,8 +238,7 @@ class TestBankImport(AccountTestInvoicingCommon):
         wizard = self._wizard([(number, 101)])
         wizard.action_import()
         self.assertEqual(wizard.conflict_count, 1)
-        second = self._line(movement=False)
-        self._xmlid('banco_0176055262_' + number, second)
+        self._line(movement=number)
         wizard = self._wizard([(number, 100)])
         wizard.action_import()
         self.assertEqual(wizard.conflict_count, 1)
@@ -336,14 +336,27 @@ class TestBankImport(AccountTestInvoicingCommon):
         self.assertEqual(wizard.created_count, 1)
         self.assertEqual(wizard.skipped_count, 1)
 
-    def test_missing_bank_account_configuration(self):
+    def test_bank_account_configuration_is_not_required(self):
         self.journal.bank_account_id = False
-        wizard = self.Wizard.create({
-            'journal_id': self.journal.id, 'filename': 'bank.csv',
-            'file_data': base64.b64encode(b'placeholder'),
-        })
-        with self.assertRaisesRegex(UserError, 'número de cuenta'):
-            wizard.action_analyze()
+        wizard = self._wizard([('no-bank-account', 100)], account='')
+        wizard.action_analyze()
+        self.assertEqual(wizard.invalid_count, 0)
+        self.assertEqual(wizard.new_count, 1)
+        wizard.action_import()
+        self.assertEqual(wizard.created_count, 1)
+
+    def test_journal_clabe_does_not_restrict_file_account(self):
+        self.journal.bank_account_id.acc_number = '072180017605526201'
+        wizard = self._wizard([('file-account', 100)], account='176055262')
+        wizard.action_import()
+        self.assertEqual(wizard.invalid_count, 0)
+        self.assertEqual(wizard.created_count, 1)
+        # Reimporting with no account still skips the same MOVIMIENTO.
+        wizard = self._wizard([('file-account', 100)], account='')
+        with self._forbid_accounting_mutation():
+            wizard.action_import()
+        self.assertEqual(wizard.created_count, 0)
+        self.assertEqual(wizard.existing_count, 1)
 
     def test_native_date_adjustment_does_not_silently_change_bank_identity(self):
         wizard = self._wizard([('adjusted-date', 100)])

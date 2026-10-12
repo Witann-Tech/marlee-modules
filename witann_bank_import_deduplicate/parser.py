@@ -14,7 +14,7 @@ MAX_FILE_BYTES = 10 * 1024 * 1024
 MAX_XLSX_BYTES = 50 * 1024 * 1024
 MAX_ROWS = 10000
 MAX_COLUMNS = 100
-REQUIRED = {'CUENTA', 'FECHA', 'MONEDA', 'MOVIMIENTO'}
+REQUIRED = {'FECHA', 'MONEDA', 'MOVIMIENTO'}
 MONEY = re.compile(r'^[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?$')
 
 
@@ -26,7 +26,6 @@ class FileError(ValueError):
 class Row:
     number: int
     movement: str
-    account: str
     date: date
     amount: Decimal
     reference: str
@@ -49,10 +48,6 @@ class Parsed:
 
 def text(value):
     return '' if value is None or value is False else str(value).strip()
-
-
-def normalize_account(value):
-    return ''.join(text(value).removeprefix("'").split())
 
 
 def normalize_currency(value):
@@ -118,8 +113,6 @@ def _identifier(cell, name):
         number_format = getattr(cell, 'number_format', '')
         if re.fullmatch('0+', number_format):
             return str(int(value)).zfill(len(number_format))
-        if name == 'CUENTA':
-            raise ValueError('CUENTA numérica sin formato de ceros: guárdala como texto para conservar ceros iniciales.')
         return str(int(value))
     return text(value)
 
@@ -162,7 +155,7 @@ def _xlsx_rows(data):
         raise FileError(f'No se pudo leer el XLSX: {exc}') from exc
     try:
         # A single nonempty worksheet is intentional; silently dropping others
-        # would hide transactions or accounts from validation.
+        # would hide transactions from validation.
         selected = None
         for sheet in workbook.worksheets:
             if sheet.max_column and sheet.max_column > MAX_COLUMNS:
@@ -183,7 +176,7 @@ def _xlsx_rows(data):
         workbook.close()
 
 
-def parse_file(data, filename, *, account, currency):
+def parse_file(data, filename, *, currency):
     if not data:
         raise FileError('El archivo está vacío.')
     if len(data) > MAX_FILE_BYTES:
@@ -192,7 +185,7 @@ def parse_file(data, filename, *, account, currency):
     if extension not in ('csv', 'xlsx'):
         raise FileError('Selecciona un archivo CSV o XLSX.')
     source = iter(_csv_rows(data) if extension == 'csv' else _xlsx_rows(data))
-    rows, issues, accounts = [], [], set()
+    rows, issues = [], []
     columns = None
     read_count = 0
     for number, cells in source:
@@ -230,11 +223,6 @@ def parse_file(data, filename, *, account, currency):
             movement = _identifier(cell('MOVIMIENTO'), 'MOVIMIENTO')
             if not movement:
                 raise ValueError('MOVIMIENTO es obligatorio.')
-            row_account = normalize_account(_identifier(cell('CUENTA'), 'CUENTA'))
-            if row_account:
-                accounts.add(row_account)
-            if not row_account or row_account != normalize_account(account):
-                raise ValueError('CUENTA no corresponde a la cuenta bancaria configurada en el diario.')
             if normalize_currency(_value(cell('MONEDA'))) != normalize_currency(currency):
                 raise ValueError('MONEDA no corresponde a la moneda del diario.')
             row_date = parse_date(_value(cell('FECHA')))
@@ -251,11 +239,9 @@ def parse_file(data, filename, *, account, currency):
                 text(_value(cell('DESCRIPCION'))),
                 text(_value(cell('DESCRIPCION DETALLADA'))),
             ))) or reference or movement
-            rows.append(Row(number, movement, row_account, row_date, amount, reference, label))
+            rows.append(Row(number, movement, row_date, amount, reference, label))
         except (ValueError, InvalidOperation) as exc:
             issues.append(Issue(number, movement, str(exc)))
     if columns is None or not read_count:
         raise FileError('El archivo no contiene movimientos.')
-    if len(accounts) > 1:
-        issues.append(Issue(0, '', 'El archivo contiene varias cuentas; usa un archivo de una sola cuenta.'))
     return Parsed(rows, issues, read_count)

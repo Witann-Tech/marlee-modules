@@ -9,7 +9,7 @@ Los existentes se leen y omiten sin actualizarlos ni rellenar campos históricos
 1. Agregar el repositorio al `addons_path` de CloudPepper y actualizar la lista
    de aplicaciones. Instalar **Witann Bank Import Deduplicate** en staging.
    Dependencias: `account` y `openpyxl`; sin servicios adicionales.
-2. Configurar cuenta bancaria, cuenta contable de banco, transitoria y moneda
+2. Configurar cuenta contable de banco, transitoria y moneda
    del diario. Si no tiene moneda específica, se usa la de su empresa.
 3. Desde el menú del diario bancario en el tablero de Contabilidad, o desde su
    formulario, abrir **Importar movimientos sin duplicados**.
@@ -25,7 +25,7 @@ los errores de serialización siguen los reintentos normales de Odoo.
 
 ## Formato
 
-Se aceptan todos los encabezados solicitados. Obligatorios: `CUENTA`, `FECHA`,
+Se aceptan todos los encabezados solicitados. Obligatorios: `FECHA`,
 `MONEDA`, `MOVIMIENTO` y `IMPORTE`, o `DEPÓSITOS` y `RETIROS` si no hay `IMPORTE`.
 Los acentos, mayúsculas y espacios de los encabezados se normalizan.
 
@@ -34,9 +34,8 @@ Los acentos, mayúsculas y espacios de los encabezados se normalizan.
 - IMPORTE tiene prioridad; vacío, `-` o inválido produce error. Sin esa columna
   se calcula DEPÓSITOS menos RETIROS; sólo allí vacío y `-` equivalen a cero.
   Se aceptan números y `$18,872.11`; comparación/redondeo con precisión de moneda.
-- CUENTA elimina espacios y el apóstrofo inicial, conserva ceros y debe coincidir
-  con `bank_account_id.acc_number`. Guarda las cuentas como texto; Excel numérico
-  requiere formato explícito de ceros. No se admiten varias cuentas.
+- CUENTA se ignora completamente y es opcional. No se consulta el número de
+  cuenta ni la CLABE del diario; el destino es el diario seleccionado.
 - MONEDA debe coincidir con el diario. MXP se reconoce como MXN.
 - REFERENCIA se conserva en `ref`; ambas descripciones se combinan en
   `payment_ref`. SALDO es informativo y no modifica saldos ni importes.
@@ -47,13 +46,14 @@ Los acentos, mayúsculas y espacios de los encabezados se normalizan.
 
 ## Histórico y verificación
 
-Se reconocen exclusivamente IDs exactos `__import__.31984` y
-`__import__.banco_0176055262_31984`, verificando modelo, registro, diario, empresa,
+Se reconocen exclusivamente IDs exactos `__import__.MOVIMIENTO` (por ejemplo
+`__import__.31984`), verificando modelo, registro, diario, empresa,
 fecha e importe. Un histórico sin identificador verificable **podría duplicarse**;
 el asistente advierte esta limitación y no infiere identidad por fecha/importe.
 Los prefijos y registros reales deben inspeccionarse en staging.
 
-Implementado localmente por indicación del usuario; sin despliegues. Las APIs y
+Versión 19.0.1.0.1: se elimina toda dependencia de CUENTA y de la cuenta bancaria
+del diario, incluida la búsqueda histórica con prefijos de cuenta. Las APIs y
 vistas se contrastaron con la rama oficial Odoo 19. Las pruebas locales CSV/XLSX
 pasan; la instalación Enterprise, pruebas ORM, conciliaciones y concurrencia real
 quedan pendientes de staging. No se afirma rendimiento contable sin medirlo.

@@ -39,12 +39,11 @@ def main():
         with xmlrpc.client.ServerProxy(url + '/xmlrpc/2/object', allow_none=True) as proxy:
             return proxy.execute_kw(args.db, uid, secret, model, method, values, kwargs)
 
-    journal = rpc('account.journal', 'read', [[args.journal]], fields=['company_id', 'bank_account_id', 'currency_id', 'type'])[0]
-    if journal['type'] != 'bank' or not journal['bank_account_id']:
+    journal = rpc('account.journal', 'read', [[args.journal]], fields=['company_id', 'currency_id', 'type'])[0]
+    if journal['type'] != 'bank':
         raise RuntimeError('Select a configured bank journal')
     company_id = journal['company_id'][0]
     context = {'allowed_company_ids': [company_id]}
-    account = rpc('res.partner.bank', 'read', [[journal['bank_account_id'][0]]], fields=['acc_number'], context=context)[0]['acc_number']
     company = rpc('res.company', 'read', [[company_id]], fields=['currency_id'], context=context)[0]
     currency_id = (journal['currency_id'] or company['currency_id'])[0]
     currency = rpc('res.currency', 'read', [[currency_id]], fields=['name'], context=context)[0]['name']
@@ -56,9 +55,9 @@ def main():
     def new_wizard(start, stop):
         output = io.StringIO(newline='')
         writer = csv.writer(output)
-        writer.writerow(['CUENTA', 'FECHA', 'MONEDA', 'MOVIMIENTO', 'IMPORTE'])
+        writer.writerow(['FECHA', 'MONEDA', 'MOVIMIENTO', 'IMPORTE'])
         for index in range(start, stop):
-            writer.writerow([account, args.date, currency, prefix + str(index), index + 1])
+            writer.writerow([args.date, currency, prefix + str(index), index + 1])
         return rpc('witann.bank.import', 'create', [{
             'journal_id': args.journal, 'filename': 'concurrency.csv',
             'file_data': base64.b64encode(output.getvalue().encode()).decode(),

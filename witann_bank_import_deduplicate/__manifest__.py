@@ -1,6 +1,6 @@
 {
     'name': 'Witann Bank Import Deduplicate',
-    'version': '19.0.1.0.0',
+    'version': '19.0.1.0.1',
     'summary': 'Importa únicamente movimientos bancarios nuevos desde CSV/XLSX',
     'category': 'Accounting/Accounting',
     'author': 'Witann Technologies',
