@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="bank_import_company_rule" model="ir.rule">
+        <field name="name">Importación bancaria: empresas activas</field>
+        <field name="model_id" ref="model_witann_bank_import"/>
+        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+    </record>
+    <record id="bank_import_result_company_rule" model="ir.rule">
+        <field name="name">Detalle importación bancaria: empresas activas</field>
+        <field name="model_id" ref="model_witann_bank_import_result"/>
+        <field name="domain_force">[('wizard_id.company_id', 'in', company_ids)]</field>
+    </record>
+</odoo>
