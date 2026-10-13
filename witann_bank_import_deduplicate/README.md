@@ -48,6 +48,40 @@ Los acentos, mayúsculas y espacios de los encabezados se normalizan.
   XLSX: una hoja con datos, sin fórmulas en campos utilizados. Límites: 10 MiB,
   10,000 filas, 100 columnas y 50 MiB descomprimidos. Se ignoran filas vacías.
 
+## Contactos automáticos
+
+La asignación es opcional e invisible: no agrega pasos, preguntas ni bloqueos.
+Se buscan contactos existentes al importar, únicamente para movimientos nuevos.
+Nunca se crean, modifican ni archivan contactos; las reimportaciones tampoco
+rellenan el contacto de movimientos existentes.
+
+- Se extraen nombres explícitos `CLIENTE`, `BENEF`, TEF y cobranza domiciliada
+  desde DESCRIPCIÓN DETALLADA; no se adivina el contacto a partir del concepto.
+  También se aprovecha el RFC aunque no haya nombre. Una contradicción entre
+  la dirección del movimiento y el rol explícito descarta esa extracción.
+- Primero se busca RFC exacto y único, normalizando espacios y prefijo MX.
+  RFC genéricos, CURP, formatos o fechas inválidos se ignoran sin error. Esta
+  comprobación es local y no consulta ni verifica la inscripción ante el SAT.
+  Un RFC duplicado o una contradicción fuerte con el nombre dejan la línea sin
+  contacto; no se fuerza una alternativa.
+- Sin match por RFC, se comparan nombres normalizados y sus componentes.
+  Se conservan las diferencias Ñ/N. Se admiten coincidencias exactas con al menos
+  dos componentes útiles; para una diferencia pequeña se exigen al menos tres,
+  dos componentes completos iguales, similitud global mínima de 96% y distancia
+  mínima de 5 puntos frente al segundo candidato. No se usa coincidencia parcial
+  por un solo nombre/apellido. RFC distintos conocidos descartan la asignación.
+- Se leen sólo contactos comerciales activos y visibles para el usuario,
+  compartidos o de la empresa del diario. Se excluyen direcciones de entrega,
+  facturación y personas subordinadas a otra entidad comercial. No se usa sudo.
+- La consulta se hace una vez por importación y los matches se reutilizan dentro
+  de esa petición. Si hay más de 20,000 candidatos visibles, más de 1,000
+  candidatos por nombre, falta de permisos o registros inaccesibles, se omite
+  la asignación. Nunca se decide unicidad usando una lista truncada.
+- Sin evidencia suficiente o con ambigüedad, se importa sin `partner_id`.
+  El nombre explícito extraído se conserva en el campo nativo `partner_name`,
+  como información. Repeticiones compatibles con datos de contacto distintos
+  también se importan sin contacto y mantienen la deduplicación financiera.
+
 ## Histórico y verificación
 
 Se reconocen exclusivamente IDs exactos `__import__.MOVIMIENTO` (por ejemplo
@@ -56,10 +90,9 @@ fecha e importe. Un histórico sin identificador verificable **podría duplicars
 el asistente advierte esta limitación y no infiere identidad por fecha/importe.
 Los prefijos y registros reales deben inspeccionarse en staging.
 
-Versión 19.0.1.0.2: los depósitos/retiros originales del banco tienen prioridad
-para calcular el importe. CUENTA sigue ignorada, incluida la búsqueda histórica.
-Las APIs y
-vistas se contrastaron con la rama oficial Odoo 19. Las pruebas locales CSV/XLSX
-pasan; la instalación Enterprise, pruebas ORM, conciliaciones y concurrencia real
+Versión 19.0.1.1.0: asignación automática y opcional de contactos existentes por
+RFC/nombre. Se mantienen los importes automáticos y CUENTA ignorada.
+Las APIs y vistas se contrastaron con la rama oficial Odoo 19. Las pruebas
+locales CSV/XLSX pasan; pruebas ORM, conciliaciones y concurrencia real
 quedan pendientes de staging. No se afirma rendimiento contable sin medirlo.
 Véanse [pruebas y comandos de staging](tests/VALIDATION.md).

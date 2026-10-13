@@ -25,6 +25,7 @@ def load(name):
 
 parser = load('parser')
 dedup = load('deduplicate')
+contacts = load('contacts')
 
 
 def compare(left, right):
@@ -261,6 +262,108 @@ class BankFileTests(unittest.TestCase):
     def test_invalid_csv_encoding_has_a_clear_file_error(self):
         with self.assertRaises(parser.FileError):
             self.parse(b'\x81', 'bank.csv')
+
+
+class ContactTests(unittest.TestCase):
+    def test_rfc_normalization_and_invalid_fiscal_identifiers(self):
+        for raw in ('GAMA900101AB1', 'mx gama900101ab1', 'MX-GAMA-900101-AB1'):
+            self.assertEqual(contacts.normalize_rfc(raw), 'GAMA900101AB1')
+        self.assertEqual(contacts.normalize_rfc('ABC010101AB1'), 'ABC010101AB1')
+        for raw in (False, '', 'XAXX010101000', 'MX XEXX010101000', 'GAMA900101HASRZS05',
+                    'GAMA900231AB1', 'GAMA901301AB1', 'ABC', 'ABC010101AB123'):
+            with self.subTest(raw=raw):
+                self.assertEqual(contacts.normalize_rfc(raw), '')
+
+    def test_name_normalization_preserves_enye_and_removes_bank_separators(self):
+        self.assertEqual(contacts.normalize_name('  Mateo Alejandro,Solís/Fuentes '), 'MATEO ALEJANDRO SOLIS FUENTES')
+        self.assertNotEqual(contacts.normalize_name('Luis Peña'), contacts.normalize_name('Luis Pena'))
+
+    def test_extract_explicit_client_and_beneficiary_names(self):
+        client = contacts.extract_contact('SPEI RECIBIDO, DEL CLIENTE MATEO ALEJANDRO,SOLIS/FUENTES, DE LA CLABE 123 CON RFC GAMA900101AB1, CONCEPTO: pago', 100)
+        self.assertEqual(client, contacts.Contact('MATEO ALEJANDRO,SOLIS/FUENTES', 'GAMA900101AB1'))
+        beneficiary = contacts.extract_contact('BEM SPEI, BENEF:Mateo Alejandro Solis Fuente (DATO NO VERIFICADO, POR ESTA INSTITUCION), pago, RFC: GAMA900101AB1, IVA: 0', -100)
+        self.assertEqual(beneficiary, contacts.Contact('Mateo Alejandro Solis Fuente', 'GAMA900101AB1'))
+
+    def test_extract_tef_direct_debit_and_rfc_without_name(self):
+        tef = contacts.extract_contact('BEM TEF.BCO:012  Juan Manuel Garcia Perez, CVE.RASTREO:123 RFC: GAMA900101AB1 IVA:0', -100)
+        self.assertEqual(tef.name, 'Juan Manuel Garcia Perez')
+        debit = contacts.extract_contact('CARGO COBRANZA DOMICILIADA, REF:123, COBRADOR SA DE CV, RFC: ABC010101AB1 IVA:0', -100)
+        self.assertEqual(debit, contacts.Contact('COBRADOR SA DE CV', 'ABC010101AB1'))
+        self.assertEqual(contacts.extract_contact('A LA CUENTA 123, prestamo AL R.F.C. GAMA900101AB1', -100), contacts.Contact('', 'GAMA900101AB1'))
+
+    def test_malformed_missing_concepts_and_direction_conflicts_are_optional(self):
+        for detail, amount in (('', 100), ('padel Juan Garcia', 100), ('Mensualidad Israel y Fabiola', 100),
+                               ('BENEF:Juan Garcia sin delimitador', -100), ('X' * 8193, 100),
+                               ('DEL CLIENTE JUAN GARCIA, DE LA CLABE 123', -100),
+                               ('BENEF:JUAN GARCIA (DATO NO VERIFICADO)', 100),
+                               ('AL RFC GAMA900101AB1', 0)):
+            with self.subTest(detail=detail[:70], amount=amount):
+                self.assertEqual(contacts.extract_contact(detail, amount), contacts.Contact())
+
+    def test_conflicting_explicit_contacts_are_ignored(self):
+        for detail in ('AL RFC GAMA900101AB1 CON RFC ABC010101AB1',
+                       'DEL CLIENTE JUAN GARCIA, DE LA CLABE 123, DEL CLIENTE PEDRO LOPEZ, DE LA CLABE 456'):
+            self.assertEqual(contacts.extract_contact(detail, 100), contacts.Contact())
+
+    def test_curp_and_generic_rfc_do_not_prevent_name_extraction(self):
+        for rfc in ('GAMA900101HASRZS05', 'XAXX010101000'):
+            contact = contacts.extract_contact(f'DEL CLIENTE JUAN MANUEL GARCIA, DE LA CLABE 123 CON RFC {rfc}, CONCEPTO: pago', 100)
+            self.assertEqual(contact, contacts.Contact('JUAN MANUEL GARCIA', ''))
+
+    def test_exact_unique_rfc_with_missing_or_truncated_name(self):
+        matcher = contacts.Matcher([contacts.Partner(7, 'Mateo Alejandro Solis Fuentes', 'MXGAMA900101AB1')])
+        for name in ('', 'Mateo Alejandro Solis Fuente'):
+            self.assertEqual(matcher.match(contacts.Contact(name, 'GAMA900101AB1')), 7)
+
+    def test_duplicate_rfc_does_not_choose_even_an_exact_name(self):
+        matcher = contacts.Matcher([contacts.Partner(7, 'Juan Manuel Garcia', 'GAMA900101AB1'),
+                                    contacts.Partner(8, 'Otra Persona', 'GAMA900101AB1')])
+        self.assertIsNone(matcher.match(contacts.Contact('Juan Manuel Garcia', 'GAMA900101AB1')))
+
+    def test_rfc_name_contradiction_and_name_rfc_contradiction_are_unmatched(self):
+        matcher = contacts.Matcher([contacts.Partner(7, 'Mateo Alejandro Solis Fuentes', 'GAMA900101AB1')])
+        self.assertIsNone(matcher.match(contacts.Contact('Ernesto Beltran Hurtado', 'GAMA900101AB1')))
+        self.assertIsNone(matcher.match(contacts.Contact('Mateo Alejandro Solis Fuentes', 'ABC010101AB1')))
+        matcher = contacts.Matcher([contacts.Partner(7, 'Juan Carlos Lopez', 'GAMA900101AB1')])
+        self.assertIsNone(matcher.match(contacts.Contact('Juan Manuel Garcia', 'GAMA900101AB1')))
+
+    def test_rfc_allows_a_company_short_name_with_the_same_distinctive_name(self):
+        matcher = contacts.Matcher([contacts.Partner(7, 'STRIPE', 'ABC010101AB1')])
+        self.assertEqual(matcher.match(contacts.Contact('STRIPE PAYMENTS MEXICO S DE RL DE CV', 'ABC010101AB1')), 7)
+
+    def test_fuzzy_name_matching_does_not_treat_enye_as_an_accent(self):
+        matcher = contacts.Matcher([contacts.Partner(7, 'Luis Alejandro Rodriguez Cañizares')])
+        self.assertIsNone(matcher.match(contacts.Contact('Luis Alejandro Rodriguez Canizares')))
+
+    def test_exact_normalized_and_reordered_names_match(self):
+        matcher = contacts.Matcher([contacts.Partner(7, 'García Pérez Juan Manuel')])
+        self.assertEqual(matcher.match(contacts.Contact('JUAN MANUEL,GARCIA/PEREZ')), 7)
+
+    def test_corporate_punctuation_matches_without_mutating_name(self):
+        matcher = contacts.Matcher([contacts.Partner(7, 'SERVICIOS MODELO SAPI DE CV')])
+        self.assertEqual(matcher.match(contacts.Contact('SERVICIOS MODELO, S.A.P.I. DE C.V.')), 7)
+
+    def test_unique_small_truncation_matches_with_enough_full_tokens(self):
+        matcher = contacts.Matcher([contacts.Partner(7, 'Mateo Alejandro Solis Fuentes')])
+        self.assertEqual(matcher.match(contacts.Contact('Mateo Alejandro Solis Fuente')), 7)
+
+    def test_duplicate_names_and_close_runner_up_do_not_match(self):
+        for second in ('Mateo Alejandro Solis Fuentes', 'Mateo Alejandro Solis Fuente'):
+            matcher = contacts.Matcher([contacts.Partner(7, 'Mateo Alejandro Solis Fuentes'), contacts.Partner(8, second)])
+            self.assertIsNone(matcher.match(contacts.Contact('Mateo Alejandro Solis Fuentes')))
+
+    def test_short_generic_partial_or_multiple_spelling_differences_do_not_match(self):
+        matcher = contacts.Matcher([contacts.Partner(7, 'Juan Manuel Garcia Perez'),
+                                    contacts.Partner(8, 'PUBLICO EN GENERAL'), contacts.Partner(9, 'OXXO'),
+                                    contacts.Partner(10, 'Jose Ramos'), contacts.Partner(11, 'Luis Peña')])
+        for name in ('Juan Garcia', 'Juan', 'Juan Manul Garcia Perz', 'PUBLICO EN GENERAL', 'OXXO', 'Jose Ramon', 'Luis Pena'):
+            with self.subTest(name=name):
+                self.assertIsNone(matcher.match(contacts.Contact(name)))
+
+    def test_empty_catalogue_and_invalid_rfc_only_are_unmatched(self):
+        self.assertIsNone(contacts.Matcher([]).match(contacts.Contact('Juan Garcia', 'GAMA900101AB1')))
+        matcher = contacts.Matcher([contacts.Partner(7, 'Juan Garcia', 'XAXX010101000')])
+        self.assertIsNone(matcher.match(contacts.Contact('', 'XAXX010101000')))
 
 
 class ClassificationTests(unittest.TestCase):

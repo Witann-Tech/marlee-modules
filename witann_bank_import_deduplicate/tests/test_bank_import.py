@@ -10,7 +10,7 @@ from psycopg2 import IntegrityError
 
 from odoo import Command
 from odoo.addons.account.tests.common import AccountTestInvoicingCommon
-from odoo.exceptions import AccessError, UserError
+from odoo.exceptions import AccessError, MissingError, UserError
 from odoo.tests import tagged
 from odoo.tests.common import new_test_user
 
@@ -64,6 +64,27 @@ class TestBankImport(AccountTestInvoicingCommon):
             'payment_ref': 'Original',
             'witann_bank_movement': movement,
             **extra,
+        })
+
+    def _contact_wizard(self, rows, user=None):
+        currency = self.journal.currency_id or self.journal.company_id.currency_id
+        output = io.StringIO(newline='')
+        writer = csv.writer(output)
+        writer.writerow(['FECHA', 'MONEDA', 'MOVIMIENTO', 'IMPORTE', 'DESCRIPCIÓN DETALLADA'])
+        writer.writerows(['12/10/2026', currency.name, movement, amount, detail] for movement, amount, detail in rows)
+        model = self.Wizard.with_company(self.journal.company_id)
+        if user:
+            model = model.with_user(user).with_context(allowed_company_ids=self.journal.company_id.ids)
+        return model.create({
+            'journal_id': self.journal.id, 'filename': 'contacts.csv',
+            'file_data': base64.b64encode(output.getvalue().encode('utf-8-sig')),
+        })
+
+    def _contact_partner(self, name, vat='', **extra):
+        # Synthetic identifiers, never real bank/customer data.
+        return self.env['res.partner'].with_context(no_vat_validation=True).create({
+            'name': name, 'vat': vat or False, 'country_id': self.env.ref('base.mx').id,
+            'company_id': False, **extra,
         })
 
     def _xmlid(self, name, record, model=None, module='__import__'):
@@ -128,6 +149,127 @@ class TestBankImport(AccountTestInvoicingCommon):
         self.assertEqual(second.created_count, 0)
         self.assertEqual(second.skipped_count, 2)
         self.assertEqual(self._snapshot(lines), before)
+
+    def test_contact_rfc_is_resolved_at_import_and_native_entries_keep_partner(self):
+        detail = 'DEL CLIENTE MATEO ALEJANDRO,SOLIS/FUENTES, DE LA CLABE 123 CON RFC GAMA900101AB1, CONCEPTO: pago'
+        wizard = self._contact_wizard([('contact-rfc', 100, detail)])
+        wizard.action_analyze()
+        partner = self._contact_partner('Mateo Alejandro Solis Fuentes', 'GAMA900101AB1')
+        self._contact_partner('Mateo Alejandro Solis Fuente', 'ABC010101AB1')
+        before = partner.read(['name', 'vat', 'write_date'])
+        count = self.env['res.partner'].search_count([])
+        with patch.object(type(partner), 'create', side_effect=AssertionError('Contact creation is forbidden')), \
+             patch.object(type(partner), 'write', side_effect=AssertionError('Contact modification is forbidden')):
+            wizard.action_import()
+        self.assertEqual(wizard.created_count, 1)
+        line = wizard.created_line_ids
+        self.assertEqual(line.partner_id, partner)
+        self.assertEqual(line.move_id.partner_id, partner)
+        self.assertTrue(all(item.partner_id == partner for item in line.move_id.line_ids))
+        self.assertEqual(line.partner_name, 'MATEO ALEJANDRO,SOLIS/FUENTES')
+        self.assertEqual(partner.read(['name', 'vat', 'write_date']), before)
+        self.assertEqual(self.env['res.partner'].search_count([]), count)
+
+    def test_contact_exact_name_and_conservative_truncated_name_assignment(self):
+        exact = self._contact_partner('Yolanda Alejandra Montes Rosales')
+        truncated = self._contact_partner('Mateo Alejandro Solis Fuentes')
+        wizard = self._contact_wizard([
+            ('contact-name', 100, 'DEL CLIENTE MONTES ROSALES YOLANDA ALEJANDRA, DE LA CLABE 123, CONCEPTO: pago'),
+            ('contact-truncated', -100, 'BENEF:Mateo Alejandro Solis Fuente (DATO NO VERIFICADO, POR ESTA INSTITUCION), pago'),
+        ])
+        wizard.action_import()
+        self.assertEqual(wizard.created_count, 2)
+        self.assertEqual({line.witann_bank_movement: line.partner_id.id for line in wizard.created_line_ids}, {
+            'contact-name': exact.id, 'contact-truncated': truncated.id,
+        })
+
+    def test_ambiguous_missing_and_contradictory_contacts_do_not_block_import(self):
+        self._contact_partner('Yolanda Alejandra Montes Rosales', 'GAMA900101AB1')
+        self._contact_partner('Yolanda Alejandra Montes Rosales', 'GAMA900101AB1')
+        self._contact_partner('Mateo Alejandro Solis Fuentes', 'ABC010101AB1')
+        wizard = self._contact_wizard([
+            ('ambiguous-rfc', 100, 'DEL CLIENTE YOLANDA ALEJANDRA MONTES ROSALES, DE LA CLABE 123 CON RFC GAMA900101AB1, CONCEPTO: pago'),
+            ('ambiguous-name', 100, 'DEL CLIENTE YOLANDA ALEJANDRA MONTES ROSALES, DE LA CLABE 123, CONCEPTO: pago'),
+            ('contradictory-rfc', -100, 'BENEF:Ernesto Beltran Hurtado (DATO NO VERIFICADO), RFC: ABC010101AB1, IVA:0'),
+            ('without-evidence', 100, 'Mensualidad Israel y Fabiola'),
+            ('unknown-contact', 100, 'DEL CLIENTE CONTACTO DESCONOCIDO DE PRUEBA, DE LA CLABE 123, CONCEPTO: pago'),
+        ])
+        count = self.env['res.partner'].search_count([])
+        wizard.action_import()
+        self.assertEqual(wizard.state, 'done')
+        self.assertEqual(wizard.created_count, 5)
+        self.assertEqual(wizard.invalid_count, 0)
+        self.assertFalse(wizard.created_line_ids.partner_id)
+        self.assertEqual(self.env['res.partner'].search_count([]), count)
+
+    def test_optional_contact_permission_error_does_not_block_import(self):
+        for index, error in enumerate((AccessError, MissingError)):
+            wizard = self._contact_wizard([(f'contact-permissions-{index}', -100, 'AL R.F.C. GAMA900101AB1')])
+            with patch.object(type(self.env['res.partner']), 'search_read', side_effect=error('Catalogue unavailable')):
+                wizard.action_import()
+            self.assertEqual(wizard.created_count, 1)
+            self.assertFalse(wizard.created_line_ids.partner_id)
+
+    def test_incomplete_contact_catalogue_does_not_produce_false_unique_match(self):
+        self._contact_partner('Mateo Alejandro Solis Fuentes', 'GAMA900101AB1')
+        wizard = self._contact_wizard([('contact-limit', -100, 'AL RFC GAMA900101AB1')])
+        with patch('odoo.addons.witann_bank_import_deduplicate.wizard.bank_import.MAX_PARTNERS', 0):
+            wizard.action_import()
+        self.assertEqual(wizard.created_count, 1)
+        self.assertFalse(wizard.created_line_ids.partner_id)
+
+    def test_archived_foreign_and_noncommercial_address_contacts_are_not_assigned(self):
+        other_company = self.setup_other_company()['company']
+        self._contact_partner('Yolanda Alejandra Montes Rosales', active=False)
+        self._contact_partner('Yolanda Alejandra Montes Rosales', company_id=other_company.id)
+        self._contact_partner('Yolanda Alejandra Montes Rosales', parent_id=self.partner_a.id, type='invoice')
+        self._contact_partner('Yolanda Alejandra Montes Rosales', parent_id=self.partner_a.id)
+        wizard = self._contact_wizard([('contact-scope', 100, 'DEL CLIENTE YOLANDA ALEJANDRA MONTES ROSALES, DE LA CLABE 123, CONCEPTO: pago')])
+        wizard.action_import()
+        self.assertEqual(wizard.created_count, 1)
+        self.assertFalse(wizard.created_line_ids.partner_id)
+
+    def test_hidden_contact_is_not_assigned_or_a_new_blocker(self):
+        partner = self._contact_partner('Yolanda Alejandra Montes Rosales', 'GAMA900101AB1')
+        accountant = new_test_user(
+            self.env, login='witann_contact_accountant', groups='account.group_account_user',
+            company_id=self.journal.company_id.id,
+            company_ids=[Command.set(self.journal.company_id.ids)],
+        )
+        self.env['ir.rule'].sudo().create({
+            'name': 'Hide contact fixture',
+            'model_id': self.env['ir.model']._get_id('res.partner'),
+            'domain_force': f"[('id', '!=', {partner.id})]",
+        })
+        wizard = self._contact_wizard([('hidden-contact', -100, 'AL RFC GAMA900101AB1')], user=accountant)
+        wizard.action_import()
+        self.assertEqual(wizard.created_count, 1)
+        self.assertFalse(wizard.created_line_ids.partner_id)
+
+    def test_reimport_does_not_backfill_contact_or_search_catalogue(self):
+        existing = self._line(movement='contact-unchanged', partner_id=False)
+        self._contact_partner('Mateo Alejandro Solis Fuentes', 'GAMA900101AB1')
+        before = self._snapshot(existing)
+        wizard = self._contact_wizard([('contact-unchanged', 100, 'DEL CLIENTE MATEO ALEJANDRO SOLIS FUENTES, DE LA CLABE 123 CON RFC GAMA900101AB1, CONCEPTO: pago')])
+        with patch.object(type(wizard), '_partner_values', side_effect=AssertionError('Existing transactions must not be enriched')), self._forbid_accounting_mutation():
+            wizard.action_import()
+        self.assertEqual(wizard.created_count, 0)
+        self.assertEqual(wizard.skipped_count, 1)
+        self.assertFalse(existing.partner_id)
+        self.assertEqual(self._snapshot(existing), before)
+
+    def test_compatible_repetitions_with_conflicting_contacts_import_without_partner(self):
+        self._contact_partner('Yolanda Alejandra Montes Rosales', 'GAMA900101AB1')
+        self._contact_partner('Mateo Alejandro Solis Fuentes', 'ABC010101AB1')
+        wizard = self._contact_wizard([
+            ('contact-duplicate', 100, 'DEL CLIENTE YOLANDA ALEJANDRA MONTES ROSALES, DE LA CLABE 123 CON RFC GAMA900101AB1, CONCEPTO: pago'),
+            ('contact-duplicate', 100, 'DEL CLIENTE MATEO ALEJANDRO SOLIS FUENTES, DE LA CLABE 456 CON RFC ABC010101AB1, CONCEPTO: pago'),
+        ])
+        wizard.action_import()
+        self.assertEqual(wizard.created_count, 1)
+        self.assertEqual(wizard.duplicate_count, 1)
+        self.assertEqual(wizard.conflict_count, 0)
+        self.assertFalse(wizard.created_line_ids.partner_id)
 
     def test_original_bank_csv_computes_signed_amounts_and_skips_history(self):
         number = self._legacy_movement()
