@@ -16,6 +16,15 @@ _logger = logging.getLogger(__name__)
 
 class SaleOrder(models.Model):
     _inherit = 'sale.order'
+
+    wgs_monthly_cutoff_day = fields.Integer(
+        string='Dia de corte mensual', default=0, copy=False, readonly=True,
+        help='Corte de la ultima compra aplicada. Cero conserva el calendario anterior o no mensual.',
+    )
+    _wgs_monthly_cutoff_day_range = models.Constraint(
+        'CHECK(wgs_monthly_cutoff_day BETWEEN 0 AND 31)',
+        'El dia de corte mensual debe estar entre 0 y 31.',
+    )
     _WGS_POS_ACCESS_RESYNC_COOLDOWN_SECONDS = 60
     _WGS_POS_SUBSCRIPTION_STATE_PRIORITY = {
         'progress': 0,

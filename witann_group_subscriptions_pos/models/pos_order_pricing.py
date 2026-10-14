@@ -301,6 +301,7 @@ class PosOrderPricingMixin(models.Model):
         return self.env['sale.subscription.plan'].browse(int(plan_id)).exists()
 
     def _wgs_get_plan_min_end_threshold(self, plan, start_date, periods_count=1):
+        """Historical interval boundary, retained for explicitly approved repairs."""
         start_date = fields.Date.to_date(start_date) or self._wgs_get_subscription_business_today_for_pos()
         interval_value, interval_unit = self._wgs_extract_interval_from_plan(plan)
         multiplier = max(1, int(periods_count or 1))
@@ -316,6 +317,32 @@ class PosOrderPricingMixin(models.Model):
         if period_end < start_date:
             return start_date
         return period_end
+
+    def _wgs_uses_fixed_monthly_cutoff(self, plan):
+        return (
+            bool(plan)
+            and self._wgs_extract_interval_from_plan(plan) == (1, 'month')
+            and not self._wgs_should_align_plan_to_calendar_month(plan)
+            and not getattr(plan, 'wgs_domiciliation_enabled', False)
+        )
+
+    def _wgs_get_sale_period_schedule(self, plan, start_date, *, monthly_cutoff_day=0, previous_end=False):
+        """Calendar for newly quoted sales; historical repair dates stay unchanged."""
+        start_date = fields.Date.to_date(start_date)
+        if not plan or not start_date:
+            raise UserError(_('Se requiere inicio y plan para calcular la vigencia contratada.'))
+        interval, unit = self._wgs_extract_interval_from_plan(plan)
+        fixed_monthly = self._wgs_uses_fixed_monthly_cutoff(plan)
+        cutoff = (monthly_cutoff_day or start_date.day) if fixed_monthly else 0
+        _, end, next_date = period(
+            start_date, interval, unit, monthly_cutoff_day=cutoff,
+            previous_end=previous_end if monthly_cutoff_day and fixed_monthly else None,
+        )
+        return {
+            'subscription_end_date': end,
+            'next_billing_date': next_date,
+            'monthly_cutoff_day': cutoff,
+        }
 
     def _wgs_get_period_alignment_field_name(self, plan):
         if not plan:
@@ -387,11 +414,14 @@ class PosOrderPricingMixin(models.Model):
             period_end = inclusive_end + timedelta(days=1)
         if not period_end:
             raise UserError(_('La suscripción no tiene una vigencia definida para calcular la renovación.'))
+        monthly_cutoff_day = source_order.wgs_monthly_cutoff_day
         scheduled = self._wgs_pending_package_changes(source_order)
         if scheduled:
             last_snapshot = scheduled[-1].order_id._wgs_get_persisted_subscription_pricing_from_pos_line(scheduled[-1])
             scheduled_next = last_snapshot['subscription_end_date'] + timedelta(days=1)
-            period_end = max(period_end, scheduled_next)
+            if scheduled_next >= period_end:
+                period_end = scheduled_next
+                monthly_cutoff_day = last_snapshot.get('monthly_cutoff_day', 0)
         renewal_anchor = period_end if period_end and today < period_end else today
 
         if self._wgs_should_align_plan_to_calendar_month(plan):
@@ -401,13 +431,16 @@ class PosOrderPricingMixin(models.Model):
                 'subscription_end_date': aligned_schedule['subscription_end_date'],
                 'next_billing_date': aligned_schedule['next_billing_date'],
                 'period_aligned': True,
+                'monthly_cutoff_day': 0,
             }
 
-        next_billing_date = self._wgs_get_plan_min_end_threshold(plan, renewal_anchor)
+        schedule = self._wgs_get_sale_period_schedule(
+            plan, renewal_anchor, monthly_cutoff_day=monthly_cutoff_day,
+            previous_end=period_end - timedelta(days=1) if renewal_anchor == period_end else False,
+        )
         return {
+            **schedule,
             'renewal_anchor': renewal_anchor,
-            'subscription_end_date': fields.Date.to_date(next_billing_date) - timedelta(days=1),
-            'next_billing_date': next_billing_date,
             'period_aligned': False,
         }
 
@@ -489,6 +522,11 @@ class PosOrderPricingMixin(models.Model):
             preferred_pricing_id=preferred_pricing_id,
         )
         choice = dict(pricing_resolution.get('choice') or {})
+        resolved_plan = self._wgs_resolve_plan_record(
+            product,
+            plan_id=choice.get('plan_id') or preferred_plan_id,
+            pricing_id=choice.get('pricing_id') or preferred_pricing_id,
+        )
         recurring_price = round(max(float(choice.get('price') or 0.0), 0.0), 2)
         display_recurring_price = self._wgs_get_price_with_taxes_for_pos(
             product,
@@ -503,6 +541,7 @@ class PosOrderPricingMixin(models.Model):
         subscription_start_date = False
         subscription_end_date = False
         next_billing_date = False
+        monthly_cutoff_day = 0
         first_period_alignment = {}
         if include_credit and source_order:
             credit_amount = self._wgs_get_upsale_source_recurring_amount(source_order)
@@ -514,15 +553,12 @@ class PosOrderPricingMixin(models.Model):
             subscription_start_date = upsale_schedule.get('subscription_start_date') or False
             subscription_end_date = upsale_schedule.get('subscription_end_date') or False
             next_billing_date = upsale_schedule.get('next_billing_date') or False
+            if self._wgs_uses_fixed_monthly_cutoff(resolved_plan):
+                monthly_cutoff_day = source_order.wgs_monthly_cutoff_day
         charge_now = round(max(recurring_price - credit_amount, 0.0), 2)
         if include_credit and source_order:
             display_charge_now = round(max(display_recurring_price - display_credit_amount, 0.0), 2)
         else:
-            resolved_plan = self._wgs_resolve_plan_record(
-                product,
-                plan_id=choice.get('plan_id') or preferred_plan_id,
-                pricing_id=choice.get('pricing_id') or preferred_pricing_id,
-            )
             if flow in ('new', 'reenroll') and self._wgs_should_align_plan_to_calendar_month(resolved_plan):
                 first_period_alignment = self._wgs_get_aligned_monthly_first_period_schedule(
                     start_date or self._wgs_get_subscription_business_today_for_pos(company=company)
@@ -535,8 +571,10 @@ class PosOrderPricingMixin(models.Model):
                 if not resolved_plan:
                     raise UserError(_('El paquete no tiene un plan recurrente valido.'))
                 subscription_start_date = fields.Date.to_date(start_date) or self._wgs_get_subscription_business_today_for_pos(company=company)
-                subscription_end_date = self._wgs_get_plan_period_end_date(resolved_plan, subscription_start_date)
-                next_billing_date = subscription_end_date + timedelta(days=1)
+                schedule = self._wgs_get_sale_period_schedule(resolved_plan, subscription_start_date)
+                subscription_end_date = schedule['subscription_end_date']
+                next_billing_date = schedule['next_billing_date']
+                monthly_cutoff_day = schedule['monthly_cutoff_day']
             display_charge_now = self._wgs_get_price_with_taxes_for_pos(
                 product,
                 charge_now,
@@ -564,6 +602,7 @@ class PosOrderPricingMixin(models.Model):
             'subscription_start_date': fields.Date.to_string(subscription_start_date) if subscription_start_date else False,
             'subscription_end_date': fields.Date.to_string(subscription_end_date) if subscription_end_date else False,
             'next_billing_date': fields.Date.to_string(next_billing_date) if next_billing_date else False,
+            'monthly_cutoff_day': monthly_cutoff_day,
             'first_period_alignment': bool(first_period_alignment),
             'first_period_start_date': (
                 fields.Date.to_string(first_period_alignment['period_start_date'])
@@ -729,6 +768,7 @@ class PosOrderPricingMixin(models.Model):
             'subscription_start_date': fields.Date.to_string(renewal_schedule['renewal_anchor']),
             'subscription_end_date': fields.Date.to_string(renewal_schedule['subscription_end_date']),
             'next_billing_date': fields.Date.to_string(renewal_schedule['next_billing_date']),
+            'monthly_cutoff_day': renewal_schedule['monthly_cutoff_day'],
             'first_period_alignment': bool(renewal_schedule.get('period_aligned')),
             'source': {
                 'type': 'subscription_product_change',

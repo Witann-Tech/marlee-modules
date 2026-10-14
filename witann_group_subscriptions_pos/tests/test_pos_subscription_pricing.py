@@ -323,7 +323,7 @@ class TestPosSubscriptionPricing(TransactionCase):
         self.assertEqual(payload['default_price'], 100.0)
         self.assertEqual(payload['default_display_price'], 116.0)
 
-    def test_plan_period_end_date_is_inclusive(self):
+    def test_historical_plan_period_end_date_is_inclusive(self):
         start_date = fields.Date.to_date('2026-03-26')
         period_end = self.PosOrder._wgs_get_plan_period_end_date(self.plan, start_date)
         self.assertEqual(period_end, fields.Date.to_date('2026-04-25'))

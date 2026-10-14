@@ -21,6 +21,16 @@ function deferred() {
 }
 const quote = (id) => ({pricing: {product_id:id, plan_id:id, recurring_price:id * 100,
     ticket_charge_now:id * 100, commercial_quote:{payload:{product_id:id, company_id:9, partner_id:7}}}});
+test('fixed cutoff and signed calendar survive the ticket JSON roundtrip', () => {
+    const charge = {monthly_cutoff_day:31, subscription_start_date:'2027-03-01',
+        subscription_end_date:'2027-03-31', next_billing_date:'2027-04-01'};
+    charge.commercial_quote = {payload:{pricing:{...charge}}, signature:'server-signature'};
+    const snapshot = JSON.parse(JSON.stringify(context.buildPricingSnapshotFromCharge(charge)));
+    assert.equal(snapshot.monthly_cutoff_day, 31);
+    assert.equal(snapshot.subscription_end_date, '2027-03-31');
+    assert.deepEqual(snapshot.commercial_quote, charge.commercial_quote);
+    assert.equal(context.buildPricingSnapshotFromCharge({}).monthly_cutoff_day, 0);
+});
 function stateFor(mode) {
     const state = {formMode:mode, selectedPartnerId:7, currentDetail:{}, productCatalog:[
         {id:1, name:'Daily'}, {id:2, name:'Monthly'},

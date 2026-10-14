@@ -1223,6 +1223,7 @@ class PosOrder(models.Model):
             'subscription_start_date': snapshot.get('subscription_start_date') or False,
             'subscription_end_date': snapshot.get('subscription_end_date') or False,
             'next_billing_date': snapshot.get('next_billing_date') or False,
+            'monthly_cutoff_day': snapshot.get('monthly_cutoff_day', 0),
             'first_period_alignment': bool(snapshot.get('first_period_alignment')),
             'first_period_start_date': snapshot.get('first_period_start_date') or False,
             'first_period_access_start_date': snapshot.get('first_period_access_start_date') or False,
@@ -2659,6 +2660,7 @@ class PosOrder(models.Model):
             next_billing_date=next_billing_date,
             clear_next_billing_date=pricing_state['snapshot'].get('single_day_term', False),
             recurring_plan_id=pricing_state['plan_id'],
+            monthly_cutoff_day=pricing_state['monthly_cutoff_day'],
         )
         if initial_contract:
             self._wgs_apply_domiciliation_contract_from_pos_line(source_order, line, pricing_state)
@@ -2785,6 +2787,7 @@ class PosOrder(models.Model):
             next_billing_date=next_billing_date,
             clear_next_billing_date=single_day_term,
             recurring_plan_id=recurring_plan_id,
+            monthly_cutoff_day=pricing_state['monthly_cutoff_day'],
         )
         self._wgs_reactivate_subscription_order_for_pos(source_order)
         self._wgs_apply_domiciliation_contract_from_pos_line(
@@ -3352,6 +3355,7 @@ class PosOrder(models.Model):
             'subscription_start_date': persisted_subscription_start_date,
             'subscription_end_date': persisted_subscription_end_date,
             'next_billing_date': persisted_next_billing_date,
+            'monthly_cutoff_day': int(snapshot.get('monthly_cutoff_day') or 0),
             'snapshot': snapshot,
         }
 
@@ -3630,6 +3634,7 @@ class PosOrder(models.Model):
                 next_billing_date=next_billing_date,
                 clear_next_billing_date=single_day_term,
                 recurring_plan_id=recurring_plan_id,
+                monthly_cutoff_day=pricing_state['monthly_cutoff_day'],
             )
             if self._wgs_is_order_recognized_as_subscription(upsell_order):
                 self._wgs_close_source_subscription_after_upgrade(
@@ -3730,6 +3735,7 @@ class PosOrder(models.Model):
             next_billing_date=next_billing_date,
             clear_next_billing_date=single_day_term,
             recurring_plan_id=recurring_plan_id,
+            monthly_cutoff_day=pricing_state['monthly_cutoff_day'],
         )
         self._wgs_apply_domiciliation_contract_from_pos_line(sale_order, line, pricing_state)
 
@@ -4072,6 +4078,7 @@ class PosOrder(models.Model):
             'subscription_start_date': snapshot.get('subscription_start_date') or False,
             'subscription_end_date': snapshot.get('subscription_end_date') or False,
             'next_billing_date': snapshot.get('next_billing_date') or False,
+            'monthly_cutoff_day': snapshot.get('monthly_cutoff_day', 0),
             'first_period_alignment': bool(snapshot.get('first_period_alignment')),
             'is_upgrade': False,
             'is_renewal': bool(is_renewal),
@@ -4524,6 +4531,7 @@ class PosOrder(models.Model):
         next_billing_date=False,
         clear_next_billing_date=False,
         recurring_plan_id=False,
+        monthly_cutoff_day=None,
     ):
         """Update only the contracted Odoo 19 order, never its historical relatives."""
         sale_order.ensure_one()
@@ -4544,6 +4552,8 @@ class PosOrder(models.Model):
             values['next_invoice_date'] = False
         if recurring_plan_id:
             values['plan_id'] = self._wgs_to_int(recurring_plan_id)
+        if monthly_cutoff_day is not None:
+            values['wgs_monthly_cutoff_day'] = monthly_cutoff_day
         if values:
             sale_order.write(values)
 
