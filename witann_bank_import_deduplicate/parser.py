@@ -30,6 +30,7 @@ class Row:
     amount: Decimal
     reference: str
     label: str
+    detail: str = ''
 
 
 @dataclass(frozen=True)
@@ -237,11 +238,12 @@ def parse_file(data, filename, *, currency):
             else:
                 amount = parse_amount(_value(cell('IMPORTE')))
             reference = text(_value(cell('REFERENCIA')))
+            detail = text(_value(cell('DESCRIPCION DETALLADA')))
             label = ' / '.join(filter(None, (
                 text(_value(cell('DESCRIPCION'))),
-                text(_value(cell('DESCRIPCION DETALLADA'))),
+                detail,
             ))) or reference or movement
-            rows.append(Row(number, movement, row_date, amount, reference, label))
+            rows.append(Row(number, movement, row_date, amount, reference, label, detail))
         except (ValueError, InvalidOperation) as exc:
             issues.append(Issue(number, movement, str(exc)))
     if columns is None or not read_count:

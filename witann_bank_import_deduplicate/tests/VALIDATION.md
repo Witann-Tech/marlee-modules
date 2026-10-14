@@ -1,13 +1,13 @@
 # Validación técnica y pruebas
 
-## Resultado local — 12 de octubre de 2026
+## Resultado local — 13 de octubre de 2026
 
-- 34 pruebas del lector/clasificador aprobadas, incluyendo CSV/XLSX reales,
+- 52 pruebas del lector/clasificador/matching aprobadas, incluyendo CSV/XLSX reales,
   fechas, importes, CUENTA ignorada/opcional, MXP/MXN, conflictos, repeticiones
   y 280 filas XLSX con CUENTA vacía, numérica, CLABE y errores/fórmulas ignorados.
 - Sintaxis Python, XML y archivos del manifiesto verificados. El script de
   concurrencia inicia y muestra su ayuda sin requerir bibliotecas adicionales.
-- 25 pruebas ORM preparadas, **sin ejecutar**: no hay Odoo ni PostgreSQL locales.
+- 34 pruebas ORM preparadas, **sin ejecutar**: no hay Odoo ni PostgreSQL locales.
   La prueba RPC simultánea y los tiempos contables también están pendientes.
 - Corrección 19.0.1.0.2: DEPÓSITOS menos RETIROS tienen prioridad sobre IMPORTE.
   El CSV original del banco proporcionado por el usuario se leyó completo:
@@ -18,6 +18,41 @@
   de importación con depósitos/retiros sin IMPORTE, históricos con cargo negativo
   y reimportación que ignora un IMPORTE manual. El script RPC usa el formato
   original y alterna abonos/cargos.
+
+## Asignación opcional de contactos — 19.0.1.1.0
+
+Las 18 pruebas locales nuevas cubren extracción delimitada de CLIENTE/BENEF,
+TEF y domiciliación; RFC sin nombre; datos ausentes/malformados; dirección
+incompatible; normalización de RFC/prefijo MX y exclusión de CURP/genéricos;
+nombres con acentos/separadores y Ñ; empresas con siglas puntuadas; pequeñas
+truncaciones; RFC o nombres duplicados; contradicciones entre nombre/RFC;
+candidatos demasiado próximos y nombres parciales/genéricos.
+
+Se volvió a procesar el CSV original del usuario sin modificarlo: las 280 filas
+siguen válidas y los 280 importes coinciden exactamente con el CSV que incluye
+IMPORTE manual. Se extraen 83 nombres y 107 RFC con formato aprovechable
+(32 de éstos sin nombre). Estos conteos son de extracción; no demuestran
+asignaciones correctas frente al catálogo real de Odoo, que no se consultó.
+
+Las nueve pruebas ORM nuevas, pendientes de ejecución, cubren:
+
+- Resolución al importar, después del análisis, sin crear/modificar contactos;
+  `partner_id` nativo en movimiento/asiento/líneas y conservación de `partner_name`.
+- Nombres exactos/reordenados y truncados con coincidencia conservadora.
+- Ambigüedad, falta de datos y contradicción: el lote completo se importa sin contacto.
+- Errores de permisos o registros desaparecidos en la consulta opcional: importación sin contacto.
+- Catálogo incompleto: no se produce un falso match único.
+- Contactos archivados, otra empresa y direcciones/subcontactos excluidos.
+- Reglas de acceso de un contador normal: el contacto oculto no se asigna.
+- Reimportación: no consulta el catálogo ni cambia contactos/asientos existentes.
+- Repeticiones financieras compatibles con contactos distintos: una creación
+  sin contacto, sin añadir un conflicto financiero.
+
+No se agregan pantallas, decisiones, validaciones obligatorias ni escritura
+sobre `res.partner`. Los límites y permisos sólo deshabilitan la asignación;
+la transacción conserva las comprobaciones financieras originales. No hay
+llamadas externas para resolver nombres o verificar RFC. La restricción única
+continúa siendo diario + MOVIMIENTO.
 
 ## Permisos e identidad
 
@@ -118,3 +153,10 @@ Fuentes consultadas: [movimientos bancarios](https://github.com/odoo/odoo/blob/1
 [restricciones SQL](https://github.com/odoo/odoo/blob/19.0/odoo/orm/table_objects.py),
 [importación estándar](https://github.com/odoo/odoo/blob/19.0/odoo/orm/models.py),
 [reintentos transaccionales](https://github.com/odoo/odoo/blob/19.0/odoo/service/model.py).
+
+Campos nativos de contacto contrastados con
+[res.partner](https://github.com/odoo/odoo/blob/19.0/odoo/addons/base/models/res_partner.py)
+y `partner_id`/`partner_name` de movimientos bancarios. El contexto
+`no_vat_validation` se usa sólo para RFC sintéticos en fixtures de prueba,
+conforme a [base_vat](https://github.com/odoo/odoo/blob/19.0/addons/base_vat/models/res_partner.py);
+el importador no modifica RFC ni desactiva validaciones contables.

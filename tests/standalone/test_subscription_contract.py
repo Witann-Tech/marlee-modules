@@ -13,6 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
+from dateutil.relativedelta import relativedelta
 
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location('commercial_contract', ROOT / 'witann_group_subscriptions_pos/subscription_contract.py')
@@ -43,7 +44,7 @@ def method(file, name):
     ns = {'fields': SimpleNamespace(Date=Dates), 'UserError': UserError, '_': lambda value: value,
           'RULES_VERSION': contract.RULES_VERSION, 'hmac': hmac, 'hashlib': hashlib,
           'canonical_json': contract.canonical_json, 'fingerprint': contract.fingerprint,
-          'json': json, 'timedelta': timedelta, 'period': contract.period}
+          'json': json, 'timedelta': timedelta, 'period': contract.period, 'relativedelta': relativedelta}
     exec(compile(ast.Module(body=[node], type_ignores=[]), str(file), 'exec'), ns)
     return ns[name]
 
@@ -55,11 +56,13 @@ class ContractTests(unittest.TestCase):
         pricing_file = 'witann_group_subscriptions_pos/models/pos_order_pricing.py'
         build = method(pricing_file, '_wgs_build_subscription_product_renewal_snapshot')
         schedule = method(pricing_file, '_wgs_get_subscription_renewal_schedule')
-        threshold = method(pricing_file, '_wgs_get_plan_min_end_threshold')
+        sale_schedule = method(pricing_file, '_wgs_get_sale_period_schedule')
+        fixed_monthly = method(pricing_file, '_wgs_uses_fixed_monthly_cutoff')
         interval = method(pricing_file, '_wgs_extract_interval_from_plan')
         source, product = Mock(), Mock()
         source.id, source.name = 1303, 'Semester source'
         source._fields = {}
+        source.wgs_monthly_cutoff_day = 0
         # Odoo slices return a recordset that still exposes fields.
         class Lines(list):
             @property
@@ -71,7 +74,7 @@ class ContractTests(unittest.TestCase):
                 return Lines(value) if isinstance(key, slice) else value
 
         source.order_line.filtered.return_value.sorted.return_value = Lines([Mock()])
-        for unit, expected_end in [('day', '2026-11-14'), ('month', '2026-12-13')]:
+        for unit, expected_end in [('day', '2026-11-14'), ('month', '2026-12-14')]:
             with self.subTest(target_unit=unit):
                 plan = SimpleNamespace(
                     _fields={'billing_period_value', 'billing_period_unit'},
@@ -89,7 +92,8 @@ class ContractTests(unittest.TestCase):
                 owner._wgs_pending_package_changes.return_value = []
                 owner._wgs_should_align_plan_to_calendar_month.return_value = False
                 owner._wgs_extract_interval_from_plan.side_effect = lambda p: interval(owner, p)
-                owner._wgs_get_plan_min_end_threshold.side_effect = lambda p, start: threshold(owner, p, start)
+                owner._wgs_uses_fixed_monthly_cutoff.side_effect = lambda p: fixed_monthly(owner, p)
+                owner._wgs_get_sale_period_schedule.side_effect = lambda *a, **kw: sale_schedule(owner, *a, **kw)
                 owner._wgs_get_subscription_renewal_schedule.side_effect = lambda *a, **kw: schedule(owner, *a, **kw)
 
                 snapshot = build(owner, source, product=product)

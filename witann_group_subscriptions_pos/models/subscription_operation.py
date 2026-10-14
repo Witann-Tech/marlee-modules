@@ -71,6 +71,8 @@ class PosSubscriptionOperation(models.Model):
         contract = source.wgs_domiciliation_contract_id
         category = source._wgs_get_subscription_state_category()
         return fingerprint({
+            # Preserve revision hashes of paid operations created before fixed cutoffs.
+            **({'monthly_cutoff_day': source.wgs_monthly_cutoff_day} if source.wgs_monthly_cutoff_day else {}),
             'id': source.id, 'company': source.company_id.id, 'holder': source.partner_id.id,
             'state': source.state,
             'subscription_state': 'active' if category in ('progress', 'renew') else source.subscription_state,

@@ -86,6 +86,7 @@ function buildPricingSnapshotFromCharge(charge, {
         next_billing_date: charge && charge.next_billing_date
             ? charge.next_billing_date
             : false,
+        monthly_cutoff_day: Number(charge?.monthly_cutoff_day || 0),
         first_period_alignment: Boolean(charge && charge.first_period_alignment),
         first_period_start_date: charge && charge.first_period_start_date
             ? charge.first_period_start_date

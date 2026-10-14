@@ -6,10 +6,11 @@ from dataclasses import replace
 from psycopg2 import IntegrityError
 
 from odoo import _, api, fields, models
-from odoo.exceptions import AccessError, UserError
+from odoo.exceptions import AccessError, MissingError, UserError
 from odoo.fields import Command
 
 from ..deduplicate import Existing, classify
+from ..contacts import MAX_PARTNERS, Contact, Matcher, Partner, extract_contact, normalize_name
 from ..parser import FileError, MAX_FILE_BYTES, parse_file
 
 
@@ -219,6 +220,9 @@ class BankImport(models.TransientModel):
             return self._show(parsed, results)
         journal, currency, lines = configuration
         new_rows = [item.row for item in results if item.status == 'new']
+        new_movements = {row.movement for row in new_rows}
+        contact_rows = [item.row for item in results if item.row.movement in new_movements]
+        partner_values = self._partner_values(contact_rows, journal) if new_rows else {}
         values = [{
             'journal_id': journal.id,
             'company_id': journal.company_id.id,
@@ -228,6 +232,7 @@ class BankImport(models.TransientModel):
             'amount': currency.round(float(row.amount)),
             'ref': row.reference or False,
             'payment_ref': row.label,
+            **partner_values.get(row.number, {}),
         } for row in new_rows]
         try:
             # Any collision rolls back the WHOLE creation batch, including native
@@ -251,6 +256,43 @@ class BankImport(models.TransientModel):
         # Serialization/deadlock errors intentionally propagate to Odoo's native
         # transaction retry service. No commit and no local snapshot refresh.
         return self._show(parsed, results, created=created)
+
+    def _partner_values(self, rows, journal):
+        """Optional enrichment, only for new lines; never create/update contacts."""
+        contacts = {row.number: extract_contact(row.detail, row.amount) for row in rows}
+        identities = defaultdict(set)
+        for row in rows:
+            contact = contacts[row.number]
+            identities[row.movement].add((normalize_name(contact.name), contact.rfc))
+        for row in rows:
+            if len(identities[row.movement]) > 1:
+                contacts[row.number] = Contact()
+        values = {number: {'partner_name': contact.name} for number, contact in contacts.items() if contact.name}
+        if not any(contact.name or contact.rfc for contact in contacts.values()):
+            return values
+        partners = self.env['res.partner'].with_context({
+            'allowed_company_ids': [journal.company_id.id],
+            'active_test': True,
+        }).with_company(journal.company_id)
+        try:
+            # Normal ACLs/rules, current company or shared commercial contacts.
+            # A truncated catalogue cannot establish uniqueness: skip enrichment.
+            with self.env.cr.savepoint():
+                catalogue = partners.search_read([
+                    ('active', '=', True), ('type', '=', 'contact'),
+                    ('company_id', 'in', [False, journal.company_id.id]),
+                    '|', ('parent_id', '=', False), ('is_company', '=', True),
+                ], ['name', 'vat'], limit=MAX_PARTNERS + 1)
+        except (AccessError, MissingError):
+            return values
+        if len(catalogue) > MAX_PARTNERS:
+            return values
+        matcher = Matcher([Partner(item['id'], item['name'] or '', item['vat'] or '') for item in catalogue])
+        for number, contact in contacts.items():
+            partner_id = matcher.match(contact)
+            if partner_id:
+                values.setdefault(number, {})['partner_id'] = partner_id
+        return values
 
     def action_open_created(self):
         self.ensure_one()

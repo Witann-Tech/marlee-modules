@@ -28,6 +28,55 @@ diagnostico del checkout previo en `AUDITORIA_FLUJOS_SUSCRIPCIONES_2026-09-28.md
   durante todo el ultimo dia. El siguiente cobro es un limite exclusivo. Los
   pases diarios no generan facturas recurrentes nativas.
 
+## Ajuste de corte mensual: 2026-10-14
+
+Implementado localmente en `staging`, version POS `19.0.1.6.1`. Requiere upgrade
+del addon antes de abrir POS: agrega `sale.order.wgs_monthly_cutoff_day`.
+No modifica main ni las vigencias existentes durante el upgrade.
+
+- Solo planes de exactamente un mes, no alineados ni domiciliados.
+- Alta/reinscripcion 20/abril -> 20/mayo inclusive. Corte persistido: dia 20.
+- Renovacion continua 21/mayo -> 20/junio, siguiente cobro 21/junio.
+- Corte 31: 31/enero -> 28/febrero (29 en bisiesto), luego 1/marzo -> 31/marzo,
+  luego 1/abril -> 30/abril. El corte original no se pierde.
+- Si se renueva con atraso, el inicio sigue siendo el dia de la operacion;
+  el fin usa el corte guardado en el mes siguiente. Reinscribir establece
+  un corte nuevo desde la fecha de inicio elegida.
+- Las suscripciones sin corte persistido conservan su periodo pagado. Su primera
+  nueva compra mensual fija el corte desde el inicio de ese nuevo periodo.
+- Los cambios de paquete futuros toman el corte del ultimo periodo pagado en
+  cola; no cambian el corte actual hasta aplicarse. Pasar a diario, semestre,
+  anual, alineado o domiciliado no propaga un corte mensual residual.
+- El corte viaja en el snapshot firmado y se aplica junto con las fechas. Los
+  snapshots anteriores conservan sus fechas, con corte cero. Las huellas de
+  origen antiguas no cambian por agregar un campo vacio.
+- No se modificaron precios, IVA, descuentos, horas de acceso, crons, cuotas
+  domiciliadas ni el calendario de reconstruccion de reparaciones historicas.
+
+Pruebas locales: 86 tests Python y 14 tests Node aprobados. Incluyen 1,096 dias
+de inicio de 2026-2028 con doce renovaciones por fecha, contratos nuevos,
+reinscripciones, adelantos, cola futura, legado y excepciones. Los tests ORM
+fueron ampliados/ajustados, pero no ejecutados aqui por falta de Odoo Enterprise.
+
+Pruebas operativas tras upgrade y recarga del POS en staging:
+
+| Caso | Esperado |
+| --- | --- |
+| Alta mensual con inicio 20/octubre | Fin 20/noviembre, mismo importe |
+| Dos renovaciones anticipadas de ese contrato | Fines 20/diciembre y 20/enero, sin desplazamiento |
+| Reinscribir diario/semestral en mensual con inicio 20/octubre | Plan mensual y fin 20/noviembre |
+| Inicio 31/octubre, renovar anticipadamente | Fin inicial 30/noviembre; siguiente fin 31/diciembre |
+| Inicio 31/enero 2027, renovar anticipadamente | Fin inicial 28/febrero; siguiente fin 31/marzo |
+| Renovar cambiando paquete mensual | Conserva corte; beneficios/participantes nuevos solo al finalizar periodo previo |
+| Semestre -> mensual | Plazo mensual del destino; semestre pagado intacto |
+| Mensual -> semestre -> mensual con cambios futuros | Solo la etapa mensual usa corte; no hereda una regla incorrecta de la cola |
+| Alineados, domiciliados, diarios, quincenas, semestres y anualidades | Misma regla e importes anteriores |
+| Suscripcion y cambio futuro pagados antes del upgrade | Fechas originales intactas, sin recalculo ni doble aplicacion |
+
+No borrar almacenamiento del POS si hay tickets pendientes. Para comprobar la
+regla nueva usar una cotizacion nueva: una cotizacion anterior firmada mantiene
+su calendario original. No promover a main hasta validar la matriz en staging.
+
 ## Responsabilidades
 
 1. `subscription_contract.py`: calendario puro, serializacion canonica y huella.
