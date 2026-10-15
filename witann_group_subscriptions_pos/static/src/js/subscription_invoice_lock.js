@@ -1,10 +1,6 @@
 /** @odoo-module **/
 
-import { PaymentScreen } from "@point_of_sale/app/screens/payment_screen/payment_screen";
 import { _t } from "@web/core/l10n/translation";
-import { useService } from "@web/core/utils/hooks";
-import { patch } from "@web/core/utils/patch";
-import { onMounted, onPatched } from "@odoo/owl";
 
 const STYLE_ID = "wgs-pos-invoice-lock-style";
 const INVOICE_TEXT_RE = /(invoice|factur|to_invoice)/i;
@@ -192,33 +188,4 @@ if (typeof document !== "undefined") {
     }
 }
 
-patch(PaymentScreen.prototype, {
-    setup() {
-        super.setup(...arguments);
-        this.notification = this.notification || useService("notification");
-        installInvoiceControlGuard();
-        onMounted(() => this.wgsDisableInvoiceControls());
-        onPatched(() => this.wgsDisableInvoiceControls());
-    },
-
-    wgsDisableInvoiceControls() {
-        clearInvoiceFlag(getOrderFromPaymentScreen(this));
-        disableInvoiceControls(this.el || document);
-    },
-
-    toggleIsToInvoice() {
-        clearInvoiceFlag(getOrderFromPaymentScreen(this));
-        if (this.notification) {
-            this.notification.add(_t("Facturación deshabilitada en POS. Emite solo ticket."), {
-                type: "warning",
-            });
-        }
-        this.wgsDisableInvoiceControls();
-        return false;
-    },
-
-    async validateOrder() {
-        clearInvoiceFlag(getOrderFromPaymentScreen(this));
-        return super.validateOrder(...arguments);
-    },
-});
+export { clearInvoiceFlag, disableInvoiceControls, getOrderFromPaymentScreen, installInvoiceControlGuard };

@@ -2,8 +2,11 @@ import json
 from datetime import datetime
 
 from odoo import Command, fields
+
 from odoo.exceptions import UserError
 from odoo.tests.common import TransactionCase
+
+from .common import create_recurring_price
 
 
 class TestPosSubscriptionPricing(TransactionCase):
@@ -58,15 +61,6 @@ class TestPosSubscriptionPricing(TransactionCase):
             }
         )
         order.action_confirm()
-        order_line = order.order_line[:1]
-        line_fields = order_line._fields
-        line_updates = {}
-        for field_name in ('subscription_plan_id', 'plan_id', 'recurring_plan_id'):
-            if field_name in line_fields:
-                line_updates[field_name] = self.plan.id
-        if line_updates:
-            order_line.write(line_updates)
-
         order_updates = {}
         for field_name in ('wgs_effective_start_date', 'start_date', 'date_start', 'subscription_start_date'):
             if field_name in order._fields:
@@ -88,28 +82,8 @@ class TestPosSubscriptionPricing(TransactionCase):
         return order
 
     def _create_subscription_pricing(self, plan, price=100.0, name='Pricing POS', product=False):
-        if 'sale.subscription.pricing' not in self.env.registry:
-            self.fail('sale.subscription.pricing no existe en este runtime.')
-
-        pricing_model = self.env['sale.subscription.pricing']
         product = product or self.product
-        pricing_vals = {}
-        for field_name in ('product_tmpl_id', 'product_template_id'):
-            if field_name in pricing_model._fields:
-                pricing_vals[field_name] = product.product_tmpl_id.id
-                break
-        for field_name in ('plan_id', 'subscription_plan_id', 'recurring_plan_id'):
-            if field_name in pricing_model._fields:
-                pricing_vals[field_name] = plan.id
-                break
-        for field_name in ('fixed_price', 'price', 'recurring_price', 'price_unit', 'list_price', 'amount'):
-            if field_name in pricing_model._fields:
-                pricing_vals[field_name] = price
-                break
-        if 'name' in pricing_model._fields:
-            pricing_vals['name'] = name
-
-        return pricing_model.create(pricing_vals)
+        return create_recurring_price(self.env, product, plan, price)
 
     def test_renewal_package_change_uses_target_price_and_source_period(self):
         target_product = self.env['product.product'].create(
@@ -187,8 +161,6 @@ class TestPosSubscriptionPricing(TransactionCase):
         self.assertEqual(snapshot['display_price_unit'], 116.0)
 
     def test_recurring_line_never_persists_pos_transaction_discount(self):
-        source_order = self._create_subscription_like_order()
-        source_line = source_order.order_line[:1]
         pos_line = self.env['pos.order.line'].new({
             'product_id': self.product.id,
             'qty': 1,
@@ -197,12 +169,10 @@ class TestPosSubscriptionPricing(TransactionCase):
         })
 
         values = self.PosOrder._wgs_build_subscription_recurring_line_values_for_pos(
-            source_line=source_line,
             pos_line=pos_line,
             product=self.product,
             qty=1,
             recurring_price_unit=100.0,
-            recurring_plan_id=self.plan.id,
         )
 
         self.assertEqual(values['discount'], 0.0)
@@ -528,10 +498,6 @@ class TestPosSubscriptionPricing(TransactionCase):
         self.assertTrue(charge['first_period_alignment'])
 
     def test_subscription_pricing_beats_generic_pricelist_candidate(self):
-        pricing_model_name = 'sale.subscription.pricing'
-        if pricing_model_name not in self.env.registry:
-            self.fail('sale.subscription.pricing no existe en este runtime.')
-
         self.product.write({'list_price': 90.0})
 
         pricelist_item_model = self.env['product.pricelist.item']
@@ -544,25 +510,7 @@ class TestPosSubscriptionPricing(TransactionCase):
             pricelist_item_vals['compute_price'] = 'fixed'
         pricelist_item_model.create(pricelist_item_vals)
 
-        pricing_model = self.env[pricing_model_name]
-        pricing_vals = {}
-        for field_name in ('product_tmpl_id', 'product_template_id'):
-            if field_name in pricing_model._fields:
-                pricing_vals[field_name] = self.product.product_tmpl_id.id
-                break
-        for field_name in ('plan_id', 'subscription_plan_id', 'recurring_plan_id'):
-            if field_name in pricing_model._fields:
-                pricing_vals[field_name] = self.plan.id
-                break
-        for field_name in ('fixed_price', 'price', 'recurring_price', 'price_unit', 'list_price', 'amount'):
-            if field_name in pricing_model._fields:
-                pricing_vals[field_name] = 50.0
-                break
-        for field_name in ('name',):
-            if field_name in pricing_model._fields and field_name not in pricing_vals:
-                pricing_vals[field_name] = 'Pricing recurrente POS'
-
-        pricing_model.create(pricing_vals)
+        self._create_subscription_pricing(self.plan, price=50.0)
 
         charge = self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
             partner_id=self.partner.id,
@@ -578,10 +526,6 @@ class TestPosSubscriptionPricing(TransactionCase):
         self.assertEqual(charge['recurring_price'], 50.0)
 
     def test_pricing_payload_plan_list_prefers_subscription_pricing_over_generic_candidate(self):
-        pricing_model_name = 'sale.subscription.pricing'
-        if pricing_model_name not in self.env.registry:
-            self.fail('sale.subscription.pricing no existe en este runtime.')
-
         self.product.write({'list_price': 90.0})
 
         pricelist_item_model = self.env['product.pricelist.item']
@@ -594,24 +538,7 @@ class TestPosSubscriptionPricing(TransactionCase):
             pricelist_item_vals['compute_price'] = 'fixed'
         pricelist_item_model.create(pricelist_item_vals)
 
-        pricing_model = self.env[pricing_model_name]
-        pricing_vals = {}
-        for field_name in ('product_tmpl_id', 'product_template_id'):
-            if field_name in pricing_model._fields:
-                pricing_vals[field_name] = self.product.product_tmpl_id.id
-                break
-        for field_name in ('plan_id', 'subscription_plan_id', 'recurring_plan_id'):
-            if field_name in pricing_model._fields:
-                pricing_vals[field_name] = self.plan.id
-                break
-        for field_name in ('fixed_price', 'price', 'recurring_price', 'price_unit', 'list_price', 'amount'):
-            if field_name in pricing_model._fields:
-                pricing_vals[field_name] = 50.0
-                break
-        if 'name' in pricing_model._fields:
-            pricing_vals['name'] = 'Pricing visible POS'
-
-        pricing_model.create(pricing_vals)
+        self._create_subscription_pricing(self.plan, price=50.0)
 
         payload = self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
             partner_id=self.partner.id,
@@ -874,7 +801,6 @@ class TestPosSubscriptionPricing(TransactionCase):
             product=target_product,
             qty=1,
             recurring_price_unit=120.0,
-            recurring_plan_id=self.plan.id,
         )
         self.PosOrder._wgs_sync_subscription_metadata(
             sale_order=order,

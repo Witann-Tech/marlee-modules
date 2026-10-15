@@ -22,7 +22,7 @@ class TestSubscriptionParticipants(TransactionCase):
         self.subscription_product = self.env['product.product'].create(
             {
                 'name': 'Plan Familiar',
-                'detailed_type': 'service',
+                'type': 'service',
                 'list_price': 100,
                 'recurring_invoice': True,
                 'max_participants_total': 3,
@@ -32,7 +32,7 @@ class TestSubscriptionParticipants(TransactionCase):
         self.non_subscription_product = self.env['product.product'].create(
             {
                 'name': 'Toalla',
-                'detailed_type': 'consu',
+                'type': 'consu',
                 'list_price': 10,
             }
         )
@@ -47,7 +47,7 @@ class TestSubscriptionParticipants(TransactionCase):
                             'product_id': self.subscription_product.id,
                             'name': self.subscription_product.name,
                             'product_uom_qty': qty,
-                            'product_uom': self.subscription_product.uom_id.id,
+                            'product_uom_id': self.subscription_product.uom_id.id,
                             'price_unit': self.subscription_product.list_price,
                         }
                     )
@@ -110,7 +110,7 @@ class TestSubscriptionParticipants(TransactionCase):
                             'product_id': self.non_subscription_product.id,
                             'name': self.non_subscription_product.name,
                             'product_uom_qty': 1,
-                            'product_uom': self.non_subscription_product.uom_id.id,
+                            'product_uom_id': self.non_subscription_product.uom_id.id,
                             'price_unit': self.non_subscription_product.list_price,
                         }
                     )

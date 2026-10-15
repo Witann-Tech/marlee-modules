@@ -29,7 +29,7 @@ class TestSubscriptionAccessControl(TransactionCase):
         self.product = self.env['product.product'].create(
             {
                 'name': 'Plan acceso',
-                'detailed_type': 'service',
+                'type': 'service',
                 'list_price': 100,
                 'recurring_invoice': True,
                 'max_participants_total': 3,
@@ -188,7 +188,7 @@ class TestSubscriptionAccessControl(TransactionCase):
                             'product_id': product.id,
                             'name': product.name,
                             'product_uom_qty': 1,
-                            'product_uom': product.uom_id.id,
+                            'product_uom_id': product.uom_id.id,
                             'price_unit': product.list_price,
                         }
                     )
@@ -200,9 +200,7 @@ class TestSubscriptionAccessControl(TransactionCase):
 
     def _set_auto_close_plan(self, order, days=3):
         Plan = self.env['sale.subscription.plan']
-        plan = Plan.search([], limit=1)
-        if not plan:
-            plan = Plan.create({'name': 'Plan cierre WGS'})
+        plan = Plan.create({'name': 'Plan cierre WGS'})
 
         auto_close_field = next(
             (
@@ -216,22 +214,8 @@ class TestSubscriptionAccessControl(TransactionCase):
             self.skipTest('El runtime no expone campo de cierre automático en planes recurrentes.')
         plan.write({auto_close_field: days})
 
-        line = order._get_subscription_recurring_lines()[:1]
-        line_plan_field = next(
-            (
-                field_name
-                for field_name in ('subscription_plan_id', 'plan_id', 'recurring_plan_id')
-                if field_name in line._fields
-            ),
-            False,
-        )
-        if line_plan_field:
-            line.write({line_plan_field: plan.id})
-            return plan
-        if 'plan_id' in order._fields:
-            order.write({'plan_id': plan.id})
-            return plan
-        self.skipTest('No se encontró campo de plan recurrente en línea ni suscripción.')
+        order.write({'plan_id': plan.id})
+        return plan
 
     def test_active_subscription_creates_access_people(self):
         order = self._create_subscription_order()
@@ -262,7 +246,7 @@ class TestSubscriptionAccessControl(TransactionCase):
                             'product_id': self.product.id,
                             'name': self.product.name,
                             'product_uom_qty': 1,
-                            'product_uom': self.product.uom_id.id,
+                            'product_uom_id': self.product.uom_id.id,
                             'price_unit': self.product.list_price,
                         }
                     )
@@ -788,7 +772,7 @@ class TestSubscriptionAccessControl(TransactionCase):
                             'product_id': self.product.id,
                             'name': self.product.name,
                             'product_uom_qty': 1,
-                            'product_uom': self.product.uom_id.id,
+                            'product_uom_id': self.product.uom_id.id,
                             'price_unit': self.product.list_price,
                         }
                     )
@@ -840,7 +824,7 @@ class TestSubscriptionAccessControl(TransactionCase):
                             'product_id': self.product.id,
                             'name': self.product.name,
                             'product_uom_qty': 1,
-                            'product_uom': self.product.uom_id.id,
+                            'product_uom_id': self.product.uom_id.id,
                             'price_unit': self.product.list_price,
                         }
                     )
@@ -899,7 +883,7 @@ class TestSubscriptionAccessControl(TransactionCase):
                             'product_id': second_product.id,
                             'name': second_product.name,
                             'product_uom_qty': 1,
-                            'product_uom': second_product.uom_id.id,
+                            'product_uom_id': second_product.uom_id.id,
                             'price_unit': second_product.list_price,
                         }
                     )

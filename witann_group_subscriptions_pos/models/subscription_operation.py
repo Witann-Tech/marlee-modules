@@ -14,6 +14,7 @@ from psycopg2.errors import DeadlockDetected, SerializationFailure
 
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError
+from odoo.fields import Domain
 
 from ..subscription_contract import RULES_VERSION, canonical_json, fingerprint, validate_period
 
@@ -120,6 +121,8 @@ class PosSubscriptionOperation(models.Model):
             'pricing': {**pricing, 'max_participants_total': product.max_participants_total or 1},
         }
         plan = self.env['sale.subscription.plan'].browse(pricing.get('plan_id') or []).exists()
+        if not plan:
+            raise UserError(_('La cotizacion requiere un plan recurrente existente.'))
         interval, unit = self._wgs_extract_interval_from_plan(plan)
         payload['pricing']['single_day_term'] = (interval, unit) == (1, 'day')
         if payload['pricing']['single_day_term'] and not pricing.get('domiciliation'):
@@ -400,8 +403,6 @@ class PosSubscriptionOperation(models.Model):
                     if not eligibility or not eligibility.get('ok'):
                         raise UserError((eligibility or {}).get('error_message') or _('La operacion no cumple las reglas de la membresia.'))
                 result = scoped_order._wgs_apply_subscription_operation(scoped_line)
-                if not result:
-                    raise UserError(_('No se obtuvo el resultado comercial de la operacion de suscripcion.'))
                 line.write({
                     'wgs_sale_order_id': result.id,
                     'wgs_application_key': '%s:%s' % (order.uuid, line.uuid),
@@ -420,7 +421,50 @@ class PosSubscriptionOperation(models.Model):
             if changed:
                 order._wgs_finalize_paid_access(sources, affected)
 
-    def _wgs_apply_subscription_operation(self, line):
+    def _wgs_apply_subscription_operation(self, line, *, activation=False):
+        """One transactional boundary for checkout and deferred activation.
+
+        A receipt may be recorded only after the native result agrees with the
+        purchased quote. Historical/applied lines never enter this boundary.
+        """
+        self.ensure_one()
+        line.ensure_one()
+        if activation and (
+            line.qty <= 0 or line.wgs_subscription_flow != 'renewal'
+            or line.wgs_application_state != 'scheduled'
+            or fingerprint(self._wgs_line_operation_input(line)) != line.wgs_application_hash
+        ):
+            raise UserError(_('El cambio programado ya no conserva el contenido del pago original.'))
+        pricing_state = False
+        before = False
+        expected_participants = False
+        if line.qty > 0 and line.wgs_subscription_flow != 'pending_charge':
+            pricing_state = self._wgs_get_persisted_subscription_pricing_from_pos_line(line)
+            if not pricing_state['snapshot'].get('commercial_quote'):
+                raise UserError(_('La operacion requiere su cotizacion firmada antes de aplicarse.'))
+            ticket_price = pricing_state['snapshot'].get('ticket_charge_now')
+            if ticket_price is None or self.currency_id.compare_amounts(line.price_unit, ticket_price):
+                raise UserError(_('El precio de la membresia pagada no coincide con su cotizacion firmada.'))
+            before = self._wgs_source_revision(line.wgs_subscription_source_id)
+            source = line.wgs_subscription_source_id
+            same_package = source and source.order_line.filtered(
+                lambda item: item.product_id.recurring_invoice and item.product_uom_qty > 0
+            ).product_id == line.product_id
+            if line.wgs_subscription_flow == 'renewal' and same_package and not activation:
+                expected_participants = set(source.participant_ids.ids)
+        result = self._wgs_dispatch_subscription_operation(line, activation=activation)
+        if not result:
+            raise UserError(_('No se obtuvo el resultado comercial de la operacion de suscripcion.'))
+        if pricing_state:
+            self._wgs_assert_subscription_application(
+                line, result, pricing_state, before=before, activation=activation,
+                expected_participants=expected_participants,
+            )
+        elif line.qty < 0:
+            self._wgs_assert_subscription_refund(result)
+        return result
+
+    def _wgs_dispatch_subscription_operation(self, line, *, activation=False):
         if line.qty < 0:
             original = line.refunded_orderline_id or line.wgs_subscription_refund_origin_line_id
             if original and (original.product_id != line.product_id or original.order_id.company_id != self.company_id):
@@ -445,56 +489,111 @@ class PosSubscriptionOperation(models.Model):
         }
         if line.wgs_subscription_flow not in handlers:
             raise UserError(_('El flujo de suscripcion no es valido.'))
+        if activation and line.wgs_subscription_flow != 'renewal':
+            raise UserError(_('Solo una renovacion pagada puede activar un cambio programado.'))
         return handlers[line.wgs_subscription_flow](line)
 
     @api.model
     def _wgs_apply_due_package_changes(self, limit=100):
         today = self._wgs_get_subscription_business_today_for_pos()
-        lines = self.env['pos.order.line'].sudo().search([
-            ('wgs_application_state', '=', 'scheduled'), ('wgs_application_date', '<=', today),
-        ], order='wgs_application_date, id', limit=limit)
-        for line in lines:
-            try:
-                with self.env.cr.savepoint():
-                    order = line.order_id
-                    sources = order._wgs_lock_operation_records(line)
-                    if line.wgs_application_state != 'scheduled':
-                        continue
-                    source = line.wgs_subscription_source_id
-                    first_pending = self.env['pos.order.line'].sudo().search([
-                        ('wgs_subscription_source_id', '=', source.id),
-                        ('wgs_application_state', 'in', ['scheduled', 'review']),
-                    ], order='wgs_application_date, id', limit=1)
-                    if first_pending != line:
-                        continue
-                    receipt = line.wgs_application_receipt or {}
-                    if order._wgs_source_revision(source) != line.wgs_activation_revision:
-                        raise UserError(_('La suscripcion cambio antes de activar el paquete programado.'))
-                    affected = sources._wgs_get_access_related_partner_ids()
-                    scoped = order.with_context(wgs_defer_access_sync=True)
-                    scoped._wgs_process_subscription_renewal_line(line.with_env(scoped.env))
-                    after = order._wgs_source_revision(source)
-                    line.write({'wgs_application_state': 'applied', 'wgs_application_receipt': {
-                        **receipt, 'activation_after': after,
-                        'activated_at': fields.Datetime.to_string(fields.Datetime.now()),
-                    }})
-                    order._wgs_pending_package_changes(source).write({'wgs_activation_revision': after})
-                    order._wgs_finalize_paid_access(sources, affected)
-            except (DeadlockDetected, SerializationFailure):
-                raise
-            except Exception as error:
-                # A rolled-back savepoint releases its locks. Recheck before
-                # quarantining so a concurrent refund/activation is not undone.
-                line.order_id._wgs_lock_operation_records(line)
+        remaining = max(1, int(limit))
+        applied = 0
+        while remaining:
+            lines = self._wgs_select_due_package_changes(today, remaining)
+            if not lines:
+                break
+            for line in lines:
+                applied += bool(self._wgs_activate_package_change(line))
+            remaining -= len(lines)
+        return applied
+
+    def _wgs_select_due_package_changes(self, today, limit):
+        Line = self.env['pos.order.line'].sudo()
+        self.env['pos.order'].flush_model(['state'])
+        Line.flush_model(['order_id', 'wgs_application_state', 'wgs_application_date', 'wgs_subscription_source_id'])
+        # Select the head of each subscription queue before limiting the batch.
+        # A queue blocked by review must not starve unrelated paid contracts.
+        self.env.cr.execute('''
+            SELECT candidate.id FROM pos_order_line candidate
+              JOIN pos_order paid_order ON paid_order.id = candidate.order_id
+             WHERE candidate.wgs_application_state = 'scheduled'
+               AND paid_order.state IN ('paid', 'done', 'invoiced')
+               AND candidate.wgs_application_date <= %s
+               AND NOT EXISTS (
+                   SELECT 1 FROM pos_order_line earlier
+                    WHERE earlier.wgs_subscription_source_id = candidate.wgs_subscription_source_id
+                      AND (earlier.wgs_application_state = 'review' OR (
+                          earlier.wgs_application_state = 'scheduled'
+                          AND (earlier.wgs_application_date, earlier.id)
+                              < (candidate.wgs_application_date, candidate.id)
+                      ))
+               )
+             ORDER BY candidate.wgs_application_date, candidate.id LIMIT %s
+        ''', [today, max(1, int(limit))])
+        return Line.browse([row[0] for row in self.env.cr.fetchall()])
+
+    def _wgs_activate_package_change(self, line):
+        try:
+            with self.env.cr.savepoint():
+                order = line.order_id
+                sources = order._wgs_lock_operation_records(line)
                 if line.wgs_application_state != 'scheduled':
-                    continue
-                line.write({'wgs_application_state': 'review'})
+                    return False
+                source = line.wgs_subscription_source_id
+                if not source:
+                    raise UserError(_('El cambio pagado perdio su suscripcion origen; requiere revision.'))
+                first_pending = self.env['pos.order.line'].sudo().search([
+                    ('wgs_subscription_source_id', '=', source.id),
+                    ('wgs_application_state', 'in', ['scheduled', 'review']),
+                ], order='wgs_application_date, id', limit=1)
+                if first_pending != line:
+                    return False
+                receipt = line.wgs_application_receipt or {}
+                if order._wgs_source_revision(source) != line.wgs_activation_revision:
+                    raise UserError(_('La suscripcion cambio antes de activar el paquete programado.'))
+                affected = sources._wgs_get_access_related_partner_ids()
+                scoped = order.with_context(wgs_defer_access_sync=True)
+                scoped._wgs_apply_subscription_operation(line.with_env(scoped.env), activation=True)
+                after = order._wgs_source_revision(source)
+                line.write({'wgs_application_state': 'applied', 'wgs_application_receipt': {
+                    **receipt, 'activation_after': after,
+                    'activated_at': fields.Datetime.to_string(fields.Datetime.now()),
+                }})
+                order._wgs_pending_package_changes(source).write({'wgs_activation_revision': after})
+                order._wgs_finalize_paid_access(sources, affected)
+                return True
+        except (DeadlockDetected, SerializationFailure):
+            raise
+        except Exception as error:
+            # A rolled-back savepoint releases its locks. Recheck before
+            # quarantining so a concurrent refund/activation is not undone.
+            line.order_id._wgs_lock_operation_records(line)
+            if line.wgs_application_state != 'scheduled':
+                return False
+            line.write({'wgs_application_state': 'review'})
+            if line.wgs_subscription_source_id:
                 line.wgs_subscription_source_id.message_post(body=str(error))
-                _logger.exception('WGS scheduled operation requires review: line=%s', line.id)
+            _logger.exception('WGS scheduled operation requires review: line=%s', line.id)
+            return False
 
 
 class SaleOrderOperationCron(models.Model):
     _inherit = 'sale.order'
+
+    wgs_subscription_operation_line_ids = fields.One2many(
+        'pos.order.line', 'wgs_subscription_source_id', readonly=True, copy=False,
+    )
+
+    @api.model
+    def _wgs_get_subscription_auto_close_candidate_domain(self, today):
+        # A bounded activation batch may leave already-paid changes for the next
+        # run. Do not close their source before those changes can be applied.
+        return super()._wgs_get_subscription_auto_close_candidate_domain(today) & Domain(
+            'wgs_subscription_operation_line_ids', 'not any', Domain([
+                ('wgs_application_state', '=', 'scheduled'),
+                ('wgs_application_date', '<=', today),
+            ]),
+        )
 
     def _build_pos_subscription_status_item(self, today):
         item = super()._build_pos_subscription_status_item(today)

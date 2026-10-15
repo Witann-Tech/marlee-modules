@@ -1,11 +1,180 @@
 # Refactor comercial de suscripciones: validacion en staging
 
-Fecha: 2026-09-28. Rama de trabajo: `staging`.
+Registro inicial: 2026-09-28. Rama de trabajo: `staging`.
+
+## Entrega para pruebas: 2026-10-15
+
+Commit y push a `staging` solicitados. Se repitieron satisfactoriamente 53 tests
+Python y 20 JavaScript; sigue pendiente la suite ORM sobre el build exacto.
+Actualizar ambos addons: base `19.0.1.1.58`, POS `19.0.1.6.3`. Sin merge a main
+ni nuevos cambios de datos en produccion. Los estados locales mencionados mas
+abajo describen la preparacion del 14/octubre, anterior a esta entrega.
+
+Para las pruebas manuales usar clientes de prueba y comprobar siempre modal,
+ticket, ficha de suscripcion y control de acceso. No basta con el estado visual
+del directorio. Crear cotizaciones nuevas tras upgrade/recarga; las ya firmadas
+conservan sus condiciones. No borrar almacenamiento si quedan tickets pendientes.
+No conectar la copia de pruebas a dispositivos o gateways de produccion.
+
+El conflicto de crons requiere dos momentos: ultimo dia pagado y dia siguiente.
+No basta ejecutar el cron hoy sobre un contrato que vence dentro de un mes. En
+la suite ORM se congelan fechas sin cambiar el reloj del servidor. En pruebas
+operativas puede usarse un contrato corto de prueba que venza hoy y un cambio
+pagado para manana. Verificar hoy que los jobs nativos no lo cierren ni cambien
+su paquete; manana activar WGS y verificar el destino comprado. No modificar
+las fechas de una fuente despues de cotizar/pagar: eso invalida su revision.
+
+## Frontera de aplicacion WGS POS: 2026-10-14
+
+Version base `19.0.1.1.58`, POS `19.0.1.6.3`. Implementacion local en `staging`,
+sin commit/push ni despliegue de codigo en produccion. Alcance WGS/POS; no
+incluye importador bancario, loyalty ni cambios al protocolo/identidades SpeedFace.
+Los estados y resultados anteriores de este documento son registros historicos.
+Separadamente se repararon, con autorizacion puntual, los dos contratos del
+incidente del 12/octubre; ver el registro al final de esta seccion.
+
+### Cambios e invariantes
+
+- Cotizacion firmada como autoridad del plan/precio/periodo comprado. La lectura
+  de una operacion firmada no sustituye el plan por metadata duplicada ni por
+  el catalogo actual. Sin plan existente no se admite una nueva cotizacion.
+- Una frontera de aplicacion para cobro inmediato y activacion futura. Antes de
+  registrar la aplicacion se verifican titular/empresa, paquete/plan, cantidad,
+  precio recurrente sin descuento heredado, participantes y periodo persistido.
+- Un cambio programado no altera el periodo ni beneficios actuales. Cambiar
+  solo el plan del mismo producto tambien espera al siguiente periodo.
+- Domiciliacion valida contrato y cuotas seleccionadas contra el pago, sin
+  confundir su cartera con la vigencia ordinaria. El reembolso total valida
+  cancelacion de la membresia, contrato domiciliado y cambios futuros.
+- Adaptador nativo Odoo 19 separado: plan exclusivamente en `sale.order.plan_id`;
+  nunca se escribe su campo relacionado de la linea. Alta, upsale, renovacion y
+  reinscripcion construyen sus lineas con el mismo adaptador.
+- Eliminada la cadena privada sin llamadas de creacion alternativa de upsell.
+  El flujo vigente de Cambiar paquete y su credito se conservan.
+- Activacion verifica la huella original del pago, conserva locks/savepoints y
+  pasa por las mismas comprobaciones que checkout. Si falla, revierte solo la
+  activacion y deja la operacion en revision; no marca un resultado incorrecto
+  como aplicado ni vuelve a cobrar.
+- Cola seleccionada por cabecera de suscripcion antes de limitar el lote. Una
+  revision bloquea su cola, no otras. Se procesan cambios consecutivos ya
+  exigibles dentro del mismo presupuesto, nunca mas de 100 por ejecucion.
+- Cierre excluye cambios pagados exigibles pendientes de activacion y contratos
+  domiciliados dentro del plazo, evitando ocupar repetidamente el lote con
+  contratos que todavia no deben cerrarse. Sin cambios de frecuencia ni commits
+  manuales; se usa exclusivamente el cursor/transaccion de Odoo.
+- Una sola regla de propiedad del ciclo de vida: sitios de acceso persistidos,
+  contrato domiciliado o evidencia de una operacion comercial POS pagada y
+  positiva (incluye ventas autorizadas al 100%). Cobrar una factura nativa
+  mediante `pending_charge` no transfiere por si solo esa responsabilidad a WGS.
+- Los tres crons nativos (facturacion, expiracion y recordatorios) excluyen esos
+  contratos de sus selecciones ORM y de los resultados SQL de expiracion. Se
+  filtra antes del limite ORM y tambien antes de cerrar lotes explicitos. Un
+  lote explicito totalmente WGS termina vacio, sin convertirse en busqueda global.
+- El cron WGS solo cierra contratos de su responsabilidad. El cierre manual
+  nativo se conserva. No se cambian flags/frecuencias de crons en la base ni se
+  agregan cursores, transacciones, threads o conexiones externas. Se retira del
+  XML la desactivacion global del cron nativo; esto NO reactiva crons ya apagados.
+- Una sola extension PaymentScreen para preflight y politica de solo tickets.
+  Se conservan bloqueo de Facturar/Informacion, reembolsos, apertura de puerta,
+  bloqueo/desbloqueo, manuales, WellHub, TotalPass, multisede y bitacoras.
+- El upgrade no recalcula ventas aplicadas ni migra fechas, pagos o personas. Los
+  snapshots previos conservan sus reglas y fechas contratadas.
+
+### Puerta de validacion
+
+Las pruebas comerciales ahora usan `product.pricelist.item` con `plan_id`, el
+esquema nativo de esta instalacion Odoo 19. El helper de compra pasa por
+`pos.order._process_order` con payload de linea y pago nativo; ya no simula un
+cobro escribiendo solamente `state=paid`.
+
+Se inspecciono un checkout local de Odoo 19 Enterprise, pero no hay un runtime
+Odoo ejecutable con sus dependencias y base PostgreSQL. La suite ORM y sus locks/savepoints,
+restricciones y hooks no se han ejecutado aqui. No promover a main hasta pasar
+esa suite y las pruebas operativas. Los tests aislados no sustituyen este paso.
+El checkout Enterprise inspeccionado no coincide con la revision reportada por
+produccion: el gate debe utilizar el build exacto de staging.
+
+Resultado local de esta iteracion: 53 pruebas Python y 20 JavaScript aprobadas,
+mas sintaxis de todos los modulos JS del addon, referencias de assets y
+`git diff --check`. La seleccion SQL se ejecuta localmente sobre SQLite para
+comprobar orden/filtros/limites; esto NO valida PostgreSQL ni la concurrencia ORM.
+
+Ejecutar la suite en una copia desechable de staging, desconectada de gateways,
+cajeros y dispositivos; nunca sobre la base operativa. Con la configuracion y
+addons de staging, indicando el nombre real de esa copia:
+
+```sh
+venv/bin/python3 src/odoo-bin -c odoo.conf -d WGS_POS_VALIDATION_DB \
+  -u witann_group_subscriptions,witann_group_subscriptions_pos --test-enable \
+  --test-tags /witann_group_subscriptions,/witann_group_subscriptions_pos --stop-after-init \
+  --max-cron-threads=0 --no-http
+```
+
+Los 35 casos ORM de operaciones POS incluyen regresiones del conflicto nativo;
+tambien se actualizan los fixtures base a `type`, `product_uom_id` y plan en la
+cabecera. Esto no constituye un resultado de ejecucion ORM.
+
+En staging operativo: build, actualizar WGS base a `.1.1.58` y POS a `.1.6.3`; recargar las cajas
+cuando sus tickets esten sincronizados. No borrar almacenamiento local.
+
+| Prueba | Resultado esperado |
+| --- | --- |
+| Nueva mensual y diaria | Plan, precio y fechas de la cotizacion; diario sin siguiente factura |
+| Reinscribir diario -> mensual, mensual -> trimestre/semestre/anual y a la inversa | Plan destino y plazo comprado, sin heredar el anterior |
+| Reinscribir pareja/trio -> personal y personal -> pareja/trio | Titular/participantes/cupo correctos, sin participantes anteriores colgados |
+| Renovar mensual -> anual y semestre -> mensual | Periodo previo intacto; paquete, plan y participantes nuevos al terminarlo |
+| Cambiar plan del mismo producto al renovar | Tambien programado; no cambia beneficios de inmediato |
+| Dos renovaciones futuras; cron atrasado | Orden de compra conservado, aplicacion una sola vez y sin recobro |
+| Cola en revision junto a otro cliente elegible | La segunda suscripcion sigue avanzando |
+| Mas cambios exigibles que el limite del cron | Fuentes pendientes pagadas no se cierran por adelantado |
+| Facturacion, expiracion y recordatorios nativos activos: ultimo dia inclusivo con cambio pagado | Ninguno cierra, factura ni recuerda deuda de WGS; acceso previo vigente |
+| Dia siguiente: crons nativos antes/despues de activacion WGS | Cambio pagado aplicado una vez; paquete/plan/horario destino y fechas firmadas |
+| Membresia WGS de backend y contrato domiciliado, sin venta POS | Tampoco son procesados por automatizaciones nativas |
+| Suscripcion ajena a WGS y cobro POS de factura nativa | Sigue bajo facturacion/cierre nativos; WGS no la cierra |
+| Cierre manual de membresia WGS | Accion explicita conservada; no confundir con cierre automatico |
+| Catalogo cambia despues de pagar una renovacion futura | Al activarse conserva precio, plan y fechas comprados |
+| Reinscribir trimestral con 100% autorizado y luego renovar | Primer ticket cero; siguiente cobro normal y plan trimestral |
+| Domiciliado retroactivo, abono parcial de meses, ponerse al corriente y adelantar | Cartera exacta; acceso solo al corriente; conserva ciclos anteriores |
+| Reembolso total con cambios futuros; intento parcial/repetido | Cancela todo lo correspondiente; rechaza parcial y duplicado |
+| Respuesta de cobro perdida/reintento/fallo de acceso | Una aplicacion comercial; reintenta solo proyeccion de acceso |
+| Inicio/fin inclusivos, corte 29/30/31, alineados y multisede | Calendarios, sitios, horarios y bloqueos conservados |
+| Facturar, Recibo/Factura e Informacion en distintas vistas | Restricciones vigentes, con impresion de ticket funcionando |
+
+La concurrencia con dos workers y entrega real de acceso a dispositivo de prueba
+siguen siendo validaciones operativas obligatorias. No se cambio la asignacion
+de IDs ni el protocolo SpeedFace. La sustitucion del guard DOM restante y de los
+setters dinamicos del ticket no se incluye sin una suite de carga/UI contra el
+build exacto de Odoo; esos riesgos no se dan por resueltos en esta iteracion.
+En la copia desechable, probar expresamente los tres jobs nativos con sus flags
+activos; ejecutar sus metodos de forma controlada y con fechas congeladas. No
+habilitar automatizaciones ni conexiones a dispositivos de produccion en esa copia.
 
 Estado: implementacion local y pruebas aisladas ejecutadas. NO desplegado desde
 esta tarea; NO validado todavia contra Odoo 19 Enterprise. NO autoriza promover a
 main ni ejecutar reparaciones historicas. La auditoria original conserva el
 diagnostico del checkout previo en `AUDITORIA_FLUJOS_SUSCRIPCIONES_2026-09-28.md`.
+
+### Incidente y reparacion puntual autorizada: 2026-10-14
+
+- Tickets `2648-8-000039` y `2648-8-000040`, fuentes `S02753` y `S01402`.
+  Cambio pagado de Estudiante a Horario Especial, con periodo firmado
+  14/octubre-13/noviembre y siguiente cobro 14/noviembre.
+- OdooBot cerro ambas fuentes durante el ultimo dia inclusivo, 13/octubre. La
+  activacion encontro la revision modificada y dejo las compras en revision.
+  La huella coincide con la cotizada al restaurar solamente el estado activo.
+- En produccion estaban activos los tres jobs nativos. El core inspeccionado
+  incluye `end_date <= hoy` en facturacion/cierre automatico. Es una ruta que
+  reproduce el defecto; el historial no identifica por si solo cual cron cerro
+  cada registro. No se atribuye un job concreto sin esa evidencia.
+- Reparacion atomica solo de esas dos compras, con dry_run, locks, comprobacion
+  de revision/cotizacion y verificacion posterior por otra conexion. Aplicacion
+  mediante el handler existente y resincronizacion normal del acceso. Se
+  conservaron fechas firmadas, cobros, hashes y personas existentes; sin fusionar
+  personas ni intervenir contratos adicionales. Se retiro la accion temporal.
+- Resultado confirmado: ambos en progreso, mensualidad SM, Horario Especial,
+  acceso habilitado en Odoo. Upserts `33994`/`33995` encolados; entrega fisica a
+  SpeedFace NO verificada. No se modificaron configuraciones globales de crons
+  ni se desplego este refactor en produccion.
 
 ## Reglas confirmadas
 

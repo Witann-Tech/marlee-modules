@@ -540,18 +540,19 @@ class SaleOrder(models.Model):
             ('state', 'in', ['sale', 'done']),
             ('order_line.product_id.product_tmpl_id.recurring_invoice', '=', True),
         ])
+        domain &= self._wgs_managed_subscription_domain()
+        domain &= ~Domain('wgs_domiciliation_contract_id', 'any', Domain([
+            ('state', '=', 'active'), ('term_end_date', '>=', today),
+        ]))
         if 'is_subscription' in self._fields:
             domain &= Domain('is_subscription', '=', True)
         if 'subscription_state' in self._fields:
             domain &= Domain('subscription_state', '!=', False)
             terminal_state_values = self._wgs_get_subscription_terminal_state_values()
             if terminal_state_values:
-                # Active domiciliation contracts own their operational state even
-                # when the native recurring engine has already closed the order.
-                domain &= Domain.OR([
-                    Domain('wgs_domiciliation_contract_id.state', '=', 'active'),
-                    Domain('subscription_state', 'not in', terminal_state_values),
-                ])
+                # The domiciliation ledger may remain operational while the
+                # native header is closed, but that header needs no second close.
+                domain &= Domain('subscription_state', 'not in', terminal_state_values)
 
         next_date_domain, missing_next_date_domain = self._wgs_get_resolved_date_candidate_domain(
             self._WGS_SUBSCRIPTION_NEXT_INVOICE_DATE_FIELDS,
