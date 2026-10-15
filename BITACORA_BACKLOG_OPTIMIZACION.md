@@ -209,6 +209,40 @@ No dar por terminados los sprints ni el hallazgo H9 de validacion integral.
 Plan operativo, versiones, limites y matriz:
 `REFACTOR_SUSCRIPCIONES_STAGING.md`.
 
+## Avance 2026-10-14 - Integridad de Aplicacion WGS POS
+
+Alcance del codigo: WGS/POS, en staging local. No modifica importador bancario,
+loyalty ni protocolo/identidades SpeedFace; sin despliegue en produccion.
+
+- Frontera de aplicacion y postcondiciones compartidas por checkout/activacion;
+  cotizacion firmada autoritativa y adaptador explicito para Odoo 19.
+- Retiradas asignaciones heuristicas del plan/precio a campos relacionados y una
+  cadena privada de upsell sin llamadas; conservado Cambiar paquete operativo.
+- Cola acotada con avance por contrato, comprobacion de huella pagada y proteccion
+  ante cierre previo a activar cambios exigibles. Domiciliados dentro de plazo
+  quedan fuera de candidatos de cierre del POS.
+- Propiedad de ciclo de vida centralizada en base y extendida por POS: sitios,
+  contrato domiciliado o compra comercial pagada. Exclusion de WGS en los tres
+  jobs nativos, incluidos candidatos SQL y lotes explicitos; WGS no toma los
+  contratos ajenos. Conservados cierre manual y cobro POS de factura nativa.
+- Retirada desactivacion global del cron nativo del XML. No se cambian flags de
+  crons existentes ni se reactivan los apagados durante el upgrade.
+- Unificada extension PaymentScreen sin retirar restricciones de facturacion
+  e informacion. Guard DOM y setters dinamicos restantes siguen pendientes.
+- Fixtures comerciales corregidos al esquema real de precios; pruebas ORM pasan
+  por pago nativo y cubren trimestres/anualidades, 100% autorizado, colas y fallos.
+- NO se declara completada la validacion integral: falta suite ORM en copia
+  desechable de staging, concurrencia de dos workers, matriz POS y dispositivo.
+- Verificacion aislada: 53 pruebas Python y 20 JavaScript aprobadas. Los 35 casos
+  ORM de operaciones estan preparados, NO ejecutados aqui.
+- Reparacion de produccion separada y autorizada: solo `S02753`/`S01402`, tickets
+  `2648-8-000039`/`000040`. Periodos firmados 14/octubre-13/noviembre y pagos
+  intactos; Horario Especial y acceso habilitado. Verificacion independiente
+  sin discrepancias; entrega SpeedFace pendiente de verificar. No se crearon,
+  eliminaron ni consolidaron personas; sin cambios globales de crons.
+- Version base `19.0.1.1.58`, POS `19.0.1.6.3`. Matriz, limites y comando en
+  `REFACTOR_SUSCRIPCIONES_STAGING.md`.
+
 ## Criterios Generales
 
 - Todo cambio de este backlog debe conservar las funcionalidades actuales:

@@ -5,6 +5,9 @@ from . import hr_employee
 from . import pos_order_pricing
 from . import subscription_pos_sync_service
 from . import pos_order
+from . import subscription_native_adapter
 from . import subscription_operation
+from . import subscription_application
+from . import subscription_lifecycle
 
 from . import subscription_period_repair

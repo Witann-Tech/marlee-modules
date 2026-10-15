@@ -10,6 +10,9 @@ from odoo.exceptions import UserError
 from odoo.tests import tagged
 from odoo.addons.point_of_sale.tests.common import CommonPosTest
 
+from .common import create_recurring_price
+from odoo.addons.witann_group_subscriptions.models.subscription_lifecycle import SaleOrderWgsLifecycle
+
 
 @tagged('post_install', '-at_install', 'wgs_commercial')
 class TestSubscriptionOperations(CommonPosTest):
@@ -39,11 +42,7 @@ class TestSubscriptionOperations(CommonPosTest):
             'available_in_pos': True, 'list_price': amount, 'taxes_id': [Command.clear()],
             'max_participants_total': capacity,
         })
-        Pricing = self.env['sale.subscription.pricing']
-        # The test must fail, not silently skip, if Enterprise's schema changes.
-        template_field = next(name for name in ('product_template_id', 'product_tmpl_id') if name in Pricing._fields)
-        amount_field = next(name for name in ('price', 'fixed_price') if name in Pricing._fields)
-        Pricing.create({template_field: product.product_tmpl_id.id, 'plan_id': plan.id, amount_field: amount})
+        create_recurring_price(self.env, product, plan, amount)
         return product
 
     def _quote(self, product, plan, flow='new', source=False, start='2026-09-15', months=False):
@@ -54,7 +53,7 @@ class TestSubscriptionOperations(CommonPosTest):
             domiciliation_installment_sequences=months,
         )
 
-    def _paid(self, product, plan, flow='new', source=False, participants=False, start='2026-09-15', months=False):
+    def _paid(self, product, plan, flow='new', source=False, participants=False, start='2026-09-15', months=False, discount=0):
         quote = self._quote(product, plan, flow, source, start, months)
         config = {
             'line_uuid': str(uuid4()), 'product_id': product.id, 'quantity': 1,
@@ -64,6 +63,21 @@ class TestSubscriptionOperations(CommonPosTest):
             'participant_ids': participants or self.holder.ids,
             'pricing_snapshot': quote, 'pricing_lock': {'price_unit': quote['ticket_charge_now'], 'discount': 0},
         }
+        if discount:
+            employee = self.env['hr.employee'].sudo().create({'name': 'WGS test supervisor'})
+            pin = str(uuid4())
+            self.env['wgs.pos.authorization.credential'].sudo().create({
+                'employee_id': employee.id, 'authorization_pin': pin,
+            })
+            authorization = self.Pos.wgs_authorize_subscription_discount_for_pos(
+                self.holder.id, product.id, flow, discount, pin, source.id if source else False,
+            )
+            self.assertTrue(authorization['ok'])
+            config.update({
+                'discount_percent': discount, 'discount_code': authorization['code'],
+                'discount_authorized_employee_id': employee.id,
+                'discount_authorized_at': authorization['authorized_at'],
+            })
         order, _refund = self.create_backend_pos_order({
             'order_data': {'partner_id': self.holder.id},
             'line_data': [{
@@ -74,11 +88,27 @@ class TestSubscriptionOperations(CommonPosTest):
         self.Pos.wgs_stage_subscription_config_for_uuid(order.uuid, [config], {
             'partner_id': self.holder.id, 'company_id': order.company_id.id,
             'lines': [{'uuid': config['line_uuid'], 'product_id': product.id, 'qty': 1,
-                       'price_unit': quote['ticket_charge_now'], 'discount': 0}],
+                       'price_unit': quote['ticket_charge_now'], 'discount': discount}],
         })
-        order._wgs_apply_subscription_line_configs([config])
-        order.write({'state': 'paid'})
-        order._wgs_sync_subscription_sales()
+        amount = order.currency_id.round(quote['ticket_charge_now'] * (1 - discount / 100))
+        payload = {
+            'uuid': order.uuid, 'state': 'paid', 'session_id': order.session_id.id,
+            'partner_id': self.holder.id, 'amount_return': 0,
+            'amount_total': amount, 'amount_paid': amount, 'amount_tax': 0,
+            'to_invoice': False, 'wgs_subscription_configs': [config],
+            'lines': [[1, order.lines.id, {
+                'uuid': config['line_uuid'], 'product_id': product.id, 'qty': 1,
+                'price_unit': quote['ticket_charge_now'], 'discount': discount,
+                'price_subtotal': amount, 'price_subtotal_incl': amount,
+            }]],
+            'payment_ids': [[0, 0, {
+                'payment_method_id': self.cash_payment_method.id,
+                'amount': amount, 'payment_date': fields.Datetime.now(),
+            }]] if amount else [],
+        }
+        self.Pos._process_order(payload, order)
+        self.assertEqual(order.state, 'paid')
+        self.assertEqual(sum(order.payment_ids.mapped('amount')), amount)
         return order, order.lines.wgs_sale_order_id
 
     def test_paid_new_has_one_application_and_exact_month(self):
@@ -135,6 +165,235 @@ class TestSubscriptionOperations(CommonPosTest):
         self.assertEqual(result._get_recurring_lines().product_id, self.solo)
         order._wgs_sync_subscription_sales()
         self.assertEqual(result.end_date, fields.Date.to_date('2026-10-15'))
+
+    def test_reenrollment_applies_each_purchased_term_not_the_old_plan(self):
+        for months, expected_end in ((3, '2026-12-14'), (6, '2027-03-14'), (12, '2027-09-14')):
+            with self.subTest(months=months):
+                self.holder = self.env['res.partner'].create({'name': f'Reenrollment {months}'})
+                target_plan = self.env['sale.subscription.plan'].create({
+                    'name': f'{months} months', 'billing_period_value': months, 'billing_period_unit': 'month',
+                })
+                target = self._product(f'Package {months}', target_plan, 100 * months)
+                _initial, subscription = self._paid(self.solo, self.month)
+                subscription.subscription_state = '6_churn'
+                _payment, subscription = self._paid(target, target_plan, 'reenroll', subscription)
+                self.assertEqual(subscription.plan_id, target_plan)
+                self.assertEqual(subscription.order_line.filtered(lambda item: item.product_uom_qty > 0).subscription_plan_id, target_plan)
+                self.assertEqual(subscription.end_date, fields.Date.to_date(expected_end))
+                self.assertEqual(subscription.wgs_monthly_cutoff_day, 0)
+
+    def test_signed_quote_owns_plan_even_if_redundant_line_metadata_drifts(self):
+        quote = self._quote(self.solo, self.month)
+        line = self.env['pos.order.line'].new({
+            'product_id': self.solo.id, 'qty': 1, 'price_unit': 100,
+            'wgs_subscription_flow': 'new', 'wgs_subscription_plan_id': self.day.id,
+            'wgs_pricing_snapshot_json': json.dumps(quote),
+        })
+        order = self.Pos.new({'partner_id': self.holder.id, 'company_id': self.env.company.id})
+        pricing = order._wgs_get_persisted_subscription_pricing_from_pos_line(line)
+        self.assertEqual(pricing['plan_id'], self.month.id)
+        self.assertEqual(pricing['subscription_end_date'], fields.Date.to_date('2026-10-15'))
+
+    def test_native_line_values_never_write_the_related_subscription_plan(self):
+        order, subscription = self._paid(self.solo, self.month)
+        values = order._wgs_build_subscription_recurring_line_values_for_pos(
+            pos_line=order.lines,
+            product=self.daily, qty=1, recurring_price_unit=10,
+        )
+        self.assertNotIn('subscription_plan_id', values)
+        self.assertNotIn('subscription_pricing_id', values)
+
+    def test_incorrect_reenrollment_result_rolls_back_without_application_receipt(self):
+        _initial, subscription = self._paid(self.daily, self.day)
+        subscription.subscription_state = '6_churn'
+        original = type(self.Pos)._wgs_sync_subscription_metadata
+
+        def omit_plan(records, **values):
+            values.pop('recurring_plan_id', None)
+            return original(records, **values)
+
+        with patch.object(type(self.Pos), '_wgs_sync_subscription_metadata', omit_plan):
+            with self.assertRaises(UserError), self.env.cr.savepoint():
+                self._paid(self.solo, self.month, 'reenroll', subscription)
+        self.assertEqual(subscription.plan_id, self.day)
+        self.assertEqual(subscription.subscription_state, '6_churn')
+        self.assertEqual(subscription.order_line.filtered(lambda item: item.product_uom_qty > 0).product_id, self.daily)
+
+    def test_incorrect_scheduled_activation_is_quarantined_and_keeps_paid_period(self):
+        _initial, subscription = self._paid(self.solo, self.month)
+        annual = self.env['sale.subscription.plan'].create({
+            'name': 'Annual future result', 'billing_period_value': 12, 'billing_period_unit': 'month',
+        })
+        target = self._product('Annual future package', annual, 1200)
+        payment, _subscription = self._paid(target, annual, 'renewal', subscription)
+        receipt = payment.lines.wgs_application_receipt
+        original = type(self.Pos)._wgs_sync_subscription_metadata
+
+        def omit_plan(records, **values):
+            values.pop('recurring_plan_id', None)
+            return original(records, **values)
+
+        with patch.object(type(self.Pos), '_wgs_sync_subscription_metadata', omit_plan), patch.object(
+            fields.Datetime, 'now', return_value=datetime(2026, 10, 16, 12),
+        ):
+            self.Pos._wgs_apply_due_package_changes()
+        self.assertEqual(payment.lines.wgs_application_state, 'review')
+        self.assertEqual(payment.lines.wgs_application_receipt, receipt)
+        self.assertEqual(subscription.plan_id, self.month)
+        self.assertEqual(subscription.end_date, fields.Date.to_date('2026-10-15'))
+        self.assertEqual(subscription._get_recurring_lines().product_id, self.solo)
+
+    def test_review_queue_does_not_starve_other_due_contracts(self):
+        _initial, blocked = self._paid(self.solo, self.month)
+        review, _subscription = self._paid(self.pair, self.month, 'renewal', blocked, (self.holder | self.member).ids)
+        next_payment, _subscription = self._paid(self.solo, self.month, 'renewal', blocked)
+        review.lines.wgs_application_state = 'review'
+        self.holder = self.env['res.partner'].create({'name': 'Unrelated due renewal'})
+        _initial, eligible = self._paid(self.solo, self.month)
+        payment, _subscription = self._paid(self.pair, self.month, 'renewal', eligible, (self.holder | self.member).ids)
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 12, 16, 12)):
+            self.Pos._wgs_apply_due_package_changes(limit=1)
+        self.assertEqual(payment.lines.wgs_application_state, 'applied')
+        self.assertEqual(next_payment.lines.wgs_application_state, 'scheduled')
+
+    def test_paid_scheduled_change_is_excluded_from_close_until_activated(self):
+        _initial, subscription = self._paid(self.solo, self.month)
+        payment, _subscription = self._paid(self.pair, self.month, 'renewal', subscription, (self.holder | self.member).ids)
+        today = fields.Date.to_date('2026-10-20')
+        domain = subscription._wgs_get_subscription_auto_close_candidate_domain(today)
+        self.assertNotIn(subscription, self.env['sale.order'].search(domain))
+        self.assertEqual(payment.lines.wgs_application_state, 'scheduled')
+
+    def test_same_package_renewal_preserves_current_participants(self):
+        _initial, subscription = self._paid(self.pair, self.month, participants=(self.holder | self.member).ids)
+        _renewal, subscription = self._paid(self.pair, self.month, 'renewal', subscription)
+        self.assertEqual(set(subscription.participant_ids.ids), set((self.holder | self.member).ids))
+
+    def test_one_hundred_percent_discount_does_not_change_plan_or_future_price(self):
+        _initial, subscription = self._paid(self.solo, self.month)
+        subscription.subscription_state = '6_churn'
+        quarter = self.env['sale.subscription.plan'].create({
+            'name': 'Complimentary quarter', 'billing_period_value': 3, 'billing_period_unit': 'month',
+        })
+        target = self._product('Quarter with authorized discount', quarter, 300)
+        payment, subscription = self._paid(target, quarter, 'reenroll', subscription, discount=100)
+        self.assertEqual(payment.amount_total, 0)
+        self.assertEqual(subscription.plan_id, quarter)
+        self.assertEqual(subscription.end_date, fields.Date.to_date('2026-12-14'))
+        self.assertEqual(subscription._get_recurring_lines().price_unit, 300)
+        self.assertEqual(subscription._get_recurring_lines().discount, 0)
+        quote = self._quote(target, quarter, 'renewal', subscription)
+        self.assertEqual(quote['ticket_charge_now'], 300)
+
+    def test_same_product_plan_change_waits_for_the_next_period(self):
+        annual = self.env['sale.subscription.plan'].create({
+            'name': 'Same product annual', 'billing_period_value': 12, 'billing_period_unit': 'month',
+        })
+        create_recurring_price(self.env, self.solo, annual, 1200)
+        _initial, subscription = self._paid(self.solo, self.month)
+        payment, subscription = self._paid(self.solo, annual, 'renewal', subscription)
+        self.assertEqual(payment.lines.wgs_application_state, 'scheduled')
+        self.assertEqual(subscription.plan_id, self.month)
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 10, 16, 12)):
+            self.Pos._wgs_apply_due_package_changes()
+        self.assertEqual(payment.lines.wgs_application_state, 'applied')
+        self.assertEqual(subscription.plan_id, annual)
+        self.assertEqual(subscription.end_date, fields.Date.to_date('2027-10-15'))
+
+    def test_one_run_catches_up_sequential_due_changes_within_its_budget(self):
+        _initial, subscription = self._paid(self.solo, self.month)
+        first, _subscription = self._paid(self.pair, self.month, 'renewal', subscription, (self.holder | self.member).ids)
+        second, _subscription = self._paid(self.solo, self.month, 'renewal', subscription)
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 11, 16, 12)):
+            applied = self.Pos._wgs_apply_due_package_changes(limit=2)
+        self.assertEqual(applied, 2)
+        self.assertEqual(first.lines.wgs_application_state, 'applied')
+        self.assertEqual(second.lines.wgs_application_state, 'applied')
+        self.assertEqual(subscription._get_recurring_lines().product_id, self.solo)
+        self.assertEqual(subscription.end_date, fields.Date.to_date('2026-12-15'))
+
+    def _native_subscription(self):
+        partner = self.env['res.partner'].create({'name': 'Native backend-only subscription'})
+        subscription = self.env['sale.order'].create({
+            'partner_id': partner.id, 'plan_id': self.month.id,
+            'order_line': [Command.create({
+                'product_id': self.solo.id, 'product_uom_qty': 1, 'price_unit': 100,
+            })],
+        })
+        subscription.action_confirm()
+        subscription.write({
+            'subscription_state': '3_progress', 'start_date': '2026-09-01',
+            'end_date': '2026-10-15', 'next_invoice_date': '2026-10-16',
+        })
+        return subscription
+
+    def test_native_invoice_domain_preserves_non_pos_subscriptions(self):
+        _payment, managed = self._paid(self.solo, self.month)
+        native = self._native_subscription()
+        with patch.object(fields.Date, 'today', return_value=fields.Date.to_date('2026-10-15')):
+            original = super(SaleOrderWgsLifecycle, self.env['sale.order'])._recurring_invoice_domain()
+            self.assertIn(managed, self.env['sale.order'].search(original))
+            candidates = self.env['sale.order'].search(self.env['sale.order']._recurring_invoice_domain())
+        self.assertNotIn(managed, candidates)
+        self.assertIn(native, candidates)
+
+    def test_native_auto_close_cannot_expire_paid_package_change_on_inclusive_last_day(self):
+        _initial, subscription = self._paid(self.solo, self.month)
+        payment, _subscription = self._paid(self.pair, self.month, 'renewal', subscription, (self.holder | self.member).ids)
+        before = subscription.read(['subscription_state', 'end_date', 'next_invoice_date', 'plan_id'])[0]
+        with patch.object(fields.Date, 'context_today', return_value=fields.Date.to_date('2026-10-15')):
+            closed = subscription._subscription_auto_close()
+        self.assertFalse(closed)
+        self.assertEqual(subscription.read(['subscription_state', 'end_date', 'next_invoice_date', 'plan_id'])[0], before)
+        self.assertEqual(payment.lines.wgs_application_state, 'scheduled')
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 10, 16, 12)):
+            self.Pos._wgs_apply_due_package_changes()
+        self.assertEqual(payment.lines.wgs_application_state, 'applied')
+        self.assertEqual(subscription.subscription_state, '3_progress')
+        self.assertEqual(subscription._get_recurring_lines().product_id, self.pair)
+
+    def test_native_expiration_sql_rows_exclude_wgs_payments(self):
+        _payment, managed = self._paid(self.solo, self.month)
+        native = self._native_subscription()
+        (managed | native).write({'next_invoice_date': '2026-10-01'})
+        model = self.env['sale.order'].with_context(wgs_native_subscription_lifecycle=True)
+        with patch.object(fields.Datetime, 'today', return_value=datetime(2026, 10, 20)):
+            rows = model._get_expired_subscriptions()
+        self.assertNotIn(managed.id, [row['so_id'] for row in rows])
+        self.assertIn(native.id, [row['so_id'] for row in rows])
+
+    def test_native_automation_context_never_changes_normal_directory_search(self):
+        _payment, managed = self._paid(self.solo, self.month)
+        native = self._native_subscription()
+        domain = [('id', 'in', (managed | native).ids)]
+        automatic = self.env['sale.order'].with_context(wgs_native_subscription_lifecycle=True).search(domain)
+        self.assertEqual(automatic, native)
+        self.assertEqual(set(self.env['sale.order'].search(domain).ids), set((managed | native).ids))
+
+    def test_explicit_all_wgs_invoice_batch_cannot_expand_to_global_search(self):
+        _payment, managed = self._paid(self.solo, self.month)
+        self._native_subscription()
+        records, retrigger = managed.with_context(wgs_native_subscription_lifecycle=True)._recurring_invoice_get_subscriptions()
+        self.assertEqual(records, [])
+        self.assertFalse(retrigger)
+
+    def test_manual_native_close_is_preserved_but_automatic_close_skips_wgs(self):
+        _payment, managed = self._paid(self.solo, self.month)
+        managed.with_context(wgs_native_subscription_lifecycle=True).set_close()
+        self.assertEqual(managed.subscription_state, '3_progress')
+        managed.set_close()
+        self.assertEqual(managed.subscription_state, '6_churn')
+
+    def test_wgs_auto_close_does_not_take_over_native_only_contracts(self):
+        self.month.auto_close_limit = 3
+        _payment, managed = self._paid(self.solo, self.month)
+        native = self._native_subscription()
+        today = fields.Date.to_date('2026-10-20')
+        candidates = self.env['sale.order'].search(
+            self.env['sale.order']._wgs_get_subscription_auto_close_candidate_domain(today),
+        )
+        self.assertIn(managed, candidates)
+        self.assertNotIn(native, candidates)
 
     def test_future_package_and_participants_wait_until_paid_period_ends(self):
         _order, subscription = self._paid(self.solo, self.month)
@@ -341,6 +600,7 @@ class TestSubscriptionOperations(CommonPosTest):
         old = subscription.wgs_domiciliation_contract_id
         old_ids = old.installment_ids.ids
         paid_ids = old.installment_ids.filtered(lambda item: item.state == 'paid').ids
+        old.state = 'cancelled'
         subscription.write({'subscription_state': '6_churn'})
         _reenroll, subscription = self._paid(self.solo, self.month, 'reenroll', subscription, months=[1])
         self.assertNotEqual(subscription.wgs_domiciliation_contract_id, old)

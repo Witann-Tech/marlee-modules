@@ -193,7 +193,7 @@ class ContractTests(unittest.TestCase):
                         owner.browse.assert_not_called()
 
     def test_metadata_write_targets_only_explicit_subscription(self):
-        update = method(POS, '_wgs_sync_subscription_metadata')
+        update = method('witann_group_subscriptions_pos/models/subscription_native_adapter.py', '_wgs_sync_subscription_metadata')
         owner, source = Mock(), Mock()
         owner._wgs_to_int = int
         update(owner, source, subscription_end_date=date(2026, 10, 8), recurring_plan_id=8)

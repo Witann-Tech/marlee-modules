@@ -2631,7 +2631,8 @@ class PosOrder(models.Model):
             raise UserError(_('La renovacion no conserva su periodo contratado; requiere revision historica.'))
         pending_changes = self._wgs_pending_package_changes(source_order).filtered(lambda item: item != line)
         initial_contract = bool((pricing_state['snapshot'].get('domiciliation') or {}).get('selection_mode') == 'initial')
-        if (package_changed or pending_changes or initial_contract) and effective_date > self._wgs_get_subscription_business_today_for_pos(company=source_order.company_id):
+        plan_changed = source_order.plan_id.id != pricing_state['plan_id']
+        if (package_changed or plan_changed or pending_changes or initial_contract) and effective_date > self._wgs_get_subscription_business_today_for_pos(company=source_order.company_id):
             line.write({
                 'wgs_sale_order_id': source_order.id,
                 'wgs_application_state': 'scheduled',
@@ -2650,8 +2651,6 @@ class PosOrder(models.Model):
             product=target_product,
             qty=abs(line.qty or 0.0) or 1.0,
             recurring_price_unit=pricing_state['price_unit'],
-            recurring_plan_id=pricing_state['plan_id'],
-            recurring_pricing_id=pricing_state['pricing_id'],
         )
         self._wgs_sync_subscription_metadata(
             sale_order=source_order,
@@ -2744,8 +2743,6 @@ class PosOrder(models.Model):
         pricing_state = self._wgs_get_persisted_subscription_pricing_from_pos_line(line)
         recurring_price_unit = pricing_state['price_unit']
         recurring_plan_id = pricing_state['plan_id']
-        recurring_pricing_id = pricing_state['pricing_id']
-        plan_record = pricing_state['plan_record']
         today = self._wgs_to_date(self.date_order)
         subscription_start_date = (
             pricing_state.get('subscription_start_date')
@@ -2774,8 +2771,6 @@ class PosOrder(models.Model):
             product=product,
             qty=qty,
             recurring_price_unit=recurring_price_unit,
-            recurring_plan_id=recurring_plan_id,
-            recurring_pricing_id=recurring_pricing_id,
         )
 
         self._wgs_sync_subscription_metadata(
@@ -2920,19 +2915,14 @@ class PosOrder(models.Model):
         product,
         qty,
         recurring_price_unit,
-        recurring_plan_id=False,
-        recurring_pricing_id=False,
     ):
         source_order.ensure_one()
         source_line.ensure_one()
         line_values = self._wgs_build_subscription_recurring_line_values_for_pos(
-            source_line=source_line,
             pos_line=pos_line,
             product=product,
             qty=qty,
             recurring_price_unit=recurring_price_unit,
-            recurring_plan_id=recurring_plan_id,
-            recurring_pricing_id=recurring_pricing_id,
         )
         if not line_values:
             return source_line
@@ -2969,59 +2959,6 @@ class PosOrder(models.Model):
             product.display_name,
         )
         return new_line
-
-    def _wgs_build_subscription_recurring_line_values_for_pos(
-        self,
-        *,
-        source_line,
-        pos_line,
-        product,
-        qty,
-        recurring_price_unit,
-        recurring_plan_id=False,
-        recurring_pricing_id=False,
-    ):
-        line_fields = source_line._fields
-        values = {}
-        if 'product_id' in line_fields:
-            values['product_id'] = product.id
-        if 'name' in line_fields:
-            values['name'] = pos_line.full_product_name or product.display_name
-        qty_field_name = self._wgs_get_sale_line_qty_field_name_for_pos(line_fields)
-        if qty_field_name:
-            values[qty_field_name] = qty
-        uom_field_name = next(
-            (
-                field_name
-                for field_name in ('product_uom_id', 'product_uom', 'uom_id')
-                if field_name in line_fields
-            ),
-            False,
-        )
-        if uom_field_name and product.uom_id:
-            values[uom_field_name] = product.uom_id.id
-        if 'price_unit' in line_fields:
-            values['price_unit'] = recurring_price_unit
-        if 'discount' in line_fields:
-            # A WGS authorization belongs to the paid POS event, never to the recurring contract.
-            values['discount'] = 0.0
-        if recurring_plan_id:
-            self._wgs_assign_many2one_value(
-                values=values,
-                fields_map=line_fields,
-                value_id=recurring_plan_id,
-                preferred_field_names=('subscription_plan_id', 'plan_id', 'recurring_plan_id'),
-                comodel_checker=self._wgs_is_plan_model_name,
-            )
-        if recurring_pricing_id:
-            self._wgs_assign_many2one_value(
-                values=values,
-                fields_map=line_fields,
-                value_id=recurring_pricing_id,
-                preferred_field_names=('subscription_pricing_id', 'pricing_id', 'recurring_pricing_id'),
-                comodel_checker=self._wgs_is_pricing_model_name,
-            )
-        return values
 
     def _wgs_finalize_subscription_access_for_pos(self, source_order, extra_partner_ids=False):
         source_order.ensure_one()
@@ -3251,7 +3188,8 @@ class PosOrder(models.Model):
         if not isinstance(snapshot, dict):
             snapshot = {}
 
-        if snapshot.get('commercial_quote'):
+        signed = bool(snapshot.get('commercial_quote'))
+        if signed:
             payload = self._wgs_verify_commercial_quote(
                 snapshot, product_id=product.id, partner_id=self.partner_id.id,
                 company_id=self.company_id.id, flow=line.wgs_subscription_flow,
@@ -3270,8 +3208,12 @@ class PosOrder(models.Model):
             ),
             2,
         )
-        recurring_plan_id = self._wgs_to_int(line.wgs_subscription_plan_id or snapshot.get('plan_id')) or False
-        recurring_pricing_id = self._wgs_to_int(line.wgs_subscription_pricing_id or snapshot.get('pricing_id')) or False
+        recurring_plan_id = self._wgs_to_int(
+            snapshot.get('plan_id') if signed else line.wgs_subscription_plan_id or snapshot.get('plan_id')
+        ) or False
+        recurring_pricing_id = self._wgs_to_int(
+            snapshot.get('pricing_id') if signed else line.wgs_subscription_pricing_id or snapshot.get('pricing_id')
+        ) or False
         source_order = self.env['sale.order']
         source_subscription_id = self._wgs_to_int(snapshot.get('source_subscription_id'))
         if line.wgs_subscription_source_id:
@@ -3316,7 +3258,11 @@ class PosOrder(models.Model):
                     or False
                 )
 
-        if recurring_pricing_id and not recurring_plan_id and 'sale.subscription.pricing' in self.env.registry:
+        if signed:
+            plan_record = self.env['sale.subscription.plan'].browse(recurring_plan_id or []).exists()
+            if not plan_record:
+                raise UserError(_('El plan contratado ya no existe. La operacion requiere revision.'))
+        elif recurring_pricing_id and not recurring_plan_id and 'sale.subscription.pricing' in self.env.registry:
             pricing_record = self.env['sale.subscription.pricing'].browse(int(recurring_pricing_id)).exists()
             if pricing_record:
                 recurring_plan_id = self._wgs_extract_plan_id_from_pricing(pricing_record)
@@ -3340,11 +3286,12 @@ class PosOrder(models.Model):
                 recurring_pricing_id,
             )
 
-        plan_record = self._wgs_resolve_plan_record(
-            product=product,
-            plan_id=recurring_plan_id,
-            pricing_id=recurring_pricing_id,
-        )
+        if not signed:
+            plan_record = self._wgs_resolve_plan_record(
+                product=product,
+                plan_id=recurring_plan_id,
+                pricing_id=recurring_pricing_id,
+            )
         return {
             'price_unit': recurring_price_unit,
             'plan_id': recurring_plan_id,
@@ -3431,8 +3378,6 @@ class PosOrder(models.Model):
         pricing_state = self._wgs_get_persisted_subscription_pricing_from_pos_line(line)
         recurring_price_unit = pricing_state['price_unit']
         recurring_plan_id = pricing_state['plan_id']
-        recurring_pricing_id = pricing_state['pricing_id']
-        plan_record = pricing_state['plan_record']
         today = self._wgs_to_date(self.date_order)
         subscription_start_date = (
             pricing_state.get('subscription_start_date')
@@ -3447,60 +3392,10 @@ class PosOrder(models.Model):
         next_billing_date = pricing_state.get('next_billing_date') or False
 
         sale_order_line_fields = self.env['sale.order.line']._fields
-        line_values = {'product_id': product.id}
-        if 'name' in sale_order_line_fields:
-            line_values['name'] = line.full_product_name or product.display_name
-
-        qty_field_name = next(
-            (
-                field_name
-                for field_name in ('product_uom_qty', 'quantity', 'qty')
-                if field_name in sale_order_line_fields
-            ),
-            False,
+        line_values = self._wgs_build_subscription_recurring_line_values_for_pos(
+            pos_line=line,
+            product=product, qty=qty, recurring_price_unit=recurring_price_unit,
         )
-        if qty_field_name:
-            line_values[qty_field_name] = qty
-
-        uom_field_name = next(
-            (
-                field_name
-                for field_name in ('product_uom_id', 'product_uom', 'uom_id')
-                if field_name in sale_order_line_fields
-            ),
-            False,
-        )
-        if uom_field_name and product.uom_id:
-            line_values[uom_field_name] = product.uom_id.id
-
-        if 'price_unit' in sale_order_line_fields:
-            line_values['price_unit'] = recurring_price_unit
-        if 'discount' in sale_order_line_fields:
-            line_values['discount'] = 0.0
-
-        if recurring_plan_id:
-            for field_name in ('subscription_plan_id', 'plan_id', 'recurring_plan_id'):
-                if field_name in sale_order_line_fields:
-                    line_values[field_name] = recurring_plan_id
-            self._wgs_assign_many2one_value(
-                values=line_values,
-                fields_map=sale_order_line_fields,
-                value_id=recurring_plan_id,
-                preferred_field_names=('subscription_plan_id', 'plan_id', 'recurring_plan_id'),
-                comodel_checker=self._wgs_is_plan_model_name,
-            )
-        if recurring_pricing_id:
-            for field_name in ('subscription_pricing_id', 'pricing_id', 'recurring_pricing_id'):
-                if field_name in sale_order_line_fields:
-                    line_values[field_name] = recurring_pricing_id
-            self._wgs_assign_many2one_value(
-                values=line_values,
-                fields_map=sale_order_line_fields,
-                value_id=recurring_pricing_id,
-                preferred_field_names=('subscription_pricing_id', 'pricing_id', 'recurring_pricing_id'),
-                comodel_checker=self._wgs_is_pricing_model_name,
-            )
-
         contract_date = self._wgs_to_date(self.date_order)
         upsell_source_order = self.env['sale.order']
         if line.wgs_subscription_flow == 'upsale':
@@ -3596,16 +3491,7 @@ class PosOrder(models.Model):
                     preferred_field_names=('end_date', 'date_end', 'subscription_end_date', 'recurring_end_date'),
                 )
             if recurring_plan_id:
-                for field_name in ('subscription_plan_id', 'plan_id', 'recurring_plan_id'):
-                    if field_name in sale_order_fields and field_name not in upsell_order_values:
-                        upsell_order_values[field_name] = recurring_plan_id
-                self._wgs_assign_many2one_value(
-                    values=upsell_order_values,
-                    fields_map=sale_order_fields,
-                    value_id=recurring_plan_id,
-                    preferred_field_names=('subscription_plan_id', 'plan_id', 'recurring_plan_id'),
-                    comodel_checker=self._wgs_is_plan_model_name,
-                )
+                upsell_order_values['plan_id'] = recurring_plan_id
 
             upsell_order = self.env['sale.order'].create(upsell_order_values)
             if 'participant_ids' in upsell_order._fields:
@@ -3695,16 +3581,7 @@ class PosOrder(models.Model):
                 preferred_field_names=('end_date', 'date_end', 'subscription_end_date', 'recurring_end_date'),
             )
         if recurring_plan_id:
-            for field_name in ('subscription_plan_id', 'plan_id', 'recurring_plan_id'):
-                if field_name in sale_order_fields and field_name not in sale_order_values:
-                    sale_order_values[field_name] = recurring_plan_id
-            self._wgs_assign_many2one_value(
-                values=sale_order_values,
-                fields_map=sale_order_fields,
-                value_id=recurring_plan_id,
-                preferred_field_names=('subscription_plan_id', 'plan_id', 'recurring_plan_id'),
-                comodel_checker=self._wgs_is_plan_model_name,
-            )
+            sale_order_values['plan_id'] = recurring_plan_id
 
         sale_order = self.env['sale.order'].create(sale_order_values)
         if 'participant_ids' in sale_order._fields:
@@ -4122,78 +3999,6 @@ class PosOrder(models.Model):
         state_value = (sale_order.subscription_state or '').strip()
         return bool(state_value)
 
-    def _wgs_create_subscription_upsell_sale_order_from_line(self, source_order, line_values, credit_amount=0.0):
-        self.ensure_one()
-        source_order.ensure_one()
-
-        upsell_order = self._wgs_get_or_create_subscription_upsell_order(source_order)
-        if not upsell_order:
-            raise UserError(
-                _(
-                    'No se pudo generar una cotización de Upsell para la suscripción %(subscription)s.'
-                ) % {'subscription': source_order.display_name}
-            )
-        if upsell_order.state not in ('draft', 'sent'):
-            raise UserError(
-                _(
-                    'La cotización de Upsell %(order)s no está en borrador.'
-                ) % {'order': upsell_order.display_name}
-            )
-
-        write_values = {}
-        if 'origin' in upsell_order._fields:
-            write_values['origin'] = self.pos_reference or self.name
-        if 'client_order_ref' in upsell_order._fields:
-            write_values['client_order_ref'] = self.pos_reference or self.name
-        if 'pricelist_id' in self._fields and self.pricelist_id and 'pricelist_id' in upsell_order._fields:
-            write_values['pricelist_id'] = self.pricelist_id.id
-        if write_values:
-            upsell_order.write(write_values)
-
-        # Replace default lines generated by upsell action with POS-selected target package.
-        if upsell_order.order_line:
-            upsell_order.order_line.unlink()
-
-        line_commands = [Command.create(line_values)]
-        self._wgs_apply_upsell_order_lines(
-            upsell_order=upsell_order,
-            line_values=line_values,
-            credit_amount=credit_amount,
-        )
-
-        return upsell_order
-
-    def _wgs_apply_upsell_order_lines(self, upsell_order, line_values, credit_amount=0.0):
-        upsell_order.ensure_one()
-        if upsell_order.order_line:
-            upsell_order.order_line.unlink()
-
-        line_commands = [Command.create(line_values)]
-        bonus_line_values = self._wgs_build_upgrade_bonus_line_values(credit_amount=credit_amount)
-        if bonus_line_values:
-            line_commands.append(Command.create(bonus_line_values))
-        upsell_order.write({'order_line': line_commands})
-
-        recurring_plan_id = int(
-            line_values.get('subscription_plan_id')
-            or line_values.get('plan_id')
-            or line_values.get('recurring_plan_id')
-            or 0
-        )
-        if recurring_plan_id > 0:
-            order_values = {}
-            self._wgs_assign_many2one_value(
-                values=order_values,
-                fields_map=upsell_order._fields,
-                value_id=recurring_plan_id,
-                preferred_field_names=('plan_id', 'subscription_plan_id', 'recurring_plan_id'),
-                comodel_checker=self._wgs_is_plan_model_name,
-            )
-            if order_values:
-                upsell_order.write(order_values)
-
-        return upsell_order
-
     def _wgs_build_upgrade_bonus_line_values(self, credit_amount=0.0):
         credit_amount = float(credit_amount or 0.0)
         if credit_amount <= 0.0:
@@ -4257,156 +4062,6 @@ class PosOrder(models.Model):
         if 'recurring_invoice' in product_model._fields:
             values['recurring_invoice'] = False
         return product_model.create(values)
-
-    def _wgs_get_or_create_subscription_upsell_order(self, source_order):
-        source_order.ensure_one()
-
-        method_names = (
-            'action_upsell',
-            'action_subscription_upsell',
-            'action_subscription_create_upsell',
-        )
-        for method_name in method_names:
-            method = getattr(source_order, method_name, None)
-            if not callable(method):
-                continue
-            try:
-                result = method()
-            except Exception as error:
-                _logger.warning(
-                    'WGS POS: upsell method %s failed on %s (%s)',
-                    method_name,
-                    source_order.name,
-                    error,
-                )
-                continue
-
-            upsell_order = self._wgs_extract_sale_order_from_upsell_result(result, source_order)
-            if upsell_order:
-                return upsell_order
-
-        upsell_order = self._wgs_find_recent_subscription_upsell_order(source_order)
-        if upsell_order:
-            return upsell_order
-
-        # Final fallback: create a draft SO linked to source subscription so POS flow can continue.
-        return self._wgs_create_manual_subscription_upsell_order(source_order)
-
-    def _wgs_create_manual_subscription_upsell_order(self, source_order):
-        source_order.ensure_one()
-        sale_order_model = self.env['sale.order']
-        sale_order_fields = sale_order_model._fields
-
-        values = {
-            'partner_id': source_order.partner_id.id or self.partner_id.id,
-            'company_id': source_order.company_id.id or self.company_id.id,
-        }
-
-        if 'origin' in sale_order_fields:
-            values['origin'] = self.pos_reference or self.name or source_order.name
-        if 'client_order_ref' in sale_order_fields:
-            values['client_order_ref'] = self.pos_reference or self.name or source_order.name
-        if 'pricelist_id' in sale_order_fields:
-            if 'pricelist_id' in self._fields and self.pricelist_id:
-                values['pricelist_id'] = self.pricelist_id.id
-            elif 'pricelist_id' in source_order._fields and source_order.pricelist_id:
-                values['pricelist_id'] = source_order.pricelist_id.id
-        if 'user_id' in sale_order_fields and source_order.user_id:
-            values['user_id'] = source_order.user_id.id
-        if 'team_id' in sale_order_fields and 'team_id' in source_order._fields and source_order.team_id:
-            values['team_id'] = source_order.team_id.id
-        if 'payment_term_id' in sale_order_fields and 'payment_term_id' in source_order._fields and source_order.payment_term_id:
-            values['payment_term_id'] = source_order.payment_term_id.id
-        if 'fiscal_position_id' in sale_order_fields and 'fiscal_position_id' in source_order._fields and source_order.fiscal_position_id:
-            values['fiscal_position_id'] = source_order.fiscal_position_id.id
-
-        # Link to source subscription/order using the best matching relation field.
-        self._wgs_assign_many2one_by_model(
-            values=values,
-            fields_map=sale_order_fields,
-            value_id=source_order.id,
-            model_name='sale.order',
-            preferred_field_names=('subscription_id', 'origin_order_id', 'note_order'),
-            required_name_tokens=('subscription',),
-        )
-
-        upsell_order = sale_order_model.create(values)
-        _logger.info(
-            'WGS POS: manual upsell draft created %s for source subscription %s',
-            upsell_order.name,
-            source_order.name,
-        )
-        return upsell_order
-
-    def _wgs_extract_sale_order_from_upsell_result(self, result, source_order):
-        if not result:
-            return self.env['sale.order']
-
-        if isinstance(result, models.BaseModel):
-            if result._name == 'sale.order':
-                return result.exists()[:1]
-            return self.env['sale.order']
-
-        if isinstance(result, int):
-            return self.env['sale.order'].browse(int(result)).exists()[:1]
-
-        if isinstance(result, dict):
-            res_model = result.get('res_model')
-            res_id = result.get('res_id')
-            if res_model == 'sale.order' and res_id:
-                return self.env['sale.order'].browse(int(res_id)).exists()[:1]
-
-            context = result.get('context') or {}
-            default_res_id = context.get('default_subscription_id') or context.get('default_origin_order_id')
-            if default_res_id and int(default_res_id) != source_order.id:
-                candidate = self.env['sale.order'].browse(int(default_res_id)).exists()
-                if candidate:
-                    return candidate[:1]
-
-        return self.env['sale.order']
-
-    def _wgs_find_recent_subscription_upsell_order(self, source_order):
-        source_order.ensure_one()
-        sale_order_model = self.env['sale.order']
-
-        preferred_relation_fields = (
-            'subscription_id',
-            'origin_order_id',
-            'note_order',
-        )
-        for field_name in preferred_relation_fields:
-            field = sale_order_model._fields.get(field_name)
-            if not field or field.type != 'many2one' or getattr(field, 'comodel_name', '') != 'sale.order':
-                continue
-            upsell_order = sale_order_model.search(
-                [
-                    (field_name, '=', source_order.id),
-                    ('state', 'in', ['draft', 'sent']),
-                ],
-                order='id desc',
-                limit=1,
-            )
-            if upsell_order:
-                return upsell_order
-
-        for field_name, field in sale_order_model._fields.items():
-            if field.type != 'many2one' or getattr(field, 'comodel_name', '') != 'sale.order':
-                continue
-            normalized_name = (field_name or '').lower()
-            if not any(token in normalized_name for token in ('subscription', 'origin', 'upsell', 'note')):
-                continue
-            upsell_order = sale_order_model.search(
-                [
-                    (field_name, '=', source_order.id),
-                    ('state', 'in', ['draft', 'sent']),
-                ],
-                order='id desc',
-                limit=1,
-            )
-            if upsell_order:
-                return upsell_order
-
-        return sale_order_model.browse()
 
     def _wgs_close_source_subscription_after_upgrade(self, source_order, new_subscription_start_date):
         source_order.ensure_one()
@@ -4520,46 +4175,6 @@ class PosOrder(models.Model):
                 sale_order.name,
                 sale_order_line.id if sale_order_line else False,
             )
-
-    def _wgs_sync_subscription_metadata(
-        self,
-        sale_order,
-        participant_ids=None,
-        contract_date=False,
-        subscription_start_date=False,
-        subscription_end_date=False,
-        next_billing_date=False,
-        clear_next_billing_date=False,
-        recurring_plan_id=False,
-        monthly_cutoff_day=None,
-    ):
-        """Update only the contracted Odoo 19 order, never its historical relatives."""
-        sale_order.ensure_one()
-        values = {}
-        if participant_ids is not None:
-            values['participant_ids'] = [Command.set(participant_ids)]
-        if contract_date:
-            values['date_order'] = self._wgs_convert_date_for_field_value(
-                contract_date, sale_order._fields['date_order'],
-            )
-        if subscription_start_date:
-            values.update(start_date=subscription_start_date, wgs_effective_start_date=subscription_start_date)
-        if subscription_end_date:
-            values['end_date'] = subscription_end_date
-        if next_billing_date:
-            values['next_invoice_date'] = next_billing_date
-        elif clear_next_billing_date:
-            values['next_invoice_date'] = False
-        if recurring_plan_id:
-            values['plan_id'] = self._wgs_to_int(recurring_plan_id)
-        if monthly_cutoff_day is not None:
-            values['wgs_monthly_cutoff_day'] = monthly_cutoff_day
-        if values:
-            sale_order.write(values)
-
-    def _wgs_clear_subscription_next_billing_date(self, sale_order):
-        sale_order.ensure_one()
-        sale_order.write({'next_invoice_date': False})
 
     def _wgs_find_partner_multi_field(self, sale_order):
         fields_map = sale_order._fields
@@ -4675,32 +4290,6 @@ class PosOrder(models.Model):
             ):
                 result.append(field_name)
         return tuple(result)
-
-    def _wgs_assign_many2one_value(self, values, fields_map, value_id, preferred_field_names=(), comodel_checker=None):
-        value_id = int(value_id or 0)
-        if value_id <= 0:
-            return
-
-        for field_name in preferred_field_names:
-            field = fields_map.get(field_name)
-            if field and field.type == 'many2one':
-                values[field_name] = value_id
-                return
-
-        if not comodel_checker:
-            return
-        for field_name, field in fields_map.items():
-            if field_name in values or field.type != 'many2one':
-                continue
-            normalized_name = (field_name or '').lower()
-            heuristic_name_match = (
-                ('plan' in normalized_name)
-                or ('recurr' in normalized_name)
-                or ('period' in normalized_name)
-            )
-            if comodel_checker(getattr(field, 'comodel_name', '')) or heuristic_name_match:
-                values[field_name] = value_id
-                return
 
     def _wgs_assign_many2one_by_model(
         self,

@@ -156,7 +156,7 @@ class MonthlyCutoffTests(unittest.TestCase):
             self.assertEqual(result['charge_now'], 100)
 
     def test_metadata_sets_or_clears_cutoff_only_when_explicit(self):
-        write = method(POS, '_wgs_sync_subscription_metadata')
+        write = method('witann_group_subscriptions_pos/models/subscription_native_adapter.py', '_wgs_sync_subscription_metadata')
         owner, source = Mock(), Mock()
         write(owner, source)
         source.write.assert_not_called()
