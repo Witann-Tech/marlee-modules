@@ -24,11 +24,16 @@ class PosSubscriptionApplication(models.Model):
 
     def _wgs_assert_subscription_application(
         self, line, subscription, pricing, *, before, activation=False, expected_participants=False,
+        preserved_source=False,
     ):
         """Reject a partial native application inside Odoo's existing transaction."""
         subscription.ensure_one()
         if subscription.company_id != self.company_id or subscription.partner_id != self.partner_id:
             raise UserError(_('La membresia aplicada no corresponde al titular y empresa del cobro.'))
+        if preserved_source:
+            if (subscription == preserved_source or subscription.wgs_reenrollment_source_id != preserved_source
+                    or self._wgs_source_revision(preserved_source) != before):
+                raise UserError(_('La reinscripcion de un participante debe conservar intacto el contrato historico.'))
         snapshot = pricing['snapshot']
         if line.wgs_application_state == 'scheduled' and not activation:
             if (subscription != line.wgs_subscription_source_id

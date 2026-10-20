@@ -33,6 +33,11 @@ class SubscriptionPosProduct(models.Model):
 class PosSubscriptionOperationLine(models.Model):
     _inherit = 'pos.order.line'
 
+    wgs_free_trial_curp = fields.Char(copy=False, readonly=True)
+    _wgs_free_trial_curp_unique = models.Constraint(
+        'UNIQUE(wgs_free_trial_curp)',
+        'Esta CURP ya utilizo el dia de prueba gratis. Solo se permite una vez en la vida.',
+    )
     wgs_operation_config_json = fields.Text(copy=False)
     wgs_application_key = fields.Char(copy=False, index=True, readonly=True)
     wgs_application_hash = fields.Char(copy=False, readonly=True)
@@ -166,6 +171,10 @@ class PosSubscriptionOperation(models.Model):
             raise UserError(_('La suscripcion cambio desde la cotizacion. Actualiza la operacion; no repitas un cobro ya recibido.'))
         if source:
             self._wgs_assert_no_due_paid_change(source)
+            if payload.get('flow') == 'reenroll':
+                self._wgs_reenrollment_requires_new_contract(
+                    source, self.env['res.partner'].browse(payload['partner_id']).exists(),
+                )
         return source
 
     def _wgs_assert_no_due_paid_change(self, source):
@@ -278,10 +287,16 @@ class PosSubscriptionOperation(models.Model):
             self._wgs_to_int(line.get('product_id')) for line in lines
         ]).exists()
         recurring_ids = set(products.filtered('recurring_invoice').ids)
+        trial_ids = set(products.filtered(lambda product: product.wgs_free_trial_day).ids)
         seen_sources = set()
+        trial_seen = False
         for line in lines:
             if self._wgs_to_int(line.get('product_id')) not in recurring_ids or float(line.get('qty') or 0) <= 0:
                 continue
+            if self._wgs_to_int(line['product_id']) in trial_ids:
+                if trial_seen or float(line['qty']) != 1:
+                    raise UserError(_('Agrega una sola unidad de prueba gratis por persona y ticket.'))
+                trial_seen = True
             config = by_uuid.get(line.get('uuid'))
             if not config:
                 raise UserError(_('Hay una membresia sin configurar. Usa Nueva suscripcion, Renovar o Reinscribir antes de cobrar.'))
@@ -408,7 +423,7 @@ class PosSubscriptionOperation(models.Model):
                 # Legacy links remain evidence of application even after expiry.
                 if line.wgs_sale_order_id:
                     continue
-                if line.qty > 0 and line.wgs_subscription_flow == 'new':
+                if line.qty > 0 and line.wgs_subscription_flow in ('new', 'reenroll'):
                     # FOR UPDATE alone cannot refresh a Repeatable Read snapshot.
                     # Version the locked holder row, without changing business or
                     # audit fields, so competing first sales retry on fresh history.
@@ -427,12 +442,21 @@ class PosSubscriptionOperation(models.Model):
                         source_id=line.wgs_subscription_source_id.id,
                     )
                     order._wgs_validate_operation_source(payload)
-                    eligibility = order.with_company(order.company_id).wgs_validate_subscription_product_eligibility_for_pos(
+                    eligibility = order.with_company(order.company_id)._wgs_validate_subscription_product_eligibility_for_pos(
                         order.partner_id.id, line.product_id.id, line.wgs_subscription_flow,
-                        line.wgs_subscription_source_id.id,
+                        line.wgs_subscription_source_id.id, applying_line=line,
                     )
                     if not eligibility or not eligibility.get('ok'):
                         raise UserError((eligibility or {}).get('error_message') or _('La operacion no cumple las reglas de la membresia.'))
+                    if eligibility.get('free_trial_day'):
+                        if line.qty != 1:
+                            raise UserError(_('El dia de prueba gratis permite una sola unidad por persona.'))
+                        # The UNIQUE claim is acquired in the payment transaction.
+                        # PostgreSQL arbitrates equal CURPs even across partners,
+                        # companies and Repeatable Read worker snapshots. A failed
+                        # application rolls it back; a refund never releases it.
+                        line.write({'wgs_free_trial_curp': eligibility['curp']})
+                        line.flush_recordset(['wgs_free_trial_curp'])
                 result = scoped_order._wgs_apply_subscription_operation(scoped_line)
                 line.write({
                     'wgs_sale_order_id': result.id,
@@ -469,6 +493,7 @@ class PosSubscriptionOperation(models.Model):
         pricing_state = False
         before = False
         expected_participants = False
+        preserved_source = False
         if line.qty > 0 and line.wgs_subscription_flow != 'pending_charge':
             pricing_state = self._wgs_get_persisted_subscription_pricing_from_pos_line(line)
             if not pricing_state['snapshot'].get('commercial_quote'):
@@ -478,6 +503,8 @@ class PosSubscriptionOperation(models.Model):
                 raise UserError(_('El precio de la membresia pagada no coincide con su cotizacion firmada.'))
             before = self._wgs_source_revision(line.wgs_subscription_source_id)
             source = line.wgs_subscription_source_id
+            if line.wgs_subscription_flow == 'reenroll' and source and source.partner_id != self.partner_id:
+                preserved_source = source
             same_package = source and source.order_line.filtered(
                 lambda item: item.product_id.recurring_invoice and item.product_uom_qty > 0
             ).product_id == line.product_id
@@ -489,7 +516,7 @@ class PosSubscriptionOperation(models.Model):
         if pricing_state:
             self._wgs_assert_subscription_application(
                 line, result, pricing_state, before=before, activation=activation,
-                expected_participants=expected_participants,
+                expected_participants=expected_participants, preserved_source=preserved_source,
             )
         elif line.qty < 0:
             self._wgs_assert_subscription_refund(result)
