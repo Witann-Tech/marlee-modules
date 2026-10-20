@@ -8,7 +8,7 @@ import { onMounted, onPatched } from "@odoo/owl";
 import {
     collectMembershipRefundsFromOrder, collectSubscriptionConfigsFromOrder,
     getCurrentCompanyId, getLineQty, getOrderLines, getOrderUid,
-    getPartnerIdFromOrder, getProductIdFromLine,
+    getPartnerIdFromOrder, getProductIdFromLine, resolveSubscriptionOrderPartner,
 } from "./subscription_ticket";
 import {
     clearInvoiceFlag, disableInvoiceControls, getOrderFromPaymentScreen, installInvoiceControlGuard,
@@ -25,6 +25,9 @@ export async function stageSubscriptionConfigsForOrder(orm, order, pos) {
     );
     if (!configs.length && !hasMembership) {
         return { ok: true, skipped: true };
+    }
+    if (configs.length) {
+        await resolveSubscriptionOrderPartner(pos, order, configs);
     }
     const lines = getOrderLines(order).map((line) => ({
         uuid: line.uuid,
@@ -78,6 +81,9 @@ patch(PaymentScreen.prototype, {
         clearInvoiceFlag(order);
         try {
             const result = await stageSubscriptionConfigsForOrder(this.orm, order, this.pos);
+            if (getOrderFromPaymentScreen(this) !== order) {
+                throw new Error(_t("Cambio el ticket durante la validacion. Revisa la orden seleccionada."));
+            }
             if (result && result.ok === false) {
                 window.alert(_t("No se pudo preparar la configuracion de suscripcion para esta venta. Actualiza el modulo y vuelve a intentar."));
                 return;

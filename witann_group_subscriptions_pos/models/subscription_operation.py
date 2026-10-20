@@ -522,6 +522,8 @@ class PosSubscriptionOperation(models.Model):
             raise UserError(_('El flujo de suscripcion no es valido.'))
         if activation and line.wgs_subscription_flow != 'renewal':
             raise UserError(_('Solo una renovacion pagada puede activar un cambio programado.'))
+        if line.wgs_subscription_flow == 'renewal':
+            return handlers['renewal'](line, activation=activation)
         return handlers[line.wgs_subscription_flow](line)
 
     @api.model

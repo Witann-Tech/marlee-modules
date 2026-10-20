@@ -1438,6 +1438,9 @@ class SaleOrder(models.Model):
         company = company or self.env.company
         today = self._wgs_subscription_business_today_for_pos(company=company)
         subscriptions_by_partner = self._get_pos_subscription_orders_by_partners(partners, company=company)
+        batch = self.browse(list({order.id for orders in subscriptions_by_partner.values() for order in orders}))
+        replaced_ids = batch._wgs_replacement_subscription_ids_for_pos()
+        replacement_status = {order.id: order.id in replaced_ids for order in batch}
         access_last_map = {}
         try:
             access_status_map = self._get_access_person_status_map_for_pos(partners, company=company)
@@ -1472,7 +1475,7 @@ class SaleOrder(models.Model):
             items = []
             for subscription in subscriptions:
                 try:
-                    item = subscription._build_pos_subscription_directory_status_item(today)
+                    item = subscription._build_pos_subscription_directory_status_item(today, replacement_status=replacement_status)
                 except Exception as error:
                     self._wgs_raise_pos_data_error(
                         _('No se pudo construir la fila del directorio de suscripciones.'),
@@ -2579,7 +2582,70 @@ class SaleOrder(models.Model):
             return True
         return False
 
-    def _wgs_build_domiciliation_status_item_for_pos(self, today, include_actions=False):
+    def _wgs_subscription_operation_policy_for_pos(self, today=False, replacement_status=None):
+        """Read-only policy shared by directory, quotes and paid handlers.
+
+        Grace expiration is a commercial fact even before its cron has changed
+        the native state. Never make cashier eligibility depend on cron timing.
+        """
+        self.ensure_one()
+        today = today or self._wgs_subscription_business_today_for_pos(company=self.company_id)
+        replacement = (
+            replacement_status[self.id] if replacement_status is not None and self.id in replacement_status
+            else self._wgs_has_replacement_subscription_for_pos()
+        )
+        contract = self.wgs_domiciliation_contract_id
+        if contract and contract.state == 'active' and not replacement:
+            operational = contract.wgs_get_operational_status(today=today)
+            return {
+                **operational,
+                'can_reenroll': operational['state_key'] == 'closed',
+                'can_upsale': bool(operational['can_renew'] and operational['access_state'] == 'enabled'),
+                'has_replacement_subscription': False,
+            }
+
+        period = self._wgs_get_subscription_access_period()
+        state_key, label = self._get_native_subscription_state_info_for_pos()
+        access_state = self._classify_subscription_access_state_for_pos()
+        deadline = self._wgs_get_subscription_auto_close_deadline_from_order(today=today)
+        reason = _('La suscripcion no esta en progreso.')
+        if replacement:
+            state_key, label = 'closed', _('Cerrada')
+            access_state = False
+            reason = _('La suscripcion fue reemplazada por un upsale posterior.')
+        elif state_key in ('cancel', 'closed'):
+            access_state = False
+            reason = _('La suscripcion esta cancelada o cerrada y puede reinscribirse.')
+        elif period['start_date'] and period['start_date'] > today:
+            state_key, label = 'future', _('Pendiente de inicio')
+            access_state = False
+            reason = _('La suscripcion todavia no inicia.')
+        elif state_key not in ('draft', 'upsell'):
+            if deadline and today >= deadline:
+                state_key, label = 'closed', _('Cerrada')
+                access_state = False
+                reason = _('La suscripcion supero los dias de gracia y debe reinscribirse.')
+            elif period['next_invoice_date'] and period['next_invoice_date'] <= today:
+                state_key, label = 'renew', _('Por renovar')
+                access_state = False
+                reason = _('La suscripcion vencio; debe renovarse para habilitar acceso.')
+            elif access_state == 'enabled':
+                reason = _('Suscripcion en progreso.')
+            elif access_state == 'suspended':
+                reason = _('La suscripcion esta pausada o suspendida.')
+        return {
+            **period,
+            'auto_close_date': deadline,
+            'state_key': state_key, 'state_label': label,
+            'access_state': access_state,
+            'can_renew': not replacement and (state_key == 'renew' or access_state == 'enabled'),
+            'can_reenroll': not replacement and state_key in ('closed', 'cancel'),
+            'can_upsale': not replacement and access_state == 'enabled',
+            'has_replacement_subscription': replacement,
+            'reason': reason,
+        }
+
+    def _wgs_build_domiciliation_status_item_for_pos(self, today, include_actions=False, replacement_status=None):
         """Project the contract-owned domiciliation state for the POS.
 
         Native Odoo recurring state is deliberately not used here.  Its invoice
@@ -2591,12 +2657,12 @@ class SaleOrder(models.Model):
         contract = self.wgs_domiciliation_contract_id
         if not contract or contract.state != 'active':
             return False
-        if self._wgs_has_replacement_subscription_for_pos():
+        operational = self._wgs_subscription_operation_policy_for_pos(today=today, replacement_status=replacement_status)
+        if operational['has_replacement_subscription']:
             return False
 
         recurring_lines = self._get_recurring_lines()
         primary_line = recurring_lines.sorted(key=lambda line: line.id)[:1]
-        operational = contract.wgs_get_operational_status(today=today)
         state_key = operational['state_key']
         state_labels = {
             'progress': _('En progreso'),
@@ -2626,6 +2692,7 @@ class SaleOrder(models.Model):
             'is_valid': access_state == 'enabled',
             'status_label': _('Vigente') if access_state == 'enabled' else _('Sin vigencia'),
             'reason': operational['reason'],
+            'can_upsale': operational['can_upsale'],
         }
         if not include_actions:
             return result
@@ -2646,264 +2713,96 @@ class SaleOrder(models.Model):
         })
         return result
 
-    def _build_pos_subscription_directory_status_item(self, today):
+    def _build_pos_subscription_directory_status_item(self, today, replacement_status=None):
         self.ensure_one()
-
         recurring_lines = self._get_recurring_lines()
         if not recurring_lines:
             return False
-
-        domiciliation_item = self._wgs_build_domiciliation_status_item_for_pos(
-            today, include_actions=False,
-        )
-        if domiciliation_item:
-            return domiciliation_item
-
-        primary_recurring_line = recurring_lines.sorted(key=lambda line: line.id)[:1]
-        plan_name = self._get_subscription_plan_name_for_pos(recurring_lines)
-        access_state = self._classify_subscription_access_state_for_pos()
-        native_state_key, native_state_label = self._get_native_subscription_state_info_for_pos()
-
-        period = self._wgs_get_subscription_access_period()
-        start_date = period['start_date']
-        next_invoice_date = period['next_invoice_date']
-        valid_until = period['valid_until']
-        period_start = start_date
-
-        close_deadline = self._wgs_get_subscription_auto_close_deadline(
-            next_invoice_date=next_invoice_date,
-            primary_recurring_line=primary_recurring_line,
-        )
-        reason = _('La suscripción no está vigente para control de acceso.')
-        if start_date and start_date > today:
-            access_state = False
-            reason = _('La suscripción todavía no inicia.')
-        elif native_state_key in ('cancel', 'closed'):
-            access_state = False
-            reason = _('La suscripción está cancelada o cerrada y puede reinscribirse.')
-        elif close_deadline and today >= close_deadline:
-            access_state = False
-            native_state_key = 'closed'
-            native_state_label = _('Cerrada')
-            reason = _('La suscripción superó los días de gracia del plan recurrente y debe reinscribirse.')
-        elif next_invoice_date and next_invoice_date <= today:
-            access_state = False
-            native_state_key = 'renew'
-            native_state_label = _('Por renovar')
-            reason = _('La suscripción ya venció su siguiente fecha de cobro y debe renovarse para habilitar acceso.')
-        elif access_state == 'enabled':
-            reason = _('Suscripción en progreso.')
-        elif access_state == 'suspended':
-            reason = _('La suscripción está pausada o suspendida.')
-
+        domiciliation = self._wgs_build_domiciliation_status_item_for_pos(today, replacement_status=replacement_status)
+        if domiciliation:
+            return domiciliation
+        primary = recurring_lines.sorted(key=lambda line: line.id)[:1]
+        policy = self._wgs_subscription_operation_policy_for_pos(today=today, replacement_status=replacement_status)
+        is_valid = policy['access_state'] == 'enabled'
         return {
-            'subscription_id': self.id,
-            'subscription_name': self.name,
-            'state': self.subscription_state if 'subscription_state' in self._fields else False,
-            'access_state': access_state or False,
-            'native_state_key': native_state_key,
-            'native_state_label': native_state_label,
+            'subscription_id': self.id, 'subscription_name': self.name,
+            'state': self.subscription_state,
+            'access_state': policy['access_state'] or False,
+            'native_state_key': policy['state_key'], 'native_state_label': policy['state_label'],
             'holder_partner_id': self.partner_id.id or False,
             'holder_partner_name': self.partner_id.display_name or False,
             'package_names': sorted(set(recurring_lines.mapped('product_id.display_name'))),
-            'plan_name': plan_name,
-            'renewal_product_id': primary_recurring_line.product_id.id if primary_recurring_line else False,
-            'start_date': start_date.isoformat() if start_date else False,
-            'period_start': period_start.isoformat() if period_start else False,
-            'valid_until': valid_until.isoformat() if valid_until else False,
-            'next_invoice_date': next_invoice_date.isoformat() if next_invoice_date else False,
-            'auto_close_date': close_deadline.isoformat() if close_deadline else False,
-            'is_valid': access_state == 'enabled',
-            'status_label': _('Vigente') if access_state == 'enabled' else _('Sin vigencia'),
-            'reason': reason,
+            'plan_name': self._get_subscription_plan_name_for_pos(recurring_lines),
+            'renewal_product_id': primary.product_id.id,
+            **{key: fields.Date.to_string(policy[key]) if policy[key] else False for key in (
+                'start_date', 'valid_until', 'next_invoice_date', 'auto_close_date',
+            )},
+            'period_start': fields.Date.to_string(policy['start_date']) if policy['start_date'] else False,
+            'is_valid': is_valid,
+            'status_label': _('Vigente') if is_valid else _('Sin vigencia'),
+            'reason': policy['reason'],
+            **{key: bool(policy[key]) for key in (
+                'can_renew', 'can_reenroll', 'can_upsale', 'has_replacement_subscription',
+            )},
         }
 
     def _build_pos_subscription_status_item(self, today):
         self.ensure_one()
-
-        recurring_lines = self._get_recurring_lines()
-        if not recurring_lines:
+        if self.wgs_domiciliation_contract_id and self.wgs_domiciliation_contract_id.state == 'active':
+            item = self._wgs_build_domiciliation_status_item_for_pos(today, include_actions=True)
+            if item:
+                return item
+        item = self._build_pos_subscription_directory_status_item(today)
+        if not item:
             return False
-
-        domiciliation_item = self._wgs_build_domiciliation_status_item_for_pos(
-            today, include_actions=True,
-        )
-        if domiciliation_item:
-            return domiciliation_item
-        primary_recurring_line = recurring_lines.sorted(key=lambda line: line.id)[:1]
-        renewal_product = primary_recurring_line.product_id if primary_recurring_line else self.env['product.product']
-        renewal_plan_id = False
-        renewal_pricing_id = False
-        if primary_recurring_line:
-            for field_name in ('subscription_plan_id', 'plan_id', 'recurring_plan_id'):
-                if field_name in primary_recurring_line._fields and primary_recurring_line[field_name]:
-                    renewal_plan_id = primary_recurring_line[field_name].id
-                    break
-            for field_name in ('subscription_pricing_id', 'pricing_id', 'recurring_pricing_id'):
-                if field_name in primary_recurring_line._fields and primary_recurring_line[field_name]:
-                    renewal_pricing_id = primary_recurring_line[field_name].id
-                    break
-
-        is_valid = False
-        reason = _('La suscripción no está vigente para control de acceso.')
-        plan_name = self._get_subscription_plan_name_for_pos(recurring_lines)
-        access_state = self._classify_subscription_access_state_for_pos()
-        native_state_key, native_state_label = self._get_native_subscription_state_info_for_pos()
-
-        period = self._wgs_get_subscription_access_period()
-        start_date = period['start_date']
-        next_invoice_date = period['next_invoice_date']
-        valid_until = period['valid_until']
-        period_start = start_date
-        has_replacement_subscription = self._wgs_has_replacement_subscription_for_pos()
-
-        should_mark_for_renewal = bool(next_invoice_date and next_invoice_date <= today)
-        close_deadline = self._wgs_get_subscription_auto_close_deadline(
-            next_invoice_date=next_invoice_date,
-            primary_recurring_line=primary_recurring_line,
-        )
-        should_force_auto_close = bool(close_deadline and today >= close_deadline)
-
-        force_closed = bool(has_replacement_subscription)
-
-        can_renew = False
-        can_reenroll = False
-
-        if force_closed:
-            access_state = False
-            is_valid = False
-            native_state_key = 'closed'
-            native_state_label = _('Cerrada')
-            reason = _('La suscripción fue reemplazada por un upsale posterior.')
-        elif start_date and start_date > today:
-            access_state = False
-            is_valid = False
-            reason = _('La suscripción todavía no inicia.')
-        elif native_state_key in ('cancel', 'closed'):
-            access_state = False
-            is_valid = False
-            reason = _('La suscripción está cancelada o cerrada y puede reinscribirse.')
-        elif should_force_auto_close:
-            access_state = False
-            is_valid = False
-            native_state_key = 'closed'
-            native_state_label = _('Cerrada')
-            reason = _('La suscripción superó los días de gracia del plan recurrente y debe reinscribirse.')
-        elif should_mark_for_renewal:
-            access_state = False
-            native_state_key = 'renew'
-            native_state_label = _('Por renovar')
-            is_valid = False
-            can_renew = True
-            reason = _('La suscripción ya venció su siguiente fecha de cobro y debe renovarse para habilitar acceso.')
-        elif access_state == 'enabled':
-            is_valid = True
-            can_renew = True
-            reason = _('Suscripción en progreso.')
-        elif access_state == 'suspended':
-            reason = _('La suscripción está pausada o suspendida.')
-        else:
-            reason = _('La suscripción no está en progreso.')
-
-        if native_state_key in ('cancel', 'closed') and not force_closed:
-            can_reenroll = True
-
+        primary = self._get_recurring_lines().sorted(key=lambda line: line.id)[:1]
+        pricing_id = False
+        for field_name in ('subscription_pricing_id', 'pricing_id', 'recurring_pricing_id'):
+            if field_name in primary._fields and primary[field_name]:
+                pricing_id = primary[field_name].id
+                break
         return {
-            'subscription_id': self.id,
-            'subscription_name': self.name,
-            'state': self.subscription_state if 'subscription_state' in self._fields else False,
-            'access_state': access_state or False,
-            'native_state_key': native_state_key,
-            'native_state_label': native_state_label,
-            'holder_partner_id': self.partner_id.id or False,
-            'holder_partner_name': self.partner_id.display_name or False,
-            'package_names': sorted(set(recurring_lines.mapped('product_id.display_name'))),
-            'plan_name': plan_name,
-            'renewal_product_id': renewal_product.id or False,
-            'renewal_product_name': renewal_product.display_name or False,
-            'renewal_plan_id': renewal_plan_id,
-            'renewal_pricing_id': renewal_pricing_id,
-            'start_date': start_date.isoformat() if start_date else False,
-            'period_start': period_start.isoformat() if period_start else False,
-            'valid_until': valid_until.isoformat() if valid_until else False,
-            'next_invoice_date': next_invoice_date.isoformat() if next_invoice_date else False,
-            'auto_close_date': close_deadline.isoformat() if close_deadline else False,
-            'is_valid': is_valid,
-            'status_label': _('Vigente') if is_valid else _('Sin vigencia'),
-            'reason': reason,
-            'has_replacement_subscription': bool(has_replacement_subscription),
-            'can_renew': bool(can_renew),
-            'can_reenroll': bool(can_reenroll),
+            **item,
+            'renewal_product_name': primary.product_id.display_name,
+            'renewal_plan_id': self.plan_id.id or False,
+            'renewal_pricing_id': pricing_id,
         }
+
+    def _wgs_replacement_subscription_ids_for_pos(self):
+        """Resolve replacements for one bounded read batch, not once per row."""
+        sources = self.sudo()
+        by_id = {order.id: order for order in sources}
+        replaced = set()
+        if not by_id:
+            return replaced
+
+        def accept(source, target):
+            return bool(target and target != source and target._is_subscription_record_for_pos()
+                        and (not source.partner_id or not target.partner_id or source.partner_id == target.partner_id))
+
+        lines = self.env['pos.order.line'].sudo().search([
+            ('wgs_subscription_source_id', 'in', sources.ids),
+            ('wgs_subscription_flow', '=', 'upsale'),
+            ('order_id.state', 'in', ['paid', 'done', 'invoiced']),
+        ])
+        for line in lines:
+            if accept(by_id[line.wgs_subscription_source_id.id], line.wgs_sale_order_id):
+                replaced.add(line.wgs_subscription_source_id.id)
+
+        for name, field in self._fields.items():
+            if (field.type != 'many2one' or getattr(field, 'comodel_name', '') != 'sale.order'
+                    or not any(token in name.lower() for token in ('subscription', 'origin', 'upsell', 'note'))):
+                continue
+            candidates = sources.search([(name, 'in', sources.ids), ('state', 'in', ['sale', 'done'])])
+            for target in candidates:
+                source = by_id[target[name].id]
+                if accept(source, target):
+                    replaced.add(source.id)
+        return replaced
 
     def _wgs_has_replacement_subscription_for_pos(self):
         self.ensure_one()
-        sale_order_model = self.sudo()
-        fields_map = sale_order_model._fields
-        relation_field_names = []
-
-        pos_line_model_name = 'pos.order.line'
-        if pos_line_model_name in self.env.registry:
-            pos_line_model = self.env[pos_line_model_name].sudo()
-            pos_line_domain = [('wgs_subscription_source_id', '=', self.id)]
-            if 'wgs_subscription_flow' in pos_line_model._fields:
-                pos_line_domain.append(('wgs_subscription_flow', '=', 'upsale'))
-            if 'order_id' in pos_line_model._fields:
-                pos_line_domain.append(('order_id.state', 'not in', ('draft', 'cancel')))
-            replacement_lines = pos_line_model.search(pos_line_domain, order='id desc')
-            replacement_orders = replacement_lines.mapped('wgs_sale_order_id').filtered(
-                lambda order: order
-                and order != self
-                and order._is_subscription_record_for_pos()
-                and (
-                    not self.partner_id
-                    or not order.partner_id
-                    or order.partner_id.id == self.partner_id.id
-                )
-            )
-            if replacement_orders:
-                return True
-
-        for field_name in ('subscription_id', 'origin_order_id', 'note_order'):
-            field = fields_map.get(field_name)
-            if field and field.type == 'many2one' and getattr(field, 'comodel_name', '') == 'sale.order':
-                relation_field_names.append(field_name)
-
-        for field_name, field in fields_map.items():
-            if field_name in relation_field_names:
-                continue
-            if field.type != 'many2one' or getattr(field, 'comodel_name', '') != 'sale.order':
-                continue
-            normalized_name = (field_name or '').lower()
-            if any(token in normalized_name for token in ('subscription', 'origin', 'upsell', 'note')):
-                relation_field_names.append(field_name)
-
-        if not relation_field_names:
-            return False
-
-        candidates = sale_order_model.browse()
-        for field_name in relation_field_names:
-            domain = [
-                (field_name, '=', self.id),
-                ('state', 'in', ['sale', 'done']),
-                ('id', '!=', self.id),
-            ]
-            if self.partner_id and 'partner_id' in fields_map:
-                domain.append(('partner_id', '=', self.partner_id.id))
-            candidates |= sale_order_model.search(domain, order='id desc')
-
-        if not candidates:
-            return False
-
-        replacement_orders = candidates.filtered(
-            lambda order: order._is_subscription_record_for_pos()
-            and (
-                not self.partner_id
-                or not order.partner_id
-                or order.partner_id.id == self.partner_id.id
-            )
-        )
-        return bool(replacement_orders)
+        return self.id in self._wgs_replacement_subscription_ids_for_pos()
 
     @api.model
     def _should_display_subscription_item_in_pos_detail(self, item, today=False):

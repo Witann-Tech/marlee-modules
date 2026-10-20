@@ -166,6 +166,63 @@ class TestSubscriptionOperations(CommonPosTest):
         order._wgs_sync_subscription_sales()
         self.assertEqual(result.end_date, fields.Date.to_date('2026-10-15'))
 
+    def test_daily_has_no_invoice_date_and_replays_without_extending(self):
+        order, subscription = self._paid(self.daily, self.day)
+        self.assertFalse(subscription.next_invoice_date)
+        self.assertEqual(subscription.start_date, subscription.end_date)
+        receipt = order.lines.wgs_application_receipt
+        order._wgs_sync_subscription_sales()
+        self.assertEqual(order.lines.wgs_application_receipt, receipt)
+        self.assertFalse(subscription.next_invoice_date)
+
+    def test_expired_before_cron_is_reenrollable_in_both_ui_and_checkout(self):
+        self.month.auto_close_limit = 3
+        _order, subscription = self._paid(self.solo, self.month)
+        self.assertEqual(subscription.subscription_state, '3_progress')
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 11, 15, 12)):
+            item = subscription._build_pos_subscription_status_item(fields.Date.to_date('2026-11-15'))
+            self.assertTrue(item['can_reenroll'])
+            self.assertFalse(item['can_renew'])
+            _payment, result = self._paid(self.solo, self.month, 'reenroll', subscription, start='2026-11-15')
+        self.assertEqual(result.end_date, fields.Date.to_date('2026-12-15'))
+        self.assertEqual(result.subscription_state, '3_progress')
+
+    def test_same_day_upsale_closes_source_without_inverting_its_period(self):
+        _order, source = self._paid(self.solo, self.month)
+        old_period = source._wgs_get_subscription_access_period()
+        payment, target = self._paid(self.pair, self.month, 'upsale', source,
+                                     participants=(self.holder | self.member).ids)
+        self.assertNotEqual(source, target)
+        self.assertEqual(source._wgs_get_subscription_access_period(), old_period)
+        self.assertIn(source._wgs_get_subscription_state_category(), ('closed', 'cancel'))
+        self.assertEqual(payment.lines.wgs_application_state, 'applied')
+        self.assertFalse(source._classify_subscription_access_state_for_pos())
+
+    def test_paid_activation_delayed_beyond_grace_applies_original_period(self):
+        self.month.auto_close_limit = 3
+        _initial, subscription = self._paid(self.solo, self.month)
+        payment, _source = self._paid(self.pair, self.month, 'renewal', subscription,
+                                     participants=(self.holder | self.member).ids)
+        self.assertEqual(payment.lines.wgs_application_state, 'scheduled')
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 12, 15, 12)):
+            self.Pos._wgs_apply_due_package_changes()
+        self.assertEqual(payment.lines.wgs_application_state, 'applied')
+        self.assertEqual(subscription.end_date, fields.Date.to_date('2026-11-15'))
+        self.assertEqual(subscription.plan_id, self.month)
+
+    def test_manual_native_close_cancels_domiciliation_but_keeps_payments(self):
+        self.month.wgs_domiciliation_enabled = True
+        _payment, subscription = self._paid(self.solo, self.month, months=[1, 12])
+        contract = subscription.wgs_domiciliation_contract_id
+        old_ids = contract.installment_ids.ids
+        paid_ids = contract.installment_ids.filtered(lambda item: item.state == 'paid').ids
+        subscription.set_close()
+        self.assertEqual(contract.state, 'cancelled')
+        self.assertEqual(contract.installment_ids.ids, old_ids)
+        self.assertEqual(contract.installment_ids.filtered(lambda item: item.state == 'paid').ids, paid_ids)
+        self.assertFalse(subscription._classify_subscription_access_state_for_pos())
+        self.assertTrue(subscription._wgs_subscription_operation_policy_for_pos()['can_reenroll'])
+
     def test_reenrollment_applies_each_purchased_term_not_the_old_plan(self):
         for months, expected_end in ((3, '2026-12-14'), (6, '2027-03-14'), (12, '2027-09-14')):
             with self.subTest(months=months):

@@ -633,58 +633,42 @@ class SaleOrder(models.Model):
         today = fields.Date.to_date(today) or self._wgs_get_subscription_business_today(company=self.company_id)
         return bool(close_deadline and today >= close_deadline)
 
-    def _wgs_find_subscription_closed_state_value(self):
-        self.ensure_one()
-        field = self._fields.get('subscription_state')
-        if not field or not getattr(field, 'selection', False):
-            return False
-
-        selection = field.selection
-        if isinstance(selection, str):
-            selection = getattr(self, selection, lambda: [])()
-        if callable(selection):
-            selection = selection(self.env[self._name])
-        normalized_selection = [(value, (label or '').lower()) for value, label in (selection or [])]
-        for preferred_token in ('churn', 'closed', 'close', 'cancel'):
-            for value, label in normalized_selection:
-                value_text = str(value or '').lower()
-                if preferred_token in value_text or preferred_token in label:
-                    return value
-        return False
-
     def _wgs_close_subscription_for_auto_close(self, today=False):
         self.ensure_one()
         if not self._wgs_is_due_for_subscription_auto_close(today=today):
             return False
+        return self._wgs_close_subscription_commercially(origin='auto_close')
 
-        for method_name in ('action_close', 'action_subscription_close', 'set_close'):
-            method = getattr(self, method_name, None)
-            if not callable(method):
-                continue
-            try:
-                method()
-                if self._wgs_get_subscription_state_category() in ('cancel', 'closed'):
-                    _logger.info('WGS ACCESS: subscription %s auto-closed with %s', self.name, method_name)
-                    return True
-                _logger.warning(
-                    'WGS ACCESS: %s on subscription %s did not close it; falling back to subscription_state write',
-                    method_name,
-                    self.name,
-                )
-            except Exception as error:
-                _logger.warning(
-                    'WGS ACCESS: could not execute %s on auto-close subscription %s (%s)',
-                    method_name,
-                    self.name,
-                    error,
-                )
+    def _wgs_close_subscription_commercially(self, *, origin):
+        """Use Odoo 19's mutating API, not action_close's interactive wizard.
 
-        closed_state = self._wgs_find_subscription_closed_state_value()
-        if closed_state and 'subscription_state' in self._fields:
-            self.write({'subscription_state': closed_state})
-            _logger.info('WGS ACCESS: subscription %s auto-closed by subscription_state=%s', self.name, closed_state)
-            return True
-        return False
+        The native terminal state removes entitlement. An upgrade must not
+        rewrite the historical paid period to yesterday (possibly before start).
+        Errors propagate to the caller's existing transaction/savepoint.
+        """
+        self.ensure_one()
+        historical_end = self.end_date
+        self.with_context(wgs_subscription_close_origin=origin).set_close()
+        self.invalidate_recordset(['subscription_state', 'end_date'])
+        if self._wgs_get_subscription_state_category() not in ('cancel', 'closed'):
+            raise ValidationError(_('Odoo no confirmo el cierre de la suscripcion sustituida o vencida.'))
+        if self.end_date != historical_end:
+            self.write({'end_date': historical_end})
+        return True
+
+    def _wgs_cancel_domiciliation_on_explicit_close(self):
+        """Cancel the commercial cycle without deleting installments or payments."""
+        contracts = self.mapped('wgs_domiciliation_contract_id').filtered(lambda contract: contract.state == 'active')
+        if contracts:
+            contracts.write({'state': 'cancelled'})
+
+    def set_close(self, close_reason_id=None, renew=False):
+        automatic = self.env.context.get('wgs_native_subscription_lifecycle') or (
+            self.env.context.get('wgs_subscription_close_origin') == 'auto_close'
+        )
+        if not automatic and not renew:
+            self._wgs_cancel_domiciliation_on_explicit_close()
+        return super().set_close(close_reason_id=close_reason_id, renew=renew)
 
     def _wgs_is_confirmed_access_subscription_order(self):
         self.ensure_one()
@@ -1374,6 +1358,8 @@ class SaleOrder(models.Model):
         return res
 
     def action_cancel(self):
+        if not self.env.context.get('wgs_native_subscription_lifecycle'):
+            self._wgs_cancel_domiciliation_on_explicit_close()
         res = super().action_cancel()
         self._wgs_sync_access_control_people_if_not_deferred()
         return res

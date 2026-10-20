@@ -27,7 +27,7 @@ class Dates:
     @staticmethod
     def to_date(value):
         if not value:
-            return False
+            return None
         return date.fromisoformat(value) if isinstance(value, str) else value
 
     @staticmethod
@@ -51,7 +51,8 @@ def method(file, name):
     assert len(found) == 1, name
     node = found[0]
     node.decorator_list = []
-    ns = {'fields': SimpleNamespace(Date=Dates, Datetime=Datetimes), 'UserError': UserError, '_': lambda value: value,
+    ns = {'fields': SimpleNamespace(Date=Dates, Datetime=Datetimes), 'UserError': UserError,
+          'ValidationError': UserError, '_': lambda value: value,
           'RULES_VERSION': contract.RULES_VERSION, 'hmac': hmac, 'hashlib': hashlib,
           'canonical_json': contract.canonical_json, 'fingerprint': contract.fingerprint,
           'json': json, 'timedelta': timedelta, 'period': contract.period, 'relativedelta': relativedelta}

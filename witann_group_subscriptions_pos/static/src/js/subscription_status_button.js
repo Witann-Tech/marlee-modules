@@ -1480,7 +1480,7 @@ patch(ControlButtons.prototype, {
             const firstPeriodNote = pricingSnapshot.first_period_alignment
                 ? `
                     <div class="wgs-inline-notice">
-                        ${this._escapeHtml(_t("Primer periodo proporcional"))}: ${this._escapeHtml(this._formatDateDisplay(pricingSnapshot.subscription_start_date || newSubscriptionForm.startDate) || "-")} - ${this._escapeHtml(this._formatDateDisplay(automaticEndDate) || "-")}
+                        ${this._escapeHtml(_t("Primer periodo proporcional"))}: ${this._escapeHtml(this._formatDateDisplay(pricingSnapshot.subscription_start_date || newSubscriptionForm.startDate) || "-")} - ${this._escapeHtml(this._formatDateDisplay(pricingSnapshot.first_period_end_date || automaticEndDate) || "-")}
                         ${pricingSnapshot.first_period_access_start_date ? ` · ${this._escapeHtml(_t("Acceso desde"))}: ${this._escapeHtml(this._formatDateDisplay(pricingSnapshot.first_period_access_start_date) || "-")}` : ""}
                         ${nextBillingDate ? ` · ${this._escapeHtml(_t("Siguiente cobro"))}: ${this._escapeHtml(this._formatDateDisplay(nextBillingDate) || "-")}` : ""}
                     </div>

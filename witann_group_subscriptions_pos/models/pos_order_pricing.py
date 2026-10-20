@@ -556,9 +556,7 @@ class PosOrderPricingMixin(models.Model):
             if self._wgs_uses_fixed_monthly_cutoff(resolved_plan):
                 monthly_cutoff_day = source_order.wgs_monthly_cutoff_day
         charge_now = round(max(recurring_price - credit_amount, 0.0), 2)
-        if include_credit and source_order:
-            display_charge_now = round(max(display_recurring_price - display_credit_amount, 0.0), 2)
-        else:
+        if not (include_credit and source_order):
             if flow in ('new', 'reenroll') and self._wgs_should_align_plan_to_calendar_month(resolved_plan):
                 first_period_alignment = self._wgs_get_aligned_monthly_first_period_schedule(
                     start_date or self._wgs_get_subscription_business_today_for_pos(company=company)
@@ -575,13 +573,12 @@ class PosOrderPricingMixin(models.Model):
                 subscription_end_date = schedule['subscription_end_date']
                 next_billing_date = schedule['next_billing_date']
                 monthly_cutoff_day = schedule['monthly_cutoff_day']
-            display_charge_now = self._wgs_get_price_with_taxes_for_pos(
-                product,
-                charge_now,
-                partner=partner or False,
-                company=company or False,
-                fiscal_position=fiscal_position or False,
-            )
+        # Fiscal display is a projection of the exact ticket unit price, not
+        # a subtraction of two independently rounded tax-inclusive totals.
+        display_charge_now = self._wgs_get_price_with_taxes_for_pos(
+            product, charge_now, partner=partner or False, company=company or False,
+            fiscal_position=fiscal_position or False,
+        )
         return {
             'mode': 'product',
             'flow': flow,

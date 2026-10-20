@@ -11,7 +11,8 @@ function screenFixture({ member = true, refund = false, failure = false, refused
     const calls = [], alerts = [];
     const order = {
         uuid: 'order-uuid', uid: 'order-uuid', to_invoice: true, partner_id: 8,
-        configs: member ? [{ flow: 'renewal', line_uuid: 'line-uuid' }] : [],
+        configs: member ? [{ flow: 'renewal', line_uuid: 'line-uuid',
+            pricing_snapshot: {commercial_quote: {payload: {partner_id: 8}}} }] : [],
         lines: [{ uuid: 'line-uuid', product_id: { id: 20, recurring_invoice: member }, qty: refund ? -1 : 1, price_unit: 619, discount: 0 }],
     };
     const stats = { validated: 0, setup: 0 };
@@ -36,6 +37,16 @@ function screenFixture({ member = true, refund = false, failure = false, refused
         clearInvoiceFlag: (value) => { value.to_invoice = false; },
         disableInvoiceControls() {}, installInvoiceControlGuard() {},
     });
+    const ticket = fs.readFileSync(path.join(root, 'subscription_ticket.js'), 'utf8')
+        .replace(/export (async )?function /g, (_match, asyncPart) => `${asyncPart || ''}function `);
+    vm.runInContext(ticket, context, { filename: 'subscription_ticket.js' });
+    // Payment-screen doubles use numeric IDs; ticket's actual identity resolver
+    // is also exercised below with native registered partner records.
+    context.getPartnerIdFromOrder = (value) => typeof value.partner_id === 'number'
+        ? value.partner_id : Number(value.partner_id?.id || 0);
+    context.getCurrentCompanyId = () => 10;
+    context.collectSubscriptionConfigsFromOrder = (value) => value.configs;
+    context.collectMembershipRefundsFromOrder = () => refund ? [{original_line_id: 1, qty: -1}] : [];
     const source = fs.readFileSync(path.join(root, 'subscription_payment_guard.js'), 'utf8')
         .replace(/^import[\s\S]*?;\s*$/gm, '')
         .replace('export async function ', 'async function ');
@@ -104,4 +115,43 @@ test('the addon registers exactly one PaymentScreen extension', () => {
         total + [...fs.readFileSync(path.join(root, name), 'utf8').matchAll(/patch\(PaymentScreen\.prototype/g)].length, 0
     );
     assert.equal(count, 1);
+});
+
+test('a restored membership loads its signed customer as a native record before preflight', async () => {
+    const { screen, order, calls, stats } = screenFixture();
+    const registered = new Map();
+    order.partner_id = false;
+    order.setPartner = (partner) => { order.partner_id = partner; };
+    screen.pos = { models: {'res.partner': registered}, data: {
+        async read(model, ids) {
+            assert.equal(model, 'res.partner');
+            assert.equal(ids[0], 8);
+            registered.set(8, {id: 8, name: 'Registered customer'});
+        },
+    } };
+    await screen.validateOrder();
+    assert.equal(order.partner_id, registered.get(8));
+    assert.equal(calls[0][2][2].partner_id, 8);
+    assert.equal(stats.validated, 1);
+});
+
+test('restoration never overwrites another explicitly selected customer', async () => {
+    const { screen, order, calls, stats } = screenFixture();
+    order.partner_id = 99;
+    await screen.validateOrder();
+    assert.equal(order.partner_id, 99);
+    assert.equal(stats.validated, 0);
+    assert.equal(calls.length, 0);
+});
+
+test('customer lookup failure and mixed quote owners never reach native payment', async () => {
+    for (const mixed of [false, true]) {
+        const { screen, order, stats } = screenFixture();
+        order.partner_id = false;
+        screen.pos = {models: {'res.partner': new Map()}, data: {async read() { throw Error('offline'); }}};
+        if (mixed) order.configs.push({pricing_snapshot: {commercial_quote: {payload: {partner_id: 9}}}});
+        await screen.validateOrder();
+        assert.equal(stats.validated, 0);
+        assert.equal(order.partner_id, false);
+    }
 });

@@ -153,6 +153,13 @@ export async function ensurePartnerLoadedInPos(source, partnerId, fetchPartnerRe
     if (localPartner) {
         return localPartner;
     }
+    const pos = getPos(source);
+    if (pos?.models?.["res.partner"]) {
+        // Odoo 19 relations must use registered records. Raw RPC objects can
+        // look correct while their relation is lost on serialization.
+        await pos.data.read("res.partner", [numericId]);
+        return findPartnerInPos(pos, numericId);
+    }
     if (typeof fetchPartnerRecord !== "function") {
         return null;
     }
@@ -160,11 +167,35 @@ export async function ensurePartnerLoadedInPos(source, partnerId, fetchPartnerRe
     if (!partnerData || Number(partnerData.id || 0) !== numericId) {
         return null;
     }
-    const pos = getPos(source);
     if (pos && pos.db && typeof pos.db.add_partners === "function") {
         pos.db.add_partners([partnerData]);
     }
     return findPartnerInPos(source, numericId) || partnerData;
+}
+
+export async function resolveSubscriptionOrderPartner(pos, order, configs) {
+    const ids = new Set(configs.map((config) =>
+        Number(config.pricing_snapshot?.commercial_quote?.payload?.partner_id || 0)
+    ));
+    if (ids.size !== 1 || ids.has(0)) {
+        throw new Error("Las membresias del ticket requieren un mismo titular cotizado.");
+    }
+    const [expectedId] = ids;
+    let currentId = getPartnerIdFromOrder(order);
+    if (currentId && currentId !== expectedId) {
+        throw new Error("El cliente cambio desde la cotizacion. Actualiza la membresia antes de cobrar.");
+    }
+    if (!currentId) {
+        const partner = await ensurePartnerLoadedInPos(pos, expectedId);
+        currentId = getPartnerIdFromOrder(order);
+        if (currentId && currentId !== expectedId) {
+            throw new Error("El cliente cambio mientras se recuperaba el ticket.");
+        }
+        if (!partner || (!currentId && !setOrderPartner(order, partner))) {
+            throw new Error("No se pudo recuperar el titular del ticket. No vuelvas a cobrar.");
+        }
+    }
+    return expectedId;
 }
 
 function addFallbackProductToLocalPosCaches(pos, productData) {
