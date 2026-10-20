@@ -219,7 +219,7 @@ class TestSubscriptionOperations(CommonPosTest):
         self.assertEqual(subscription.subscription_state, '6_churn')
         self.assertEqual(subscription.order_line.filtered(lambda item: item.product_uom_qty > 0).product_id, self.daily)
 
-    def test_incorrect_scheduled_activation_is_quarantined_and_keeps_paid_period(self):
+    def test_incorrect_activation_rolls_back_and_retries_without_quarantine(self):
         _initial, subscription = self._paid(self.solo, self.month)
         annual = self.env['sale.subscription.plan'].create({
             'name': 'Annual future result', 'billing_period_value': 12, 'billing_period_unit': 'month',
@@ -237,24 +237,113 @@ class TestSubscriptionOperations(CommonPosTest):
             fields.Datetime, 'now', return_value=datetime(2026, 10, 16, 12),
         ):
             self.Pos._wgs_apply_due_package_changes()
-        self.assertEqual(payment.lines.wgs_application_state, 'review')
+        self.assertEqual(payment.lines.wgs_application_state, 'scheduled')
+        self.assertTrue(payment.lines.wgs_activation_error)
+        self.assertEqual(payment.lines.wgs_activation_attempts, 1)
         self.assertEqual(payment.lines.wgs_application_receipt, receipt)
         self.assertEqual(subscription.plan_id, self.month)
         self.assertEqual(subscription.end_date, fields.Date.to_date('2026-10-15'))
         self.assertEqual(subscription._get_recurring_lines().product_id, self.solo)
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 10, 16, 13)):
+            self.Pos._wgs_apply_due_package_changes()
+        self.assertEqual(payment.lines.wgs_application_state, 'applied')
+        self.assertFalse(payment.lines.wgs_activation_error)
+        self.assertFalse(payment.lines.wgs_activation_retry_at)
+        self.assertEqual(subscription.plan_id, annual)
 
-    def test_review_queue_does_not_starve_other_due_contracts(self):
+    def test_failed_legacy_queue_does_not_starve_other_due_contracts(self):
         _initial, blocked = self._paid(self.solo, self.month)
         review, _subscription = self._paid(self.pair, self.month, 'renewal', blocked, (self.holder | self.member).ids)
         next_payment, _subscription = self._paid(self.solo, self.month, 'renewal', blocked)
         review.lines.wgs_application_state = 'review'
+        blocked.order_line.filtered(lambda item: item.product_uom_qty > 0).price_unit += 1
         self.holder = self.env['res.partner'].create({'name': 'Unrelated due renewal'})
         _initial, eligible = self._paid(self.solo, self.month)
         payment, _subscription = self._paid(self.pair, self.month, 'renewal', eligible, (self.holder | self.member).ids)
         with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 12, 16, 12)):
-            self.Pos._wgs_apply_due_package_changes(limit=1)
+            self.Pos._wgs_apply_due_package_changes(limit=2)
         self.assertEqual(payment.lines.wgs_application_state, 'applied')
+        self.assertEqual(review.lines.wgs_application_state, 'scheduled')
+        self.assertTrue(review.lines.wgs_activation_error)
         self.assertEqual(next_payment.lines.wgs_application_state, 'scheduled')
+
+    def test_legacy_review_is_automatically_applied_without_new_payment(self):
+        _initial, subscription = self._paid(self.solo, self.month)
+        payment, _subscription = self._paid(self.pair, self.month, 'renewal', subscription, (self.holder | self.member).ids)
+        payment.lines.wgs_application_state = 'review'
+        financial = payment.read(['amount_total', 'amount_paid', 'payment_ids'])[0]
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 10, 16, 12)):
+            self.Pos._wgs_apply_due_package_changes()
+        self.assertEqual(payment.lines.wgs_application_state, 'applied')
+        self.assertEqual(payment.read(['amount_total', 'amount_paid', 'payment_ids'])[0], financial)
+        self.assertEqual(subscription._get_recurring_lines().product_id, self.pair)
+
+    def test_inclusive_bot_close_recovers_exact_paid_source_on_first_attempt(self):
+        _initial, subscription = self._paid(self.solo, self.month)
+        payment, _subscription = self._paid(self.pair, self.month, 'renewal', subscription, (self.holder | self.member).ids)
+        financial = payment.read(['amount_total', 'amount_paid', 'payment_ids'])[0]
+        payment.lines.write({'create_date': datetime(2026, 9, 15, 12)})
+        # Reproduce the old core path directly, bypassing the new cron adapter.
+        with patch.object(fields.Date, 'context_today', return_value=fields.Date.to_date('2026-10-15')), patch.object(
+            fields.Datetime, 'now', return_value=datetime(2026, 10, 15, 20, 9),
+        ):
+            super(SaleOrderWgsLifecycle, subscription.with_user(self.env.ref('base.user_root'))).set_close()
+        # TransactionCase does not advance PostgreSQL's transaction timestamp.
+        self.env.cr.execute('UPDATE sale_order SET write_date = %s WHERE id = %s',
+                            [datetime(2026, 10, 15, 20, 9), subscription.id])
+        subscription.invalidate_recordset()
+        tracking = self.env['mail.tracking.value'].search([
+            ('field_id.model', '=', 'sale.order'), ('field_id.name', '=', 'subscription_state'),
+            ('mail_message_id.model', '=', 'sale.order'), ('mail_message_id.res_id', '=', subscription.id),
+            ('mail_message_id.author_id', '=', self.env.ref('base.user_root').partner_id.id),
+        ], order='id desc', limit=1)
+        self.assertTrue(tracking)
+        tracking.mail_message_id.write({'date': datetime(2026, 10, 15, 20, 9)})
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 10, 16, 12)):
+            self.Pos._wgs_apply_due_package_changes()
+        self.assertEqual(payment.lines.wgs_application_state, 'applied')
+        self.assertTrue(payment.lines.wgs_application_receipt['automatic_close_recovered'])
+        self.assertEqual(subscription.subscription_state, '3_progress')
+        self.assertEqual(subscription._get_recurring_lines().product_id, self.pair)
+        self.assertEqual(payment.read(['amount_total', 'amount_paid', 'payment_ids'])[0], financial)
+
+    def test_manual_close_is_never_automatically_reopened(self):
+        _initial, subscription = self._paid(self.solo, self.month)
+        payment, _subscription = self._paid(self.pair, self.month, 'renewal', subscription, (self.holder | self.member).ids)
+        with patch.object(fields.Date, 'context_today', return_value=fields.Date.to_date('2026-10-15')):
+            subscription.set_close()
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 10, 16, 12)):
+            self.Pos._wgs_apply_due_package_changes()
+        self.assertEqual(subscription.subscription_state, '6_churn')
+        self.assertNotEqual(payment.lines.wgs_application_state, 'applied')
+        self.assertEqual(payment.lines.wgs_application_state, 'scheduled')
+
+    def test_quote_settles_due_paid_changes_before_calculating_next_period(self):
+        _initial, subscription = self._paid(self.solo, self.month)
+        payment, _subscription = self._paid(self.pair, self.month, 'renewal', subscription, (self.holder | self.member).ids)
+        payment.lines.wgs_application_state = 'review'
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 10, 16, 12)):
+            quote = self._quote(self.pair, self.month, 'renewal', subscription)
+        self.assertEqual(payment.lines.wgs_application_state, 'applied')
+        self.assertEqual(quote['subscription_start_date'], '2026-11-16')
+        self.assertEqual(subscription.end_date, fields.Date.to_date('2026-11-15'))
+
+    def test_opening_customer_detail_applies_only_their_due_paid_changes(self):
+        _initial, subscription = self._paid(self.solo, self.month)
+        payment, _subscription = self._paid(self.pair, self.month, 'renewal', subscription, (self.holder | self.member).ids)
+        payment.lines.wgs_application_state = 'review'
+        original_holder = self.holder
+        self.holder = self.env['res.partner'].create({'name': 'Other pending customer'})
+        _other_initial, other = self._paid(self.solo, self.month)
+        other_payment, _other = self._paid(self.pair, self.month, 'renewal', other)
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 10, 16, 12)):
+            detail = self.Pos.wgs_get_partner_subscription_detail_for_pos(original_holder.id)
+        self.assertEqual(payment.lines.wgs_application_state, 'applied')
+        self.assertEqual(other_payment.lines.wgs_application_state, 'scheduled')
+        item = next(item for item in detail['items'] if item['subscription_id'] == subscription.id)
+        self.assertTrue(item['can_renew'])
+        self.assertFalse(item['can_reenroll'])
+        self.assertEqual(subscription._get_recurring_lines().product_id, self.pair)
 
     def test_paid_scheduled_change_is_excluded_from_close_until_activated(self):
         _initial, subscription = self._paid(self.solo, self.month)

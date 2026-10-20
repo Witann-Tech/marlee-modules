@@ -1288,6 +1288,11 @@ class PosOrder(models.Model):
         product = self._wgs_browse_product_for_pos(product_id) if product_id else self.env['product.product']
         source_order = self.env['sale.order']
 
+        if normalized_flow in ('renewal', 'reenroll', 'upsale'):
+            source_order = self._wgs_browse_source_subscription_for_pos(source_subscription_id)
+            if source_order:
+                self._wgs_settle_due_source_changes(source_order)
+
         if normalized_flow == 'new':
             if not product:
                 raise UserError(_('El producto seleccionado no existe o no está disponible.'))
@@ -2607,7 +2612,7 @@ class PosOrder(models.Model):
         source_line = recurring_lines.sorted(key=lambda so_line: so_line.id)[:1]
         target_product = line.product_id
         package_changed = source_line.product_id != target_product
-        apply_participants = package_changed or line.wgs_application_state == 'scheduled'
+        apply_participants = package_changed or line.wgs_application_state in ('scheduled', 'review')
         previous_access_partner_ids = (
             source_order._wgs_get_access_related_partner_ids()
             if apply_participants and hasattr(source_order, '_wgs_get_access_related_partner_ids')

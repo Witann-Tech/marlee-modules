@@ -176,6 +176,7 @@ class MonthlyCutoffTests(unittest.TestCase):
         source.wgs_domiciliation_contract_id.id = False
         source.wgs_domiciliation_contract_id.installment_ids.sorted.return_value = []
         source.wgs_monthly_cutoff_day = 0
+        owner._wgs_source_contract.side_effect = lambda record, **kw: method(OPS, '_wgs_source_contract')(owner, record, **kw)
         revision = method(OPS, '_wgs_source_revision')
         expected = contract.fingerprint({
             'id': 7, 'company': 9, 'holder': 12, 'state': 'sale', 'subscription_state': 'active',
