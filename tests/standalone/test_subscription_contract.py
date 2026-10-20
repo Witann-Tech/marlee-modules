@@ -4,7 +4,7 @@ Run without Odoo. These do not substitute the addon TransactionCase suite.
 """
 import ast
 import copy
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 import hashlib
 import hmac
 import importlib.util
@@ -35,13 +35,23 @@ class Dates:
         return value.isoformat() if value else False
 
 
+class Datetimes:
+    @staticmethod
+    def now():
+        return datetime(2026, 10, 14, 12)
+
+    @staticmethod
+    def to_string(value):
+        return value.strftime('%Y-%m-%d %H:%M:%S') if value else False
+
+
 def method(file, name):
     tree = ast.parse((ROOT / file).read_text())
     found = [node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == name]
     assert len(found) == 1, name
     node = found[0]
     node.decorator_list = []
-    ns = {'fields': SimpleNamespace(Date=Dates), 'UserError': UserError, '_': lambda value: value,
+    ns = {'fields': SimpleNamespace(Date=Dates, Datetime=Datetimes), 'UserError': UserError, '_': lambda value: value,
           'RULES_VERSION': contract.RULES_VERSION, 'hmac': hmac, 'hashlib': hashlib,
           'canonical_json': contract.canonical_json, 'fingerprint': contract.fingerprint,
           'json': json, 'timedelta': timedelta, 'period': contract.period, 'relativedelta': relativedelta}

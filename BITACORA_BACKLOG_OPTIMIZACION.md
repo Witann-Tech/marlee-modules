@@ -7,6 +7,26 @@ Este backlog registra mejoras de confiabilidad, rendimiento, seguridad y
 mantenibilidad detectadas en los addons actuales. No autoriza retirar ni
 modificar reglas operativas sin una historia funcional aprobada.
 
+## Avance 2026-10-19 - Activacion Sin Cuarentena Operativa
+
+- En staging local, POS `19.0.1.6.4`: no se crean nuevas operaciones en `review`;
+  las heredadas se reintentan automaticamente. Se conserva compatibilidad de
+  lectura, no un flujo de revision para cajeros.
+- Recuperacion automatica de cierres inclusivos solo con huella comercial exacta
+  y evidencia de OdooBot/fechas/motivo/seguimiento. No se reabren cancelaciones
+  manuales ni se sobrescriben diferencias comerciales reales.
+- Rollback y reintentos tecnicos acotados, sin recobro, orden por contrato y
+  prioridad para clientes no intentados. Ficha POS y cotizacion recuperan pagos
+  ya exigibles del socio antes de ofrecer otra operacion.
+- Verificacion aislada: 67 tests Python y 22 JS aprobados. Los 40 tests ORM
+  comerciales estan preparados, no ejecutados aqui. Gate Odoo 19/two-workers
+  pendiente; no se declara concluida la validacion integral.
+- Reparacion puntual autorizada y verificada en produccion: `S01905`, ticket
+  `2648-8-000088`; $250 y periodo 16-22/octubre conservados, acceso habilitado.
+  Sin nuevos cobros, cambios globales de crons ni intervencion en otros socios.
+- Alcance WGS/POS, sin cambios bancarios. Sin commit/push de esta iteracion.
+  Detalle, limites y pruebas: `REFACTOR_SUSCRIPCIONES_STAGING.md`.
+
 ## Correccion 2026-09-15 - Activaciones al iniciar vigencia
 
 - Una venta con inicio futuro no genera acceso activo al cobrar. El cron

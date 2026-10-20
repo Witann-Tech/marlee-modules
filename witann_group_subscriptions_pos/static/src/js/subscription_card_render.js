@@ -49,7 +49,7 @@ function renderSubscriptionCard({
             </div>
             ${(item.scheduled_changes || []).map((change) => `
                 <div class="wgs-access-origin-notice">
-                    <strong>${escapeHtml(change.state === "review" ? _t("Cambio pagado: requiere revision") : _t("Cambio de paquete pagado y programado"))}</strong>
+                    <strong>${escapeHtml(change.retry_pending ? _t("Cambio pagado: activacion automatica pendiente") : _t("Cambio de paquete pagado y programado"))}</strong>
                     <span>${escapeHtml(change.product)}: ${escapeHtml(formatDateDisplay(change.start))} - ${escapeHtml(formatDateDisplay(change.end))}</span>
                 </div>
             `).join("")}

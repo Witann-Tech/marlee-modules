@@ -2,6 +2,98 @@
 
 Registro inicial: 2026-09-28. Rama de trabajo: `staging`.
 
+## Preparacion de entrega y build: 2026-10-19
+
+Solicitados commit y push de la recuperacion automatica a `staging`. Se
+repitieron 67 tests Python y 22 JavaScript, todos aprobados. El usuario aplicara
+el build y los upgrades y confirmara antes de iniciar pruebas por navegador.
+Versiones objetivo: base `19.0.1.1.58` y POS `19.0.1.6.4`. No se ha ejecutado la
+suite ORM ni validacion de caja sobre este despliegue. Las menciones de codigo
+local mas abajo describen el estado previo a esta entrega.
+
+## Recuperacion automatica de activaciones: 2026-10-19
+
+Implementado localmente en `staging`, POS `19.0.1.6.4`; mantiene la dependencia
+base `19.0.1.1.58`. Sin commit/push ni despliegue desde esta iteracion. Las
+secciones siguientes son historicas: esta seccion sustituye su cuarentena de
+operaciones en `review`. No se modifica el importador bancario.
+
+### Comportamiento
+
+- Se elimina la escritura de nuevas operaciones en `review`. El valor se
+  conserva solo por compatibilidad con registros anteriores, que vuelven a
+  entrar automaticamente en la cola de activacion. No hay paso de aprobacion
+  manual para una compra comercialmente valida.
+- Si la huella coincide, se aplica directamente. Si solo difiere el estado por
+  un cierre en el ultimo dia inclusivo, se exige que coincida exactamente la
+  huella normalizada y evidencia de OdooBot, motivo de cierre nativo, fechas de
+  cierre/cobro y seguimiento del estado. Solo entonces se restaura el estado
+  anterior y se aplica el paquete firmado dentro del mismo savepoint.
+- No se ignoran diferencias de titular, empresa, paquete, plan, precio,
+  participantes o fechas. Una cancelacion manual no se reabre. Una operacion
+  cancelada/reembolsada o un ticket sin pagar no se activan.
+- Los fallos tecnicos revierten la aplicacion parcial y conservan la compra en
+  `scheduled`, con diagnostico, contador y proximo intento (15 minutos minimo,
+  ejecutado por los crons existentes). No se repite un intento dentro del mismo
+  lote; los contratos sin fallos tienen prioridad sobre reintentos. Una cola
+  ajena no queda bloqueada por otro cliente. Se mantienen lotes de 100.
+- La lectura explicita de la ficha POS intenta recuperar solo las compras
+  pagadas ya exigibles de ese cliente/empresa antes de elegir Renovar/Reinscribir.
+  No ejecuta una activacion global ni adelanta beneficios futuros. La cotizacion
+  tambien termina periodos exigibles antes de calcular la proxima compra.
+- Antes de cobrar se comprueba que siga existiendo el plan firmado. Si un pago
+  exigible no puede aplicarse, se impide cobrar otra vez sobre la misma fuente;
+  no se considera resuelto ignorando el error o concediendo un periodo inventado.
+- La tarjeta ya no solicita una revision inexistente. Un error tecnico muestra
+  activacion automatica pendiente, no una tarea para el cajero. Los errores de
+  concurrencia SQL siguen el reintento transaccional nativo de Odoo.
+- Se conservan hashes, comprobantes, importes y fechas originales. La proteccion
+  de los tres crons nativos sigue siendo la prevencion principal del cierre
+  anticipado; la recuperacion cubre compras heredadas del defecto anterior.
+
+### Validacion
+
+67 tests aislados Python y 22 JavaScript aprobados. Incluyen recuperacion por
+estado, rechazo de cambios comerciales reales/cancelacion manual, recuperacion
+de compras heredadas, reintento tras fallo tecnico, no duplicacion, equidad de
+colas y rechazo de plan inexistente antes del pago. SQL ejercitado en SQLite con
+traduccion explicita de exclusion de arrays; NO prueba PostgreSQL.
+
+40 tests ORM de operaciones preparados, NO ejecutados localmente. Sigue siendo
+obligatorio correr la suite en la copia desechable con el build exacto de Odoo
+19 Enterprise, incluyendo locks/savepoints y dos workers.
+
+Pruebas nuevas prioritarias en esa copia:
+
+1. Reproducir un cierre nativo por OdooBot en el ultimo dia, con cambio pagado
+   para el siguiente: primera activacion recupera y aplica exactamente la compra.
+2. Una compra heredada en `review` se aplica sin nuevo pago ni accion manual.
+3. Omitir el plan en el handler de prueba: rollback sin cambio comercial ni
+   cuarentena; retirar el fallo y comprobar la aplicacion al reintentar.
+4. Abrir la ficha antes del cron: aplica solo pagos exigibles de ese cliente,
+   refresca el paquete/boton, no activa otros socios ni periodos futuros.
+5. Cierre manual, reembolso, cambio real de precio/participantes y dos compras
+   futuras: no reapertura indebida, no recobro y orden de aplicacion conservado.
+6. Muchas colas fallidas junto a clientes nuevos: los nuevos progresan y cada
+   intento queda acotado. Ejecutar de nuevo los tres crons nativos: no cierran WGS.
+
+No se garantiza exito frente a datos corruptos, cancelaciones expresas o caidas
+de infraestructura: esas condiciones no justifican omitir controles. El criterio
+de salida es que las ventas validas se apliquen sin cuarentenas ni recobros, y
+los fallos transitorios se recuperen automaticamente. No promover sin la prueba
+ORM y operativa.
+
+### Reparacion puntual de produccion autorizada
+
+Solo `S01905`, compra POS `14488` / linea `25882`, ticket `2648-8-000088`.
+Cobro de $250 del 15/octubre conservado. Aplicada SEMANA SM del 16 al 22/octubre,
+siguiente cobro 23/octubre; sin extender desde la fecha de reparacion. Restaurado
+acceso en Santa Monica con el horario general correspondiente al paquete.
+Dry-run, reparacion atomica y verificacion independiente correctos; se retiro la
+accion temporal. Personas existentes conservadas, sin crear/eliminar/consolidar.
+Upsert `34882` encolado; entrega fisica a SpeedFace no verificada. No se cambiaron
+configuraciones globales de crons ni otros contratos en produccion.
+
 ## Entrega para pruebas: 2026-10-15
 
 Commit y push a `staging` solicitados. Se repitieron satisfactoriamente 53 tests

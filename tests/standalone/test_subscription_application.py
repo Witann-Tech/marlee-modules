@@ -6,6 +6,7 @@ integration gate for transactions, constraints, SQL queues and native hooks.
 
 from contextlib import closing
 from datetime import date
+import json
 import sqlite3
 from types import MethodType, SimpleNamespace
 import unittest
@@ -213,11 +214,12 @@ class ApplicationTests(unittest.TestCase):
             check(owner, subscription)
 
     def test_activation_budget_is_shared_by_successive_queue_heads(self):
-        first, second, unrelated = object(), object(), object()
+        first, second, unrelated = (SimpleNamespace(id=value) for value in (1, 2, 3))
         batches = [[first, unrelated], [second]]
         calls = []
-        def select(today, limit):
+        def select(today, limit, exclude_ids):
             calls.append(limit)
+            self.assertEqual(exclude_ids, [] if len(calls) == 1 else [1, 3])
             return batches.pop(0) if batches else []
         owner = SimpleNamespace(
             _wgs_get_subscription_business_today_for_pos=lambda: date(2026, 10, 14),
@@ -230,7 +232,7 @@ class ApplicationTests(unittest.TestCase):
 
     def test_nonprogressing_activation_is_still_bounded(self):
         owner = Mock()
-        owner._wgs_select_due_package_changes.return_value = [object()]
+        owner._wgs_select_due_package_changes.return_value = [SimpleNamespace(id=1)]
         owner._wgs_activate_package_change.return_value = False
         self.assertEqual(method(OPS, '_wgs_apply_due_package_changes')(owner, limit=2), 0)
         self.assertEqual(owner._wgs_activate_package_change.call_count, 2)
@@ -244,25 +246,39 @@ class ApplicationTests(unittest.TestCase):
                 CREATE TABLE pos_order_line (
                     id INTEGER PRIMARY KEY, order_id INTEGER,
                     wgs_subscription_source_id INTEGER, wgs_application_date TEXT,
-                    wgs_application_state TEXT
+                    wgs_application_state TEXT, wgs_activation_retry_at TEXT
                 );
                 INSERT INTO pos_order VALUES (1, 'paid'), (2, 'draft');
                 INSERT INTO pos_order_line VALUES
-                    (1, 1, 10, '2026-08-01', 'review'),
-                    (2, 1, 10, '2026-09-01', 'scheduled'),
-                    (3, 1, 20, '2026-09-01', 'scheduled'),
-                    (4, 1, 20, '2026-10-01', 'scheduled'),
-                    (5, 2, 30, '2026-08-01', 'scheduled'),
-                    (6, 1, 40, '2026-11-01', 'scheduled');
+                    (1, 1, 10, '2026-08-01', 'review', NULL),
+                    (2, 1, 10, '2026-09-01', 'scheduled', NULL),
+                    (3, 1, 20, '2026-09-01', 'scheduled', NULL),
+                    (4, 1, 20, '2026-10-01', 'scheduled', NULL),
+                    (5, 2, 30, '2026-08-01', 'scheduled', NULL),
+                    (6, 1, 40, '2026-11-01', 'scheduled', NULL),
+                    (7, 1, 30, '2026-10-01', 'scheduled', NULL);
             ''')
             line_model = Mock()
             line_model.sudo.return_value = line_model
             line_model.browse.side_effect = lambda ids: ids
             owner = SimpleNamespace(env=Mock())
             owner.env.__getitem__ = Mock(return_value=line_model)
-            owner.env.cr.execute.side_effect = lambda sql, params: cursor.execute(sql.replace('%s', '?'), params)
+            def execute(sql, params):
+                # Translate only PostgreSQL's array exclusion, not queue logic.
+                sql = sql.replace('candidate.id != ALL(%s)',
+                                  'candidate.id NOT IN (SELECT value FROM json_each(%s))')
+                cursor.execute(sql.replace('%s', '?'), [params[0], str(params[1]), json.dumps(params[2]), params[3]])
+            owner.env.cr.execute.side_effect = execute
             owner.env.cr.fetchall.side_effect = cursor.fetchall
             select = method(OPS, '_wgs_select_due_package_changes')
+            self.assertEqual(select(owner, '2026-10-14', 1), [1])
+            self.assertEqual(select(owner, '2026-10-14', 10), [1, 3, 7])
+            self.assertEqual(select(owner, '2026-10-14', 1, exclude_ids=[1]), [3])
+            cursor.execute("UPDATE pos_order_line SET wgs_activation_retry_at = '2026-10-14 12:15:00' WHERE id = 1")
             self.assertEqual(select(owner, '2026-10-14', 1), [3])
             cursor.execute("UPDATE pos_order_line SET wgs_application_state = 'applied' WHERE id = 3")
             self.assertEqual(select(owner, '2026-10-14', 1), [4])
+            cursor.execute("UPDATE pos_order_line SET wgs_application_state = 'applied' WHERE id = 4")
+            cursor.execute("UPDATE pos_order_line SET wgs_activation_retry_at = '2026-10-14 11:00:00' WHERE id = 1")
+            # Untouched contracts progress before an old failure is retried.
+            self.assertEqual(select(owner, '2026-10-14', 1), [7])
