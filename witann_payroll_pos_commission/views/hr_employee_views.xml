@@ -13,7 +13,8 @@
                         <field name="witann_pos_commission_rate"/>
                     </group>
                     <p>1% mensual equivale a 0.5% en cada quincena sobre las ventas sin impuestos del mes anterior.
-                       Un porcentaje de 0 desactiva la comisión. Las ventas se identifican por el usuario vinculado al empleado.</p>
+                       Un porcentaje de 0 desactiva la comisión. Las ventas se identifican por el cajero del ticket;
+                       si no hay cajero, se utiliza el usuario vinculado al empleado.</p>
                 </page>
             </xpath>
         </field>

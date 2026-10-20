@@ -1,15 +1,18 @@
 # Comisión POS en nómina mexicana
 
 Addon para Odoo 19 y **Nómina mexicana nativa con CFDI**. Depende de
-`point_of_sale` y `l10n_mx_hr_payroll_account_edi`; no depende de los módulos de
+`pos_hr` y `l10n_mx_hr_payroll_account_edi`; no depende de los módulos de
 suscripciones ni de `witann_mx_payroll`.
 
 ## Uso
 
 1. Instalar **Witann: comisión POS en nómina**.
-2. En Empleados, vincular el usuario que registra las ventas en POS. Debe ser
-   un usuario interno activo, con permisos de Punto de Venta y acceso a la
-   compañía del empleado.
+2. El empleado debe tener acceso como cajero en un POS activo de su compañía,
+   con **Iniciar sesión como empleado** habilitado; se respetan las listas
+   nativas de permisos mínimos, básicos y avanzados, incluido el modo de acceso
+   para todos los empleados. También es elegible con un usuario interno activo
+   vinculado, permisos de Punto de Venta y acceso a su compañía.
+   No necesita un usuario de Odoo propio si accede como cajero.
 3. Un responsable de Nómina configura **Comisión POS → Comisión mensual POS (%)**.
    La pestaña solo aparece para empleados elegibles. El valor inicial es **0**:
    no se habilitan comisiones para toda la plantilla durante la instalación.
@@ -23,9 +26,11 @@ Con 2% mensual, serían $1,000 por quincena. Con 0%, no se genera entrada ni ing
 
 ## Criterios del cálculo
 
-- Vendedor: `pos.order.user_id`, relacionado con `hr.employee.user_id`. No utiliza
-  el cajero por PIN de `pos_hr` ni un vendedor de Ventas. No deben compartirse
-  usuarios POS entre vendedores que comisionan.
+- Vendedor: el cajero de `pos.order.employee_id` tiene prioridad. Solo en tickets
+  sin cajero se utiliza `pos.order.user_id`, relacionado con `hr.employee.user_id`.
+  Así, varias cajeras pueden compartir sesión sin que sus ventas se atribuyan
+  al usuario que la abrió. Los tickets históricos sin cajero no se asignan
+  automáticamente a empleados sin usuario: no contienen esa identificación.
 - Mes calendario anterior al periodo del recibo; nunca relativo al día en que
   se pulsa Calcular. Se respeta la zona horaria del calendario de la compañía
   (respaldo `America/Mexico_City`), con inicio incluido y fin excluido.
@@ -33,7 +38,7 @@ Con 2% mensual, serían $1,000 por quincena. Con 0%, no se genera entrada ni ing
   sin contar por separado sus facturas; se excluyen borradores y cancelados.
 - Base: total menos impuestos de cada pedido, que ya incorpora descuentos y el
   signo de las devoluciones. Las devoluciones se restan en el mes de su registro
-  y al usuario POS que las registra. Una base negativa no produce una deducción
+  y al cajero o usuario POS que las registra. Una base negativa no produce una deducción
   salarial ni se arrastra a otro mes.
 - Si la moneda del ticket difiere de la compañía, se utiliza el tipo de cambio
   histórico almacenado en el pedido. Se guarda evidencia del importe y cambio.
@@ -80,7 +85,7 @@ no se admite. Con porcentaje cero, las comisiones manuales siguen funcionando.
   Aguinaldo, extraordinarios, finiquitos, estructuras copiadas y periodos parciales
   no incorporan automáticamente esta percepción.
 - Nómina puede calcular sin permisos de POS: la lectura elevada de tickets está
-  limitada al usuario, compañía autorizada y mes. No se otorga acceso general al POS.
+  limitada al vendedor, compañía autorizada y mes. No se otorga acceso general al POS.
 
 ## Validación
 
@@ -117,3 +122,15 @@ pruebas locales; este desarrollo no despliega ni modifica su base de datos.
 - Sintaxis Python, vistas XML y archivos declarados en el manifiesto correctos.
 - Pendiente de instalar y validar en el staging de Marlee con su revisión de Odoo,
   configuración fiscal, cuentas y flujo de timbrado. No se ha desplegado.
+
+### Corrección de cajeros — 20 de octubre de 2026
+
+- Versión `19.0.1.1.0`: reconoce acceso nativo como empleado sin exigir un usuario
+  de Odoo vinculado. La configuración de POS invalida la elegibilidad al cambiar.
+- Los tickets con cajero se atribuyen exclusivamente a ese empleado; los tickets
+  sin cajero conservan la atribución por usuario.
+- **8 pruebas independientes y 24 pruebas integradas aprobadas**, sin fallos,
+  incluida actualización del módulo y regresión del XML CFDI nativo.
+- Casos añadidos: dos cajeras sin usuario compartiendo sesión, prioridad del
+  cajero sobre el usuario, los tres niveles de permisos, revocación de acceso,
+  POS deshabilitado/archivado y aislamiento por compañía.

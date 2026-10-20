@@ -48,17 +48,18 @@ class TestPosPayrollCommission(TestMxEdiCommon):
         cls.config = cls.env['pos.config'].create({'name': 'POS comisiones', 'company_id': cls.company.id})
         cls.session = cls.env['pos.session'].create({'config_id': cls.config.id, 'user_id': cls.seller.id})
 
-    def order(self, base=100000, tax=16000, when='2026-09-10 12:00:00', user=None, state='paid'):
+    def order(self, base=100000, tax=16000, when='2026-09-10 12:00:00', user=None, state='paid', employee=None):
         return self.env['pos.order'].create({
             'session_id': self.session.id, 'company_id': self.company.id,
             'user_id': (user or self.seller).id, 'date_order': when,
+            'employee_id': employee.id if employee else False,
             'amount_total': base + tax, 'amount_tax': tax,
             'amount_paid': base + tax, 'amount_return': 0, 'state': state,
         })
 
-    def slip(self, first='2026-10-01', last='2026-10-15'):
+    def slip(self, first='2026-10-01', last='2026-10-15', employee=None):
         return self.env['hr.payslip'].create({
-            'name': 'Comisión de prueba', 'employee_id': self.employee.id,
+            'name': 'Comisión de prueba', 'employee_id': (employee or self.employee).id,
             'struct_id': self.structure.id, 'date_from': first, 'date_to': last,
         })
 
@@ -159,6 +160,87 @@ class TestPosPayrollCommission(TestMxEdiCommon):
         for value in (-1, 100.01):
             with self.subTest(value=value), self.assertRaises(ValidationError), self.cr.savepoint():
                 self.employee.witann_pos_commission_rate = value
+
+    def test_cashiers_without_users_share_session_but_not_sales(self):
+        self.employee.write({'witann_pos_commission_rate': 0, 'user_id': False})
+        second = self.env['hr.employee'].create({
+            'name': 'Segunda cajera', 'company_id': self.company.id,
+            'date_version': '2024-01-01', 'contract_date_start': '2024-01-01',
+            'wage': 30000, 'schedule_pay': 'bi-weekly',
+            'structure_type_id': self.employee.structure_type_id.id,
+        })
+        self.assertFalse(self.employee.witann_pos_commission_eligible)
+        self.config.write({
+            'module_pos_hr': True,
+            'basic_employee_ids': [Command.set((self.employee | second).ids)],
+        })
+        self.assertTrue(self.employee.witann_pos_commission_eligible)
+        self.assertTrue(second.witann_pos_commission_eligible)
+        self.employee.witann_pos_commission_rate = 1
+        second.witann_pos_commission_rate = 2
+        self.order(employee=self.employee)
+        self.order(-10000, -1600, employee=self.employee)
+        self.order(50000, 8000, employee=second)
+        self.order()  # Session user's unassigned ticket belongs to neither cashier.
+        officer = new_test_user(
+            self.env, login='cashier_payroll_officer',
+            groups='base.group_user,hr_payroll.group_hr_payroll_user',
+            company_id=self.company.id, company_ids=[Command.set(self.company.ids)],
+        )
+        first_slip = self.slip().with_user(officer)
+        second_slip = self.slip(employee=second).with_user(officer)
+        (first_slip | second_slip).compute_sheet()
+        self.assertEqual(first_slip.witann_pos_base, 90000)
+        self.assertEqual(self.line(first_slip).total, 450)
+        self.assertEqual(second_slip.witann_pos_base, 50000)
+        self.assertEqual(self.line(second_slip).total, 500)
+        self.assertFalse(first_slip.witann_pos_user_id)
+
+    def test_cashier_takes_precedence_over_session_user(self):
+        other = self.env['hr.employee'].create({'name': 'Otra cajera', 'company_id': self.company.id})
+        self.order(1000, 160)  # Legacy user-attributed sale.
+        self.order(2000, 320, employee=self.employee, user=self.other_seller)
+        self.order(5000, 800, employee=other)  # Our user opened POS, another cashier sold.
+        slip = self.slip()
+        slip.compute_sheet()
+        self.assertEqual(slip.witann_pos_base, 3000)
+        self.assertEqual(slip.witann_pos_order_count, 2)
+
+    def test_cashier_access_levels_and_revocation(self):
+        cashier = self.env['hr.employee'].create({'name': 'Cajera', 'company_id': self.company.id})
+        excluded = self.env['hr.employee'].create({'name': 'Sin acceso', 'company_id': self.company.id})
+        self.config.write({'module_pos_hr': True, 'basic_employee_ids': [Command.set(self.employee.ids)]})
+        self.assertFalse(cashier.witann_pos_commission_eligible)
+        for field in ('minimal_employee_ids', 'basic_employee_ids', 'advanced_employee_ids'):
+            with self.subTest(field=field):
+                self.config.write({field: [Command.link(cashier.id)]})
+                self.assertTrue(cashier.witann_pos_commission_eligible)
+                self.assertFalse(excluded.witann_pos_commission_eligible)
+                self.config.write({field: [Command.unlink(cashier.id)]})
+                self.assertFalse(cashier.witann_pos_commission_eligible)
+
+    def test_open_cashier_access_requires_active_enabled_pos(self):
+        cashier = self.env['hr.employee'].create({'name': 'Cajera', 'company_id': self.company.id})
+        self.config.write({'module_pos_hr': True})
+        self.assertTrue(cashier.witann_pos_commission_eligible)
+        self.config.module_pos_hr = False
+        self.assertFalse(cashier.witann_pos_commission_eligible)
+        self.config.module_pos_hr = True
+        self.session.state = 'closed'
+        self.config.active = False
+        self.assertFalse(cashier.witann_pos_commission_eligible)
+        self.config.active = True
+        self.assertTrue(cashier.witann_pos_commission_eligible)
+        cashier.active = False
+        self.assertFalse(cashier.witann_pos_commission_eligible)
+
+    def test_cashier_access_does_not_cross_companies(self):
+        other_company = self.setup_other_company(name='Otra compañía cajeros')['company']
+        cashier = self.env['hr.employee'].sudo().create({
+            'name': 'Cajera otra compañía', 'company_id': other_company.id,
+        })
+        self.config.write({'module_pos_hr': True})
+        self.assertFalse(cashier.witann_pos_commission_eligible)
 
     def test_revoked_pos_access_stops_commission(self):
         self.order()
