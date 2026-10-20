@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="hr_payslip_form_pos_commission" model="ir.ui.view">
+        <field name="name">hr.payslip.form.pos.commission</field>
+        <field name="model">hr.payslip</field>
+        <field name="inherit_id" ref="hr_payroll.view_hr_payslip_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//notebook" position="inside">
+                <page name="witann_pos_commission" string="Comisión POS" invisible="not witann_pos_month">
+                    <group>
+                        <group>
+                            <field name="witann_pos_month"/>
+                            <field name="witann_pos_period"/>
+                            <field name="witann_pos_user_id"/>
+                            <field name="witann_pos_timezone"/>
+                        </group>
+                        <group>
+                            <field name="witann_pos_base"/>
+                            <field name="witann_pos_rate"/>
+                            <field name="witann_pos_amount"/>
+                            <field name="witann_pos_order_count"/>
+                        </group>
+                    </group>
+                    <field name="witann_pos_detail" nolabel="1" groups="hr_payroll.group_hr_payroll_user"/>
+                </page>
+            </xpath>
+        </field>
+    </record>
+</odoo>

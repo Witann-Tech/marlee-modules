@@ -1,0 +1,119 @@
+# Comisión POS en nómina mexicana
+
+Addon para Odoo 19 y **Nómina mexicana nativa con CFDI**. Depende de
+`point_of_sale` y `l10n_mx_hr_payroll_account_edi`; no depende de los módulos de
+suscripciones ni de `witann_mx_payroll`.
+
+## Uso
+
+1. Instalar **Witann: comisión POS en nómina**.
+2. En Empleados, vincular el usuario que registra las ventas en POS. Debe ser
+   un usuario interno activo, con permisos de Punto de Venta y acceso a la
+   compañía del empleado.
+3. Un responsable de Nómina configura **Comisión POS → Comisión mensual POS (%)**.
+   La pestaña solo aparece para empleados elegibles. El valor inicial es **0**:
+   no se habilitan comisiones para toda la plantilla durante la instalación.
+4. Calcular la nómina ordinaria mexicana con frecuencia **quincenal** y periodos
+   del 1 al 15 o del 16 al último día del mes. Aparece la percepción
+   **Comisión por venta** y una pestaña con el detalle del cálculo.
+
+Ejemplo: ventas de septiembre de $116,000 con $16,000 de IVA; porcentaje mensual
+del empleado de 1%. La base es $100,000 y se pagan $500 en cada quincena de octubre.
+Con 2% mensual, serían $1,000 por quincena. Con 0%, no se genera entrada ni ingreso.
+
+## Criterios del cálculo
+
+- Vendedor: `pos.order.user_id`, relacionado con `hr.employee.user_id`. No utiliza
+  el cajero por PIN de `pos_hr` ni un vendedor de Ventas. No deben compartirse
+  usuarios POS entre vendedores que comisionan.
+- Mes calendario anterior al periodo del recibo; nunca relativo al día en que
+  se pulsa Calcular. Se respeta la zona horaria del calendario de la compañía
+  (respaldo `America/Mexico_City`), con inicio incluido y fin excluido.
+- Pedidos pagados/contabilizados de la misma compañía. Se incluyen los facturados
+  sin contar por separado sus facturas; se excluyen borradores y cancelados.
+- Base: total menos impuestos de cada pedido, que ya incorpora descuentos y el
+  signo de las devoluciones. Las devoluciones se restan en el mes de su registro
+  y al usuario POS que las registra. Una base negativa no produce una deducción
+  salarial ni se arrastra a otro mes.
+- Si la moneda del ticket difiere de la compañía, se utiliza el tipo de cambio
+  histórico almacenado en el pedido. Se guarda evidencia del importe y cambio.
+- El porcentaje es mensual. Se redondea el derecho mensual a la moneda del recibo
+  y se divide entre dos; el ajuste de un centavo, si existe, se hace en la segunda
+  quincena para que ambas sumen exactamente el derecho mensual.
+- Los borradores se actualizan al recalcular. Al validar una quincena, su base,
+  tasa y tickets se conservan también para la otra quincena de ese mes. Cambiar
+  una tasa positiva después afecta al siguiente mes no cerrado. Poner 0 o quitar
+  el acceso POS desactiva las siguientes comisiones, sin modificar pagos anteriores.
+- La validación vuelve a calcular las comisiones de borradores. Si se mantiene
+  un borrador de la segunda quincena mientras se valida la primera, la segunda
+  adoptará la base cerrada al recalcular o validar.
+
+## Nómina y CFDI
+
+Se utiliza la entrada y regla salarial nativas `COMMISSIONS`, con su categoría,
+cuentas contables, integración salarial y concepto CFDI `028`. Se conserva el
+cálculo nativo de impuestos, cuotas, bruto y neto. El importe de la comisión es
+una percepción antes de las deducciones que determine Nómina.
+
+La entrada y la línea del recibo se llaman **Comisión por venta**. Para este ingreso,
+el módulo adapta también la descripción en los valores del CFDI; no cambia las
+claves ni genera o timbra documentos por su cuenta.
+
+Si hay entradas manuales `COMMISSIONS` en un recibo que recibirá comisión POS,
+se pide conciliarlas antes de continuar, sin borrarlas ni sumarlas silenciosamente.
+El generador CFDI nativo de la revisión usada agrupa por regla salarial y puede
+omitir importes si hay varias líneas con la misma regla; por eso esta combinación
+no se admite. Con porcentaje cero, las comisiones manuales siguen funcionando.
+
+## Controles
+
+- Un índice único en PostgreSQL impide dos comisiones automáticas activas del
+  mismo empleado, compañía y quincena, incluyendo cálculos concurrentes.
+- Las entradas automáticas y la evidencia no pueden editarse mediante formulario
+  ni RPC. Se regeneran desde el cálculo privado del módulo.
+- Los recibos confirmados conservan sus datos. Para corregirlos se utiliza el
+  flujo nativo; un CFDI firmado debe cancelarse antes de regresar a borrador.
+- Una sustitución requiere cancelar el recibo anterior para liberar la quincena.
+  Las devoluciones nativas conservan sus líneas invertidas y no generan otra
+  comisión. No se permite recalcular una devolución de un recibo con comisión POS.
+- Solo se calculan comisiones para la estructura ordinaria mexicana nativa.
+  Aguinaldo, extraordinarios, finiquitos, estructuras copiadas y periodos parciales
+  no incorporan automáticamente esta percepción.
+- Nómina puede calcular sin permisos de POS: la lectura elevada de tickets está
+  limitada al usuario, compañía autorizada y mes. No se otorga acceso general al POS.
+
+## Validación
+
+Pruebas aritméticas sin Odoo, desde la raíz del repositorio:
+
+```sh
+python3 -m unittest discover -s tests/standalone -p test_pos_payroll_commission.py -v
+```
+
+Pruebas integradas, en una base **desechable** con las fuentes de Odoo 19 Community
+y Enterprise autorizadas y los addons de este repositorio:
+
+```sh
+odoo-bin -d BASE_DESECHABLE -i witann_payroll_pos_commission \
+  --test-enable --test-tags /witann_payroll_pos_commission --stop-after-init
+```
+
+La configuración fiscal, cuentas y timbrado siguen a cargo de la localización
+nativa. La instalación y la validación en Marlee se realizan separadamente de las
+pruebas locales; este desarrollo no despliega ni modifica su base de datos.
+
+### Resultado local — 19 de octubre de 2026
+
+- **8 pruebas independientes y 19 pruebas integradas aprobadas**, sin fallos.
+- Instalación inicial y actualización del addon verificadas en Odoo 19 local,
+  PostgreSQL 16 y localización mexicana Enterprise, sobre datos ficticios.
+- Se comprobó el XML CFDI renderizado por la plantilla nativa: percepción `028`,
+  descripción «Comisión por venta» e importe gravado de $500 en ambas quincenas.
+  Se usaron certificados de prueba nativos; **no se envió al PAC ni al SAT**.
+- Se verificaron bruto/neto, usuario POS, exclusión de otras compañías, devoluciones,
+  periodos, permisos, desactivación, recálculo, conservación del mes validado,
+  entradas manuales, reversión nativa e índice SQL contra duplicados (incluidos
+  recibos cuyo campo `credit_note` es NULL).
+- Sintaxis Python, vistas XML y archivos declarados en el manifiesto correctos.
+- Pendiente de instalar y validar en el staging de Marlee con su revisión de Odoo,
+  configuración fiscal, cuentas y flujo de timbrado. No se ha desplegado.
