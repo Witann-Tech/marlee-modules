@@ -624,6 +624,25 @@ class PosOrder(models.Model):
         source_subscription_id=False,
     ):
         self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para validar productos de suscripción desde Punto de Venta.'))
+        return self._wgs_validate_subscription_product_eligibility_for_pos(
+            partner_id, product_id, flow, source_subscription_id,
+        )
+
+    def _wgs_validate_subscription_product_eligibility_for_pos(
+        self, partner_id, product_id, flow='new', source_subscription_id=False, *, applying_line=False,
+    ):
+        """Share preflight rules; only checkout may identify its own persisted line.
+
+        The exclusion is a server record, never a browser flag or context key.
+        Other lines in the same ticket and all historical uses remain visible.
+        """
+        if applying_line:
+            self.ensure_one()
+            applying_line.ensure_one()
+            if (applying_line.order_id != self or self.partner_id.id != partner_id
+                    or applying_line.product_id.id != product_id or applying_line.qty <= 0
+                    or self.state not in ('paid', 'done', 'invoiced')):
+                raise UserError(_('La validacion no corresponde a la linea de membresia pagada.'))
 
         partner = self._wgs_browse_partner_for_pos(partner_id)
         if not partner:
@@ -679,7 +698,7 @@ class PosOrder(models.Model):
                 ),
             }
 
-        if free_trial_day and self._wgs_has_free_trial_usage_for_curp(curp):
+        if free_trial_day and self._wgs_has_free_trial_usage_for_curp(curp, excluding_line=applying_line):
             return {
                 'ok': False,
                 'error_code': 'free_trial_already_used',
@@ -843,7 +862,7 @@ class PosOrder(models.Model):
         return Employee._wgs_find_by_authorization_pin(pin)
 
     @api.model
-    def _wgs_has_free_trial_usage_for_curp(self, curp):
+    def _wgs_has_free_trial_usage_for_curp(self, curp, *, excluding_line=False):
         sale_order_model = self.env['sale.order'].sudo()
         partner_model = self._wgs_partner_model_for_pos()
         normalized = sale_order_model._wgs_normalize_partner_curp_for_pos(curp)
@@ -858,16 +877,24 @@ class PosOrder(models.Model):
             ('order_id.partner_id.%s' % curp_field, '=', normalized),
             ('product_id.product_tmpl_id.wgs_free_trial_day', '=', True),
         ]
-        if sale_line_model.search_count(sale_domain):
+        if sale_line_model.search(sale_domain, limit=1):
             return True
 
         pos_line_model = self.env['pos.order.line'].sudo()
-        pos_domain = [
+        legacy_domain = [
             ('order_id.partner_id.%s' % curp_field, '=', normalized),
             ('product_id.product_tmpl_id.wgs_free_trial_day', '=', True),
+            ('qty', '>', 0),
             ('order_id.state', 'not in', ('draft', 'cancel')),
         ]
-        return bool(pos_line_model.search_count(pos_domain))
+        # A captured use remains evidence even after refund, partner edits or
+        # catalog changes. Legacy lines still resolve through their customer.
+        pos_domain = fields.Domain.OR([
+            [('wgs_free_trial_curp', '=', normalized)], legacy_domain,
+        ])
+        if excluding_line:
+            pos_domain = fields.Domain.AND([pos_domain, [('id', '!=', excluding_line.id)]])
+        return bool(pos_line_model.search(pos_domain, limit=1))
 
     @api.model
     def _wgs_product_has_single_day_term(self, product):
@@ -1350,6 +1377,7 @@ class PosOrder(models.Model):
                 raise UserError(_('Selecciona el paquete para la reinscripción.'))
             if not partner and 'partner_id' in source_order._fields:
                 partner = source_order.partner_id
+            self._wgs_reenrollment_requires_new_contract(source_order, partner)
 
         return {
             'flow': normalized_flow,
@@ -2716,6 +2744,24 @@ class PosOrder(models.Model):
         )
         return source_order
 
+    def _wgs_reenrollment_requires_new_contract(self, source, buyer):
+        """A former participant may buy independently, never inherit ownership."""
+        source.ensure_one()
+        buyer.ensure_one()
+        if buyer == source.partner_id:
+            return False
+        if buyer not in source.participant_ids:
+            raise UserError(_('El cliente no es titular ni participante de la suscripcion origen.'))
+        candidates = self._wgs_find_subscription_history_for_partner(buyer, company=source.company_id) - source
+        for candidate in candidates:
+            policy = candidate._wgs_subscription_operation_policy_for_pos()
+            if policy['can_renew'] or policy['state_key'] == 'future':
+                raise UserError(_(
+                    'El cliente ya tiene otra membresia vigente o programada (%s). '
+                    'Opera sobre esa membresia; no repitas la reinscripcion del contrato anterior.'
+                ) % candidate.display_name)
+        return True
+
     def _wgs_process_subscription_reenroll_line(self, line):
         self.ensure_one()
 
@@ -2736,16 +2782,10 @@ class PosOrder(models.Model):
             if hasattr(source_order, '_wgs_get_access_related_partner_ids')
             else set(source_order.participant_ids.ids if 'participant_ids' in source_order._fields else [])
         )
-        if holder_partner and source_order.partner_id != holder_partner and 'partner_id' in source_order._fields:
-            previous_partner = source_order.partner_id
-            source_order.write({'partner_id': holder_partner.id})
-            _logger.info(
-                'WGS POS: reenroll reassigned subscription %s holder from %s to %s via POS %s',
-                source_order.name,
-                previous_partner.display_name if previous_partner else False,
-                holder_partner.display_name,
-                self.pos_reference or self.name,
-            )
+        if self._wgs_reenrollment_requires_new_contract(source_order, holder_partner):
+            # Reuse native creation and the purchased quote, not the former
+            # holder's identity, lines, payments or domiciliation installments.
+            return self._wgs_create_subscription_sale_order_from_line(line)
         participant_ids = self._wgs_resolve_subscription_participant_ids_for_pos_line(
             line=line,
             holder_partner=holder_partner,
@@ -3566,6 +3606,14 @@ class PosOrder(models.Model):
             'company_id': self.company_id.id,
             'order_line': [Command.create(line_values)],
         }
+        if line.wgs_subscription_flow == 'reenroll':
+            source = line.wgs_subscription_source_id
+            sale_order_values.update({
+                'wgs_reenrollment_source_id': source.id,
+                'origin': _('%(pos)s | Reinscripcion de participante de %(source)s') % {
+                    'pos': self.pos_reference or self.name, 'source': source.name,
+                },
+            })
         if 'date_order' in sale_order_fields:
             sale_order_values['date_order'] = self._wgs_convert_date_for_field_value(
                 contract_date,
@@ -4372,7 +4420,7 @@ class PosOrder(models.Model):
                 continue
             if getattr(field, 'comodel_name', '') != 'sale.order':
                 continue
-            if field_name == 'wgs_sale_order_id':
+            if field_name in ('wgs_sale_order_id', 'wgs_subscription_source_id'):
                 continue
             generic_field_names.append(field_name)
 
@@ -4382,7 +4430,12 @@ class PosOrder(models.Model):
         if not candidates:
             return pos_line_model
 
-        return candidates.exists()
+        # The source is lineage, not the recipient of a later participant's
+        # payment. An explicit application target takes precedence over any
+        # generic native relation when selecting historical/refundable sales.
+        return candidates.exists().filtered(
+            lambda line: not line.wgs_sale_order_id or line.wgs_sale_order_id == source_order
+        )
 
     def _wgs_get_pos_line_total_amount(self, line, include_taxes=False):
         line.ensure_one()

@@ -5,8 +5,10 @@ from datetime import datetime
 from unittest.mock import patch
 from uuid import uuid4
 
+from psycopg2 import IntegrityError
+
 from odoo import Command, fields
-from odoo.exceptions import UserError
+from odoo.exceptions import UserError, ValidationError
 from odoo.tests import tagged
 from odoo.addons.point_of_sale.tests.common import CommonPosTest
 
@@ -139,6 +141,122 @@ class TestSubscriptionOperations(CommonPosTest):
         self.assertEqual(order.partner_id, self.holder)
         self.assertEqual(subscription.partner_id, self.holder)
         self.assertEqual(set(subscription.participant_ids.ids), set((self.holder | self.member).ids))
+
+    def test_first_free_trial_applies_once_and_replay_keeps_its_claim(self):
+        curp_field = self.env['sale.order']._wgs_get_partner_curp_field_for_pos()
+        if not curp_field:
+            self.skipTest('The production CURP field is not installed in this test database.')
+        self.holder.write({curp_field: 'QATR010101HASBRS01'})
+        trial = self._product('First free trial', self.day, 0)
+        trial.wgs_free_trial_day = True
+        order, subscription = self._paid(trial, self.day)
+        self.assertEqual(order.lines.wgs_application_state, 'applied')
+        self.assertEqual(order.lines.wgs_free_trial_curp, 'QATR010101HASBRS01')
+        self.assertEqual(subscription.start_date, subscription.end_date)
+        self.assertEqual(subscription.partner_id, self.holder)
+        receipt = order.lines.wgs_application_receipt
+        order._wgs_sync_subscription_sales()
+        self.assertEqual(order.lines.wgs_application_receipt, receipt)
+        self.assertEqual(order.lines.wgs_free_trial_curp, 'QATR010101HASBRS01')
+        self.assertFalse(self.Pos.wgs_validate_subscription_product_eligibility_for_pos(
+            self.holder.id, trial.id,
+        )['ok'])
+        # Neither a refund nor customer/catalog edits erase the captured use.
+        refund, _unused = self.create_backend_pos_order({
+            'order_data': {'partner_id': self.holder.id, 'state': 'paid'},
+            'line_data': [{
+                'product_id': trial.id, 'qty': -1, 'price_unit': 0,
+                'refunded_orderline_id': order.lines.id,
+            }],
+        })
+        refund._wgs_sync_subscription_sales()
+        self.holder.write({curp_field: 'QATR020202HASBRS02'})
+        trial.wgs_free_trial_day = False
+        self.assertTrue(self.Pos._wgs_has_free_trial_usage_for_curp('QATR010101HASBRS01'))
+
+    def test_trial_claim_is_unique_across_distinct_customers_and_rolls_back(self):
+        first, _unused = self.create_backend_pos_order({
+            'order_data': {'partner_id': self.holder.id},
+            'line_data': [{'product_id': self.daily.id, 'qty': 1, 'price_unit': 0}],
+        })
+        second, _unused = self.create_backend_pos_order({
+            'order_data': {'partner_id': self.member.id},
+            'line_data': [{'product_id': self.daily.id, 'qty': 1, 'price_unit': 0}],
+        })
+        first.lines.write({'wgs_free_trial_curp': 'QATR010101HASBRS01'})
+        first.lines.flush_recordset(['wgs_free_trial_curp'])
+        with self.assertRaises((IntegrityError, ValidationError)), self.env.cr.savepoint():
+            second.lines.write({'wgs_free_trial_curp': 'QATR010101HASBRS01'})
+            second.lines.flush_recordset(['wgs_free_trial_curp'])
+        self.assertFalse(second.lines.wgs_free_trial_curp)
+        with self.assertRaisesRegex(UserError, 'abort claim'), self.env.cr.savepoint():
+            second.lines.write({'wgs_free_trial_curp': 'QATR020202HASBRS02'})
+            second.lines.flush_recordset(['wgs_free_trial_curp'])
+            raise UserError('abort claim')
+        self.assertFalse(second.lines.wgs_free_trial_curp)
+        self.assertFalse(self.Pos._wgs_has_free_trial_usage_for_curp('QATR020202HASBRS02'))
+
+    def test_participant_reenrollment_preserves_source_history_and_refund_isolation(self):
+        original, source = self._paid(self.pair, self.month, participants=(self.holder | self.member).ids)
+        source.subscription_state = '6_churn'
+        old_holder = self.holder
+        before = self.Pos._wgs_source_revision(source)
+        payment_fields = ['amount', 'pos_order_id', 'payment_method_id']
+        old_payments = original.payment_ids.read(payment_fields)
+        self.holder = self.member
+        payment, target = self._paid(self.solo, self.month, 'reenroll', source)
+        self.assertNotEqual(target, source)
+        self.assertEqual(target.partner_id, self.member)
+        self.assertEqual(target.participant_ids, self.member)
+        self.assertEqual(target.wgs_reenrollment_source_id, source)
+        self.assertEqual(payment.lines.wgs_subscription_source_id, source)
+        self.assertEqual(source.partner_id, old_holder)
+        self.assertEqual(self.Pos._wgs_source_revision(source), before)
+        self.assertEqual(original.payment_ids.read(payment_fields), old_payments)
+        self.assertEqual(original.lines.wgs_sale_order_id, source)
+        self.assertNotIn(payment.lines, payment._wgs_get_pos_lines_linked_to_subscription(source))
+        self.assertTrue(self.env['sale.order']._wgs_partner_has_subscription_history_for_pos(old_holder))
+        self.assertTrue(self.Pos._wgs_get_any_subscription_history_for_partner(old_holder))
+        receipt = payment.lines.wgs_application_receipt
+        payment._wgs_sync_subscription_sales()
+        self.assertEqual(payment.lines.wgs_application_receipt, receipt)
+        self.assertEqual(self.Pos._wgs_source_revision(source), before)
+        with self.assertRaisesRegex(UserError, 'otra membresia vigente o programada'):
+            self._quote(self.solo, self.month, 'reenroll', source)
+        _renewal, result = self._paid(self.solo, self.month, 'renewal', target)
+        self.assertEqual(result, target)
+        self.assertEqual(self.Pos._wgs_source_revision(source), before)
+        refund, _unused = self.create_backend_pos_order({
+            'order_data': {'partner_id': self.member.id, 'state': 'paid'},
+            'line_data': [{
+                'product_id': self.solo.id, 'qty': -1, 'price_unit': payment.lines.price_unit,
+                'refunded_orderline_id': payment.lines.id,
+            }],
+        })
+        refund._wgs_sync_subscription_sales()
+        self.assertEqual(refund.lines.wgs_sale_order_id, target)
+        self.assertTrue(payment._wgs_is_subscription_order_closed_for_reenroll(target))
+        self.assertEqual(self.Pos._wgs_source_revision(source), before)
+
+    def test_participant_reenrollment_to_domiciliation_creates_own_installments(self):
+        _original, source = self._paid(self.pair, self.month, participants=(self.holder | self.member).ids)
+        source.subscription_state = '6_churn'
+        before = self.Pos._wgs_source_revision(source)
+        self.month.wgs_domiciliation_enabled = True
+        self.holder = self.member
+        _payment, target = self._paid(self.solo, self.month, 'reenroll', source, months=[1, 12])
+        self.assertNotEqual(target, source)
+        self.assertEqual(target.wgs_domiciliation_contract_id.partner_id, self.member)
+        self.assertEqual(target.wgs_domiciliation_contract_id.subscription_id, target)
+        self.assertFalse(source.wgs_domiciliation_contract_id)
+        self.assertEqual(self.Pos._wgs_source_revision(source), before)
+
+    def test_unrelated_buyer_cannot_reenroll_from_someone_elses_contract(self):
+        _original, source = self._paid(self.solo, self.month)
+        source.subscription_state = '6_churn'
+        self.holder = self.member
+        with self.assertRaisesRegex(UserError, 'titular ni participante'):
+            self._quote(self.solo, self.month, 'reenroll', source)
 
     def test_payment_preflight_accepts_identical_retry_after_lost_response(self):
         order, subscription = self._paid(self.solo, self.month)

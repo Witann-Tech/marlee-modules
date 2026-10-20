@@ -17,6 +17,11 @@ _logger = logging.getLogger(__name__)
 class SaleOrder(models.Model):
     _inherit = 'sale.order'
 
+    wgs_reenrollment_source_id = fields.Many2one(
+        'sale.order', string='Origen de reinscripcion de participante',
+        copy=False, readonly=True, index=True, check_company=True, ondelete='restrict',
+        help='Contrato historico que conserva su titular y sus pagos. No es una sustitucion por upsale.',
+    )
     wgs_monthly_cutoff_day = fields.Integer(
         string='Dia de corte mensual', default=0, copy=False, readonly=True,
         help='Corte de la ultima compra aplicada. Cero conserva el calendario anterior o no mensual.',

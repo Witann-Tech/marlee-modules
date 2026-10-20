@@ -2,9 +2,333 @@
 
 Registro inicial: 2026-09-28. Rama de trabajo: `staging`.
 
+## Correccion de H1 y H2: 2026-10-20
+
+**Candidato en staging, pendiente build/upgrade y repeticion por navegador.**
+No aprobado para main. POS sube a `19.0.1.6.6`; base se conserva en
+`19.0.1.1.59`. El QA de `34db870` documentado abajo es evidencia del build
+anterior, no una aprobacion de estas correcciones.
+
+### Limites transaccionales y de identidad
+
+- H1: la elegibilidad publica y la aplicacion comparten la misma regla. Solo
+  el metodo privado de checkout recibe el registro servidor de la linea
+  pagada que se aplica; verifica orden, cliente, producto, cantidad positiva
+  y estado pagado. Excluye exclusivamente esa linea, nunca todo el ticket.
+  No se expone una excepcion mediante RPC, payload del navegador o contexto.
+- Una CURP de prueba usada se captura en `pos.order.line.wgs_free_trial_curp`,
+  con `UNIQUE` PostgreSQL, en la misma transaccion del pago y la membresia.
+  La restriccion arbitra usos concurrentes incluso con contactos diferentes.
+  Un fallo comercial revierte la captura; reembolso, cambios posteriores de
+  CURP o catalogo y replay no liberan el uso. Se mantienen las consultas de
+  evidencia legacy, con `search(limit=1)` en lugar de contar todos los usos.
+  Antes de cobrar se rechazan dos lineas/unidades de prueba en un ticket;
+  el backend repite la validacion al aplicar.
+- H2: si compra el titular, se conserva la ruta de reinscripcion existente.
+  Si compra un participante del origen cerrado, se crea una suscripcion
+  nativa independiente por la ruta compartida de creacion, usando la misma
+  cotizacion firmada, plan, precio recurrente y vigencia contratada. Se crea
+  un contrato domiciliado propio si corresponde, sin reciclar cuotas ajenas.
+- `sale.order.wgs_reenrollment_source_id` y el origen del recibo conservan la
+  procedencia del participante. No son una sustitucion por upsale. El origen
+  mantiene titular, participantes, producto, plan, fechas, estado y pagos.
+  Una postcondicion compara su revision tomada ANTES de aplicar: una
+  reasignacion accidental no puede desactivar la comprobacion cambiando el
+  propio titular que se usa para decidirla.
+- El destinatario aplicado (`wgs_sale_order_id`) manda al consultar pagos y
+  devoluciones; `wgs_subscription_source_id` solo representa procedencia.
+  Una nueva compra del participante no se agrega a los cobros reembolsables
+  del anterior titular ni un reembolso suyo cancela el contrato anterior.
+- Se rechaza un comprador ajeno al origen y una nueva reinscripcion desde
+  ese mismo origen si el participante ya compro otra membresia vigente o
+  futura. La version de fila del comprador, ya utilizada para altas, se usa
+  tambien para reinscripciones para forzar retry con snapshot fresco frente
+  a dos workers. Los reintentos aplicados conservan su recibo y no crean otro
+  contrato. No hay nuevos cursores, commits, threads ni colas externas.
+
+No se reparan ni reescriben automaticamente contratos historicos o fixtures
+del QA anterior. Se conservan sus evidencias. Sin cambios a main, importador
+bancario, reglas de calendario ni protocolo SpeedFace.
+
+### Verificacion local
+
+- **99 tests Python y 26 JavaScript aprobados**, incluidos 19 nuevos tests
+  aislados que ejecutan los metodos de produccion. No sustituyen el ORM.
+- **50 tests ORM comerciales preparados, no ejecutados**: cinco nuevos
+  escenarios integrados cubren primera prueba/replay/reembolso, unicidad y
+  rollback de captura, participante con renovacion y reembolso aislados,
+  domiciliacion propia y comprador ajeno. El caso CURP requiere el campo
+  configurado en produccion; se omite expresamente si no esta instalado en
+  la base desechable. Sigue faltando runner Enterprise/PostgreSQL desechable.
+- Logs: `/tmp/wgs-qa-20261020-h1-h2/python.log` y
+  `/tmp/wgs-qa-20261020-h1-h2/javascript.log`. `git diff --check` sin errores.
+
+### Repeticion por navegador pendiente de despliegue
+
+El usuario realiza el build y los upgrades. Se requiere actualizar
+`witann_group_subscriptions_pos` a `19.0.1.6.6` y recargar el POS conservando
+almacenamiento y pendientes. No repetir las ventas fallidas anteriores ni
+declarar aprobada la correccion probando sobre `19.0.1.6.5`.
+
+1. ED y SM: contacto QA nuevo con CURP ficticia unica, primera prueba gratis
+   pagada por cero, un solo dia y acceso; verificar recibo y suscripcion.
+2. Bloquear otro uso de la misma CURP, incluido despues de reembolso/cambio
+   del dato en contactos QA. Control: WELLHUB/TOTALPASS siguen renovables.
+3. Pareja QA vencida, reinscribir al participante en individual: cliente,
+   precio normal, plan, vigencia y acceso propios; suscripcion distinta.
+   Titular anterior conserva contrato, participantes y recibos historicos,
+   sin opcion de Nueva suscripcion. No modifica su vigencia.
+4. Recarga antes de cobrar, renovacion del nuevo titular y reembolso total:
+   sin traspaso del origen ni cobro repetido. Control de reinscripcion del
+   titular original por la ruta existente.
+5. No sustituir por UI las pruebas pendientes de dos transacciones realmente
+   concurrentes, rollback PostgreSQL o entrega fisica al SpeedFace aislado.
+
+## Repeticion por navegador del build 34db870: 2026-10-20
+
+**NO APROBADO para main.** Build y upgrades confirmados por el usuario y
+versiones verificadas en Aplicaciones: base `19.0.1.1.59`, POS `19.0.1.6.5`.
+Se recargo el POS conservando almacenamiento y tickets pendientes. Se probaron
+El Dorado (configuracion 3) y Santa Monica (configuracion 8), exclusivamente en
+`staging-portal.spinbike.mx`, con contactos sinteticos QA. No se modifico codigo
+funcional, catalogos, produccion, importador bancario ni protocolo SpeedFace.
+Se continuaron las pruebas independientes despues de encontrar fallos.
+
+### Resultado ejecutivo
+
+- **34 operaciones confirmadas: 32 ventas y dos devoluciones**. Las ventas
+  incluyen importes cero, descuentos autorizados y anticipos. No se cuentan
+  como exitosos los intentos gratuitos fallidos ni los borradores sin validar.
+- **Dos hallazgos de severidad alta**: primer uso de prueba gratis rechazado
+  en ambas sucursales; transferencia del contrato historico al reinscribir a
+  un participante como titular, dejando al titular anterior sin historial
+  visible y con opcion de Nueva suscripcion.
+- Los fallos del build anterior de diario, cotizacion S03615, recarga del
+  cliente, upsale mismo dia, centavo de IVA y cierre domiciliado explicito no
+  reaparecieron en los escenarios efectivamente ejecutados abajo.
+- **80 tests Python y 26 JavaScript repetidos: todos aprobados.** Estos tests
+  aislados NO detectaron los dos hallazgos de integracion observados. Logs:
+  `/tmp/wgs-qa-20261020/python-retest.log` y
+  `/tmp/wgs-qa-20261020/javascript-retest.log`.
+- **45 tests ORM NO ejecutados**, por falta de runner y base desechable,
+  confirmada previamente por el usuario. No se ejecutaron contra la base
+  operativa para sustituir ese requisito.
+- Anualidad nueva: tras autorizacion explicita del usuario se confirmo el
+  pago ficticio de $7,200 en staging. Recibo `263-3-000121`, S03629,
+  ANUALIDAD ED, 20/oct/2026-19/oct/2027 y acceso activo. Captura60.
+
+### Hallazgos altos
+
+**H1. La primera prueba gratuita se considera uso previo de si misma.**
+
+Reproducido con dos contactos nuevos e identificadores ficticios distintos:
+`QA WGS 20261020 SM Flujo` (inicio 20/sep) y
+`QA WGS 20261020 PruebaHoy` (inicio 20/oct). Alta y cotizacion admitidas,
+pero al validar aparece: "La CURP ... ya utilizo previamente el dia de prueba
+gratis. Solo se permite una vez en la vida." El segundo caso descarta que el
+fallo dependa de la retroactividad o de Santa Monica. WELLHUB/TOTALPASS de
+precio cero si se vendieron y renovaron correctamente.
+
+Cadena de codigo que explica la reproduccion:
+
+- `witann_group_subscriptions_pos/models/pos_order.py:1965`: el procesamiento
+  nativo precede a la aplicacion WGS en la misma transaccion.
+- `witann_group_subscriptions_pos/models/pos_order.py:1972` llama
+  `_wgs_sync_subscription_sales`.
+- `witann_group_subscriptions_pos/models/subscription_operation.py:393`
+  procesa ordenes ya `paid/done/invoiced`; en la linea 430 repite elegibilidad.
+- `witann_group_subscriptions_pos/models/pos_order.py:682` consulta el uso de
+  prueba gratis. La busqueda de POS en la linea 865 incluye los pedidos no
+  draft/cancel y no excluye la orden/linea que se esta aplicando. La propia
+  primera venta ya cumple ese dominio. La lectura anterior al cobro en
+  `subscription_operation.py:244` no presenta esa misma situacion.
+
+No se observo contrato aplicado para el primer contacto en el listado nativo
+filtrado por **Cliente** ni en su directorio POS tras el error. No se interpreta
+el cambio automatico a ticket vacio como pago exitoso. Se conservaron los
+intentos locales 7050 / `267-8-000050` y 3119 / `263-3-000119`, sin reintentar
+ni borrar cache. Capturas 43, 55 y 56. No se verifico por SQL la totalidad de
+los efectos de rollback.
+
+Correccion propuesta, **no aplicada**: separar elegibilidad previa y aplicacion
+del primer uso dentro de la misma frontera transaccional; excluir solamente
+el propio evento identificado de la consulta de usos anteriores, sin permitir
+otro uso real, duplicados en el mismo ticket ni carreras entre dos ventas.
+Agregar integracion de primera venta, repeticion, replay y concurrencia.
+
+**H2. Reinscribir un participante cambia el propietario del contrato historico.**
+
+Se preparo una pareja cerrada en S03611: titular
+`QA WGS 20261019 Descuento`, participante `QA WGS 20261019 Pareja`.
+Desde la ficha del participante se reinscribio TODO INCLUIDO individual por
+$799. Ticket, recarga, pago y acceso individual quedaron a nombre del
+participante, pero el recibo 000118 reutiliza **S03611**, no un contrato
+independiente. Backend confirma que S03611 ahora pertenece a Pareja.
+El antiguo titular aparece **Sin suscripcion**, sin suscripciones relacionadas
+y con **Nueva suscripcion**, pese a sus pagos anteriores. Capturas 51-54.
+
+La causa es explicita en
+`witann_group_subscriptions_pos/models/pos_order.py:2739`: se escribe el
+`partner_id` del origen cuando es diferente al comprador, y se reutiliza ese
+origen. La busqueda de historial en la linea 3729 solo resuelve por titular y
+participantes actuales; despues de sustituir ambos deja de encontrar al
+titular anterior. No se borraron sus tickets anteriores: el fallo demostrado
+es el traspaso de identidad del contrato y la perdida del historial visible,
+no una desaparicion de los pagos POS.
+
+Correccion propuesta, **no aplicada**: mantener identidad/titularidad del
+contrato historico cuando cambia el comprador. Crear una etapa/contrato
+independiente vinculada al origen para el antiguo participante, manteniendo
+pagos y referencias historicas. Directorio, bloqueo de alta nueva y consultas
+deben consultar participacion historica, no solo relaciones actuales. Probar
+tambien que renovar/reembolsar la nueva membresia no modifique al otro socio.
+
+### Matriz efectivamente repetida
+
+| Grupo | Resultado observado en este build | Limite |
+| --- | --- | --- |
+| S03615 vencida antes del cron | Reinscripcion cotiza $799, paga y queda 20/oct-20/nov con acceso | Sin factura ni cierre manual para desbloquear |
+| Diario hoy y pasado | DAY PASS pagado, fechas de un dia, acceso hoy/no acceso historico | Siguiente factura vacia comprobada en listado nativo S03619 |
+| Renovacion diaria | $99.99, dia siguiente correcto, sin error de fecha ausente | No se espero al cambio real de dia |
+| Diario -> mensual | ED y SM: $799, MENSUALIDAD de la empresa, hasta 20/nov, acceso activo | Inicio historico del contrato se conserva en renovacion; periodo cobrado desde 20/oct |
+| Diario vigente -> mensual futuro | Cobro confirmado y programacion 22/oct-22/nov; conserva diario actual | Activacion futura no ejecutada |
+| Semestre -> mensual | $799, 20/abr-20/may/2027 programado; semestre hasta 19/abr intacto | No se simulo abril cambiando fechas o reloj |
+| Corte mensual 29/30/31 | Tres cotizaciones enero -> 28/feb; corte31 futuro comprado sin acceso | Recuperacion del corte en marzo pendiente ORM/avance temporal |
+| Upsale mismo dia | Modal y ticket $600; dos integrantes activos; origen nativo terminal hasta 20/nov, sin fecha invertida | Upsale de un ciclo con dias ya transcurridos no repetido |
+| Renovaciones futuras encadenadas | Dos periodos consecutivos de S03621, 21/nov-20/dic y 21/dic-20/ene | No se ejecutaron sus activaciones; posteriormente cancelados por refund |
+| Solo -> pareja futura SM | $1,398.99; 21/nov-20/dic; titular actual conserva un acceso | Participante sigue sin acceso antes del inicio |
+| Reinscribir -> TRIO | Selector, tres personas activas y precio $1,899 correctos | Fixture cerrada explicitamente con factura QA anterior |
+| TRIO cerrado -> individual | $799, solo titular y una persona activa | No conserva integrantes antiguos |
+| Participante -> titular | Pago/cliente/acceso propio funcionan tras recarga | **Falla aislamiento historico, H2** |
+| Cierre domiciliado explicito | Sin acceso y Reinscribir disponible | Se reutilizo el unico borrador contable autorizado de S03611; no se crearon mas |
+| Nuevo ciclo DOM tras cierre | Desde 20/oct, primer proporcional $239.62, meses1+12 $858.63; posterior anticipo nov-dic $1,238.02 | Anterior ciclo no se convierte en nuevas cuotas; conservacion completa de cuotas historicas pendiente inspeccion ORM |
+| DOM febrero, primer mes solamente | 15-28/feb $309.50; plazo hasta 31/ene/2027; sin acceso con adeudos | Resumen proporcional ya no muestra el fin anual |
+| Seleccion DOM | 1; 1+12; marcar3 incluye2; quitar2 retira3; fechas reales e IVA | Seleccion inicial1-3 comprobada en cotizacion, no otro pago distinto |
+| DOM abono/regularizacion | Mar-abr pagados sin reactivar; may-oct pagados reactivan acceso | No duplica meses previos |
+| DOM anticipos/liquidacion | Nov-ene $1,857.03; Renovar deshabilitado al pagar las doce cuotas | No simula terminacion real del plazo |
+| Descuentos | 50% en semestre,100% en renovacion; siguiente cotizacion vuelve a normal y se cobra $799 | No se modificaron posiciones fiscales para fabricar otra combinacion de IVA |
+| Recarga de borradores | Alta diaria nueva, reinscripcion, renovacion ED y pareja futura SM pagan sin recuperar manualmente cliente | UUID de todas las lineas no exportado; no equivale a prueba de replay |
+| Cliente distinto | Preflight rechaza antes de aplicar; restaurado correcto y cobrado una sola vez en000098 | El usuario ayudo a cerrar la alerta nativa; no es fallo comercial |
+| WELLHUB/TOTALPASS | Altas y renovaciones de monto cero confirmadas | TOTALPASS vencido renueva hoy y no se considera prueba gratis |
+| Prueba gratis | **Primera venta falla en ED y SM, H1** | No se declara probada venta ni regla de segundo uso exitoso |
+| Refund parcial | Rechazo antes de registrar devolucion por cantidad0.5 | No se ha ejecutado ataque directo a API ni suite ORM |
+| Refund total | -$600, destino Cancelado nativo, titular/participante sin acceso, origen sigue cerrado | UI ya no muestra cambios futuros; falta comprobar cola durable y no activacion por cron |
+| Segundo refund | Cantidad reembolsada1.00; no permite seleccionar/devolver de nuevo | Comprobacion UI, no carrera concurrente |
+| Producto ordinario | Agua $17 y devolucion -$17 confirmadas sin flujo de membresia | Exclusivamente productos QA en staging |
+| Quincena | QUINCENA ED de2semanas,20/oct-2/nov,$450,un acceso | No se redefine como quince dias ni mensual |
+| Anualidad nueva | $7,200 pagados ficticiamente; S03629, ANUALIDAD ED,20/oct/2026-19/oct/2027,una persona activa en ED y SM | Sin entrega fisica SpeedFace; venta autorizada expresamente por el usuario |
+| Resincronizar | Exito, una persona activa antes/despues, cooldown visible | No prueba cron por lotes, RSS ni dispositivo fisico |
+| Restricciones | Factura deshabilitada en Pago y Ordenes; Informacion deshabilitada en Acciones | No se intentaron permisos administrativos fuera del POS |
+| Empresas | Catalogo/plan/acceso ED y SM correspondientes; pareja futura SM preserva beneficios actuales | No se repitio cada combinacion de toda la matriz en ambas empresas |
+
+La tarjeta seleccionada pendiente DOM se vio blanca con borde, mientras la
+pagada se vio sombreada y etiquetada Pagada. No se confundio un checkbox
+obligatorio con un pago ya realizado. Captura21 inspeccionada visualmente.
+
+### Operaciones confirmadas de esta sesion
+
+Todas son del **20/octubre/2026**. ED usa prefijo `263-3-`, SM `267-8-`.
+Hay referencias historicas repetidas en esta copia: identificar siempre por
+fecha, cliente, monto y empresa, no solo por el contador visible del ticket.
+
+| Sede / contador | Contrato | Operacion | Total con IVA |
+| --- | --- | --- | ---: |
+| ED000090 | S03615 | Reinscribir mensual | 799.00 |
+| ED000091 | S03619 | DAY PASS hoy | 99.99 |
+| ED000092 | S03619 | Renovar diario | 99.99 |
+| ED000093 | S03619 | Mensual futuro despues del diario | 799.00 |
+| ED000094 | S03620 | DAY PASS historico | 99.99 |
+| ED000095 | S03620 | Renovar diario vencido a mensual | 799.00 |
+| ED000096 | S03621 | Upsale mismo dia a pareja | 600.00 |
+| ED000097 | S03621 | Individual futuro, descuento100% | 0.00 |
+| ED000098 | S03621 | Siguiente mensual sin descuento heredado | 799.00 |
+| ED000099 | S03611 | Nuevo ciclo DOM, meses1+12 | 858.63 |
+| ED000100 | S03611 | DOM anticipar nov-dic | 1238.02 |
+| ED000101 | S03622 | DOM desde15/feb, solo proporcional | 309.50 |
+| ED000102 | S03622 | DOM abonar mar-abr | 1238.02 |
+| ED000103 | S03622 | DOM liquidar may-oct | 3714.06 |
+| ED000104 | S03622 | DOM adelantar nov-ene | 1857.03 |
+| ED000105 | S03623 | Alta semestre, descuento50% | 2049.50 |
+| ED000106 | S03623 | Renovar semestre a mensual futuro | 799.00 |
+| ED000107 | S03624 | Alta futura31/ene-28/feb | 799.00 |
+| ED000108 | S03625 | Alta WELLHUB | 0.00 |
+| ED000109 | S03625 | Renovar WELLHUB | 0.00 |
+| ED000110 | S03626 | Alta TOTALPASS retroactivo | 0.00 |
+| ED000111 | S03626 | Renovar TOTALPASS para hoy | 0.00 |
+| ED000112 | S03621 | Refund total de000096 | -600.00 |
+| ED000113 | Sin suscripcion | Agua | 17.00 |
+| ED000114 | Sin suscripcion | Refund de agua000113 | -17.00 |
+| SM000051 | S03627 | DAY PASS historico | 99.99 |
+| SM000052 | S03627 | Renovar diario a mensual | 799.00 |
+| SM000053 | S03627 | Pareja futura, borrador recargado | 1398.99 |
+| ED000115 | S03611 | Reinscribir TRIO | 1899.00 |
+| ED000116 | S03611 | Reinscribir TRIO a individual | 799.00 |
+| ED000117 | S03611 | Reinscribir pareja de control | 1398.99 |
+| ED000118 | S03611 | Participante a titular: reproduce H2 | 799.00 |
+| ED000120 | S03628 | Alta quincenal | 450.00 |
+| ED000121 | S03629 | Alta anual, pago ficticio autorizado | 7200.00 |
+
+### Pendientes y limites no sustituidos por pruebas aisladas
+
+- Corregir H1/H2 de manera integrada y repetir sus escenarios, incluidos
+  titular anterior, participante, pagos historicos, reembolso y nueva alta.
+- Ejecutar45 tests ORM Enterprise/PostgreSQL en base desechable. Sin SSH/runner
+  disponible no se aprobaron crons, locks ni concurrencia con dos workers.
+- Activacion futura real y retrasada, recuperacion de estados heredados,
+  excepcion transitoria de acceso/reintento, reenvio por perdida de respuesta,
+  dos altas simultaneas y dos renovaciones sobre la misma revision.
+- Ultimo segundo del dia, primer segundo del dia y conversiones reales a las
+  18:00/medianoche; no se cambio el reloj del servidor. Acceso vigente hoy o
+  programado no prueba por si solo esas fronteras temporales.
+- Nuevo ciclo de domiciliado legacy sintetico y proporcional de alineados
+  no domiciliados: no se fabricaron cambios de catalogo ni se utilizaron
+  clientes reales para suplir fixtures. Upsale con dias transcurridos, otra
+  posicion fiscal y todas las combinaciones de plazos no se repitieron.
+- No se ejecutaron crons globales sobre clientes copiados. Auditoria historica
+  masiva/dry_run y alteracion intencional de origen antes de activar no se
+  ejercitaron. La ausencia de review en ventas nuevas observadas no prueba
+  que cualquier review historico se recupere correctamente.
+- No se probo entrega al SpeedFace: el aislamiento de staging fue confirmado
+  por el usuario. Indicador verde solo demuestra proyeccion en Odoo.
+
+### Residuos QA, seguridad y evidencias
+
+Los tickets previos **3058/000058** y **3065/000065** siguen intactos.
+Se conservaron los dos intentos gratuitos fallidos. El borrador QA de reembolso
+parcial fue descartado despues del rechazo, sin registrar pago, para realizar
+el reembolso total; no se eliminaron ventas, cuotas ni recibos de aplicacion.
+No se borraron datos locales para ocultar fallos. El usuario cerro una alerta
+nativa de cliente incorrecto que bloqueaba el control de esa pestaña; las
+comprobaciones independientes de backend continuaron mientras tanto.
+
+Se abrio una sesion QA en Santa Monica con saldo ficticio0 y nota explicita
+de pruebas sin efectivo real. No se cerro ni publico su contabilidad. El unico
+borrador contable QA de $1 autorizado anteriormente para S03611 no se publico,
+timbro, envio ni pago; se reutilizo para cierres controlados. S03611 queda
+traspasado al participante, evidencia de H2, no reparado silenciosamente.
+
+La impresion automatica sin impresora produjo avisos tardios en ambas cajas.
+Se eligio Continuar sin reintentar cobros ni alterar configuracion global.
+El recibo anterior permanece en el DOM de impresion aunque la pantalla actual
+sea otro ticket: el cobro anual se detuvo inicialmente tras un bloqueo de
+seguridad por esa interpretacion; producto/cliente/monto actuales fueron
+verificados tambien visualmente. Tras autorizacion explicita del usuario se
+confirmo una sola vez el ticket3121, por $7,200 ficticios, para
+`QA WGS 20261020 Anual`, exclusivamente en staging. El recibo000121 y el
+directorio confirmaron S03629 y acceso activo. No se evadio ese bloqueo.
+
+60 capturas, estados finales QA y `estado-pruebas.json`, separados del QA del build anterior:
+`/Users/apreza/.codex/visualizations/2026/02/18/019c72fb-fa85-7b22-a4fa-20aa1262c18f/wgs-staging-qa-20261020/`.
+Sin PIN ni claves guardados intencionalmente. Sugeridas para inspeccion: 04
+(reinscripcion),14(cierre upsale),23(proporcional),27(reactivacion),43/56(H1),
+45(SM mensual),48/50(TRIO e individual),52-54(H2),60(anualidad aplicada).
+
+No hubo commit/push/merge ni modificaciones a main durante esta validacion.
+El codigo evaluado sigue en `34db870`; main conserva `df4e525`.
+
 ## Correccion integral de hallazgos QA: 2026-10-20
 
-Estado: **candidato de staging; pendiente build/upgrades y repeticion por
+Estado al entregar el commit, antes del QA registrado arriba: **candidato de staging; pendiente build/upgrades y repeticion por
 navegador**. No aprobado para main. El usuario confirmo que aplicara el build y
 ambos upgrades; no se sustituye esa comprobacion con ventas sobre el build viejo.
 Versiones nuevas: base `19.0.1.1.59`, POS `19.0.1.6.5`.
