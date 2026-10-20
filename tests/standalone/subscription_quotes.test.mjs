@@ -31,6 +31,15 @@ test('fixed cutoff and signed calendar survive the ticket JSON roundtrip', () =>
     assert.deepEqual(snapshot.commercial_quote, charge.commercial_quote);
     assert.equal(context.buildPricingSnapshotFromCharge({}).monthly_cutoff_day, 0);
 });
+
+test('initial proportional end is separate from the domiciliation forced-term end', () => {
+    const snapshot = context.buildPricingSnapshotFromCharge({
+        first_period_end_date: '2026-10-31', subscription_end_date: '2027-09-30',
+    });
+    const persisted = JSON.parse(JSON.stringify(snapshot));
+    assert.equal(persisted.first_period_end_date, '2026-10-31');
+    assert.equal(persisted.subscription_end_date, '2027-09-30');
+});
 function stateFor(mode) {
     const state = {formMode:mode, selectedPartnerId:7, currentDetail:{}, productCatalog:[
         {id:1, name:'Daily'}, {id:2, name:'Monthly'},

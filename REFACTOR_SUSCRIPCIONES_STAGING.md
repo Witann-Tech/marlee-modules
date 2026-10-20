@@ -2,6 +2,387 @@
 
 Registro inicial: 2026-09-28. Rama de trabajo: `staging`.
 
+## Correccion integral de hallazgos QA: 2026-10-20
+
+Estado: **candidato de staging; pendiente build/upgrades y repeticion por
+navegador**. No aprobado para main. El usuario confirmo que aplicara el build y
+ambos upgrades; no se sustituye esa comprobacion con ventas sobre el build viejo.
+Versiones nuevas: base `19.0.1.1.59`, POS `19.0.1.6.5`.
+Solo WGS/POS, sus pruebas y esta bitacora; sin cambios a produccion, importador
+bancario ni reglas/protocolo de SpeedFace. No hay reparacion automatica masiva
+de los datos historicos ni de las fixtures QA anteriores.
+
+### Fronteras compartidas
+
+- `_wgs_subscription_operation_policy_for_pos` decide Renovar/Reinscribir/
+  Cambiar Plan para directorio, ficha, cotizacion y manejadores de pago.
+  Superar la gracia permite reinscribir aunque el cron no haya cambiado aun el
+  estado nativo. Un contrato futuro, sustituido o cerrado manualmente conserva
+  sus restricciones. Directorio resuelve sustituciones por lote, sin agregar
+  busquedas por cada fila ni guardar decisiones en caches globales/contexto de
+  cobro. No hay escrituras desde esta politica de lectura.
+- La activacion de un cambio **ya pagado** es distinta de una nueva compra:
+  conserva firma, hash, revision, participantes y periodo original. Un retraso
+  mas alla de la gracia no la rechaza por la elegibilidad de una nueva venta.
+  Cierres manuales siguen sin reabrirse automaticamente.
+- `_wgs_close_subscription_commercially` usa `set_close`, la API mutante nativa,
+  y verifica el estado terminal. No ejecuta un wizard ni silencia errores para
+  escribir directamente un estado. Conserva el fin del periodo historico del
+  origen; no lo mueve a un dia anterior al inicio. El upsale exige tambien
+  como postcondicion que el origen distinto del destino haya quedado cerrado.
+- En las postcondiciones, ambas fechas se convierten con la misma API Date.
+  Ausencias `False`/`None` no producen un falso desacuerdo de vigencia; fechas
+  realmente distintas siguen rechazandose. La doble de Date usada en tests
+  ahora reproduce el `None` real de Odoo al convertir un valor ausente.
+- Modal y ticket proyectan el mismo precio unitario fiscal del upsale. Se
+  elimina la resta paralela de dos totales con IVA redondeados por separado.
+  En el ejemplo QA previo el cargo real de $600 tambien se mostraria como $600,
+  no $599.99; no se alteraron precios de catalogo ni descuentos.
+- La carga de clientes usa registros nativos `pos.data.read`, no un objeto RPC
+  temporal que pierde su relacion al serializar. El preflight puede resolver el
+  titular de la cotizacion persistida si la relacion no esta cargada; nunca
+  sustituye a otro cliente seleccionado ni infiere al titular de participantes.
+  El backend sigue verificando la firma/identidad. Si falla la carga, no se
+  inicia el pago nativo; tampoco si el cajero cambia de ticket durante el await.
+- Un cierre nativo **explicito** cancela el ciclo domiciliado activo y conserva
+  cuotas/pagos para trazabilidad. No ocurre al abrir el wizard ni con los crons
+  nativos, cierre automatico WGS o generacion de renovacion nativa. El historial
+  no se borra. Los domiciliados antiguos cerrados por contabilidad NO se migran
+  ni cancelan en bloque por su estado nativo: no debe bloquearse su cobranza.
+- El proporcional inicial tiene su propio `first_period_end_date`. La primera
+  cuota y el resumen muestran fin del mes, separado del fin del plazo forzoso.
+
+Referencia del adaptador POS comprobada contra el codigo oficial de
+[Odoo 19: carga nativa de res.partner](https://github.com/odoo/odoo/blob/19.0/addons/point_of_sale/static/src/app/services/pos_store.js).
+No se consultaron ni cambiaron datos de produccion para implementar el arreglo.
+
+### Pruebas locales de esta entrega
+
+**80 Python y 26 JavaScript aprobadas**. Python incluye el gate de sintaxis y
+nombres globales, calendario, aplicacion, activacion y lifecycle, mas 13 casos
+nuevos de politica/fronteras. JavaScript ejecuta carga/restauracion del titular,
+rechazo de otro cliente, fallo de carga/propietarios mezclados y separacion del
+fin proporcional. Se mantienen las regresiones previas de descuentos, firma,
+UUID, reembolso total, cuotas, cola y tres crons nativos.
+
+**45 tests ORM de operaciones preparados, NO ejecutados**: se agregan al gate
+anterior diario sin siguiente factura, reinscripcion antes del cron, upsale el
+mismo dia, cierre comercial domiciliado y activacion mas alla de la gracia.
+El usuario no dispone de runner/SSH/base desechable; esto sigue siendo una
+limitacion de integracion, no una aprobacion implicita de PostgreSQL/Enterprise.
+
+### Repeticion por navegador tras el build
+
+1. Verificar versiones instaladas y recargar POS sin borrar almacenamiento.
+   Conservar el ticket fallido 000065 y no intervenir la orden ajena 000058.
+2. DAY PASS hoy y retroactivo, renovacion diaria, gratis/WellHub/TotalPass segun
+   catalogo, y diario -> mensual: mismo periodo modal/ticket/contrato, sin
+   siguiente factura diaria y sin volver a traer el plan DIA.
+3. S03615: cotizar y reinscribir sin fabricar factura/cierre nativo para
+   desbloquearlo. Comparar tambien una reinscripcion realmente cerrada.
+4. Upsale nuevo el mismo dia y otro posterior: IVA y precio modal/ticket iguales;
+   origen cerrado con periodo historico intacto; destino/participantes/acceso
+   correctos. Refund total no debe resucitar el origen ni futuros cambios.
+5. Cliente QA recien creado: alta/renovacion/reinscripcion con borrador, recargar
+   y pagar sin buscar otra vez al cliente. Repetir con otro cliente seleccionado:
+   rechazo antes de pago, sin reemplazo silencioso ni segundo cobro.
+6. Domiciliado nuevo/retroactivo: primer periodo mostrado correctamente, cuotas
+   1, 1+12, consecutivos, abonos, liquidacion y anticipos. Cierre comercial
+   explicito: sin acceso y reinscribible, cuotas anteriores conservadas; nuevo
+   ciclo independiente. No usar cierre contable viejo como migracion masiva.
+7. Repetir mensual/cortes 29-31, semestral -> mensual, cambios futuros, pareja/
+   trio/individual, descuentos, restricciones POS y devolucion ordinaria.
+8. Separar resultados observados por navegador de concurrencia, cambio de dia,
+   reintentos tecnicos y entrega fisica al SpeedFace, que no quedan demostrados
+   por los tests aislados. No promover a main sin autorizacion posterior.
+
+## Cierre de la continuacion de QA: 2026-10-19
+
+**NO APROBADO para main.** Se continuaron los escenarios independientes a pesar
+del fallo diario, exclusivamente en staging, commit `e6087fa`, base
+`19.0.1.1.58` y POS `19.0.1.6.4`. No se corrigio codigo funcional durante QA.
+La seccion siguiente conserva el primer corte de resultados como historico;
+esta seccion lo complementa y sustituye su listado de pendientes.
+
+### Balance acumulado
+
+- 25 ventas simuladas confirmadas, incluidas una venta ordinaria y una
+  renovacion con descuento autorizado del 100%.
+- Tres devoluciones confirmadas: dos totales de membresia y una ordinaria.
+- Un checkout diario fallido, un parcial rechazado, un segundo intento de
+  reembolso bloqueado en la interfaz y un preflight rechazado tras recarga.
+- Doce contactos QA sinteticos; contratos S03607, S03609-S03618. No se
+  intervinieron clientes reales, produccion ni importador bancario.
+- 66 tests Python WGS y 22 JavaScript repetidos en esta continuacion: todos
+  aprobados. No se repitio el gate sintactico global de otros addons; los 67
+  Python del corte anterior incluyen ese gate adicional.
+- **40 tests ORM NO ejecutados.** El usuario confirmo que no dispone de
+  SSH/runner y base desechable. No se ejecutaron sobre la base operativa.
+
+### Ventas adicionales y resultado
+
+Recibos con prefijo `263-3-`, todos del 19/octubre/2026, caja El Dorado.
+En la copia hay referencias de recibo repetidas con ventas historicas: para
+identificar QA se deben usar tambien fecha, cliente y monto, no solo el texto
+del recibo. No se tocaron las ventas historicas coincidentes.
+
+| Recibo | Contrato | Operacion | Resultado |
+| --- | --- | --- | --- |
+| 000074 | Sin suscripcion | Agua, $17 | Venta ordinaria confirmada sin flujo de membresia |
+| 000075 | S03612 | Mensual, $799 | 19/oct-19/nov, titular con acceso |
+| 000076 | S03613 | Upsale inmediato a pareja, $600 | Destino correcto, dos participantes con acceso; origen y centavo de cotizacion fallan, ver hallazgos |
+| 000077 | S03613 | Renovacion pareja -> individual, $799 | 20/nov-19/dic programado; pareja y dos accesos actuales conservados; persiste al recargar |
+| 000078 | S03613 | Devolver totalmente 000076, -$600 | Destino cancelado, sin acceso; origen S03612 reaparece inconsistente |
+| 000079 | S03611 | Reinscribir cerrado -> trio, $1,899 | Selector disponible, tres participantes QA y tres accesos, MENSUALIDAD ED, fin 19/nov |
+| 000080 | S03611 | Reinscribir trio cerrado -> individual, $799 | Solo titular, sin participantes anteriores, un acceso, fin 19/nov |
+| 000081 | S03611 | Reinscribir mensual cerrado -> domiciliado, $259.58 | Solo proporcional 19-31/oct; contrato hasta 30/sep/2027, acceso activo |
+| 000082 | S03614 | Mensual futuro, $799 | 31/ene/2027-28/feb/2027, sin acceso antes del inicio |
+| 000083 | S03615 | Mensual historico, $799 | 31/ago-30/sep; sin acceso, mostrado Cerrada. Reinscripcion posterior no cotiza |
+| 000084 | S03616 | Semestre vigente, $4,099 | 19/oct/2026-18/abr/2027, un titular con acceso |
+| 000085 | S03616 | Semestre -> mensual, $799 | Programa 19/abr-19/may/2027; conserva semestre actual, no cobra ni asigna seis meses al destino |
+| 000086 | S03616 | Renovar individual -> pareja futura, $1,398.99 | Programa 20/may-19/jun/2027; titular actual intacto, nuevo participante sin acceso anticipado. Borrador necesitaba recuperar cliente tras recarga |
+| 000087 | Sin suscripcion | Devolver agua de 000074, -$17 | Devolucion ordinaria confirmada, sin bloqueo de membresia |
+| 000088 | S03617 | Nueva quincena, $450 | QUINCENA ED de dos semanas, 19/oct-1/nov; titular y acceso correctos |
+| 000089 | S03618 | Nueva anualidad, $7,200 | ANUALIDAD ED de un anio, 19/oct/2026-18/oct/2027; acceso activo en ambas sedes |
+
+Para S03611 el usuario autorizo especificamente una factura QA **solo borrador**.
+Se creo un unico anticipo fijo de $1 para permitir el cierre nativo y preparar
+reinscripciones reales, con motivo Fin del contrato. No se publico, timbro,
+envio ni pago. Ese documento y los cierres QA permanecen como evidencia; no se
+crearon otras facturas ni se cambiaron fechas de contratos pagados para forzar
+activaciones futuras. La captura 33 documenta el borrador.
+
+### Hallazgos pendientes
+
+1. **Alta: checkout DAY PASS rechazado.** Sigue abierto el defecto documentado
+   abajo: misma vigencia diaria pero fecha opcional esperada `None` frente a
+   `False` ORM. Recibo 000065 permanece en Pago, sin membresia aplicada. Impide
+   aprobar diarios y la transicion diario -> mensual de extremo a extremo.
+   Referencias: `pos_order.py:3239`, `subscription_application.py:66`.
+
+2. **Alta: upsale no deja cerrado coherentemente el origen.** S03612 inicia el
+   19/oct; al hacer upsale el mismo dia termina el 18/oct, pero sigue En progreso.
+   El destino S03613 si tiene pareja y vigencia correctas. El directorio muestra
+   el vencimiento del origen; tras devolver el destino queda el origen visible,
+   sin acceso y sin Renovar/Cambiar Plan disponibles. No desaparece recargando.
+   `_wgs_close_source_subscription_after_upgrade`, `pos_order.py:4071`, escribe
+   inicio del destino menos un dia y da por bueno cualquier retorno del primer
+   metodo de cierre. No comprueba estado final ni procesa un posible wizard.
+   La implementacion Enterprise de ese retorno no se inspecciono con ORM:
+   retorno de wizard es hipotesis, estado inconsistente es evidencia observada.
+   Capturas 29-31 y estado despues de 000078.
+
+3. **Alta: una fuente vencida aparece reinscribible pero no logra cotizar.**
+   S03615 se creo con 31/ago-30/sep; hoy aparece Cerrada y ofrece Reinscribir.
+   Al abrir, muestra "No se pudo consultar el cobro de reinscripcion"; tampoco
+   cotiza al elegir PREMIUM 619. Consola muestra RPC_ERROR, sin traceback Python.
+   La UI clasifica como cerrado al superar su limite, mientras el guard de
+   `pos_order.py:3893` exige tokens terminales del estado nativo; el builder de
+   cotizacion aplica ese guard en `pos_order.py:1345`. Esta diferencia es una
+   causa probable, no una causa runtime confirmada sin traceback/ORM. Captura 45.
+   Contrasta con S03611 realmente cerrado por el wizard: sus reinscripciones
+   trio, individual y domiciliado si se pagaron y aplicaron.
+
+4. **Alta: recargar borrador pierde la resolucion del cliente.** Borrador 000086
+   conserva producto PAREJA y $1,398.99, pero muestra Cliente en lugar del titular.
+   Validar rechaza "La cotizacion no corresponde al cliente, empresa, paquete u
+   operacion del ticket". La guarda impidio aplicar una identidad incorrecta.
+   Buscando al titular original en el selector nativo y pulsando Enter se cargo
+   desde servidor; seleccionandolo de nuevo se pudo pagar la misma venta una
+   sola vez y se conservaron sus dos periodos futuros. No es evidencia de que
+   el ID se borre de la base: indica al menos una relacion no resuelta al
+   recargar. Revisar carga de partners y `subscription_payment_guard.js:43`
+   junto con `subscription_ticket.js:101`. Capturas 48-51. **Recarga automatica
+   no aprobada**, aunque la recuperacion manual funciono.
+
+5. **Media, operacion por definir: cerrar nativo no termina domiciliado.**
+   Tras cerrar S03611 con motivo Fin del contrato, backend permanece Cancelado,
+   ofrece Volver a abrir y fin 19/oct; POS sigue En progreso, fin 30/sep/2027 y
+   acceso activo. No es cache ni reapertura de la fila nativa. El codigo lo
+   hace deliberadamente: `sale_order.py:2582` del POS y `sale_order.py:710` base
+   toman el contrato domiciliado como autoridad, ignorando cierre nativo para
+   no bloquear adeudos por cierres contables. Falta aclarar/proveer un cierre
+   comercial explicito que no se confunda con el cierre contable; no debe
+   arreglarse reactivando el problema de adeudos. Capturas 39 y 41. Este escenario
+   no demuestra por si solo una regresion del refactor y no se declara pasada
+   la reinscripcion al mismo domiciliado usando el cierre nativo.
+
+6. **Baja: modal de upsale difiere un centavo del ticket.** Credito $799 sobre
+   pareja $1,398.99 cotiza $599.99; ticket, pago y recibo 000076 cobran $600.
+   Validar calculo central antes/despues de IVA y redondeo; no ocultar cambiando
+   solo el texto. Captura 29 y recibo 000076.
+
+7. **Baja: texto domiciliado llama proporcional al plazo completo.** La primera
+   tarjeta dice correctamente 19-31/oct y $259.58, pero el resumen dice
+   "Primer periodo proporcional: 19 oct 2026 - 30 sep 2027". Capturas 37, 46-47.
+
+### Cobertura aprobada y sus limites
+
+| Grupo | Evidencia aprobada | Limite de lo comprobado |
+| --- | --- | --- |
+| Mensual | Alta hoy, pasada y futura; renovar mismo paquete; corte conservado | Recuperar corte 31 despues de febrero requiere periodo posterior |
+| Fechas 29/30/31 | Cotizaciones enero -> 28/feb; alta 31/ene pagada; 31/ago -> 30/sep pagado | No se cambio reloj ni se forzo renovar un inicio futuro |
+| Semestre/mensual | Mensual -> semestre -> mensual y semestre vigente -> mensual, todos pagados | Programacion observada; activacion futura no ejecutada |
+| Otros plazos | Altas quincenal y anual pagadas; planes y fechas exactos del catalogo, sin heredar mensual | No prueba todas las combinaciones de cambio entre esos plazos |
+| Participantes | Alta pareja; reinscribir trio; trio -> individual; pareja -> individual futura; individual -> pareja futura | No prueba participante historico que pasa a titular ni entrega fisica |
+| Domiciliados | Alta retroactiva febrero, cuotas 1+12, abono, liquidacion, sin acceso con adeudos y reactivacion al quedar al corriente; anticipos | Cuotas/pagos del nuevo ciclo legacy no ejercitados |
+| Seleccion domiciliada | Solo 1; 1+12; marcar 3 incluye 2; desmarcar 2 retira 3; IVA y fecha inicial correctos | Consecutivos iniciales 1-3 comprobados en cotizacion, sin un nuevo pago para esa combinacion |
+| Prorrateo | Reinscribir mensual -> domiciliado el 19/oct cobra $259.58, sin ultimo mes obligatorio | Mismo domiciliado y alineado no domiciliado no aprobados |
+| Descuentos | Autorizacion 50% y 100%; siguiente renovacion cotiza normal, sin heredar descuento | No se cambiaron listas fiscales ni otras posiciones fiscales |
+| Devoluciones | Parcial de membresia rechazado; total confirmado; repetido no seleccionable; venta/devolucion ordinaria confirmadas | Cancelacion durable de toda la cola tras refund pendiente ORM |
+| Acceso | Activo/no activo congruente en casos aprobados; multisede domiciliado; resincronizacion sin duplicar persona visible | No pruebas de hardware, zona horaria del equipo ni entrega al gateway |
+| Restricciones POS | Facturar deshabilitado Pago/Ordenes; Informacion ausente; teclado precio/descuento bloqueado para membresias | No auditoria de permisos de backend fuera del POS |
+| Recarga | Cambios ya pagados persisten; borrador recuperable manualmente | Resolucion automatica del cliente fallo; replay/red perdida no ejercitados |
+
+### Pendientes sin simular como aprobados
+
+- Resolver y repetir los hallazgos altos; conservar el rechazo de incoherencias,
+  la atomicidad y la firma, no quitar guardas para hacer verde la prueba.
+- Suite ORM Enterprise/PostgreSQL de 40 tests, locks y dos workers. Sin acceso
+  a runner/base desechable, queda bloqueada por infraestructura, confirmado por
+  el usuario. No convertir esta carencia en permiso para usar produccion.
+- Activacion futura real, recuperacion heredada de review, fallo transitorio y
+  reintento, tres crons nativos, ultimo dia 23:59:59/inicio 00:00 y medianoche
+  local. Ventas hechas despues de las 18:00 conservaron fechas, pero no prueban
+  por si mismas esos bordes temporales.
+- Doble click/respuesta perdida/reenvio concurrente, dos altas simultaneas y
+  dos renovaciones sobre la misma revision. Una recarga no sustituye estos tests.
+- Cadena de cambios futuros cancelada por refund: cancelar sin activar es solo
+  comprobacion visual; falta verificar recibos/cola a nivel ORM y su no activacion.
+- Reinscripcion diaria, mismo domiciliado tras terminar plazo y nuevo ciclo
+  legacy; participante anterior como nuevo titular; alineado no domiciliado;
+  cambios entre todos los plazos, IVA excluido/otra posicion fiscal.
+  No se reutilizaron clientes reales ni se alteraron catalogos para fabricar casos.
+- Repetir matriz de caja en Santa Monica: esta evidencia operativa se obtuvo
+  en El Dorado, no se presenta como prueba de ambas cajas.
+
+### Residuos QA y evidencias
+
+Se conservaron las ventas y devoluciones sinteticas para trazabilidad. El ticket
+000065 sigue en Pago; la orden ajena 000058 no se modifico. No limpiar cache,
+almacenamiento ni borrar pedidos para dar por resuelto un checkout fallido.
+El unico borrador contable autorizado de S03611 sigue sin publicar. S03611
+queda cerrado nativamente pero su contrato domiciliado sigue activo, conforme
+al hallazgo 5; S03612 queda como evidencia del upsale inconsistente.
+
+Capturas 01-54 y `estado-pruebas.json` en
+`/Users/apreza/.codex/visualizations/2026/02/18/019c72fb-fa85-7b22-a4fa-20aa1262c18f/wgs-staging-qa-20261019/`.
+No contienen claves de acceso ni PIN guardados intencionalmente. Las capturas
+son evidencia de interfaz, no sustituyen una lectura ORM transaccional.
+Solo este documento cambia en el repo; sin commit, push ni merge en esta QA.
+
+## Primer corte de pruebas por navegador: 2026-10-19
+
+Resultado parcial: **NO APROBADO para promover a main**. Build probado en
+`staging-portal.spinbike.mx`, commit `e6087fa`; versiones instaladas verificadas
+en Aplicaciones: base `19.0.1.1.58`, POS `19.0.1.6.4`. El usuario confirmo el
+aislamiento del gateway SpeedFace de produccion antes de las ventas simuladas.
+Solo se operaron clientes sinteticos `QA WGS 20261019`; no se intervino
+produccion, importador bancario ni clientes reales de la copia.
+
+### Evidencia operativa
+
+11 ventas simuladas confirmadas, un reembolso total confirmado y un intento de
+venta diaria rechazado. Tambien se comprobo el rechazo de reembolso parcial.
+Caja El Dorado, recibos con prefijo `263-3-`; importes incluyen IVA.
+
+| Recibo | Contrato | Operacion | Resultado observado |
+| --- | --- | --- | --- |
+| 000061 | S03607 | Nueva TODO INCLUIDO, $799 | MENSUALIDAD ED, 19/oct-19/nov; una persona activa en El Dorado |
+| 000062 | S03607 | Renovacion igual paquete, $799 | Fin 19/dic, siguiente periodo 20/nov-19/dic; acceso conservado |
+| 000063 | S03607 | Renovar a SEMESTRE, $4,099 | Cambio pagado 20/dic/2026-19/jun/2027; mensual vigente intacto |
+| 000064 | S03607 | Volver a mensual tras semestre futuro, $799 | Segundo cambio 20/jun-20/jul/2027, no seis meses; ambos cambios visibles |
+| 000065 | Sin contrato aplicado | DAY PASS de ayer, $99.99 | Rechazo de vigencia al validar; permanece en Pago en el POS |
+| 000066 | S03609 | Domiciliado desde 15/feb, meses 1 y 12, $928.51 | Proporcional $309.50 mas ultimo mes $619.01; sin acceso con adeudos |
+| 000067 | S03609 | Abono de marzo y abril, $1,238.02 | Cuotas pagadas bloqueadas; conserva adeudos y no activa acceso |
+| 000068 | S03609 | Liquidar mayo-octubre, $3,714.06 | Acceso activo; una persona, sitios El Dorado y Santa Monica |
+| 000069 | S03609 | Adelantar noviembre-diciembre, $1,238.02 | Se permite estando al corriente; al pagar todo el plazo ya no permite otro cobro |
+| 000070 | S03610 | Pareja historica, $1,398.99 | Dos participantes QA persistidos; MENSUALIDAD ED, 18/sep-18/oct |
+| 000071 | S03607 | Reembolso total de 000064, -$799 | Confirmado; ficha deja de mostrar membresia activa y acceso |
+| 000072 | S03611 | Mensual con autorizacion de 50%, $399.50 | Acceso activo; siguiente renovacion cotiza $799 sin descuento heredado |
+| 000073 | S03611 | Renovacion con autorizacion de 100%, $0 | Fin 19/dic; siguiente renovacion vuelve a $799 y conserva corte 19 |
+
+El intento parcial de 0.5 unidades de 000064 se rechazo antes de sincronizar:
+"Las membresias solo permiten reembolso total, sin cambiar cantidad, precio ni
+descuento." Se descarto solo ese borrador QA y se repitio con una unidad completa.
+No hubo devolucion parcial confirmada. La cancelacion de otras compras futuras
+del mismo contrato tras el reembolso no se inspecciono a nivel ORM.
+
+En S03610 se intento preparar un cierre por backend para probar reinscripcion.
+El cierre nativo fue rechazado porque no tenia facturas; posteriormente se
+cancelo solo ese contrato QA. Esa cancelacion elimina su estado de suscripcion
+y el directorio lo muestra sin historial visible, por lo que **no constituye
+una prueba de reinscripcion de una suscripcion cerrada**. No se alteraron fechas
+despues de cotizar ni se crearon facturas para forzar el escenario.
+
+Otras comprobaciones aprobadas: Factura deshabilitada en Pago y Ordenes; menu
+Acciones sin Informacion; precio/descuento del teclado bloqueados en membresias;
+no ofrece Nueva suscripcion en contratos activos; selector de pareja permite
+buscar y seleccionar otro QA; resincronizar S03611 conserva una persona activa,
+fechas y paquete, con enfriamiento visible. Las cuotas iniciales y de renovacion
+domiciliadas muestran IVA y fecha real de arranque del proporcional. El primer
+mes futuro seleccionado tiene tarjeta blanca, distinta de las cuotas pagadas.
+
+### Hallazgo bloqueante: fechas vacias en pases diarios
+
+Se reprodujo en caja el error "La vigencia aplicada no coincide con la vigencia
+contratada" al validar DAY PASS del 18/oct. No quedo contrato aplicado ni persona
+para el cliente QA Diario; el ticket 000065 sigue pendiente localmente. **No
+borrar almacenamiento ni reintentar cobros en bloque para ocultar este error.**
+
+La inspeccion acota una causa probable a la representacion de fecha vacia:
+`pos_order.py:3239` convierte `next_billing_date=False` con `fields.Date.to_date`,
+mientras `subscription_application.py:66` compara directamente con la fecha
+ORM. El sellado ya elimina correctamente la siguiente factura para un dia
+(`subscription_operation.py:135`); no debe reintroducirse una factura recurrente
+para eludir el rechazo.
+
+Se ejecuto el metodo real de postcondiciones con la fixture aislada existente,
+sin editar fuentes: fechas de inicio/fin iguales y correctas, corte 0, siguiente
+factura ORM `False` y esperada `None` producen exactamente el rechazo. Cambiar
+solo la representacion esperada a `False` lo acepta. Esto demuestra el defecto
+de comparacion, pero no sustituye la inspeccion ORM de los valores reales ni la
+prueba de checkout diario sobre el build corregido. Severidad **alta**: impide
+ventas validas de un dia y bloquea probar diario -> mensual de extremo a extremo.
+
+Correccion requerida: una convencion consistente para fechas opcionales en la
+frontera cotizacion/adaptador/postcondiciones, conservando el rechazo de fechas
+realmente distintas. Agregar regresion de `None`/`False`, diario hoy/retroactivo,
+renovacion diaria, reinscripcion diario -> mensual y cambio mensual -> diario.
+No quitar postcondiciones, firmas ni atomicidad. No se aplico codigo durante
+esta sesion de pruebas, ni se hizo commit/push/merge.
+
+### Observaciones no bloqueantes
+
+- En alta domiciliada, el texto "Primer periodo proporcional" usa el fin del
+  contrato completo, aunque la tarjeta del primer mes y el importe son correctos.
+  Severidad baja; debe mostrar el fin de esa cuota, no el del plazo forzoso.
+- No hay impresora fisica disponible en staging: aparece un aviso despues de
+  ventas y puede interceptar la siguiente accion. Se continuo sin imprimir; no
+  se reintento el cobro ni se cambiaron ajustes globales de impresion.
+- El selector de participantes llega a renderizar unos 3,002 elementos antes
+  del filtro. Observacion de rendimiento, no fallo comercial demostrado.
+
+### Cobertura pendiente y condicion de salida
+
+No se declara completada toda la matriz. Faltan reinscripcion real desde estado
+cerrado, diario -> mensual, participantes en reinscripcion y retiro de antiguos
+participantes al pasar a individual, prorrateo de reinscripcion alineada,
+upsale inmediato, venta ordinaria no recurrente, devolucion repetida,
+reconexion/reenvio del mismo ticket y bordes de corte 29/30/31 en el despliegue.
+La cadena mensual -> semestre -> mensual fue pagada y programada, pero **no se
+adelanto el reloj ni se verifico su activacion futura**.
+
+Siguen pendientes los 40 tests ORM sobre Odoo 19 Enterprise/PostgreSQL con dos
+workers, incluido ultimo dia inclusivo, conflicto de crons, recuperacion de
+`review`, fallos tecnicos y concurrencia. No se ejecutan desde esta validacion
+de navegador; requieren una copia desechable con acceso al runner Odoo. Las
+67 pruebas Python y 22 JS historicas no equivalen a este gate de integracion.
+Acceso activo en Odoo no demuestra entrega fisica a SpeedFace.
+
+Capturas 01-24 y estado estructurado guardados fuera del repo en
+`/Users/apreza/.codex/visualizations/2026/02/18/019c72fb-fa85-7b22-a4fa-20aa1262c18f/wgs-staging-qa-20261019/`.
+
 ## Preparacion de entrega y build: 2026-10-19
 
 Solicitados commit y push de la recuperacion automatica a `staging`. Se

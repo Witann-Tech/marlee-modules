@@ -1206,6 +1206,7 @@ class PosOrder(models.Model):
                 'display_charge_now': float(selected_display_charge),
                 'subscription_start_date': fields.Date.to_string(schedule['access_start_date']),
                 'subscription_end_date': fields.Date.to_string(schedule['term_end_date']),
+                'first_period_end_date': fields.Date.to_string(schedule['installments'][0]['period_end_date']),
                 'next_billing_date': fields.Date.to_string(schedule['installments'][1]['due_date']),
                 'domiciliation': domiciliation,
             })
@@ -1227,6 +1228,7 @@ class PosOrder(models.Model):
             'first_period_alignment': bool(snapshot.get('first_period_alignment')),
             'first_period_start_date': snapshot.get('first_period_start_date') or False,
             'first_period_access_start_date': snapshot.get('first_period_access_start_date') or False,
+            'first_period_end_date': snapshot.get('first_period_end_date') or snapshot.get('subscription_end_date') or False,
             'first_period_days': int(snapshot.get('first_period_days') or 0),
             'first_period_charge_days': int(snapshot.get('first_period_charge_days') or 0),
             'source_recurring_price': float(snapshot.get('source_recurring_price') or 0.0),
@@ -1333,7 +1335,7 @@ class PosOrder(models.Model):
                     )
                 if not contract.wgs_get_operational_status().get('can_renew'):
                     raise UserError(_('El contrato domiciliado no tiene mensualidades pendientes para cobrar.'))
-            elif not self._wgs_is_subscription_order_active_for_upsell(source_order):
+            elif not self._wgs_is_subscription_order_renewable_for_pos(source_order):
                 raise UserError(_('La suscripción origen no está activa para renovación.'))
 
         elif normalized_flow == 'reenroll':
@@ -2565,7 +2567,7 @@ class PosOrder(models.Model):
             domain.append(('order_id.date_order', '>', line_date))
         return self.env['pos.order.line'].sudo().search(domain, order='id desc', limit=1)
 
-    def _wgs_process_subscription_renewal_line(self, line):
+    def _wgs_process_subscription_renewal_line(self, line, *, activation=False):
         self.ensure_one()
 
         source_order = line.wgs_subscription_source_id or line.wgs_sale_order_id
@@ -2597,7 +2599,13 @@ class PosOrder(models.Model):
             source_order.with_context(access_sync_priority=True)._wgs_sync_access_control_people()
             return source_order
 
-        if not self._wgs_is_subscription_order_active_for_upsell(source_order):
+        # Paid activations are revision-checked at the application boundary;
+        # a delayed cron must not recategorize them as new purchases.
+        if activation:
+            allowed = source_order._wgs_get_subscription_state_category() in ('progress', 'renew')
+        else:
+            allowed = self._wgs_is_subscription_order_renewable_for_pos(source_order)
+        if not allowed:
             raise UserError(_('La suscripción origen no está activa para renovación.'))
 
         recurring_lines = source_order.order_line.filtered(
@@ -3236,7 +3244,7 @@ class PosOrder(models.Model):
             or line.wgs_subscription_end_date
             or False
         )
-        persisted_next_billing_date = fields.Date.to_date(snapshot.get('next_billing_date') or False)
+        persisted_next_billing_date = fields.Date.to_date(snapshot.get('next_billing_date')) or False
 
         if line.wgs_subscription_flow == 'upsale':
             if not source_order:
@@ -3530,7 +3538,6 @@ class PosOrder(models.Model):
             if self._wgs_is_order_recognized_as_subscription(upsell_order):
                 self._wgs_close_source_subscription_after_upgrade(
                     source_order=upsell_source_order,
-                    new_subscription_start_date=contract_date,
                 )
             else:
                 _logger.warning(
@@ -3882,22 +3889,13 @@ class PosOrder(models.Model):
         return False
 
     def _wgs_is_subscription_order_active_for_upsell(self, sale_order):
-        sale_order.ensure_one()
-        if 'subscription_state' not in sale_order._fields:
-            return True
-        state_value = (sale_order.subscription_state or '').lower()
-        if not state_value:
-            return True
-        return not any(token in state_value for token in self._WGS_INVALID_SUBSCRIPTION_STATE_TOKENS)
+        return sale_order._wgs_subscription_operation_policy_for_pos()['can_upsale']
+
+    def _wgs_is_subscription_order_renewable_for_pos(self, sale_order):
+        return sale_order._wgs_subscription_operation_policy_for_pos()['can_renew']
 
     def _wgs_is_subscription_order_closed_for_reenroll(self, sale_order):
-        sale_order.ensure_one()
-        if 'subscription_state' not in sale_order._fields:
-            return False
-        state_value = (sale_order.subscription_state or '').strip().lower()
-        if not state_value:
-            return False
-        return any(token in state_value for token in ('cancel', 'canceled', 'cancelled', 'close', 'closed', 'churn', 'churned'))
+        return sale_order._wgs_subscription_operation_policy_for_pos()['can_reenroll']
 
     def _wgs_subscription_order_has_product(self, sale_order, product):
         sale_order.ensure_one()
@@ -4068,39 +4066,9 @@ class PosOrder(models.Model):
             values['recurring_invoice'] = False
         return product_model.create(values)
 
-    def _wgs_close_source_subscription_after_upgrade(self, source_order, new_subscription_start_date):
+    def _wgs_close_source_subscription_after_upgrade(self, source_order):
         source_order.ensure_one()
-
-        close_date = fields.Date.to_date(new_subscription_start_date) or self._wgs_get_subscription_business_today_for_pos(
-            company=source_order.company_id,
-        )
-        close_date = close_date - timedelta(days=1)
-        values = {}
-        end_field = self._wgs_find_subscription_end_date_field(source_order)
-        if end_field:
-            values[end_field] = close_date
-        if values:
-            source_order.write(values)
-
-        for method_name in ('action_close', 'action_subscription_close', 'set_close'):
-            method = getattr(source_order, method_name, None)
-            if not callable(method):
-                continue
-            try:
-                method()
-                _logger.info(
-                    'WGS POS: source subscription %s closed after upgrade with %s',
-                    source_order.name,
-                    method_name,
-                )
-                return
-            except Exception as error:
-                _logger.warning(
-                    'WGS POS: could not execute %s on source subscription %s (%s)',
-                    method_name,
-                    source_order.name,
-                    error,
-                )
+        source_order._wgs_close_subscription_commercially(origin='upsale')
 
     def _wgs_get_upsale_schedule_from_source(self, source_order, today=False):
         source_order.ensure_one()

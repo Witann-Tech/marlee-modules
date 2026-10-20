@@ -95,6 +95,7 @@ function buildPricingSnapshotFromCharge(charge, {
             ? charge.first_period_access_start_date
             : false,
         first_period_days: Number(charge && charge.first_period_days ? charge.first_period_days : 0) || 0,
+        first_period_end_date: charge?.first_period_end_date || charge?.subscription_end_date || false,
         first_period_charge_days: Number(charge && charge.first_period_charge_days ? charge.first_period_charge_days : 0) || 0,
         source_recurring_price: Number(charge && charge.source_recurring_price ? charge.source_recurring_price : 0) || 0,
         source_display_recurring_price: Number(

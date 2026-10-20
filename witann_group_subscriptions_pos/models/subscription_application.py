@@ -59,17 +59,22 @@ class PosSubscriptionApplication(models.Model):
         if set(subscription.participant_ids.ids) != expected_participants:
             raise UserError(_('Los participantes aplicados no coinciden con el paquete pagado.'))
 
+        if line.wgs_subscription_flow == 'upsale':
+            source = line.wgs_subscription_source_id
+            if not source or source == subscription or source._wgs_get_subscription_state_category() not in ('closed', 'cancel'):
+                raise UserError(_('El upsale no cerro la membresia sustituida.'))
+
         domiciliation = snapshot.get('domiciliation') or {}
         if domiciliation.get('is_domiciliation'):
             self._wgs_assert_domiciliation_application(line, subscription, pricing, domiciliation)
             return
-        if (subscription.end_date != pricing['subscription_end_date']
-                or subscription.next_invoice_date != pricing['next_billing_date']
+        if (fields.Date.to_date(subscription.end_date) != fields.Date.to_date(pricing['subscription_end_date'])
+                or fields.Date.to_date(subscription.next_invoice_date) != fields.Date.to_date(pricing['next_billing_date'])
                 or subscription.wgs_monthly_cutoff_day != pricing['monthly_cutoff_day']):
             raise UserError(_('La vigencia aplicada no coincide con la vigencia contratada.'))
         if line.wgs_subscription_flow in ('new', 'reenroll', 'upsale'):
             start = subscription.wgs_effective_start_date or subscription.start_date
-            if start != pricing['subscription_start_date']:
+            if fields.Date.to_date(start) != fields.Date.to_date(pricing['subscription_start_date']):
                 raise UserError(_('El inicio aplicado no coincide con el inicio contratado.'))
 
     def _wgs_assert_domiciliation_application(self, line, subscription, pricing, domiciliation):

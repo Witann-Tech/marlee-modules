@@ -555,17 +555,12 @@ class TestPosSubscriptionPricing(TransactionCase):
         self.assertEqual(len(payload['plans']), 1)
         self.assertEqual(payload['plans'][0]['price'], 50.0)
 
-    def test_close_source_subscription_after_upgrade_sets_previous_day_end(self):
+    def test_close_source_subscription_after_upgrade_preserves_paid_period(self):
         order = self._create_subscription_like_order()
-        end_field = self.PosOrder._wgs_find_subscription_end_date_field(order)
-        self.assertTrue(end_field)
-
-        self.PosOrder._wgs_close_source_subscription_after_upgrade(order, '2026-04-26')
-
-        self.assertEqual(
-            fields.Date.to_date(order[end_field]),
-            fields.Date.to_date('2026-04-25'),
-        )
+        historical_period = order._wgs_get_subscription_access_period()
+        self.PosOrder._wgs_close_source_subscription_after_upgrade(order)
+        self.assertIn(order._wgs_get_subscription_state_category(), ('cancel', 'closed'))
+        self.assertEqual(order._wgs_get_subscription_access_period(), historical_period)
 
     def test_upsale_schedule_keeps_source_renewal_anchor(self):
         order = self._create_subscription_like_order()

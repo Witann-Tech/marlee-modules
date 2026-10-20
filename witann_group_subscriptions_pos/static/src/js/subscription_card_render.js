@@ -80,7 +80,7 @@ function renderSubscriptionCard({
                     class="wgs-action-btn"
                     data-action="open-upsale"
                     data-subscription-id="${escapeHtml(String(item.subscription_id || 0))}"
-                    ${item.can_renew ? "" : "disabled"}
+                    ${item.can_upsale ? "" : "disabled"}
                 >${escapeHtml(_t("Cambiar Plan"))}</button>
                 ${participantActionHtml}
                 <button
