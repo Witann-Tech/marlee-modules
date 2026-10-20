@@ -1,5 +1,6 @@
 from odoo import api, fields, models, _
 from odoo.exceptions import AccessError, UserError, ValidationError
+from odoo.fields import Domain
 from odoo.tools import html_escape
 
 from ..calculation import commission_amount, commission_period
@@ -85,13 +86,20 @@ class HrPayslip(models.Model):
         else:
             user = self.employee_id.user_id
             rate = self.employee_id.witann_pos_commission_rate
+            # A named cashier owns the sale, even when another user opened POS.
+            # Legacy orders without a cashier may fall back to a linked user.
+            seller_domain = Domain('employee_id', '=', self.employee_id.id)
+            if user:
+                seller_domain |= Domain.AND([
+                    Domain('employee_id', '=', False), Domain('user_id', '=', user.id),
+                ])
             # Payroll does not need access to the POS application. The elevated read
             # is strictly scoped to this authorized company, seller and closed month.
-            orders = self.env['pos.order'].sudo().search([
-                ('company_id', '=', self.company_id.id), ('user_id', '=', user.id),
+            orders = self.env['pos.order'].sudo().search(seller_domain & Domain([
+                ('company_id', '=', self.company_id.id),
                 ('state', 'in', ['paid', 'done', 'invoiced']),
                 ('date_order', '>=', start), ('date_order', '<', stop),
-            ], order='date_order, id')
+            ]), order='date_order, id')
             evidence = []
             base = 0.0
             for order in orders:
@@ -107,6 +115,7 @@ class HrPayslip(models.Model):
                 base += amount
                 evidence.append({
                     'order_id': order.id, 'name': order.name,
+                    'employee_id': order.employee_id.id, 'user_id': order.user_id.id,
                     'date_order_utc': fields.Datetime.to_string(order.date_order),
                     'untaxed': untaxed, 'currency': order.currency_id.name,
                     'currency_rate': order.currency_rate, 'company_amount': amount,
