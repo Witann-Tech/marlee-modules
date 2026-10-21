@@ -503,7 +503,9 @@ class PosSubscriptionOperation(models.Model):
                 raise UserError(_('El precio de la membresia pagada no coincide con su cotizacion firmada.'))
             before = self._wgs_source_revision(line.wgs_subscription_source_id)
             source = line.wgs_subscription_source_id
-            if line.wgs_subscription_flow == 'reenroll' and source and source.partner_id != self.partner_id:
+            if line.wgs_subscription_flow == 'reenroll' and source and (
+                source.partner_id != self.partner_id or source.state == 'cancel'
+            ):
                 preserved_source = source
             same_package = source and source.order_line.filtered(
                 lambda item: item.product_id.recurring_invoice and item.product_uom_qty > 0

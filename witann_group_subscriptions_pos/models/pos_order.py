@@ -2745,12 +2745,12 @@ class PosOrder(models.Model):
         return source_order
 
     def _wgs_reenrollment_requires_new_contract(self, source, buyer):
-        """A former participant may buy independently, never inherit ownership."""
+        """Never transfer ownership or revive a natively cancelled sale."""
         source.ensure_one()
         buyer.ensure_one()
-        if buyer == source.partner_id:
+        if buyer == source.partner_id and source.state != 'cancel':
             return False
-        if buyer not in source.participant_ids:
+        if buyer != source.partner_id and buyer not in source.participant_ids:
             raise UserError(_('El cliente no es titular ni participante de la suscripcion origen.'))
         candidates = self._wgs_find_subscription_history_for_partner(buyer, company=source.company_id) - source
         for candidate in candidates:
@@ -2783,8 +2783,8 @@ class PosOrder(models.Model):
             else set(source_order.participant_ids.ids if 'participant_ids' in source_order._fields else [])
         )
         if self._wgs_reenrollment_requires_new_contract(source_order, holder_partner):
-            # Reuse native creation and the purchased quote, not the former
-            # holder's identity, lines, payments or domiciliation installments.
+            # Native cancelled sales and another holder's contracts remain
+            # immutable history; the new purchase owns a confirmed contract.
             return self._wgs_create_subscription_sale_order_from_line(line)
         participant_ids = self._wgs_resolve_subscription_participant_ids_for_pos_line(
             line=line,
@@ -3610,7 +3610,7 @@ class PosOrder(models.Model):
             source = line.wgs_subscription_source_id
             sale_order_values.update({
                 'wgs_reenrollment_source_id': source.id,
-                'origin': _('%(pos)s | Reinscripcion de participante de %(source)s') % {
+                'origin': _('%(pos)s | Reinscripcion desde %(source)s') % {
                     'pos': self.pos_reference or self.name, 'source': source.name,
                 },
             })
@@ -3774,7 +3774,7 @@ class PosOrder(models.Model):
         if not partner_ids:
             return sale_order_model
 
-        domain = [('state', 'in', ['sale', 'done', 'cancel'])]
+        domain = sale_order_model._wgs_subscription_history_state_domain_for_pos()
         if 'participant_ids' in sale_order_model._fields:
             domain.extend([
                 '|',
@@ -3850,7 +3850,7 @@ class PosOrder(models.Model):
         if not partner_scope_ids:
             return sale_order_model
 
-        domain = [('state', 'in', ['sale', 'done'])]
+        domain = sale_order_model._wgs_subscription_history_state_domain_for_pos()
         if 'participant_ids' in sale_order_model._fields:
             domain.extend([
                 '|',
