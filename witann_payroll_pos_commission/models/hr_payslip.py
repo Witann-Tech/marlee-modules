@@ -12,6 +12,8 @@ class HrPayslip(models.Model):
     witann_pos_period = fields.Date(string='Quincena comisionada', readonly=True, copy=False)
     witann_pos_month = fields.Date(string='Mes de ventas', readonly=True, copy=False)
     witann_pos_user_id = fields.Many2one('res.users', string='Usuario POS', readonly=True, copy=False)
+    witann_pos_source_config_id = fields.Many2one('pos.config', string='POS de origen', readonly=True, copy=False, check_company=False, ondelete='restrict')
+    witann_pos_source_employee_id = fields.Many2one('hr.employee', string='Cajera o cajero de origen', readonly=True, copy=False, check_company=False, ondelete='restrict')
     witann_pos_rate = fields.Float(string='Porcentaje mensual (%)', digits=(7, 4), readonly=True, copy=False)
     witann_pos_base = fields.Monetary(string='Ventas sin impuestos', readonly=True, copy=False)
     witann_pos_amount = fields.Monetary(string='Comisión por venta', readonly=True, copy=False)
@@ -80,23 +82,32 @@ class HrPayslip(models.Model):
             base = previous.witann_pos_base
             rate = previous.witann_pos_rate
             user = previous.witann_pos_user_id
+            source_config = previous.witann_pos_source_config_id
+            source_employee = previous.witann_pos_source_employee_id or previous.employee_id
             timezone = previous.witann_pos_timezone
             evidence = previous.witann_pos_evidence
             count = previous.witann_pos_order_count
         else:
-            user = self.employee_id.user_id
+            source_config = self.employee_id.witann_pos_source_config_id.sudo()
+            source_employee = (self.employee_id.witann_pos_source_employee_id or self.employee_id).sudo()
+            source_company = source_config.company_id if source_config else self.company_id
+            if source_company.currency_id != self.currency_id:
+                raise UserError(_('La compañía del POS y la de nómina deben utilizar la misma moneda.'))
+            user = source_employee.user_id
             rate = self.employee_id.witann_pos_commission_rate
             # A named cashier owns the sale, even when another user opened POS.
             # Legacy orders without a cashier may fall back to a linked user.
-            seller_domain = Domain('employee_id', '=', self.employee_id.id)
-            if user:
+            seller_domain = Domain('employee_id', '=', source_employee.id)
+            if source_config:
+                seller_domain &= Domain('config_id', '=', source_config.id)
+            elif user:
                 seller_domain |= Domain.AND([
                     Domain('employee_id', '=', False), Domain('user_id', '=', user.id),
                 ])
             # Payroll does not need access to the POS application. The elevated read
             # is strictly scoped to this authorized company, seller and closed month.
             orders = self.env['pos.order'].sudo().search(seller_domain & Domain([
-                ('company_id', '=', self.company_id.id),
+                ('company_id', '=', source_company.id),
                 ('state', 'in', ['paid', 'done', 'invoiced']),
                 ('date_order', '>=', start), ('date_order', '<', stop),
             ]), order='date_order, id')
@@ -116,6 +127,8 @@ class HrPayslip(models.Model):
                 evidence.append({
                     'order_id': order.id, 'name': order.name,
                     'employee_id': order.employee_id.id, 'user_id': order.user_id.id,
+                    'config_id': order.config_id.id, 'config_name': order.config_id.display_name,
+                    'company_id': order.company_id.id, 'company_name': order.company_id.display_name,
                     'date_order_utc': fields.Datetime.to_string(order.date_order),
                     'untaxed': untaxed, 'currency': order.currency_id.name,
                     'currency_rate': order.currency_rate, 'company_amount': amount,
@@ -127,6 +140,8 @@ class HrPayslip(models.Model):
         return {
             'witann_pos_period': period if amount else False,
             'witann_pos_month': month, 'witann_pos_user_id': user.id,
+            'witann_pos_source_config_id': source_config.id,
+            'witann_pos_source_employee_id': source_employee.id,
             'witann_pos_rate': rate, 'witann_pos_base': base, 'witann_pos_amount': amount,
             'witann_pos_timezone': timezone, 'witann_pos_order_count': count,
             'witann_pos_evidence': evidence,
@@ -142,6 +157,7 @@ class HrPayslip(models.Model):
             values = {
                 'witann_pos_period': False, 'witann_pos_month': False,
                 'witann_pos_user_id': False, 'witann_pos_rate': 0,
+                'witann_pos_source_config_id': False, 'witann_pos_source_employee_id': False,
                 'witann_pos_base': 0, 'witann_pos_amount': 0,
                 'witann_pos_timezone': False, 'witann_pos_order_count': 0,
                 'witann_pos_evidence': False,
@@ -172,7 +188,51 @@ class HrPayslip(models.Model):
             # Avoid recursive line recomputation when updating this managed input.
             with self.env.protecting([self._fields['line_ids']], slip):
                 super(HrPayslip, slip).write(values)
+                slip._witann_sync_pos_claims()
                 self.env['hr.payslip.input']._witann_sync_pos_commission(slip, amount)
+
+    def _witann_pos_claim_values(self):
+        self.ensure_one()
+        if not self.witann_pos_amount or not self.witann_pos_period or self.credit_note or self.state == 'cancel':
+            return []
+        employee = self.witann_pos_source_employee_id or self.employee_id
+        sources = set()
+        if self.witann_pos_source_config_id:
+            sources.add((self.witann_pos_source_config_id.id, 'employee:%s' % employee.id))
+        else:
+            evidence = self.witann_pos_evidence or []
+            # Earlier versions did not store the POS in evidence. Resolve only
+            # those recorded tickets to protect pre-upgrade commissions as well.
+            old_orders = self.env['pos.order'].sudo().browse([
+                item['order_id'] for item in evidence if not item.get('config_id')
+            ]).exists()
+            old_configs = {order.id: order.config_id.id for order in old_orders}
+            old_cashiers = {order.id: order.employee_id.id for order in old_orders}
+            for item in evidence:
+                config_id = item.get('config_id') or old_configs.get(item['order_id'])
+                if not config_id:
+                    raise UserError(_('No se puede identificar el POS de un ticket histórico comisionado. Revise el recibo antes de continuar.'))
+                sources.add((config_id, 'employee:%s' % employee.id))
+                cashier_id = item.get('employee_id', old_cashiers.get(item['order_id']))
+                if cashier_id:
+                    sources.add((config_id, 'employee:%s' % cashier_id))
+                if not item.get('employee_id') and self.witann_pos_user_id:
+                    sources.add((config_id, 'user:%s' % self.witann_pos_user_id.id))
+        return [{'payslip_id': self.id, 'config_id': config_id, 'seller_key': key,
+                 'period': self.witann_pos_period} for config_id, key in sorted(sources)]
+
+    def _witann_sync_pos_claims(self):
+        Claim = self.env['witann.pos.commission.claim'].sudo()
+        for slip in self:
+            values = slip._witann_pos_claim_values()
+            for value in values:
+                if Claim.search_count([
+                    ('payslip_id', '!=', slip.id), ('config_id', '=', value['config_id']),
+                    ('seller_key', '=', value['seller_key']), ('period', '=', value['period']),
+                ], limit=1):
+                    raise ValidationError(_('Este origen POS ya tiene una comisión en la misma quincena. Cancele el recibo anterior antes de sustituirlo.'))
+            Claim.search([('payslip_id', '=', slip.id)]).unlink()
+            Claim.create(values)
 
     def _get_payslip_lines(self):
         if self.filtered(lambda s: s.credit_note and s.origin_payslip_id.witann_pos_month):
@@ -230,4 +290,7 @@ class HrPayslip(models.Model):
                 if slip._witann_pos_enabled() and not slip.witann_pos_month:
                     raise ValidationError(_('Calcule el recibo antes de validar la comisión POS.'))
             self._witann_check_pos_lines()
-        return super().write(vals)
+        result = super().write(vals)
+        if 'state' in vals:
+            self._witann_sync_pos_claims()
+        return result

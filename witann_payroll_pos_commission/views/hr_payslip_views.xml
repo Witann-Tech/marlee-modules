@@ -12,6 +12,8 @@
                             <field name="witann_pos_month"/>
                             <field name="witann_pos_period"/>
                             <field name="witann_pos_user_id"/>
+                            <field name="witann_pos_source_config_id" options="{'no_open': True}"/>
+                            <field name="witann_pos_source_employee_id" options="{'no_open': True}"/>
                             <field name="witann_pos_timezone"/>
                         </group>
                         <group>
