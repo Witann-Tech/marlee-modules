@@ -1,4 +1,7 @@
 from datetime import date
+import importlib.util
+import json
+from pathlib import Path
 from lxml import etree
 from psycopg2 import IntegrityError
 
@@ -65,6 +68,190 @@ class TestPosPayrollCommission(TestMxEdiCommon):
 
     def line(self, slip):
         return slip.line_ids.filtered(lambda l: l.code == 'COMMISSIONS')
+
+    def foreign_source(self):
+        branch = self.setup_other_company(name='Sucursal POS')['company']
+        self.env.user.company_ids |= branch
+        origin_env = self.env['hr.employee'].with_company(branch).env
+        cashier = origin_env['hr.employee'].create({'name': 'Cajera sucursal', 'company_id': branch.id})
+        config = origin_env['pos.config'].create({
+            'name': 'POS sucursal', 'company_id': branch.id, 'module_pos_hr': True,
+            'basic_employee_ids': [Command.set(cashier.ids)],
+        })
+        session = origin_env['pos.session'].create({'config_id': config.id, 'user_id': self.env.user.id})
+        self.employee.with_context(allowed_company_ids=[self.company.id, branch.id]).write({
+            'user_id': False, 'witann_pos_source_config_id': config.id,
+            'witann_pos_source_employee_id': cashier.id,
+        })
+        return cashier, config, session
+
+    def source_order(self, cashier, session, base=100000, tax=16000, **overrides):
+        return self.env['pos.order'].with_company(session.company_id).create({
+            'session_id': session.id, 'company_id': session.company_id.id,
+            'employee_id': cashier.id, 'user_id': self.env.user.id,
+            'date_order': '2026-09-10 12:00:00', 'amount_total': base + tax,
+            'amount_tax': tax, 'amount_paid': base + tax, 'amount_return': 0,
+            'state': 'paid', **overrides,
+        })
+
+    def payroll_employee(self, **values):
+        return self.env['hr.employee'].create({
+            'name': 'Otra ficha de nómina', 'company_id': self.company.id,
+            'date_version': '2024-01-01', 'contract_date_start': '2024-01-01',
+            'wage': 30000, 'schedule_pay': 'bi-weekly',
+            'structure_type_id': self.employee.structure_type_id.id, **values,
+        })
+
+    def test_mapped_source_two_fortnights_and_native_cfdi(self):
+        cashier, config, session = self.foreign_source()
+        self.source_order(cashier, session)
+        # Reuse the full native payroll, accounting and rendered CFDI assertions.
+        # Its local-company order must be ignored by the explicit source.
+        self.test_two_fortnights_native_rule_and_cfdi()
+        self.assertEqual(self.employee.company_id, self.company)
+        self.assertEqual(cashier.company_id, config.company_id)
+        self.assertEqual(config.basic_employee_ids, cashier)
+
+    def test_mapped_source_filters_pos_cashier_and_month_without_pos_rights(self):
+        cashier, config, session = self.foreign_source()
+        order = self.source_order(cashier, session)
+        self.source_order(cashier, session, -10000, -1600)
+        self.source_order(cashier, session, state='draft')
+        self.source_order(cashier, session, date_order='2026-10-02 12:00:00')
+        self.source_order(cashier, session, employee_id=False)
+        other = cashier.env['hr.employee'].create({'name': 'Otra cajera', 'company_id': config.company_id.id})
+        self.source_order(other, session)
+        another_config = config.copy({'name': 'Otro POS'})
+        another_session = session.env['pos.session'].create({'config_id': another_config.id})
+        self.source_order(cashier, another_session)
+        officer = new_test_user(
+            self.env, login='mapped_payroll_officer', groups='base.group_user,hr_payroll.group_hr_payroll_user',
+            company_id=self.company.id, company_ids=[Command.set(self.company.ids)],
+        )
+        slip = self.slip().with_user(officer).with_context(allowed_company_ids=self.company.ids)
+        slip.compute_sheet()
+        self.assertEqual(slip.company_id, self.company)
+        self.assertEqual(slip.witann_pos_base, 90000)
+        self.assertEqual(slip.witann_pos_amount, 450)
+        self.assertEqual(slip.witann_pos_order_count, 2)
+        self.assertEqual(slip.witann_pos_source_config_id.id, config.id)
+        self.assertEqual(slip.witann_pos_source_employee_id.id, cashier.id)
+        self.assertEqual(slip.witann_pos_evidence[0]['order_id'], order.id)
+        self.assertEqual(slip.witann_pos_evidence[0]['config_id'], config.id)
+        self.assertFalse(officer.has_group('point_of_sale.group_pos_user'))
+        # The origin is reviewable on the receipt without granting POS access.
+        displayed = slip.read(['witann_pos_source_config_id', 'witann_pos_source_employee_id'])[0]
+        self.assertEqual(displayed['witann_pos_source_config_id'][0], config.id)
+        with self.assertRaises(AccessError):
+            self.env['witann.pos.commission.claim'].with_user(officer).search([])
+        self.employee.witann_pos_commission_rate = 0
+        slip.compute_sheet()
+        self.assertFalse(self.line(slip))
+        self.assertFalse(self.env['witann.pos.commission.claim'].sudo().search([('payslip_id', '=', slip.id)]))
+
+    def test_mapped_source_requires_manager_and_access_to_source(self):
+        cashier, config, session = self.foreign_source()
+        for groups in ('hr_payroll.group_hr_payroll_user',
+                       'hr_payroll.group_hr_payroll_manager,point_of_sale.group_pos_manager'):
+            with self.subTest(groups=groups):
+                officer = new_test_user(
+                    self.env, login='limited_' + groups.split(',')[0], groups='base.group_user,' + groups,
+                    company_id=self.company.id, company_ids=[Command.set(self.company.ids)],
+                )
+                with self.assertRaises(AccessError), self.cr.savepoint():
+                    self.employee.with_user(officer).write({
+                        'witann_pos_source_config_id': config.id,
+                        'witann_pos_source_employee_id': cashier.id,
+                    })
+        with self.assertRaises(ValidationError), self.cr.savepoint():
+            self.employee.write({'witann_pos_source_employee_id': self.employee.id})
+        with self.assertRaises(ValidationError), self.cr.savepoint():
+            self.employee.write({'witann_pos_source_config_id': False})
+
+    def test_mapped_source_revocation_and_no_implicit_fallback(self):
+        cashier, config, session = self.foreign_source()
+        self.source_order(cashier, session)
+        self.order()  # Must not become a fallback after source access is revoked.
+        slip = self.slip()
+        slip.compute_sheet()
+        config.module_pos_hr = False
+        self.assertFalse(self.employee.witann_pos_commission_eligible)
+        slip.compute_sheet()
+        self.assertFalse(self.line(slip))
+
+    def test_mapped_source_frozen_with_validated_month(self):
+        cashier, config, session = self.foreign_source()
+        self.source_order(cashier, session)
+        first = self.slip()
+        first.compute_sheet()
+        first.action_payslip_done()
+        another = cashier.env['hr.employee'].create({'name': 'Otro origen', 'company_id': config.company_id.id})
+        config.write({'basic_employee_ids': [Command.link(another.id)]})
+        self.source_order(another, session, 300000, 48000)
+        self.employee.with_context(allowed_company_ids=[self.company.id, config.company_id.id]).write({
+            'witann_pos_source_employee_id': another.id, 'witann_pos_commission_rate': 2,
+        })
+        second = self.slip('2026-10-16', '2026-10-31')
+        second.compute_sheet()
+        self.assertEqual(second.witann_pos_amount, 500)
+        self.assertEqual(second.witann_pos_source_employee_id.id, cashier.id)
+
+    def test_mapped_source_duplicate_payroll_employees_and_sql_guard(self):
+        cashier, config, session = self.foreign_source()
+        self.source_order(cashier, session)
+        other = self.payroll_employee()
+        other.with_context(allowed_company_ids=[self.company.id, config.company_id.id]).write({
+            'witann_pos_source_config_id': config.id, 'witann_pos_source_employee_id': cashier.id,
+            'witann_pos_commission_rate': 1,
+        })
+        first, duplicate = self.slip(), self.slip(employee=other)
+        first.compute_sheet()
+        with self.assertRaises(ValidationError), self.cr.savepoint():
+            duplicate.compute_sheet()
+        claim = self.env['witann.pos.commission.claim'].sudo().search([('payslip_id', '=', first.id)])
+        with self.assertRaises(IntegrityError), self.cr.savepoint(), mute_logger('odoo.sql_db'):
+            self.cr.execute('INSERT INTO witann_pos_commission_claim (payslip_id, config_id, seller_key, period) VALUES (%s,%s,%s,%s)',
+                            [duplicate.id, config.id, claim.seller_key, first.witann_pos_period])
+        first.action_payslip_cancel()
+        duplicate.compute_sheet()
+        self.assertEqual(duplicate.witann_pos_amount, 500)
+
+    def test_direct_and_mapped_source_cannot_pay_twice(self):
+        self.config.write({'module_pos_hr': True, 'basic_employee_ids': [Command.set(self.employee.ids)]})
+        self.order(employee=self.employee)
+        other = self.payroll_employee(
+            witann_pos_source_config_id=self.config.id, witann_pos_source_employee_id=self.employee.id,
+            witann_pos_commission_rate=1,
+        )
+        direct, mapped = self.slip(), self.slip(employee=other)
+        direct.compute_sheet()
+        with self.assertRaises(ValidationError), self.cr.savepoint():
+            mapped.compute_sheet()
+        direct.action_payslip_cancel()
+        mapped.compute_sheet()
+        with self.assertRaises(ValidationError), self.cr.savepoint():
+            self.slip().compute_sheet()
+
+    def test_upgrade_reserves_historical_origins_idempotently(self):
+        self.order()
+        slip = self.slip()
+        slip.compute_sheet()
+        self.env['witann.pos.commission.claim'].sudo().search([('payslip_id', '=', slip.id)]).unlink()
+        old_evidence = [{key: value for key, value in item.items()
+                         if key not in ('config_id', 'config_name', 'company_id', 'company_name', 'employee_id', 'user_id')}
+                        for item in slip.witann_pos_evidence]
+        self.cr.execute('UPDATE hr_payslip SET witann_pos_evidence = %s, witann_pos_source_employee_id = NULL WHERE id = %s',
+                        [json.dumps(old_evidence), slip.id])
+        slip.invalidate_recordset()
+        path = Path(__file__).parents[1] / 'migrations/19.0.1.2.0/post-migrate.py'
+        spec = importlib.util.spec_from_file_location('commission_migration_test', path)
+        migration = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(migration)
+        migration.migrate(self.cr, '19.0.1.1.0')
+        migration.migrate(self.cr, '19.0.1.1.0')
+        claims = self.env['witann.pos.commission.claim'].sudo().search([('payslip_id', '=', slip.id)])
+        self.assertEqual(set(claims.mapped('seller_key')), {'employee:%s' % self.employee.id, 'user:%s' % self.seller.id})
+        self.assertEqual(slip.witann_pos_evidence, old_evidence)
 
     def test_two_fortnights_native_rule_and_cfdi(self):
         self.order()

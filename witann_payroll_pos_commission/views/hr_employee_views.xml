@@ -6,15 +6,29 @@
         <field name="inherit_id" ref="hr.view_employee_form"/>
         <field name="arch" type="xml">
             <xpath expr="//sheet/notebook" position="inside">
-                <page name="witann_pos_commission" string="Comisión POS" groups="hr_payroll.group_hr_payroll_user"
-                      invisible="not witann_pos_commission_eligible">
+                <page name="witann_pos_commission" string="Comisión POS" groups="hr_payroll.group_hr_payroll_user">
                     <field name="witann_pos_commission_eligible" invisible="1"/>
+                    <field name="witann_pos_source_company_id" invisible="1"/>
                     <group>
-                        <field name="witann_pos_commission_rate"/>
+                        <field name="witann_pos_source_config_id" domain="[('active', '=', True), ('module_pos_hr', '=', True)]"
+                               options="{'no_create': True, 'no_open': True}" groups="hr_payroll.group_hr_payroll_manager"/>
+                        <field name="witann_pos_source_config_id" readonly="1" options="{'no_open': True}"
+                               groups="!hr_payroll.group_hr_payroll_manager"/>
+                        <field name="witann_pos_source_employee_id" invisible="not witann_pos_source_config_id"
+                               required="witann_pos_source_config_id"
+                               domain="[('company_id', '=', witann_pos_source_company_id), ('active', '=', True)]"
+                               options="{'no_create': True, 'no_open': True}" groups="hr_payroll.group_hr_payroll_manager"/>
+                        <field name="witann_pos_source_employee_id" readonly="1" invisible="not witann_pos_source_config_id"
+                               options="{'no_open': True}" groups="!hr_payroll.group_hr_payroll_manager"/>
+                        <field name="witann_pos_commission_rate" invisible="not witann_pos_commission_eligible and not witann_pos_commission_rate"/>
                     </group>
+                    <p>Un responsable de Nómina puede seleccionar un POS y una cajera o cajero de origen de las compañías
+                       a las que tiene acceso. Con este vínculo solo se comisionan los tickets de esa persona en ese POS.
+                       Active también la compañía de origen en el selector de compañías para configurarlo.</p>
+                    <p invisible="witann_pos_commission_eligible">Seleccione un origen válido para habilitar el porcentaje de comisión.</p>
                     <p>1% mensual equivale a 0.5% en cada quincena sobre las ventas sin impuestos del mes anterior.
-                       Un porcentaje de 0 desactiva la comisión. Las ventas se identifican por el cajero del ticket;
-                       si no hay cajero, se utiliza el usuario vinculado al empleado.</p>
+                       Un porcentaje de 0 desactiva la comisión. Si deja ambos campos de origen vacíos, se conservan
+                       las ventas propias del empleado en su compañía, por cajero o por usuario cuando el ticket no tiene cajero.</p>
                 </page>
             </xpath>
         </field>

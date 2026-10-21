@@ -14,7 +14,8 @@ suscripciones ni de `witann_mx_payroll`.
    vinculado, permisos de Punto de Venta y acceso a su compañía.
    No necesita un usuario de Odoo propio si accede como cajero.
 3. Un responsable de Nómina configura **Comisión POS → Comisión mensual POS (%)**.
-   La pestaña solo aparece para empleados elegibles. El valor inicial es **0**:
+   La pestaña permite configurar el origen; el porcentaje se habilita con acceso
+   POS propio o con un origen válido. El valor inicial es **0**:
    no se habilitan comisiones para toda la plantilla durante la instalación.
 4. Calcular la nómina ordinaria mexicana con frecuencia **quincenal** y periodos
    del 1 al 15 o del 16 al último día del mes. Aparece la percepción
@@ -24,9 +25,39 @@ Ejemplo: ventas de septiembre de $116,000 con $16,000 de IVA; porcentaje mensual
 del empleado de 1%. La base es $100,000 y se pagan $500 en cada quincena de octubre.
 Con 2% mensual, serían $1,000 por quincena. Con 0%, no se genera entrada ni ingreso.
 
+## Nómina en otra compañía: POS y cajera de origen
+
+En la ficha de la empleada de **Comercializadora Marlee**, configurar:
+
+- **POS de origen:** SB Total Padel.
+- **Cajera o cajero de origen:** su ficha operativa de Padel.
+- **Comisión mensual POS (%):** 1 para pagar 0.5% por quincena.
+
+La ficha de nómina puede no tener usuario ni acceso propio a POS. Se mantiene
+separada de la ficha operativa; los contratos, recibos, contabilidad y CFDI siguen
+el flujo nativo de su compañía. No se crean, trasladan ni sincronizan empleados
+automáticamente, ni se modifican los permisos o el funcionamiento del POS.
+
+Solo un responsable de Nómina puede guardar o cambiar el vínculo, con los permisos
+nativos de lectura sobre el POS y la cajera. Debe seleccionar ambas compañías al
+configurarlo. Después, un usuario de Nómina puede calcular con solo la compañía
+empleadora seleccionada y sin permisos de POS: se lee exclusivamente el origen
+guardado. No se amplían ACL ni reglas multiempresa de Odoo.
+
+Ambos campos de origen se completan juntos. La cajera debe pertenecer a la compañía
+del POS, estar activa y tener acceso nativo a ese POS activo. Las dos compañías
+deben utilizar la misma moneda. Se consideran únicamente tickets con esa cajera
+en ese POS: no se toma el usuario que abrió la sesión ni se buscan coincidencias
+por nombre. Los tickets sin cajera quedan excluidos del origen explícito.
+
+Dejar ambos campos vacíos conserva el cálculo anterior por empleado/usuario propio.
+El porcentaje cero o la pérdida del acceso al origen detienen nuevas comisiones.
+Una quincena validada conserva también el origen para la otra quincena del mes;
+un cambio de origen con porcentaje positivo se aplica al siguiente mes no cerrado.
+
 ## Criterios del cálculo
 
-- Vendedor: el cajero de `pos.order.employee_id` tiene prioridad. Solo en tickets
+- Sin origen explícito: el cajero de `pos.order.employee_id` tiene prioridad. Solo en tickets
   sin cajero se utiliza `pos.order.user_id`, relacionado con `hr.employee.user_id`.
   Así, varias cajeras pueden compartir sesión sin que sus ventas se atribuyan
   al usuario que la abrió. Los tickets históricos sin cajero no se asignan
@@ -34,7 +65,8 @@ Con 2% mensual, serían $1,000 por quincena. Con 0%, no se genera entrada ni ing
 - Mes calendario anterior al periodo del recibo; nunca relativo al día en que
   se pulsa Calcular. Se respeta la zona horaria del calendario de la compañía
   (respaldo `America/Mexico_City`), con inicio incluido y fin excluido.
-- Pedidos pagados/contabilizados de la misma compañía. Se incluyen los facturados
+- Pedidos pagados/contabilizados de la compañía de origen (o de nómina cuando no
+  se configuró otro origen). Se incluyen los facturados
   sin contar por separado sus facturas; se excluyen borradores y cancelados.
 - Base: total menos impuestos de cada pedido, que ya incorpora descuentos y el
   signo de las devoluciones. Las devoluciones se restan en el mes de su registro
@@ -74,6 +106,14 @@ no se admite. Con porcentaje cero, las comisiones manuales siguen funcionando.
 
 - Un índice único en PostgreSQL impide dos comisiones automáticas activas del
   mismo empleado, compañía y quincena, incluyendo cálculos concurrentes.
+- Una reserva interna con unicidad SQL por POS, vendedor y quincena impide
+  comisionar el mismo origen desde fichas de nómina distintas, incluso si una
+  usa el cálculo propio y otra un vínculo explícito. Se libera al cancelar el
+  recibo o recalcular su comisión a cero. El modelo interno no tiene ACL de usuario.
+- Al actualizar desde versiones anteriores, la migración registra esas reservas
+  para recibos con comisión activos, sin modificar sus importes ni evidencia.
+  Si existen orígenes ya duplicados o tickets históricos que no permiten localizar
+  el POS, la actualización se detiene para conciliarlos; no se descartan pagos.
 - Las entradas automáticas y la evidencia no pueden editarse mediante formulario
   ni RPC. Se regeneran desde el cálculo privado del módulo.
 - Los recibos confirmados conservan sus datos. Para corregirlos se utiliza el
@@ -134,3 +174,15 @@ pruebas locales; este desarrollo no despliega ni modifica su base de datos.
 - Casos añadidos: dos cajeras sin usuario compartiendo sesión, prioridad del
   cajero sobre el usuario, los tres niveles de permisos, revocación de acceso,
   POS deshabilitado/archivado y aislamiento por compañía.
+
+### Origen configurable — 21 de octubre de 2026
+
+- Versión `19.0.1.2.0`: POS y cajera de origen opcionales en la ficha de nómina.
+- **8 pruebas independientes y 32 pruebas integradas aprobadas**, sin fallos,
+  con instalación/actualización local del addon y vistas validadas por Odoo.
+- Se verificaron nómina y XML CFDI nativos en la compañía empleadora tomando
+  ventas de otra compañía, filtrado por POS y cajera, permisos de configuración
+  y cálculo, conservación del origen validado, duplicados entre fichas, reserva
+  SQL y migración idempotente de evidencia histórica. Sin envío al PAC ni al SAT.
+- Esta entrega es código para actualizar el módulo; no crea fichas reales ni
+  configura los vínculos o porcentajes de empleados en staging.
