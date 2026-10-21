@@ -4,8 +4,9 @@ Registro inicial: 2026-09-28. Rama de trabajo: `staging`.
 
 ## H3: historial despues de reembolso, 2026-10-21
 
-**Candidato staging POS `19.0.1.6.7`, pendiente despliegue y navegador.**
-Base sin cambios (`19.0.1.1.59`). No autorizado para main.
+**H3 corregido y validado por navegador en staging POS `19.0.1.6.7`.**
+Codigo desplegado: `60afffa`. Base sin cambios (`19.0.1.1.59`).
+No se ha autorizado ni realizado merge a main.
 
 El QA del 20/oct sobre `5d322fc` verifico H1 (primera prueba gratis ED/SM,
 bloqueo de CURP repetida incluso entre sedes) y H2 (contratos independientes
@@ -51,17 +52,49 @@ Logs: `/tmp/wgs-qa-20261021-h3/{python,source-calendar,javascript}.log`.
 El Python del sistema no tenia `dateutil`; las ejecuciones aprobadas usan
 el runtime Python incluido en Codex. `git diff --check` sin errores.
 
-### Comprobacion por navegador pendiente
+### Resultado por navegador: 2026-10-21
 
-1. Build CloudPepper solo de staging; upgrade WGS POS a `19.0.1.6.7`.
-2. S03632 debe reaparecer cancelada y sin acceso, con Reinscribir y sin
-   Nueva suscripcion/Renovar; sus pagos anteriores deben permanecer.
-3. Reinscribir ese cliente: contrato nuevo, importe y periodo correctos,
-   acceso activo y origen cancelado intacto. S03631 no debe alterarse.
-4. Reembolsar totalmente la nueva compra; recuperar la misma clasificacion
-   cancelada, historial visible y acceso retirado tras recargar el POS.
-5. Repetir reinscripcion posterior al reembolso y comprobar que los recibos
-   se vinculan a su destino, sin reintentar ni borrar tickets anteriores.
+CloudPepper mostro `60afffa451cbfeb7699321e8a4467c189d5899af` como commit
+instalado del repositorio staging. Se actualizo la lista de aplicaciones y
+exclusivamente WGS POS; Aplicaciones confirmo instalada/disponible `19.0.1.6.7`.
+No se actualizo Enterprise, Payroll, importador bancario ni produccion.
+No se ejecuto la funcion CloudPepper Refresh Staging from Production; su
+dialogo se cancelo sin copiar/restaurar la base de produccion.
+
+Se probo sobre el contacto ficticio existente `QA WGS 20261020 R6 Miembro`
+en El Dorado, sin reescribir el fixture que habia fallado:
+
+| Caso | Resultado observado |
+| --- | --- |
+| Recuperar S03632 reembolsada antes del upgrade | Cancelada visible, sin acceso, con Reinscribir; no Nueva suscripcion ni Renovar. No backfill/manual write. |
+| Reinscripcion desde S03632 | Recibo `263-3-000129`, $799; contrato nuevo S03635 confirmado, MENSUALIDAD ED, 21/oct-21/nov/2026; una persona activa. |
+| Preservar origen S03632 | Cancelado, mismo titular, plan y fin 20/dic; pagos positivos `000124` y `000126` por $799 cada uno siguen ligados solo al origen. |
+| Reembolso total de compra nueva | Recibo `263-3-000130`, -$799; S03635 cancelada y acceso retirado. |
+| Recarga normal despues de devolver | S03635 sigue visible como Cancelada, no Sin suscripcion; Reinscribir disponible y alta nueva ausente. |
+| Segunda reinscripcion desde S03635 | Recibo `263-3-000131`, $799; S03636 nuevo confirmado y con acceso, 21/oct-21/nov/2026. Origen nativo `Reinscripcion desde S03635`. |
+| Aislamiento del contrato devuelto | S03635 sigue cancelado, origen `Reinscripcion desde S03632`, periodo conservado y unico pago positivo `000129`; no recibe el `000131`. |
+| Control de titular original | S03631 sigue en progreso, acceso activo, 20/oct-20/nov/2026, titular/participante propio y pagos `000123` ($1,398.99) y `000125` ($799). |
+| Control de renovacion posterior | Solo cotizacion de S03636: $799, 22/nov-21/dic/2026. Cancelada sin agregar/cobrar, conserva corte 21. |
+
+**Tres operaciones confirmadas: dos ventas ficticias y una devolucion.**
+No se duplicaron cobros, no se publicaron/timbraron facturas, no se aplicaron
+accesos manuales ni se borraron contactos/tickets/cache. Pendientes previos
+3058, 3065 y 3119 intactos; se termino con 3132 vacio. El aviso de impresora
+no disponible es del entorno: continuar sin imprimir, nunca repetir la venta.
+
+El detalle mantiene su regla previa de mostrar el contrato comercial de
+mayor prioridad/mas reciente, no todas las tarjetas antiguas a la vez. La
+cancelada vuelve a ser operable cuando no hay otra activa; los contratos y
+pagos completos se verificaron en las vistas nativas de Ventas/POS.
+
+**Sin nuevos fallos comerciales observados en este alcance.** No es una
+reejecucion de toda la matriz del refactor: H1/H2 de 20/oct y sus pruebas
+previas se conservan como evidencia separada. Los 52 tests ORM, concurrencia
+real, rollback PostgreSQL y entrega fisica SpeedFace siguen sin ejecutarse.
+
+Capturas y estado estructurado:
+`/Users/apreza/.codex/visualizations/2026/02/18/019c72fb-fa85-7b22-a4fa-20aa1262c18f/wgs-staging-qa-60afffa/`.
+Main y origin/main permanecen en `df4e525`.
 
 ## Correccion de H1 y H2: 2026-10-20
 
