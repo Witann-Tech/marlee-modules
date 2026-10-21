@@ -20,6 +20,18 @@ class HrEmployee(models.Model):
         related='witann_pos_source_config_id.company_id',
         groups='hr_payroll.group_hr_payroll_user',
     )
+    witann_pos_source_allowed_company_ids = fields.Many2many(
+        'res.company', compute='_compute_witann_pos_source_allowed_companies',
+        groups='hr_payroll.group_hr_payroll_user', compute_sudo=False,
+    )
+
+    @api.depends_context('uid')
+    def _compute_witann_pos_source_allowed_companies(self):
+        # Only the two origin selectors use this context. Do not change the
+        # employee form's active company or any native POS/HR record rules.
+        companies = self.env['res.company'].browse(self.env.user._get_company_ids())
+        for employee in self:
+            employee.witann_pos_source_allowed_company_ids = companies
 
     @api.onchange('witann_pos_source_config_id')
     def _onchange_witann_pos_source_config(self):
@@ -38,11 +50,12 @@ class HrEmployee(models.Model):
             return
         if not self.env.su and not self.env.user.has_group('hr_payroll.group_hr_payroll_manager'):
             raise AccessError(_('Solo un responsable de Nómina puede configurar el origen POS.'))
-        # Configure using the caller's normal access to both companies. Subsequent
-        # payroll calculations may read only this saved source without POS rights.
+        # Match the selectors while deriving authorization on the server, never
+        # from client-supplied company IDs. All native ACLs and record rules apply.
+        source_context = {'allowed_company_ids': list(self.env.user._get_company_ids())}
         for employee in self:
-            employee.witann_pos_source_config_id.check_access('read')
-            employee.witann_pos_source_employee_id.check_access('read')
+            employee.witann_pos_source_config_id.with_context(**source_context).check_access('read')
+            employee.witann_pos_source_employee_id.with_context(**source_context).check_access('read')
 
     @api.model_create_multi
     def create(self, vals_list):

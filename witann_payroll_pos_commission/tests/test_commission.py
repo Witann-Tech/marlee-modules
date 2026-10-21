@@ -9,6 +9,7 @@ from odoo import Command
 from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.tests import tagged, new_test_user
 from odoo.tools import mute_logger
+from odoo.tools.safe_eval import safe_eval
 from odoo.addons.l10n_mx_edi.tests.common import TestMxEdiCommon
 
 
@@ -167,6 +168,51 @@ class TestPosPayrollCommission(TestMxEdiCommon):
             self.employee.write({'witann_pos_source_employee_id': self.employee.id})
         with self.assertRaises(ValidationError), self.cr.savepoint():
             self.employee.write({'witann_pos_source_config_id': False})
+
+    def test_source_selectors_and_save_with_only_payroll_company_active(self):
+        cashier, config, session = self.foreign_source()
+        employee = self.employee.with_context(allowed_company_ids=self.company.ids)
+        # Reproduce the dropdown regression: ordinary POS searches still obey
+        # the active company and must remain unchanged by this feature.
+        self.assertFalse(employee.env['pos.config'].search([('id', '=', config.id)]))
+        form = employee.get_view(view_id=self.env.ref('hr.view_employee_form').id, view_type='form')
+        arch = etree.fromstring(form['arch'])
+        values = employee.read(['witann_pos_source_allowed_company_ids'])[0]
+        self.assertIn(config.company_id.id, values['witann_pos_source_allowed_company_ids'])
+        for field_name, model, record in (
+            ('witann_pos_source_config_id', 'pos.config', config),
+            ('witann_pos_source_employee_id', 'hr.employee', cashier),
+        ):
+            selector = arch.xpath('//field[@name="%s"][@context]' % field_name)[0]
+            context = safe_eval(selector.get('context'), values)
+            matches = employee.env[model].with_context(**context).name_search(
+                name=record.name, domain=[('id', '=', record.id)])
+            self.assertEqual([match[0] for match in matches], record.ids)
+        employee.write({
+            'witann_pos_source_config_id': config.id,
+            'witann_pos_source_employee_id': cashier.id,
+        })
+        self.assertEqual(employee.env.companies, self.company)
+        self.assertEqual(employee.company_id, self.company)
+        self.assertFalse(employee.env['pos.config'].search([('id', '=', config.id)]))
+
+    def test_source_selectors_do_not_expose_unauthorized_companies(self):
+        cashier, config, session = self.foreign_source()
+        manager = new_test_user(
+            self.env, login='source_selector_limited_manager',
+            groups='base.group_user,hr_payroll.group_hr_payroll_manager,point_of_sale.group_pos_manager',
+            company_id=self.company.id, company_ids=[Command.set(self.company.ids)],
+        )
+        employee = self.employee.with_user(manager).with_context(allowed_company_ids=self.company.ids)
+        allowed = employee.witann_pos_source_allowed_company_ids.ids
+        self.assertNotIn(config.company_id.id, allowed)
+        self.assertFalse(employee.env['pos.config'].with_context(allowed_company_ids=allowed).name_search(
+            name=config.name, domain=[('id', '=', config.id)]))
+        with self.assertRaises(AccessError), self.cr.savepoint():
+            employee.write({
+                'witann_pos_source_config_id': config.id,
+                'witann_pos_source_employee_id': cashier.id,
+            })
 
     def test_mapped_source_revocation_and_no_implicit_fallback(self):
         cashier, config, session = self.foreign_source()

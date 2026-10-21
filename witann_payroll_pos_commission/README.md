@@ -39,8 +39,9 @@ el flujo nativo de su compañía. No se crean, trasladan ni sincronizan empleado
 automáticamente, ni se modifican los permisos o el funcionamiento del POS.
 
 Solo un responsable de Nómina puede guardar o cambiar el vínculo, con los permisos
-nativos de lectura sobre el POS y la cajera. Debe seleccionar ambas compañías al
-configurarlo. Después, un usuario de Nómina puede calcular con solo la compañía
+nativos de lectura sobre el POS y la cajera. Los dos selectores consultan las
+compañías autorizadas del usuario, incluidas sucursales no activas en la sesión;
+no es necesario cambiar el selector general de compañías. Después, un usuario de Nómina puede calcular con solo la compañía
 empleadora seleccionada y sin permisos de POS: se lee exclusivamente el origen
 guardado. No se amplían ACL ni reglas multiempresa de Odoo.
 
@@ -186,3 +187,13 @@ pruebas locales; este desarrollo no despliega ni modifica su base de datos.
   SQL y migración idempotente de evidencia histórica. Sin envío al PAC ni al SAT.
 - Esta entrega es código para actualizar el módulo; no crea fichas reales ni
   configura los vínculos o porcentajes de empleados en staging.
+
+### Selectores de sucursales — 21 de octubre de 2026
+
+- Versión `19.0.1.2.1`: los selectores de POS y cajera usan las compañías
+  autorizadas del usuario aunque solo esté activa la compañía de nómina.
+- El guardado verifica ese mismo alcance en el servidor, con las ACL y reglas
+  nativas. El contexto general de la ficha y los demás selectores no cambian.
+- **8 pruebas independientes y 34 integradas aprobadas**. La regresión utiliza
+  el contexto de los campos de la vista real para buscar POS/cajera y guardar
+  el vínculo, y comprueba que compañías no autorizadas permanezcan excluidas.
