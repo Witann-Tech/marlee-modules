@@ -258,6 +258,54 @@ class TestSubscriptionOperations(CommonPosTest):
         with self.assertRaisesRegex(UserError, 'titular ni participante'):
             self._quote(self.solo, self.month, 'reenroll', source)
 
+    def test_refunded_contract_stays_visible_and_reenrollment_preserves_cancelled_history(self):
+        payment, source = self._paid(self.solo, self.month)
+        before_payments = payment.payment_ids.read(['amount', 'pos_order_id', 'payment_method_id'])
+        refund, _unused = self.create_backend_pos_order({
+            'order_data': {'partner_id': self.holder.id, 'state': 'paid'},
+            'line_data': [{
+                'product_id': self.solo.id, 'qty': -1, 'price_unit': payment.lines.price_unit,
+                'refunded_orderline_id': payment.lines.id,
+            }],
+        })
+        refund._wgs_sync_subscription_sales()
+        self.assertEqual(source.state, 'cancel')
+        self.assertTrue(source._is_subscription_record_for_pos())
+        Sale = self.env['sale.order']
+        company = source.company_id
+        self.assertIn(source, Sale._get_pos_subscription_orders(self.holder, company=company))
+        self.assertIn(source, Sale._get_pos_subscription_orders_by_partners(self.holder, company=company)[self.holder.id])
+        self.assertTrue(Sale._wgs_partner_has_subscription_history_for_pos(self.holder, company=company))
+        self.assertIn(source, self.Pos._wgs_find_subscription_history_for_partner(self.holder, company=company))
+        status = source._build_pos_subscription_status_item(fields.Date.today())
+        self.assertEqual(status['native_state_key'], 'cancel')
+        self.assertTrue(status['can_reenroll'])
+        self.assertFalse(status['can_renew'])
+        self.assertFalse(status['is_valid'])
+        with self.assertRaises(UserError):
+            self._quote(self.solo, self.month)
+        before = self.Pos._wgs_source_revision(source)
+        new_payment, target = self._paid(self.solo, self.month, 'reenroll', source)
+        self.assertNotEqual(target, source)
+        self.assertEqual(target.state, 'sale')
+        self.assertEqual(target.wgs_reenrollment_source_id, source)
+        self.assertEqual(new_payment.lines.wgs_subscription_source_id, source)
+        self.assertEqual(self.Pos._wgs_source_revision(source), before)
+        self.assertEqual(payment.payment_ids.read(['amount', 'pos_order_id', 'payment_method_id']), before_payments)
+        self.assertNotIn(new_payment.lines, self.Pos._wgs_get_pos_lines_linked_to_subscription(source))
+        with self.assertRaises(UserError):
+            self._quote(self.solo, self.month, 'reenroll', source)
+
+    def test_cancelled_unpaid_recurring_quote_is_not_membership_history(self):
+        quote = self.env['sale.order'].create({
+            'partner_id': self.holder.id, 'plan_id': self.month.id,
+            'order_line': [Command.create({'product_id': self.solo.id, 'product_uom_qty': 1, 'price_unit': 100})],
+        })
+        quote.action_cancel()
+        self.assertFalse(quote._is_subscription_record_for_pos())
+        self.assertFalse(self.env['sale.order']._wgs_partner_has_subscription_history_for_pos(self.holder))
+        self.assertFalse(self.Pos._wgs_find_subscription_history_for_partner(self.holder))
+
     def test_payment_preflight_accepts_identical_retry_after_lost_response(self):
         order, subscription = self._paid(self.solo, self.month)
         config = json.loads(order.lines.wgs_operation_config_json)

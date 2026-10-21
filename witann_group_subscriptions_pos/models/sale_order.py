@@ -18,9 +18,13 @@ class SaleOrder(models.Model):
     _inherit = 'sale.order'
 
     wgs_reenrollment_source_id = fields.Many2one(
-        'sale.order', string='Origen de reinscripcion de participante',
+        'sale.order', string='Contrato historico de reinscripcion',
         copy=False, readonly=True, index=True, check_company=True, ondelete='restrict',
-        help='Contrato historico que conserva su titular y sus pagos. No es una sustitucion por upsale.',
+        help='Contrato del participante o contrato cancelado que conserva su titular y sus pagos. No es un upsale.',
+    )
+    wgs_pos_application_line_ids = fields.One2many(
+        'pos.order.line', 'wgs_sale_order_id', readonly=True, copy=False,
+        help='Pagos aplicados a este contrato, no al contrato de procedencia.',
     )
     wgs_monthly_cutoff_day = fields.Integer(
         string='Dia de corte mensual', default=0, copy=False, readonly=True,
@@ -2378,7 +2382,7 @@ class SaleOrder(models.Model):
             ('participant_ids', 'in', list(partner_ids)),
             ('partner_id', 'in', list(partner_ids)),
         ]
-        base_domain = [('state', 'in', ['sale', 'done', 'cancel'])]
+        base_domain = self._wgs_subscription_history_state_domain_for_pos()
         if 'company_id' in self._fields:
             base_domain.append(('company_id', '=', company.id))
         domain = self._wgs_and_domains_for_pos(base_domain, partner_domain)
@@ -2419,8 +2423,20 @@ class SaleOrder(models.Model):
         return subscriptions_by_partner
 
     @api.model
+    def _wgs_subscription_history_state_domain_for_pos(self):
+        # EXISTS on application target: do not load all cancelled quotations or
+        # mistake a participant's source link for a purchase of that contract.
+        return [
+            '|', ('state', 'in', ['sale', 'done']),
+            '&', ('state', '=', 'cancel'),
+            ('wgs_pos_application_line_ids', 'any', [
+                ('qty', '>', 0), ('order_id.state', 'in', ['paid', 'done', 'invoiced']),
+            ]),
+        ]
+
+    @api.model
     def _get_subscription_action_domain_for_pos(self, company=False):
-        base_domain = [('state', 'in', ['sale', 'done'])]
+        base_domain = self._wgs_subscription_history_state_domain_for_pos()
         company = company or self.env.company
         if 'company_id' in self._fields:
             base_domain.append(('company_id', '=', company.id))
@@ -2573,10 +2589,22 @@ class SaleOrder(models.Model):
         return result
 
     def _is_subscription_record_for_pos(self):
+        """Recognize commercial history, not eligibility for active access.
+
+        Native cancellation clears subscription_state/is_subscription. Paid
+        application links survive it and are the historical evidence, including
+        legacy payments without an application receipt. Draft quotations and
+        source-only participant links are not evidence of a purchased contract.
+        """
         self.ensure_one()
         recurring_lines = self._get_recurring_lines()
         if not recurring_lines:
             return False
+
+        if self.state == 'cancel':
+            return bool(self.wgs_pos_application_line_ids.filtered(
+                lambda line: line.qty > 0 and line.order_id.state in ('paid', 'done', 'invoiced')
+            ))
 
         # Source of truth: records that Odoo itself classifies as subscriptions.
         if 'is_subscription' in self._fields and not self.is_subscription:
@@ -2600,7 +2628,7 @@ class SaleOrder(models.Model):
             else self._wgs_has_replacement_subscription_for_pos()
         )
         contract = self.wgs_domiciliation_contract_id
-        if contract and contract.state == 'active' and not replacement:
+        if self.state != 'cancel' and contract and contract.state == 'active' and not replacement:
             operational = contract.wgs_get_operational_status(today=today)
             return {
                 **operational,
@@ -2660,7 +2688,7 @@ class SaleOrder(models.Model):
         """
         self.ensure_one()
         contract = self.wgs_domiciliation_contract_id
-        if not contract or contract.state != 'active':
+        if self.state == 'cancel' or not contract or contract.state != 'active':
             return False
         operational = self._wgs_subscription_operation_policy_for_pos(today=today, replacement_status=replacement_status)
         if operational['has_replacement_subscription']:
@@ -3016,6 +3044,8 @@ class SaleOrder(models.Model):
 
     def _get_native_subscription_state_info_for_pos(self):
         self.ensure_one()
+        if self.state == 'cancel':
+            return 'cancel', _('Cancelada')
         display_label = self._get_subscription_state_display_for_pos()
         state_value = (self.subscription_state or '').strip().lower() if 'subscription_state' in self._fields else ''
         haystack = ' '.join(filter(None, [state_value, (display_label or '').strip().lower()]))

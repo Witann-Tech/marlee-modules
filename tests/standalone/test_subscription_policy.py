@@ -18,7 +18,7 @@ SALE = 'witann_group_subscriptions_pos/models/sale_order.py'
 def source(*, state='progress', start=date(2026, 9, 19), end=date(2026, 10, 19),
            next_date=date(2026, 10, 20), deadline=None, replacement=False, access='enabled'):
     item = SimpleNamespace(
-        id=1, ensure_one=lambda: None, company_id=1, wgs_domiciliation_contract_id=False,
+        id=1, state='sale', ensure_one=lambda: None, company_id=1, wgs_domiciliation_contract_id=False,
         _wgs_has_replacement_subscription_for_pos=lambda: replacement,
         _get_native_subscription_state_info_for_pos=lambda: (state, state),
         _classify_subscription_access_state_for_pos=lambda: access,

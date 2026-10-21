@@ -2,6 +2,67 @@
 
 Registro inicial: 2026-09-28. Rama de trabajo: `staging`.
 
+## H3: historial despues de reembolso, 2026-10-21
+
+**Candidato staging POS `19.0.1.6.7`, pendiente despliegue y navegador.**
+Base sin cambios (`19.0.1.1.59`). No autorizado para main.
+
+El QA del 20/oct sobre `5d322fc` verifico H1 (primera prueba gratis ED/SM,
+bloqueo de CURP repetida incluso entre sedes) y H2 (contratos independientes
+de titular/participante, renovacion y reembolso aislados). Fueron ocho
+operaciones ficticias: siete ventas y una devolucion. El nuevo hallazgo H3:
+S03632 seguia cancelada y con pagos nativos, pero el directorio la omitia y
+permitia cotizar una alta nueva. No se confirmo esa alta.
+
+### Correccion y limites
+
+- Odoo limpia `is_subscription/subscription_state` al cancelar. Una sola
+  regla de identidad reconoce ademas el contrato cancelado con lineas
+  recurrentes y compras positivas POS pagadas aplicadas a ese contrato.
+- Relacion inversa `wgs_pos_application_line_ids` sobre el destino real
+  `wgs_sale_order_id`, no sobre el origen del participante. Aprovecha los
+  enlaces existentes; no necesita reescribir historicos ni hacer backfill.
+- Directorio, detalle y validaciones comerciales incluyen las canceladas
+  mediante un dominio compartido `any`/EXISTS de pagos positivos. No se
+  cargan todas las cotizaciones canceladas para buscar esa evidencia.
+- La cancelacion de venta prevalece sobre etiquetas, fechas futuras o un
+  contrato domiciliado desactualizado: sin acceso, Renovar ni Cambiar plan;
+  se permite Reinscribir, nunca Nueva suscripcion por perdida de historial.
+- Reinscribir una venta nativa cancelada crea un contrato confirmado nuevo,
+  incluso para el mismo titular. Se conserva procedencia y se verifica que
+  el origen no cambio. No se reactiva una venta reembolsada ni se mezclan
+  pagos. Otro contrato vigente/futuro impide repetir esa reinscripcion.
+- El titular de una venta confirmada cerrada por vencimiento conserva el
+  flujo existente. Los participantes siguen comprando contratos propios.
+- No se modifican main, produccion, importador bancario, Payroll POS,
+  calendario, crons ni protocolo SpeedFace. Los commits Payroll existentes
+  en staging se conservan sin editar.
+
+### Verificacion local
+
+106 tests Python y 26 JavaScript aprobados; siete nuevos tests aislados de
+H3 ejecutan cuerpos de metodos de produccion. Dos nuevos tests ORM cubren
+directorio individual/lote, bloqueo de alta, reinscripcion, conservacion de
+pagos y rechazo de cotizaciones canceladas sin compra. Total: 52 tests ORM
+preparados, no ejecutados por falta de runner/base desechable. No sustituir
+ese requisito con ejecuciones sobre la base operativa de staging.
+
+Logs: `/tmp/wgs-qa-20261021-h3/{python,source-calendar,javascript}.log`.
+El Python del sistema no tenia `dateutil`; las ejecuciones aprobadas usan
+el runtime Python incluido en Codex. `git diff --check` sin errores.
+
+### Comprobacion por navegador pendiente
+
+1. Build CloudPepper solo de staging; upgrade WGS POS a `19.0.1.6.7`.
+2. S03632 debe reaparecer cancelada y sin acceso, con Reinscribir y sin
+   Nueva suscripcion/Renovar; sus pagos anteriores deben permanecer.
+3. Reinscribir ese cliente: contrato nuevo, importe y periodo correctos,
+   acceso activo y origen cancelado intacto. S03631 no debe alterarse.
+4. Reembolsar totalmente la nueva compra; recuperar la misma clasificacion
+   cancelada, historial visible y acceso retirado tras recargar el POS.
+5. Repetir reinscripcion posterior al reembolso y comprobar que los recibos
+   se vinculan a su destino, sin reintentar ni borrar tickets anteriores.
+
 ## Correccion de H1 y H2: 2026-10-20
 
 **Candidato en staging, pendiente build/upgrade y repeticion por navegador.**
