@@ -7,9 +7,55 @@ and domiciliation owns installment balances. No balances are duplicated here.
 from odoo import _, fields, models
 from odoo.exceptions import UserError
 
+from ..subscription_contract import fingerprint
+
 
 class PosSubscriptionApplication(models.Model):
     _inherit = 'pos.order'
+
+    def _wgs_domiciliation_collection_state(self, subscription, *, selected_sequences=()):
+        """Freeze commercial identity and all ledger fields except this payment."""
+        contract = subscription.wgs_domiciliation_contract_id
+        native = self._wgs_source_contract(subscription)
+        native.pop('installments')
+        ledger = []
+        for item in contract.installment_ids.sorted('sequence'):
+            values = {
+                'id': item.id, 'sequence': item.sequence, 'kind': item.kind,
+                'start': str(item.period_start_date), 'end': str(item.period_end_date),
+                'due': str(item.due_date), 'amount': item.amount, 'source': item.payment_source,
+            }
+            if item.sequence not in selected_sequences:
+                values.update(state=item.state, order=item.paid_pos_order_id.id,
+                              line=item.paid_pos_line_id.id, at=str(item.paid_at or ''))
+            ledger.append(values)
+        return {
+            'subscription': native, 'contract': contract.id, 'state': contract.state,
+            'owner': contract.partner_id.id, 'company': contract.company_id.id,
+            'product': contract.product_id.id, 'plan': contract.plan_id.id,
+            'currency': contract.currency_id.id, 'monthly': contract.monthly_amount,
+            'access_start': str(contract.access_start_date), 'term_start': str(contract.term_start_date),
+            'term_end': str(contract.term_end_date), 'months': contract.term_months,
+            'ledger': ledger,
+        }
+
+    def _wgs_domiciliation_collection_revision(self, subscription):
+        return fingerprint(self._wgs_domiciliation_collection_state(subscription))
+
+    def _wgs_validate_domiciliation_collection_quote(self, subscription, snapshot):
+        contract = subscription.wgs_domiciliation_contract_id
+        quote = snapshot.get('domiciliation') or {}
+        if (not contract or contract.state != 'active' or not quote.get('is_domiciliation')
+                or contract.subscription_id != subscription or contract.partner_id != subscription.partner_id
+                or contract.company_id != subscription.company_id or contract.currency_id != subscription.currency_id
+                or quote.get('selection_mode') != 'renewal' or quote.get('contract_id') != contract.id
+                or quote.get('collection_revision') != self._wgs_domiciliation_collection_revision(subscription)
+                or snapshot.get('plan_id') != contract.plan_id.id
+                or contract.currency_id.compare_amounts(snapshot.get('recurring_price', -1), contract.monthly_amount)):
+            raise UserError(_(
+                'La cotizacion domiciliada no corresponde a la cartera actual. '
+                'Actualiza la seleccion de mensualidades antes de cobrar; no repitas un pago ya recibido.'
+            ))
 
     def _wgs_assert_subscription_refund(self, subscription):
         if subscription.state != 'cancel' and subscription._wgs_get_subscription_state_category() not in ('closed', 'cancel'):
@@ -25,6 +71,7 @@ class PosSubscriptionApplication(models.Model):
     def _wgs_assert_subscription_application(
         self, line, subscription, pricing, *, before, activation=False, expected_participants=False,
         preserved_source=False,
+        collection_before=False,
     ):
         """Reject a partial native application inside Odoo's existing transaction."""
         subscription.ensure_one()
@@ -52,7 +99,20 @@ class PosSubscriptionApplication(models.Model):
         if (subscription.plan_id.id != pricing['plan_id']
                 or len(recurring) != 1 or recurring.product_id != line.product_id):
             raise UserError(_('El paquete o plan aplicado no coincide con la cotizacion pagada.'))
-        if (abs(recurring.product_uom_qty - abs(line.qty)) > 0.00001
+        domiciliation = snapshot.get('domiciliation') or {}
+        collection = line.wgs_subscription_flow == 'renewal' and domiciliation.get('selection_mode') == 'renewal'
+        if collection:
+            contract = subscription.wgs_domiciliation_contract_id
+            contract.flush_recordset()
+            contract.installment_ids.flush_recordset()
+            contract.invalidate_recordset()
+            contract.installment_ids.invalidate_recordset()
+            if (not collection_before or line.qty != 1 or subscription != line.wgs_subscription_source_id
+                    or self._wgs_domiciliation_collection_state(
+                        subscription, selected_sequences=domiciliation.get('selected_installment_sequences') or [],
+                    ) != collection_before):
+                raise UserError(_('La cobranza domiciliada no debe modificar el contrato ni los pagos anteriores.'))
+        elif (abs(recurring.product_uom_qty - abs(line.qty)) > 0.00001
                 or subscription.currency_id.compare_amounts(recurring.price_unit, pricing['price_unit'])
                 or recurring.discount):
             raise UserError(_('El contrato no conserva la cantidad y precio recurrente cotizados.'))
@@ -69,7 +129,6 @@ class PosSubscriptionApplication(models.Model):
             if not source or source == subscription or source._wgs_get_subscription_state_category() not in ('closed', 'cancel'):
                 raise UserError(_('El upsale no cerro la membresia sustituida.'))
 
-        domiciliation = snapshot.get('domiciliation') or {}
         if domiciliation.get('is_domiciliation'):
             self._wgs_assert_domiciliation_application(line, subscription, pricing, domiciliation)
             return
@@ -88,12 +147,15 @@ class PosSubscriptionApplication(models.Model):
                 or contract.subscription_id != subscription or contract.company_id != self.company_id
                 or contract.partner_id != self.partner_id or contract.product_id != line.product_id
                 or contract.plan_id.id != pricing['plan_id']
+                or contract.currency_id != subscription.currency_id
+                or (domiciliation.get('selection_mode') == 'renewal' and domiciliation.get('contract_id') != contract.id)
                 or contract.currency_id.compare_amounts(contract.monthly_amount, pricing['price_unit'])):
             raise UserError(_('El contrato domiciliado aplicado no coincide con el contratado.'))
         sequences = domiciliation.get('selected_installment_sequences') or []
         paid = contract.installment_ids.filtered(lambda item: item.sequence in sequences)
         if not sequences or len(paid) != len(sequences) or any(
-            item.state != 'paid' or item.paid_pos_line_id != line for item in paid
+            item.state != 'paid' or item.paid_pos_line_id != line or item.paid_pos_order_id != self
+            for item in paid
         ):
             raise UserError(_('Las mensualidades seleccionadas no quedaron aplicadas al pago.'))
         if domiciliation.get('selection_mode') == 'initial' and contract.access_start_date != fields.Date.to_date(

@@ -701,6 +701,52 @@ class PosOrderPricingMixin(models.Model):
             ),
         )
 
+    def _wgs_build_domiciliation_collection_payload(self, source, *, product=False, installment_sequences=False):
+        """Collect an existing wallet; do not sell/reprice its monthly term."""
+        source.ensure_one()
+        contract = source.wgs_domiciliation_contract_id
+        if not contract or contract.state != 'active' or (product and product != contract.product_id):
+            raise UserError(_('Selecciona el paquete del contrato domiciliado activo.'))
+        product = contract.product_id
+        quote = contract.wgs_get_renewal_quote(installment_sequences=installment_sequences)
+        selected = contract.installment_ids.filtered(
+            lambda item: item.sequence in quote['selected_installment_sequences']
+        ).sorted('sequence')
+        tax_context = {
+            'partner': contract.partner_id, 'company': contract.company_id,
+            'fiscal_position': source.fiscal_position_id,
+        }
+        amount = quote['amount_due_total']
+        monthly = contract.monthly_amount
+        display = self._wgs_get_price_with_taxes_for_pos(product, amount, **tax_context)
+        display_monthly = self._wgs_get_price_with_taxes_for_pos(product, monthly, **tax_context)
+        return {
+            'flow': 'renewal', 'is_upgrade': False, 'is_renewal': True, 'is_reenroll': False,
+            'plan_id': contract.plan_id.id, 'plan_name': contract.plan_id.display_name, 'pricing_id': False,
+            'interval_value': 1, 'interval_unit': 'month', 'interval_label': '1 month',
+            'charge_now': amount, 'ticket_charge_now': amount, 'display_charge_now': display,
+            'recurring_price': monthly, 'ticket_recurring_price': monthly,
+            'display_recurring_price': display_monthly,
+            'credit_amount': 0.0, 'ticket_credit_amount': 0.0, 'display_credit_amount': 0.0,
+            'source_subscription_id': source.id, 'source_subscription_name': source.name,
+            'subscription_start_date': fields.Date.to_string(max(selected[0].period_start_date, contract.access_start_date)),
+            'subscription_end_date': fields.Date.to_string(selected[-1].period_end_date),
+            'next_billing_date': fields.Date.to_string(selected[-1].period_end_date + timedelta(days=1)),
+            'monthly_cutoff_day': 0, 'first_period_alignment': True,
+            'business_date': fields.Date.to_string(self._wgs_get_subscription_business_today_for_pos(company=source.company_id)),
+            'domiciliation': {
+                **quote, 'is_domiciliation': True, 'selection_mode': 'renewal',
+                'collection_revision': self._wgs_domiciliation_collection_revision(source),
+                'monthly_amount': monthly,
+                'term_months': contract.term_months,
+                'term_start_date': fields.Date.to_string(contract.term_start_date),
+                'term_end_date': fields.Date.to_string(contract.term_end_date),
+                'installments': self._wgs_get_domiciliation_installment_payloads_for_pos(
+                    quote['installments'], product=product, access_start_date=contract.access_start_date, **tax_context,
+                ),
+            },
+        }
+
     def _wgs_build_subscription_product_renewal_snapshot(
         self,
         source_order,

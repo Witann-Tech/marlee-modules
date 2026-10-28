@@ -1515,50 +1515,10 @@ class PosOrder(models.Model):
         elif normalized_flow == 'renewal':
             contract = source_order.wgs_domiciliation_contract_id
             if contract and contract.state == 'active':
-                pricing = self._wgs_build_subscription_recurring_charge_payload(
-                    source_order,
-                    product_id=product.id if product else False,
-                    preferred_plan_id=preferred_plan_id,
-                    preferred_pricing_id=preferred_pricing_id,
-                    fallback=fallback,
-                    is_renewal=True,
-                    is_reenroll=False,
-                )
-                domiciliation_quote = contract.wgs_get_renewal_quote(
+                pricing = self._wgs_build_domiciliation_collection_payload(
+                    source_order, product=product,
                     installment_sequences=domiciliation_installment_sequences,
                 )
-                domiciliation_installments = self._wgs_get_domiciliation_installment_payloads_for_pos(
-                    domiciliation_quote['installments'],
-                    product=product or contract.product_id,
-                    partner=partner or source_order.partner_id,
-                    company=source_order.company_id,
-                    fiscal_position=(
-                        source_order.fiscal_position_id
-                        if 'fiscal_position_id' in source_order._fields else False
-                    ),
-                    access_start_date=contract.access_start_date,
-                )
-                pricing.update({
-                    'charge_now': domiciliation_quote['amount_due_total'],
-                    'ticket_charge_now': domiciliation_quote['amount_due_total'],
-                    'display_charge_now': self._wgs_get_price_with_taxes_for_pos(
-                        product or contract.product_id,
-                        domiciliation_quote['amount_due_total'],
-                        partner=partner or source_order.partner_id,
-                        company=source_order.company_id,
-                        fiscal_position=source_order.fiscal_position_id if 'fiscal_position_id' in source_order._fields else False,
-                    ),
-                    'domiciliation': {
-                        'is_domiciliation': True,
-                        'selection_mode': 'renewal',
-                        **domiciliation_quote,
-                        'installments': domiciliation_installments,
-                        'term_months': contract.term_months,
-                        'term_start_date': fields.Date.to_string(contract.term_start_date),
-                        'term_end_date': fields.Date.to_string(contract.term_end_date),
-                    },
-                })
-                pricing['flow'] = normalized_flow
                 pricing = self._wgs_seal_pricing_payload(pricing, request_data)
                 return {'flow': normalized_flow, 'pricing': pricing, 'offers': offers}
             pricing = self._wgs_build_subscription_recurring_charge_payload(

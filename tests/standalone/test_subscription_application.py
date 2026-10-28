@@ -109,7 +109,7 @@ class ApplicationTests(unittest.TestCase):
             partner_id=owner.partner_id, product_id=line.product_id, plan_id=subscription.plan_id,
             currency_id=subscription.currency_id, monthly_amount=619,
             access_start_date=pricing['subscription_start_date'],
-            installment_ids=Lines([SimpleNamespace(sequence=1, state='paid', paid_pos_line_id=line)]),
+            installment_ids=Lines([SimpleNamespace(sequence=1, state='paid', paid_pos_line_id=line, paid_pos_order_id=owner)]),
         )
         subscription.wgs_domiciliation_contract_id = contract
         pricing['snapshot']['domiciliation'] = {

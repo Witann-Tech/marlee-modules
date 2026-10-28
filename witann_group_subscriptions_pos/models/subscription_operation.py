@@ -171,6 +171,8 @@ class PosSubscriptionOperation(models.Model):
             raise UserError(_('La suscripcion cambio desde la cotizacion. Actualiza la operacion; no repitas un cobro ya recibido.'))
         if source:
             self._wgs_assert_no_due_paid_change(source)
+            if payload.get('flow') == 'renewal' and source.wgs_domiciliation_contract_id.state == 'active':
+                self._wgs_validate_domiciliation_collection_quote(source, payload['pricing'])
             if payload.get('flow') == 'reenroll':
                 self._wgs_reenrollment_requires_new_contract(
                     source, self.env['res.partner'].browse(payload['partner_id']).exists(),
@@ -494,6 +496,7 @@ class PosSubscriptionOperation(models.Model):
         before = False
         expected_participants = False
         preserved_source = False
+        collection_before = False
         if line.qty > 0 and line.wgs_subscription_flow != 'pending_charge':
             pricing_state = self._wgs_get_persisted_subscription_pricing_from_pos_line(line)
             if not pricing_state['snapshot'].get('commercial_quote'):
@@ -503,6 +506,12 @@ class PosSubscriptionOperation(models.Model):
                 raise UserError(_('El precio de la membresia pagada no coincide con su cotizacion firmada.'))
             before = self._wgs_source_revision(line.wgs_subscription_source_id)
             source = line.wgs_subscription_source_id
+            domiciliation = pricing_state['snapshot'].get('domiciliation') or {}
+            if line.wgs_subscription_flow == 'renewal' and domiciliation.get('selection_mode') == 'renewal':
+                self._wgs_validate_domiciliation_collection_quote(source, pricing_state['snapshot'])
+                collection_before = self._wgs_domiciliation_collection_state(
+                    source, selected_sequences=domiciliation['selected_installment_sequences'],
+                )
             if line.wgs_subscription_flow == 'reenroll' and source and (
                 source.partner_id != self.partner_id or source.state == 'cancel'
             ):
@@ -519,6 +528,7 @@ class PosSubscriptionOperation(models.Model):
             self._wgs_assert_subscription_application(
                 line, result, pricing_state, before=before, activation=activation,
                 expected_participants=expected_participants, preserved_source=preserved_source,
+                collection_before=collection_before,
             )
         elif line.qty < 0:
             self._wgs_assert_subscription_refund(result)

@@ -2,6 +2,62 @@
 
 Registro inicial: 2026-09-28. Rama de trabajo: `staging`.
 
+## Incidente domiciliados: cartera vs catalogo, 2026-10-28
+
+**Correccion POS `19.0.1.6.8` preparada en staging. Pendiente despliegue/QA.**
+Main/produccion sin modificar. No hay reparaciones de datos autorizadas aun.
+
+### Diagnostico de solo lectura
+
+- S02673 / contrato 137 y S02904 / contrato 52: contrato activo de 12 meses,
+  producto 1476, plan DOMICILIADOS ED 26, mensualidad base $533.62. Ambas
+  lineas nativas tienen cantidad 1, precio $533.62, descuento 0 e IVA 16%:
+  $619 finales. No hay que cambiar sus precios ni sus plazos.
+- Los calendarios conservan octubre pendiente (secuencias 2 y 6), con los
+  meses anteriores pagados. Sus finales forzosos son 31/ago/2027 y
+  30/abr/2027. El estado nativo churn no manda sobre la cartera activa.
+- Los intentos fallidos firmaron recurrente $533.63 desde el catalogo, pero
+  cobraron $533.62 desde la cartera. La postcondicion generica comparo la
+  linea nativa con el importe de catalogo y rechazo el centavo de diferencia.
+  No es necesario ni correcto falsificar la historia para que coincida.
+- Intentos 15417 (cancelado) y 15422 (borrador), recibos 26255-3-000034/35:
+  ambos conservan una linea de pago POS de $619, metodo Tarjeta Debito, sin
+  cuota de octubre aplicada ni recibo de aplicacion WGS. No se puede asumir
+  que un `pos.payment` en borrador/cancelado prueba un cargo bancario real.
+- Se solicito confirmacion humana del cobro real y autorizacion para una
+  recuperacion sin recobro. No se marco octubre pagado ni se habilito acceso.
+- Evidencia acotada fuera del repo: `/tmp/wgs-domiciliation-20261028/production-readonly.json`.
+  Solo `read/search_read/fields_get`; no se llamaron cotizaciones productivas
+  que puedan activar cambios pendientes. No se registran credenciales aqui.
+
+### Regla y correccion
+
+- Renovar un contrato domiciliado activo es cobranza de su cartera, no una
+  nueva venta que pueda tomar tarifa/plan vigente del catalogo. La cotizacion
+  usa producto, plan, moneda, mensualidad y cuotas del contrato existente.
+- Se firma una revision completa de terminos, calendario, linea nativa y
+  pagos existentes. El preflight rechaza cotizaciones antiguas/incoherentes
+  antes del cobro, con instruccion de actualizar mensualidades sin recobrar.
+- Aplicacion y postcondicion preservan la representacion nativa historica,
+  los terminos y todas las cuotas/pagos no seleccionados. Solo se permite
+  una unidad de cobranza; las cuotas seleccionadas deben quedar ligadas al
+  pedido y linea que las paga. No se relajan altas/reinscripciones/upsales.
+- Sin cursores/commits nuevos, migraciones automaticas, cambios a calendarios
+  o precios de datos existentes. La cartera sigue determinando el acceso.
+- Fixtures ORM ahora computan IVA real en vez de simular importe sin impuesto.
+  Tres casos nuevos cubren $533.62/$533.63, IVA $619, churn nativo, historial
+  con descuento manual, replay idempotente y rollback posterior al pago.
+
+### Pruebas y gate pendiente
+
+112 pruebas Python y 26 JavaScript aprobadas. Seis tests aislados nuevos
+ejecutan pricing y postcondiciones reales; no sustituyen transacciones ORM.
+55 tests ORM preparados pero no ejecutados sin base Enterprise desechable.
+Logs: `/tmp/wgs-domiciliation-20261028/{python,calendar-source,javascript}.log`.
+Falta build/upgrade de staging y comprobacion funcional por navegador antes
+de solicitar liberacion o intervencion productiva. No se incluyen cambios
+de Payroll, importador bancario ni protocolo SpeedFace.
+
 ## H3: historial despues de reembolso, 2026-10-21
 
 **H3 corregido y validado por navegador en staging POS `19.0.1.6.7`.**

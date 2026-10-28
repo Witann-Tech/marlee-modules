@@ -92,16 +92,20 @@ class TestSubscriptionOperations(CommonPosTest):
             'lines': [{'uuid': config['line_uuid'], 'product_id': product.id, 'qty': 1,
                        'price_unit': quote['ticket_charge_now'], 'discount': discount}],
         })
-        amount = order.currency_id.round(quote['ticket_charge_now'] * (1 - discount / 100))
+        totals = product.taxes_id.compute_all(
+            quote['ticket_charge_now'] * (1 - discount / 100), currency=order.currency_id,
+            quantity=1, product=product, partner=self.holder,
+        )
+        amount, subtotal = totals['total_included'], totals['total_excluded']
         payload = {
             'uuid': order.uuid, 'state': 'paid', 'session_id': order.session_id.id,
             'partner_id': self.holder.id, 'amount_return': 0,
-            'amount_total': amount, 'amount_paid': amount, 'amount_tax': 0,
+            'amount_total': amount, 'amount_paid': amount, 'amount_tax': amount - subtotal,
             'to_invoice': False, 'wgs_subscription_configs': [config],
             'lines': [[1, order.lines.id, {
                 'uuid': config['line_uuid'], 'product_id': product.id, 'qty': 1,
                 'price_unit': quote['ticket_charge_now'], 'discount': discount,
-                'price_subtotal': amount, 'price_subtotal_incl': amount,
+                'price_subtotal': subtotal, 'price_subtotal_incl': amount,
             }]],
             'payment_ids': [[0, 0, {
                 'payment_method_id': self.cash_payment_method.id,
@@ -905,6 +909,80 @@ class TestSubscriptionOperations(CommonPosTest):
         subscription.end_date = fields.Date.to_date('2026-10-01')
         with self.assertRaises(UserError):
             order._wgs_apply_approved_period_repair(order.lines, options)
+
+    def _historical_domiciliation(self):
+        self.month.write({'wgs_domiciliation_enabled': True, 'wgs_domiciliation_term_months': 12})
+        tax = self.env['account.tax'].create({
+            'name': 'Incident VAT 16%', 'amount': 16, 'amount_type': 'percent',
+            'company_id': self.env.company.id, 'type_tax_use': 'sale',
+        })
+        self.solo.taxes_id = tax
+        price = self.env['product.pricelist.item'].search([
+            ('product_tmpl_id', '=', self.solo.product_tmpl_id.id), ('plan_id', '=', self.month.id),
+        ])
+        price.fixed_price = 533.62
+        initial, sub = self._paid(self.solo, self.month, start='2026-09-01', months=[1])
+        self.assertEqual(initial.amount_total, 619)
+        price.fixed_price = 533.63
+        sub.subscription_state = '6_churn'
+        return initial, sub, sub.wgs_domiciliation_contract_id
+
+    def test_domiciliation_collection_uses_frozen_price_with_vat_and_replay_is_idempotent(self):
+        initial, sub, contract = self._historical_domiciliation()
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 10, 28, 12)):
+            quote = self._quote(self.solo, self.month, 'renewal', sub, months=[2])
+            self.assertEqual(quote['recurring_price'], 533.62)
+            self.assertEqual(quote['ticket_charge_now'], 533.62)
+            self.assertEqual(quote['display_charge_now'], 619)
+            before = self.Pos._wgs_domiciliation_collection_state(sub, selected_sequences=[2])
+            payment, result = self._paid(self.solo, self.month, 'renewal', sub, months=[2])
+            self.assertEqual(result, sub)
+            self.assertEqual(payment.amount_total, 619)
+            self.assertEqual(payment.lines.price_unit, 533.62)
+            self.assertEqual(self.Pos._wgs_domiciliation_collection_state(sub, selected_sequences=[2]), before)
+            self.assertEqual(sub.subscription_state, '6_churn')
+            self.assertTrue(contract.is_access_current)
+            self.assertEqual(contract.term_end_date, fields.Date.to_date('2027-08-31'))
+            paid = contract.installment_ids.filtered(lambda i: i.sequence == 2)
+            self.assertEqual(paid.paid_pos_line_id, payment.lines)
+            receipt = payment.lines.wgs_application_receipt
+            old_payments = initial.payment_ids.read(['amount', 'pos_order_id'])
+            payment._wgs_sync_subscription_sales()
+            self.assertEqual(payment.lines.wgs_application_receipt, receipt)
+            self.assertEqual(paid.paid_pos_line_id, payment.lines)
+            self.assertEqual(initial.payment_ids.read(['amount', 'pos_order_id']), old_payments)
+            self.assertEqual(sum(payment.payment_ids.mapped('amount')), 619)
+
+    def test_domiciliation_collection_preserves_legacy_discounted_native_representation(self):
+        _initial, sub, contract = self._historical_domiciliation()
+        sub.order_line.write({'price_unit': 0, 'discount': 100})
+        before = self.Pos._wgs_domiciliation_collection_state(sub, selected_sequences=[2])
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 10, 28, 12)):
+            payment, _sub = self._paid(self.solo, self.month, 'renewal', sub, months=[2])
+        self.assertEqual(payment.amount_total, 619)
+        self.assertEqual(sub.order_line.price_unit, 0)
+        self.assertEqual(sub.order_line.discount, 100)
+        self.assertEqual(contract.monthly_amount, 533.62)
+        self.assertEqual(self.Pos._wgs_domiciliation_collection_state(sub, selected_sequences=[2]), before)
+
+    def test_domiciliation_postcondition_failure_rolls_back_payment_and_installments(self):
+        _initial, sub, contract = self._historical_domiciliation()
+        ledger = contract.installment_ids.read(['amount', 'state', 'paid_pos_line_id', 'paid_pos_order_id', 'paid_at'])
+        orders_before = self.Pos.search_count([('partner_id', '=', self.holder.id)])
+        original = type(self.Pos)._wgs_assert_domiciliation_application
+
+        def fail_after_wallet_payment(records, *args):
+            original(records, *args)
+            raise UserError('Reject incomplete wallet application')
+
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 10, 28, 12)):
+            with patch.object(type(self.Pos), '_wgs_assert_domiciliation_application', fail_after_wallet_payment):
+                with self.assertRaises(UserError), self.env.cr.savepoint():
+                    self._paid(self.solo, self.month, 'renewal', sub, months=[2])
+            self.assertEqual(contract.installment_ids.read(['amount', 'state', 'paid_pos_line_id', 'paid_pos_order_id', 'paid_at']), ledger)
+            self.assertEqual(self.Pos.search_count([('partner_id', '=', self.holder.id)]), orders_before)
+            payment, _sub = self._paid(self.solo, self.month, 'renewal', sub, months=[2])
+            self.assertEqual(payment.amount_total, 619)
 
     def test_domiciliation_restart_preserves_previous_installments(self):
         self.month.write({'wgs_domiciliation_enabled': True, 'wgs_domiciliation_term_months': 12})
