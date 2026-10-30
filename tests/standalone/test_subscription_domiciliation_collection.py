@@ -17,11 +17,26 @@ PRICING = 'witann_group_subscriptions_pos/models/pos_order_pricing.py'
 
 
 class Records(Lines):
+    def __init__(self, values=(), *, relations=None, writes=None):
+        super().__init__(values)
+        self.relations = relations or {}
+        self.writes = writes if writes is not None else []
+
     def filtered(self, predicate):
-        return Records(item for item in self if predicate(item))
+        return Records((item for item in self if predicate(item)), relations=self.relations, writes=self.writes)
 
     def sorted(self, key):
-        return Records(sorted(self, key=lambda item: getattr(item, key)))
+        return Records(sorted(self, key=key if callable(key) else lambda item: getattr(item, key)),
+                       relations=self.relations, writes=self.writes)
+
+    def mapped(self, name):
+        return [getattr(item, name) for item in self]
+
+    def write(self, values):
+        self.writes.append(dict(values))
+        for item in self:
+            for key, value in values.items():
+                setattr(item, key, self.relations.get(key, value))
 
     def invalidate_recordset(self):
         pass
@@ -30,6 +45,7 @@ class Records(Lines):
 def collection_fixture(*, historical_price=533.62, historical_discount=0, historical_qty=1):
     owner, line, sub, pricing = fixture()
     owner.id, line.id, sub.id, sub.name = 50, 51, 52, 'Historical subscription'
+    line.order_id, line.ensure_one = owner, lambda: None
     owner.company_id = sub.company_id = SimpleNamespace(id=10)
     owner.partner_id = sub.partner_id = SimpleNamespace(id=7)
     owner.currency_id.id = 33
@@ -57,6 +73,8 @@ def collection_fixture(*, historical_price=533.62, historical_discount=0, histor
         term_start_date=date(2026, 9, 1), term_end_date=date(2027, 8, 31), term_months=12,
         installment_ids=installments, flush_recordset=lambda: None, invalidate_recordset=lambda: None,
     )
+    contract.ensure_one = lambda: None
+    installments.relations = {'paid_pos_order_id': owner, 'paid_pos_line_id': line}
     contract.wgs_get_renewal_quote = lambda **kw: {
         'contract_id': contract.id, 'selected_installment_sequences': [2],
         'amount_due_total': 533.62, 'installments': [], 'due_installment_count': 1,
@@ -92,6 +110,28 @@ def apply_selected(owner, line, sub, pricing, contract):
 
 
 class DomiciliationCollectionTests(unittest.TestCase):
+    def test_actual_wallet_payment_body_is_idempotent_and_rejects_wrong_amount(self):
+        owner, line, _sub, _pricing, contract = collection_fixture()
+        pay = method('witann_group_subscriptions/models/domiciliation.py', 'wgs_apply_pos_payment')
+        contract._wgs_normalize_installment_sequences = lambda values: sorted(set(values))
+        contract._wgs_get_renewal_payment_installments = lambda **kw: contract.installment_ids.filtered(
+            lambda item: item.sequence in kw['installment_sequences'] and item.state != 'paid'
+        )
+        line.price_unit = 500
+        with self.assertRaises(UserError):
+            pay(contract, line, installment_sequences=[2])
+        self.assertEqual(contract.installment_ids[1].state, 'due')
+        self.assertFalse(contract.installment_ids.writes)
+        line.price_unit = 533.62
+        pay(contract, line, installment_sequences=[2])
+        first_paid_at = contract.installment_ids[1].paid_at
+        pay(contract, line, installment_sequences=[2])
+        self.assertEqual(len(contract.installment_ids.writes), 1)
+        self.assertEqual(contract.installment_ids[1].paid_at, first_paid_at)
+        self.assertIs(contract.installment_ids[1].paid_pos_line_id, line)
+        self.assertIs(contract.installment_ids[1].paid_pos_order_id, owner)
+        self.assertEqual(contract.installment_ids[0].paid_pos_line_id.id, 9)
+
     def test_quote_uses_wallet_price_and_full_october_even_if_catalog_is_different(self):
         owner, _line, _sub, pricing, _contract = collection_fixture()
         quote = pricing['snapshot']
@@ -113,6 +153,48 @@ class DomiciliationCollectionTests(unittest.TestCase):
                 owner._wgs_assert_subscription_application(line, sub, pricing, before='old', collection_before=before)
                 self.assertEqual(sub.order_line.price_unit, kwargs.get('historical_price', 533.62))
                 self.assertEqual(contract.monthly_amount, 533.62)
+
+    def test_collection_uses_wallet_plan_and_preserves_different_native_plan(self):
+        for wallet_plan, native_plan in ((25, 15), (26, 9), (25, 14), (25, 21)):
+            with self.subTest(wallet_plan=wallet_plan, native_plan=native_plan):
+                owner, line, sub, pricing, contract = collection_fixture()
+                contract.plan_id = SimpleNamespace(id=wallet_plan, display_name='Domiciliation')
+                sub.plan_id = SimpleNamespace(id=native_plan, display_name='Historical native plan')
+                quote = method(PRICING, '_wgs_build_domiciliation_collection_payload')(
+                    owner, sub, product=line.product_id, installment_sequences=[2],
+                )
+                pricing.update(plan_id=wallet_plan)
+                pricing['snapshot'].update(quote)
+                owner._wgs_validate_domiciliation_collection_quote(sub, pricing['snapshot'])
+                before = apply_selected(owner, line, sub, pricing, contract)
+                owner._wgs_assert_subscription_application(
+                    line, sub, pricing, before='old', collection_before=before,
+                )
+                self.assertEqual(sub.plan_id.id, native_plan)
+                self.assertEqual(contract.plan_id.id, wallet_plan)
+
+    def test_collection_cannot_rewrite_native_plan_during_payment(self):
+        owner, line, sub, pricing, contract = collection_fixture()
+        sub.plan_id = SimpleNamespace(id=9)
+        before = apply_selected(owner, line, sub, pricing, contract)
+        sub.plan_id = contract.plan_id
+        with self.assertRaises(UserError):
+            owner._wgs_assert_subscription_application(
+                line, sub, pricing, before='old', collection_before=before,
+            )
+
+    def test_collection_must_match_wallet_plan_even_when_native_plan_is_different(self):
+        owner, line, sub, pricing, contract = collection_fixture()
+        sub.plan_id = SimpleNamespace(id=9)
+        pricing['plan_id'] = pricing['snapshot']['plan_id'] = 9
+        pricing['snapshot']['domiciliation']['collection_revision'] = owner._wgs_domiciliation_collection_revision(sub)
+        with self.assertRaises(UserError):
+            owner._wgs_validate_domiciliation_collection_quote(sub, pricing['snapshot'])
+        before = apply_selected(owner, line, sub, pricing, contract)
+        with self.assertRaises(UserError):
+            owner._wgs_assert_subscription_application(
+                line, sub, pricing, before='old', collection_before=before,
+            )
 
     def test_queued_catalog_priced_quote_is_rejected_before_dispatch_not_silently_accepted(self):
         owner, _line, sub, pricing, _contract = collection_fixture()

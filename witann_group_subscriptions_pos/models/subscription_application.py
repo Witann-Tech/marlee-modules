@@ -68,6 +68,26 @@ class PosSubscriptionApplication(models.Model):
         if pending or (contract and contract.state != 'cancelled'):
             raise UserError(_('El reembolso no cancelo todos los cambios y cobros domiciliados pendientes.'))
 
+    def _wgs_assert_domiciliation_collection_application(self, line, subscription, pricing, before):
+        """Collect the wallet without rewriting the historical native sale.
+
+        Imported wallets can intentionally differ from the native sale's old
+        plan or discounted price. The wallet owns this collection's terms; the
+        frozen native footprint must remain exactly as it was before payment.
+        """
+        domiciliation = pricing['snapshot']['domiciliation']
+        contract = subscription.wgs_domiciliation_contract_id
+        contract.flush_recordset()
+        contract.installment_ids.flush_recordset()
+        contract.invalidate_recordset()
+        contract.installment_ids.invalidate_recordset()
+        if (not before or line.qty != 1 or subscription != line.wgs_subscription_source_id
+                or self._wgs_domiciliation_collection_state(
+                    subscription, selected_sequences=domiciliation.get('selected_installment_sequences') or [],
+                ) != before):
+            raise UserError(_('La cobranza domiciliada no debe modificar el contrato ni los pagos anteriores.'))
+        self._wgs_assert_domiciliation_application(line, subscription, pricing, domiciliation)
+
     def _wgs_assert_subscription_application(
         self, line, subscription, pricing, *, before, activation=False, expected_participants=False,
         preserved_source=False,
@@ -96,23 +116,22 @@ class PosSubscriptionApplication(models.Model):
         recurring = subscription.order_line.filtered(
             lambda item: item.product_id.recurring_invoice and item.product_uom_qty > 0
         )
-        if (subscription.plan_id.id != pricing['plan_id']
-                or len(recurring) != 1 or recurring.product_id != line.product_id):
+        if len(recurring) != 1 or recurring.product_id != line.product_id:
             raise UserError(_('El paquete o plan aplicado no coincide con la cotizacion pagada.'))
         domiciliation = snapshot.get('domiciliation') or {}
-        collection = line.wgs_subscription_flow == 'renewal' and domiciliation.get('selection_mode') == 'renewal'
+        collection = (
+            line.wgs_subscription_flow == 'renewal' and domiciliation.get('is_domiciliation')
+            and domiciliation.get('selection_mode') == 'renewal'
+        )
         if collection:
-            contract = subscription.wgs_domiciliation_contract_id
-            contract.flush_recordset()
-            contract.installment_ids.flush_recordset()
-            contract.invalidate_recordset()
-            contract.installment_ids.invalidate_recordset()
-            if (not collection_before or line.qty != 1 or subscription != line.wgs_subscription_source_id
-                    or self._wgs_domiciliation_collection_state(
-                        subscription, selected_sequences=domiciliation.get('selected_installment_sequences') or [],
-                    ) != collection_before):
-                raise UserError(_('La cobranza domiciliada no debe modificar el contrato ni los pagos anteriores.'))
-        elif (abs(recurring.product_uom_qty - abs(line.qty)) > 0.00001
+            self._wgs_assert_domiciliation_collection_application(
+                line, subscription, pricing, collection_before,
+            )
+            return
+
+        if subscription.plan_id.id != pricing['plan_id']:
+            raise UserError(_('El paquete o plan aplicado no coincide con la cotizacion pagada.'))
+        if (abs(recurring.product_uom_qty - abs(line.qty)) > 0.00001
                 or subscription.currency_id.compare_amounts(recurring.price_unit, pricing['price_unit'])
                 or recurring.discount):
             raise UserError(_('El contrato no conserva la cantidad y precio recurrente cotizados.'))

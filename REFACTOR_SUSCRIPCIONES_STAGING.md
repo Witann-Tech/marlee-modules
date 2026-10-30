@@ -2,6 +2,45 @@
 
 Registro inicial: 2026-09-28. Rama de trabajo: `staging`.
 
+## Cobranza domiciliada con plan nativo historico, 2026-10-30
+
+**Correccion WGS POS `19.0.1.6.9`. Solo staging; no reparar datos productivos.**
+
+- La auditoria del 28/oct detecto 52 carteras cuyo plan difiere de la venta
+  nativa, 50 de ellas dentro de plazo y con mensualidades por cobrar. Jafet
+  Ibraim Rodriguez Franco / S01184 es uno de estos casos: cartera DOMICILIADOS
+  ED, venta historica MENSUALIDAD ED. El arreglo 1.6.8 de precio no cubria el
+  rechazo posterior de esta diferencia de plan.
+- Primero se reprodujo el mensaje exacto de produccion mediante los cuerpos
+  reales de cotizacion, preflight y postcondicion, sin conectar esos tests a
+  Odoo. Casos SM/ED y planes nativos mensual/anual/diario fallaban antes.
+- La cobranza de una cartera existente tiene ahora una postcondicion propia:
+  valida plan/precio/moneda/producto contra la cartera, sus cuotas contra el
+  pedido/linea pagados, y conserva la huella completa de la venta nativa,
+  calendario y pagos no seleccionados. No convierte el plan nativo ni cambia
+  precios, participantes, vigencias o pagos historicos para aceptar el cobro.
+- No se elimina la comprobacion del producto recurrente. Altas, reinscripciones,
+  cambios de paquete y cobranza inicial siguen exigiendo que el plan nativo
+  coincida con el contratado. Las cotizaciones obsoletas siguen rechazadas.
+- Pruebas negativas conservan el rechazo de un plan de cartera incorrecto y
+  de cualquier cambio de plan nativo durante la transaccion. La prueba local
+  pendiente de idempotencia del metodo real de pago se conserva y se incluye.
+- Reproduccion local de la poblacion auditada: 152/152 representaciones
+  aceptadas, incluidas las 50 con plan nativo distinto. Es una comprobacion
+  de metodos aislados; no son 152 ventas ni pruebas transaccionales en Odoo.
+- 116 pruebas Python y 26 JavaScript aprobadas. Hay 58 tests ORM preparados,
+  no ejecutados por falta de base Enterprise desechable. Nuevos casos ORM:
+  cobro con plan nativo distinto, rollback si se reescribe durante el cobro,
+  y trimestral -> mensual con un mes comprado, no tres.
+- La primera clienta de la captura del 30/oct no puede identificarse con
+  certeza. Se solicito nombre o suscripcion antes de auditar su cronologia;
+  no se presupone que su vigencia historica se repare desplegando codigo.
+- Sin cambios de Payroll, importador bancario, crons o protocolo SpeedFace.
+  Sin escrituras de pagos/suscripciones productivas. Pendiente QA por navegador.
+
+Evidencia local: `/tmp/wgs-domiciliation-audit-20261028/local-replay-after-1.6.9.json`.
+Logs: `/tmp/wgs-20261030-{subscriptions,source-calendar,javascript}.log`.
+
 ## Incidente domiciliados: cartera vs catalogo, 2026-10-28
 
 **Correccion POS `19.0.1.6.8` preparada en staging. Pendiente despliegue/QA.**

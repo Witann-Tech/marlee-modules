@@ -60,6 +60,9 @@ def fixture():
     )
     owner._wgs_assert_subscription_application = MethodType(method(APPLICATION, '_wgs_assert_subscription_application'), owner)
     owner._wgs_assert_domiciliation_application = MethodType(method(APPLICATION, '_wgs_assert_domiciliation_application'), owner)
+    owner._wgs_assert_domiciliation_collection_application = MethodType(
+        method(APPLICATION, '_wgs_assert_domiciliation_collection_application'), owner,
+    )
     return owner, line, subscription, pricing
 
 

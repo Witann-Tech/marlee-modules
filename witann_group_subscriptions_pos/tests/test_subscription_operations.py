@@ -809,6 +809,31 @@ class TestSubscriptionOperations(CommonPosTest):
         renewal._wgs_sync_subscription_sales()
         self.assertEqual(subscription.end_date, fields.Date.to_date('2026-12-14'))
 
+    def test_quarter_to_month_applies_only_the_purchased_month(self):
+        quarter = self.env['sale.subscription.plan'].create({
+            'name': 'Quarterly source', 'billing_period_value': 3, 'billing_period_unit': 'month',
+        })
+        quarterly_product = self._product('Quarterly package', quarter, 300)
+        _initial, subscription = self._paid(quarterly_product, quarter, start='2026-07-03')
+        self.assertEqual(subscription.end_date, fields.Date.to_date('2026-10-02'))
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 10, 3, 18)):
+            quote = self._quote(self.solo, False, 'renewal', subscription)
+            self.assertEqual(quote['plan_id'], self.month.id)
+            self.assertEqual(quote['ticket_charge_now'], 100)
+            self.assertEqual(quote['subscription_start_date'], '2026-10-03')
+            self.assertEqual(quote['subscription_end_date'], '2026-11-03')
+            renewal, result = self._paid(self.solo, False, 'renewal', subscription)
+        self.assertEqual(result, subscription)
+        self.assertEqual(renewal.lines.wgs_application_state, 'applied')
+        self.assertEqual(subscription.plan_id, self.month)
+        self.assertEqual(subscription._get_recurring_lines().product_id, self.solo)
+        self.assertEqual(subscription.end_date, fields.Date.to_date('2026-11-03'))
+        self.assertEqual(subscription.next_invoice_date, fields.Date.to_date('2026-11-04'))
+        receipt = renewal.lines.wgs_application_receipt
+        renewal._wgs_sync_subscription_sales()
+        self.assertEqual(subscription.end_date, fields.Date.to_date('2026-11-03'))
+        self.assertEqual(renewal.lines.wgs_application_receipt, receipt)
+
     def test_aligned_reenrollment_prorates_same_and_other_package(self):
         _order, subscription = self._paid(self.solo, self.month)
         subscription.write({'subscription_state': '6_churn'})
@@ -963,6 +988,50 @@ class TestSubscriptionOperations(CommonPosTest):
         self.assertEqual(sub.order_line.price_unit, 0)
         self.assertEqual(sub.order_line.discount, 100)
         self.assertEqual(contract.monthly_amount, 533.62)
+        self.assertEqual(self.Pos._wgs_domiciliation_collection_state(sub, selected_sequences=[2]), before)
+
+    def test_domiciliation_collection_preserves_a_different_legacy_native_plan(self):
+        initial, sub, contract = self._historical_domiciliation()
+        legacy = self.env['sale.subscription.plan'].create({
+            'name': 'Historical monthly plan, not the wallet plan',
+            'billing_period_value': 1, 'billing_period_unit': 'month',
+        })
+        sub.write({'plan_id': legacy.id})
+        before = self.Pos._wgs_domiciliation_collection_state(sub, selected_sequences=[2])
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 10, 28, 18)):
+            payment, result = self._paid(self.solo, self.month, 'renewal', sub, months=[2])
+            self.assertEqual(result, sub)
+            self.assertEqual(payment.lines.wgs_application_state, 'applied')
+            self.assertEqual(payment.amount_total, 619)
+            receipt = payment.lines.wgs_application_receipt
+            payment._wgs_sync_subscription_sales()
+            self.assertEqual(payment.lines.wgs_application_receipt, receipt)
+        self.assertEqual(sub.plan_id, legacy)
+        self.assertEqual(contract.plan_id, self.month)
+        self.assertEqual(self.Pos._wgs_domiciliation_collection_state(sub, selected_sequences=[2]), before)
+        self.assertEqual(contract.installment_ids.filtered(lambda i: i.sequence == 1).paid_pos_order_id, initial)
+        self.assertEqual(contract.installment_ids.filtered(lambda i: i.sequence == 2).paid_pos_order_id, payment)
+
+    def test_domiciliation_collection_rolls_back_a_native_plan_rewrite(self):
+        _initial, sub, contract = self._historical_domiciliation()
+        legacy = self.env['sale.subscription.plan'].create({
+            'name': 'Preserved native plan', 'billing_period_value': 1, 'billing_period_unit': 'month',
+        })
+        sub.write({'plan_id': legacy.id})
+        before = self.Pos._wgs_domiciliation_collection_state(sub, selected_sequences=[2])
+        original = type(self.Pos)._wgs_process_subscription_renewal_line
+
+        def rewrite_native_plan(order, line, **kwargs):
+            result = original(order, line, **kwargs)
+            result.write({'plan_id': contract.plan_id.id})
+            return result
+
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 10, 28, 18)):
+            with patch.object(type(self.Pos), '_wgs_process_subscription_renewal_line', rewrite_native_plan):
+                with self.assertRaises(UserError), self.env.cr.savepoint():
+                    self._paid(self.solo, self.month, 'renewal', sub, months=[2])
+        self.env.invalidate_all()
+        self.assertEqual(sub.plan_id, legacy)
         self.assertEqual(self.Pos._wgs_domiciliation_collection_state(sub, selected_sequences=[2]), before)
 
     def test_domiciliation_postcondition_failure_rolls_back_payment_and_installments(self):
