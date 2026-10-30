@@ -32,14 +32,41 @@ Registro inicial: 2026-09-28. Rama de trabajo: `staging`.
   no ejecutados por falta de base Enterprise desechable. Nuevos casos ORM:
   cobro con plan nativo distinto, rollback si se reescribe durante el cobro,
   y trimestral -> mensual con un mes comprado, no tres.
-- La primera clienta de la captura del 30/oct no puede identificarse con
-  certeza. Se solicito nombre o suscripcion antes de auditar su cronologia;
-  no se presupone que su vigencia historica se repare desplegando codigo.
+- La primera clienta fue identificada por el usuario como Lilia Yolanda
+  Quezada Lozano. Hay dos contactos homonimos; el contrato es S02451, titular
+  1908, El Dorado. Pago 799 el 2/oct/2026, ticket 26247-3-000093 / linea 24207.
+  Su cotizacion historica sin firma cobraba mensual, plan 9, pero conservaba
+  periodo 3/oct-2/ene. El plan/producto nativo ya eran mensuales; la vigencia
+  continuaba hasta 3/ene/2027 por la normalizacion posterior de corte.
 - Sin cambios de Payroll, importador bancario, crons o protocolo SpeedFace.
-  Sin escrituras de pagos/suscripciones productivas. Pendiente QA por navegador.
+  La correccion de codigo no modifica datos productivos automaticamente.
+
+### QA y correccion puntual autorizada
+
+- Commit de codigo `b8fe2cb`, desplegado en CloudPepper exclusivamente en
+  staging. Upgrade estandar de WGS POS a 1.6.9; base sin cambios. No se
+  modificaron permisos del usuario del navegador para realizar el upgrade.
+- Jafet / S01184: venta ficticia por navegador, ticket `263-3-000134`, 549
+  con IVA. Octubre (cuota 10) quedo pagado y acceso habilitado; noviembre
+  cotiza 549 y no se cobro. Diciembre ya estaba pagado y no se modifico.
+- Lectura antes/despues confirma venta nativa, plan 9, linea, fechas, precio,
+  plan de cartera 26, plazo y pagos anteriores identicos. Un solo pedido y
+  pago nuevos en staging. Pendientes 3058/3065/3119 conservados, 3135 vacio.
+  El aviso de impresora no disponible se descarto sin repetir la venta.
+- El usuario autorizo corregir completamente el registro de Lilia. Se
+  verifico que no hay pagos posteriores, reembolsos ni periodos programados.
+  Escritura unica sobre S02451: end_date=3/nov/2026 y next_invoice_date=4/nov.
+  Inicio historico/efectivo 3/jul, plan mensual 9, producto, lineas, precios,
+  ambos pedidos y pagos permanecen iguales. No se reescribio la evidencia
+  del ticket antiguo para ocultar su periodo incorrecto.
+- Cotizacion siguiente de Lilia en produccion, sin crear ticket/cobro:
+  MENSUALIDAD ED, 799, 4/nov-3/dic/2026, siguiente corte 4/dic.
+- El pago de Jafet no fue aplicado en produccion. La liberacion de codigo
+  a main/produccion requiere autorizacion; en este punto solo esta en staging.
 
 Evidencia local: `/tmp/wgs-domiciliation-audit-20261028/local-replay-after-1.6.9.json`.
 Logs: `/tmp/wgs-20261030-{subscriptions,source-calendar,javascript}.log`.
+Resultados: `/tmp/wgs-20261030-plan/{qa-results,lilia-repair-result}.json`.
 
 ## Incidente domiciliados: cartera vs catalogo, 2026-10-28
 
