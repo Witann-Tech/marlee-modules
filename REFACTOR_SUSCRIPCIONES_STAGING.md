@@ -4,7 +4,8 @@ Registro inicial: 2026-09-28. Rama de trabajo: `staging`.
 
 ## Cobranza domiciliada con plan nativo historico, 2026-10-30
 
-**Correccion WGS POS `19.0.1.6.9`. Solo staging; no reparar datos productivos.**
+**Correccion WGS POS `19.0.1.6.9` validada en staging y liberada a produccion
+con autorizacion el 30/oct/2026. Sin aplicar pagos productivos.**
 
 - La auditoria del 28/oct detecto 52 carteras cuyo plan difiere de la venta
   nativa, 50 de ellas dentro de plazo y con mensualidades por cobrar. Jafet
@@ -43,7 +44,7 @@ Registro inicial: 2026-09-28. Rama de trabajo: `staging`.
 
 ### QA y correccion puntual autorizada
 
-- Commit de codigo `b8fe2cb`, desplegado en CloudPepper exclusivamente en
+- Commit de codigo `b8fe2cb`, desplegado primero en CloudPepper en
   staging. Upgrade estandar de WGS POS a 1.6.9; base sin cambios. No se
   modificaron permisos del usuario del navegador para realizar el upgrade.
 - Jafet / S01184: venta ficticia por navegador, ticket `263-3-000134`, 549
@@ -61,12 +62,32 @@ Registro inicial: 2026-09-28. Rama de trabajo: `staging`.
   del ticket antiguo para ocultar su periodo incorrecto.
 - Cotizacion siguiente de Lilia en produccion, sin crear ticket/cobro:
   MENSUALIDAD ED, 799, 4/nov-3/dic/2026, siguiente corte 4/dic.
-- El pago de Jafet no fue aplicado en produccion. La liberacion de codigo
-  a main/produccion requiere autorizacion; en este punto solo esta en staging.
+
+### Liberacion y verificacion en produccion
+
+- El usuario autorizo liberar la correccion sin aplicar ni recobrar el pago
+  de Jafet. Merge fast-forward a main y despliegue de `891626b` por CloudPepper.
+  Lectura API y vista de Aplicaciones confirman WGS POS `19.0.1.6.9` tanto
+  en codigo como en version instalada, estado instalado. Al detectar el
+  upgrade ya completado por el despliegue, no se repitio la actualizacion.
+- La cotizacion productiva de Jafet / S01184 devuelve DOMICILIADOS ED,
+  549 con IVA, octubre 1-31, cuota 10. No se creo ticket ni se aplico pago.
+  Comparacion antes/despues: suscripcion, lineas nativas, cartera, cuotas,
+  pedidos POS y pagos identicos; octubre sigue pendiente. Se conservan
+  el plan nativo historico 9 y el plan de cartera 26, sin normalizarlos.
+- La verificacion final conserva la correccion autorizada de Lilia / S02451:
+  vencimiento 3/nov/2026, siguiente factura 4/nov, plan mensual 9. Su proxima
+  renovacion cotiza 4/nov-3/dic por 799 con IVA, siguiente corte 4/dic,
+  sin crear pedido ni modificar pagos.
+- No se desplegaron cambios de Payroll ni del importador bancario. Los 58
+  tests ORM siguen pendientes de un runner Enterprise con base desechable;
+  las pruebas aisladas y el checkout por navegador no sustituyen esa suite.
+- Este cierre de bitacora es documental; no requiere otro build o upgrade.
 
 Evidencia local: `/tmp/wgs-domiciliation-audit-20261028/local-replay-after-1.6.9.json`.
 Logs: `/tmp/wgs-20261030-{subscriptions,source-calendar,javascript}.log`.
 Resultados: `/tmp/wgs-20261030-plan/{qa-results,lilia-repair-result}.json`.
+Verificacion productiva: `/tmp/wgs-20261030-plan/production-release-verified.json`.
 
 ## Incidente domiciliados: cartera vs catalogo, 2026-10-28
 
