@@ -2,6 +2,72 @@
 
 Registro inicial: 2026-09-28. Rama de trabajo: `staging`.
 
+## Incidencias WhatsApp: cierre tecnico y liberacion, 2026-11-04
+
+Esta entrada actualiza el estado inicial y la validacion de staging que se
+conservan debajo como historial. El usuario autorizo resolver primero en
+staging y promover el remedio validado junto con las reparaciones justificadas.
+
+### Codigo y despliegue
+
+- Staging: codigo `0d61a975694179c3fd9921ad037cb1dede9e50c7`, validacion
+  `7821bb7631274ea6f7a1d225474ca7770ae8da38`.
+- Promocion limitada por cherry-pick con trazabilidad: codigo `2621a0f` y
+  documentacion `7eaa4075a9f99648cc12ddcac687678b5e112482` en main. Sus arboles
+  coincidian con staging; no se incorporo todo el historial de la rama.
+- Build productivo `7eaa407`, upgrade exclusivo de WGS POS completado. API
+  confirma installed/latest `19.0.1.6.17`, sin modulos pendientes.
+- Access API sigue `19.0.2.0.87`; WGS base sigue `19.0.1.1.62`. Los crons
+  productivos de cierre y resincronizacion siguen activos cada hora, sin cambios
+  de configuracion. No se lanzo un backup/pg_dump ni se ejecutaron crons globales.
+- Payroll, importador bancario y outputs/ quedaron fuera. No se enviaron mensajes
+  por WhatsApp ni se cambiaron impuestos, tarifas o configuracion de impresoras.
+
+### Resultado por caso en produccion
+
+| Caso | Resultado verificado | Movimientos financieros |
+| --- | --- | --- |
+| Luis Eduardo Guerrero Pedroza, S01856 | Recuperada la activacion anual de la linea 27303: periodo firmado 29/oct/2026-28/oct/2027, plan ANUALIDAD ED, siguiente corte 29/oct/2027. Se conserva el inicio historico del contrato, 28/sep/2026. | Venta 15466 y pago 17025 por $7,200 identicos antes/despues; sin nuevo cobro. |
+| Berenice Bautista Nieves, S01236 | El directorio vuelve a mostrar su contrato vigente hasta 7/nov, en progreso y con acceso. S02702 cancelado ya no oculta al origen valido. | Ningun cambio de pagos, fechas o acceso manual. |
+| Angelica Padilla Castelo, S02187 | Cotizacion fresca de Renovar a Premium 570 domiciliado valida; removida la prohibicion contradictoria del destino. | No existe nueva venta acreditada en la auditoria; no se registro contrato ni pago. |
+| Orlando Briceno Leon, S02701 | Cotizacion de octubre por $619 valida sobre la cartera existente; octubre y noviembre siguen pendientes. | Cuatro intentos cancelados no se convirtieron en pagos. Requiere conciliacion si el gimnasio afirma que hubo cargo efectivo. |
+| Gilberto Pozo Juarez, S02086 | Prevalidacion de devolucion completa de la cobranza 27769 aprobada. La regresion en staging conserva contrato anual/facturas y revierte solo las cuotas del cobro. | No se aplico ninguna devolucion productiva. Los intentos cancelados no prueban devolucion bancaria; verificar el reporte de doble cargo con el adquirente antes de intervenir. |
+
+Luis: persona 3800 activa, acceso habilitado, sitios El Dorado y Santa Monica;
+venta con wgs_access_sync_pending=False y sin error. Upserts 38569/38570 creados
+al reparar y last_sf_sync_at actualizado posteriormente. Esa marca acredita
+entrega desde Odoo al puente, no confirmacion del dispositivo ni paso fisico.
+La reparacion queda en recibo comercial y chatter con digest de aprobacion.
+No se recuperaron automaticamente todas las revisiones historicas divergentes.
+
+Carla Jazmin S01905 ya tenia aplicada su semana 28/oct-3/nov; en la fecha de
+auditoria no correspondia extenderla. Jafet fue reportado resuelto en el chat.
+No se repitieron reparaciones basadas solo en capturas antiguas.
+
+### Alcance de pruebas y pendientes
+
+- 263 ORM reales (45 Access + 218 WGS/POS), 135 standalone Python y 41 JavaScript
+  aprobados; un placeholder PostgreSQL omitido, sustituido por dos pruebas
+  PostgreSQL reales aprobadas. Dos pruebas HTTP con workers=2 aprobadas.
+- En staging: venta por navegador de cambio mensual a domiciliado con meses
+  [1,12], diferimiento de beneficios; devolucion/recotizacion sin descuento
+  heredado; devolucion con factura nativa y recuperacion anual controlada.
+  Reenvios de sync_from_ui sin duplicar pagos. Impresion fisica y paso real por
+  SpeedFace no comprobados en staging.
+- Produccion: lecturas posteriores confirman versiones, acceso, anualidad y
+  pagos inalterados; cotizaciones de Angelica/Orlando y prevalidacion de Gilberto
+  sin efectuar ventas/devoluciones.
+- Pendiente operativo, no resuelto por inferencia: conciliar con comprobantes
+  los cargos/devoluciones reportados de Orlando y Gilberto; confirmar si Angelica
+  efectivamente pago y con que ticket. No se declaran todos esos movimientos
+  liquidados ni se garantiza ausencia absoluta de cualquier fallo futuro.
+
+Evidencia local fuera de outputs/: production-before.json,
+production-preview.json, production-repair.json, production-verify.json,
+production-final-health.json y production-luis-annual-repaired.jpg dentro de
+`/Users/apreza/.codex/visualizations/2026/02/18/019c72fb-fa85-7b22-a4fa-20aa1262c18f/wgs-incidents-20261104/`.
+Las evidencias contienen datos operativos y no se agregan al repositorio.
+
 ## Incidencias WhatsApp, 2026-11-04: en validacion
 
 Version POS propuesta: `19.0.1.6.17`. Desarrollo exclusivamente en staging;
