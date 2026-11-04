@@ -2003,7 +2003,21 @@ class SaleOrder(models.Model):
         )
         partner_ids = set(Partner.search(partner_search_domain).ids)
 
-        subscriptions = self.sudo().search(self._get_subscription_action_domain_for_pos(company=company))
+        # Product display names include codes and variant labels. Match that
+        # small catalogue once, then shortlist orders in SQL, rather than
+        # loading and classifying every historical subscription per keystroke.
+        products = self.env['product.product'].sudo().with_context(active_test=False).search([
+            ('product_tmpl_id.recurring_invoice', '=', True),
+        ])
+        needle = search_term.lower()
+        product_ids = products.filtered(lambda product: needle in (product.display_name or '').lower()).ids
+        matching_line = Domain('product_id.product_tmpl_id.recurring_invoice', '=', True) & (
+            Domain('product_id', 'in', product_ids) | Domain('name', 'ilike', search_term)
+        )
+        domain = Domain(self._get_subscription_action_domain_for_pos(company=company)) & Domain(
+            'order_line', 'any', matching_line,
+        )
+        subscriptions = self.sudo().search(domain)
         subscriptions = self._filter_local_pos_subscriptions_for_pos(subscriptions, company=company)
         subscriptions = subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
         if subscriptions:
@@ -2463,15 +2477,19 @@ class SaleOrder(models.Model):
     @api.model
     def _filter_local_pos_subscriptions_for_pos(self, subscriptions, company=False):
         company = company or self.env.company
-        return subscriptions.filtered(lambda order: order._wgs_is_local_pos_subscription_for_pos(company))
+        pos_site_ids = set(self._wgs_get_pos_access_sites_for_pos(company).ids)
+        return subscriptions.filtered(lambda order: order._wgs_is_local_pos_subscription_for_pos(
+            company, pos_site_ids=pos_site_ids,
+        ))
 
-    def _wgs_is_local_pos_subscription_for_pos(self, company=False):
+    def _wgs_is_local_pos_subscription_for_pos(self, company=False, *, pos_site_ids=None):
         self.ensure_one()
         company = company or self.env.company
         if 'company_id' in self._fields and company and self.company_id and self.company_id != company:
             return False
 
-        pos_site_ids = set(self._wgs_get_pos_access_sites_for_pos(company).ids)
+        if pos_site_ids is None:
+            pos_site_ids = set(self._wgs_get_pos_access_sites_for_pos(company).ids)
         if not pos_site_ids:
             return True
 

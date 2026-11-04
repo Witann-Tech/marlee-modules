@@ -908,26 +908,7 @@ class TestSubscriptionAccessControl(TransactionCase):
             'max_participants_total': 3,
         })
         second_product.product_tmpl_id.write({'wgs_access_site_ids': [Command.set([self.site_b.id])]})
-        order_b = self.env['sale.order'].create(
-            {
-                'partner_id': self.owner.id,
-                'plan_id': self.plan.id,
-                'company_id': self.env.company.id,
-                'state': 'sale',
-                'order_line': [
-                    Command.create(
-                        {
-                            'product_id': second_product.id,
-                            'name': second_product.name,
-                            'product_uom_qty': 1,
-                            'product_uom_id': second_product.uom_id.id,
-                            'price_unit': second_product.list_price,
-                        }
-                    )
-                ],
-            }
-        )
-        order_b.write({'participant_ids': [Command.set([self.owner.id, self.participant.id])]})
+        order_b = self._create_subscription_order_for_product(second_product)
         order_b.write({'subscription_state': progress_state})
 
         owner_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.owner.id)], limit=1)

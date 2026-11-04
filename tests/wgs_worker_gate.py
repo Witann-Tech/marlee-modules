@@ -48,6 +48,28 @@ class TwoWorkerTests(unittest.TestCase):
                 if time.monotonic() >= deadline:
                     raise
                 time.sleep(.5)
+        # Authenticating one HTTP worker does not imply that the independently
+        # spawned gevent worker has finished loading its registry. Wait for
+        # startup quiescence before testing business-request cursor lifetimes.
+        # Assertions after each business request below remain immediate/strict.
+        deadline = time.monotonic() + 20
+        quiet_samples = 0
+        with closing(psycopg2.connect(cls.dsn)) as connection:
+            connection.autocommit = True
+            with connection.cursor() as cursor:
+                while quiet_samples < 3:
+                    cursor.execute('SELECT pg_stat_clear_snapshot()')
+                    cursor.execute("""
+                        SELECT pid, state, application_name, now() - xact_start, query
+                        FROM pg_stat_activity
+                        WHERE datname = %s AND pid <> pg_backend_pid()
+                          AND xact_start IS NOT NULL
+                    """, [DB])
+                    pending = cursor.fetchall()
+                    quiet_samples = 0 if pending else quiet_samples + 1
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError('Disposable workers did not finish startup: %r' % (pending,))
+                    time.sleep(.2)
 
     def call(self, model, method, args, **kwargs):
         with xmlrpc.client.ServerProxy(
@@ -66,7 +88,8 @@ class TwoWorkerTests(unittest.TestCase):
     def assert_clean_transactions(self):
         with closing(psycopg2.connect(self.dsn)) as connection, connection, connection.cursor() as cursor:
             cursor.execute("""
-                SELECT pid, state FROM pg_stat_activity
+                SELECT pid, state, application_name, now() - xact_start, query
+                FROM pg_stat_activity
                 WHERE datname = %s AND pid <> pg_backend_pid()
                   AND state LIKE 'idle in transaction%%'
             """, [DB])

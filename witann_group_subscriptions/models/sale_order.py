@@ -380,7 +380,9 @@ class SaleOrder(models.Model):
         return False
 
     def _wgs_get_subscription_plan_from_line(self, line):
-        line = line.exists() if line else self.env['sale.order.line']
+        # Internal callers pass ORM relations, not unvalidated RPC ids. Calling
+        # exists() here issues a SELECT for every contract in directory batches.
+        line = line or self.env['sale.order.line']
         if not line:
             return False
         line.ensure_one()
@@ -425,7 +427,6 @@ class SaleOrder(models.Model):
         return relativedelta(months=interval)
 
     def _wgs_get_subscription_plan_auto_close_days(self, plan):
-        plan = plan.exists() if plan else False
         if not plan:
             return 0
 

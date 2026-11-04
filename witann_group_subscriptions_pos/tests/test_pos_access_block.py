@@ -1,5 +1,8 @@
 import json
+from datetime import timedelta
 from unittest.mock import patch
+
+from dateutil.relativedelta import relativedelta
 
 from odoo import Command
 from odoo.exceptions import UserError
@@ -7,6 +10,11 @@ from odoo.tests.common import TransactionCase
 
 
 class TestPosAccessBlock(TransactionCase):
+    def _current_period(self):
+        today = self.env['sale.order']._wgs_get_subscription_business_today()
+        boundary = today + relativedelta(months=1)
+        return {'start_date': today, 'end_date': boundary - timedelta(days=1), 'next_invoice_date': boundary}
+
     def _external_access_device(self, site=False):
         return self.env['access_control.device'].create({
             'name': 'POS provider test door', 'device_serial': 'POS-PROVIDER-QA',
@@ -129,6 +137,7 @@ class TestPosAccessBlock(TransactionCase):
                 'company_id': self.env.company.id,
                 'plan_id': self.plan.id,
                 'state': 'sale',
+                **self._current_period(),
                 'order_line': [
                     Command.create(
                         {
@@ -152,6 +161,7 @@ class TestPosAccessBlock(TransactionCase):
                 'company_id': self.other_company.id,
                 'plan_id': self.plan.id,
                 'state': 'sale',
+                **self._current_period(),
                 'order_line': [
                     Command.create(
                         {
@@ -176,6 +186,7 @@ class TestPosAccessBlock(TransactionCase):
                 'company_id': company.id,
                 'plan_id': self.plan.id,
                 'state': 'sale',
+                **self._current_period(),
                 'order_line': [
                     Command.create(
                         {

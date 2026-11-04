@@ -56,13 +56,28 @@ class ResPartner(models.Model):
     @api.depends_context('uid')
     def _compute_wgs_access_block(self):
         ICP = self.env['ir.config_parameter'].sudo()
+        # A directory page computes these four fields for the entire partner
+        # prefetch batch. Read the existing storage once, including missing
+        # flags, instead of four get_param cache misses per partner/worker.
+        keys_by_partner = {
+            partner.id: {
+                suffix: partner._wgs_access_block_param_key(partner.id, suffix)
+                for suffix in ('blocked', 'reason', 'blocked_at', 'blocked_by_id')
+            }
+            for partner in self
+        }
+        keys = [key for partner_keys in keys_by_partner.values() for key in partner_keys.values()]
+        stored = {row['key']: row['value'] for row in ICP.search_read(
+            [('key', 'in', keys)], ['key', 'value'],
+        )} if keys else {}
         user_ids = set()
         values_by_partner = {}
         for partner in self:
-            blocked = ICP.get_param(partner._wgs_access_block_param_key(partner.id, 'blocked')) == '1'
-            reason = ICP.get_param(partner._wgs_access_block_param_key(partner.id, 'reason')) or False
-            blocked_at = ICP.get_param(partner._wgs_access_block_param_key(partner.id, 'blocked_at')) or False
-            blocked_by_raw = ICP.get_param(partner._wgs_access_block_param_key(partner.id, 'blocked_by_id')) or False
+            partner_keys = keys_by_partner[partner.id]
+            blocked = stored.get(partner_keys['blocked']) == '1'
+            reason = stored.get(partner_keys['reason']) or False
+            blocked_at = stored.get(partner_keys['blocked_at']) or False
+            blocked_by_raw = stored.get(partner_keys['blocked_by_id']) or False
             try:
                 blocked_by_id = int(blocked_by_raw or 0)
             except (TypeError, ValueError):
