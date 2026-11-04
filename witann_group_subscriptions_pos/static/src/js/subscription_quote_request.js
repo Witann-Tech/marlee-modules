@@ -1,5 +1,12 @@
 /** @odoo-module **/
 
+// Readiness is independent of price: a signed zero-price sale is valid.
+export function isPricingReady(form) {
+    const snapshot = form?.pricingSnapshot;
+    return Boolean(form && !form.loading && Number(snapshot?.plan_id || 0) > 0
+        && snapshot?.commercial_quote?.payload && snapshot.commercial_quote.signature);
+}
+
 // A replaced/closed form or a newer selection invalidates all older responses.
 export function beginPricingRequest(state, key) {
     const token = {};

@@ -71,6 +71,29 @@ hardware productivo ni se habilitan crons globales sobre datos clonados.
   guard de solicitudes existente y la fecha actual. Dos regresiones reproducen
   respuestas invertidas y comprueban calendario, loading y rechazo de la vieja.
   Total JavaScript: 29 aprobadas. No se cobro el ticket que expuso esa carrera.
+- La repeticion en .12 confirma fecha del Day Pass elegida durante la consulta:
+  S03638 del 1/nov al 1/nov, POS13942; renovacion POS13943 por $799 aplica
+  MENSUALIDAD ED 3/nov-3/dic, corte 3, acceso habilitado. No hereda DIA.
+- Cartera QA159/S03639 retroactiva 15/sep: POS13944 paga cuotas 1 y 12 por
+  $949.15; conserva dos adeudos y sin acceso. POS13945 paga octubre por $619.01,
+  queda noviembre pendiente y sin acceso. POS13946 paga noviembre y diciembre
+  por $1238.02: cero adeudos y persona 5201 habilitada en ambas sedes. Permite
+  cotizar enero aun estando al corriente. Importes con IVA en tarjetas/ticket.
+- Bloqueo/desbloqueo/resincronizacion dirigidos por API solo al QA9491: motivo
+  editado conserva bloqueo; vuelve a enabled al desbloquear. Pagos intactos.
+  El dialogo nativo de Chrome bloqueo la automatizacion de esa pestaña; el
+  mismo flujo backend se completo por API. No se atribuye a una fuga Odoo.
+- SM QA9494/S03640: 25% cotiza $599.25; 100% autoriza y aplica POS13947 con
+  importe cero y plazo mensual integro. Renovacion POS13948 vuelve a $799 con
+  descuento cero. Reembolso total por navegador cancela y retira acceso;
+  preflight API rechaza parcial y segundo reembolso sin crear pagos nuevos.
+- Navegador detecto desconexiones transitorias de RPC, distintas de excepciones
+  comerciales: el mismo ticket se recupera sin doble venta. No se afirma causa
+  de infraestructura sin metricas de red/servidor. POS .13 unifica readiness:
+  los cuatro formularios y sus handlers exigen cotizacion firmada cargada antes
+  de tocar cliente/ticket, sin rechazar precio cero. Una busqueda vieja fallida
+  no sobreescribe otra nueva; cerrar el modal impide render tardio. 40 tests JS
+  aprobados, incluidos errores, cierre de modal y render real de los formularios.
 
 ## Validacion integral de los tres addons, 2026-11-03
 

@@ -57,6 +57,33 @@ function stateFor(mode) {
     state[key] = {holderPartnerId:7, subscriptionId:8, sourceProductId:1, participantIds:[7]};
     return [state,key];
 }
+test('pricing readiness rejects absent/unsigned/loading quotes but accepts a signed zero price', () => {
+    assert.equal(context.isPricingReady(null), false);
+    assert.equal(context.isPricingReady({loading:false, pricingSnapshot:null}), false);
+    assert.equal(context.isPricingReady({pricingSnapshot:quote(1).pricing}), false);
+    const form = {loading:false, pricingSnapshot:{...quote(1).pricing, ticket_charge_now:0,
+        commercial_quote:{payload:{product_id:1}, signature:'server-signature'}}};
+    assert.equal(context.isPricingReady(form), true);
+    form.loading = true;
+    assert.equal(context.isPricingReady(form), false);
+});
+for (const [mode, action] of [['new','save-new'], ['renewal','save-renewal'],
+    ['reenroll','save-reenroll'], ['upsale','save-upsale']]) {
+    test(`${mode}: failed quote cannot assign a customer or add a line through the action handler`, async () => {
+        const [state, key] = stateFor(mode);
+        state[key].loading = false;
+        state[key].pricingSnapshot = null;
+        let renders = 0;
+        const handlers = context.buildSubscriptionInlineActionHandlers({state,
+            renderDetail() { renders++; }, _t: value => value,
+            getCurrentOrder() { assert.fail('No ticket access before valid quote'); },
+        });
+        await handlers[action]({});
+        assert.equal(renders, 1);
+        assert.match(state.formError, /cotizacion valida/);
+        assert.equal(state.subscriptionTicketPending, undefined);
+    });
+}
 for (const [mode, handler, field] of [
     ['new', 'applySelectedProduct', 'start_date'],
     ['reenroll', 'applySelectedReenrollProduct', 'reenroll_start_date'],

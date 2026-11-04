@@ -1,6 +1,6 @@
 /** @odoo-module **/
 
-import { beginPricingRequest, capturePricingSelection } from "./subscription_quote_request";
+import { beginPricingRequest, capturePricingSelection, isPricingReady } from "./subscription_quote_request";
 
 import { getRequestedDiscountPercent } from "./subscription_discount_render";
 import { getToggledDomiciliationInstallmentSequences } from "./subscription_domiciliation_selection";
@@ -952,6 +952,13 @@ function buildSubscriptionInlineActionHandlers({
         const submit = handlers[action];
         handlers[action] = async (...args) => {
             if (state.subscriptionTicketPending) {
+                return;
+            }
+            const form = action === "save-new" ? state.newSubscriptionForm
+                : action === "save-upsale" ? state.upsaleForm : state.renewalForm;
+            if (!isPricingReady(form)) {
+                state.formError = _t("Espera una cotizacion valida antes de agregar la membresia al ticket. Vuelve a seleccionar el paquete o plan para reintentar.");
+                renderDetail(state.currentDetail);
                 return;
             }
             state.subscriptionTicketPending = true;
