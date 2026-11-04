@@ -2,6 +2,133 @@
 
 Registro inicial: 2026-09-28. Rama de trabajo: `staging`.
 
+## Directorio y desconexiones: diagnostico y cierre, 2026-11-04
+
+Esta seccion actualiza el pendiente de rendimiento/disponibilidad del cierre
+anterior. Las secciones siguientes conservan el historial de cada build.
+
+**Correcciones desplegadas y verificadas exclusivamente en staging. Main y
+produccion sin cambios. No se modificaron pagos, suscripciones ni accesos
+operativos; tampoco outputs/, Payroll o importador bancario.**
+
+Runtime: `7f1cfa32e164d56449534ad19f2714e019aa3aad`. Commits funcionales:
+`45b3a81` y `7f1cfa3`. Versiones instaladas/codigo verificadas por API:
+Access API `19.0.2.0.87` (sin cambios), WGS `19.0.1.1.62` y POS
+`19.0.1.6.16`. Base neutralizada, sin upgrades pendientes y crons WGS
+66/67/72 conservados inactivos. Main local/remoto sigue en
+`ca0910cbaf862fb423a0b1a89ec4980c57a9b3a4`.
+
+### Causas confirmadas de lentitud
+
+- Impacto medio/alto en operacion: consultas N+1 en el directorio. Por contrato
+  se buscaban nuevamente los sitios de la sede y se ejecutaban dos `exists()`
+  para relaciones ORM ya validadas. Un resumen real genero 6,287 consultas en
+  Santa Monica y 4,758 en El Dorado. Los sitios ahora se resuelven una vez por
+  lote; se mantienen las validaciones de IDs en las entradas RPC.
+- Impacto medio: los cuatro atributos de bloqueo manual se consultaban con
+  `get_param` por cada contacto. `_compute_wgs_access_block` ahora lee las claves
+  del lote en una sola busqueda, conservando almacenamiento, permisos, motivo,
+  fecha, operador e invalidacion existente. No se agrego cache comercial propia.
+- Impacto medio: buscar por cliente tambien cargaba y clasificaba todo el
+  historial local para comparar nombres de productos. Se coteja el catalogo
+  recurrente, incluidos productos archivados/codigos/variantes, y se restringen
+  las ordenes desde el dominio antes de clasificarlas.
+- Impacto medio/alto en operacion: faltaban indices sobre
+  `pos.order.line.wgs_sale_order_id` y `wgs_subscription_source_id`. Tras quitar
+  los N+1 todavia habia 10-12 s de demora. El perfil SQL real identifico 6.634 s
+  en cuatro selecciones de candidatos y 2.097 s en cuatro busquedas de contratos:
+  subconsultas de pagos/historial atravesaban esas relaciones sin indice. Se
+  declararon indices `btree_not_null`, creados por el upgrade estandar de Odoo;
+  no se altero el dominio comercial para ocultar contratos/pagos historicos.
+
+Archivos principales: `witann_group_subscriptions/models/res_partner.py`,
+`witann_group_subscriptions/models/sale_order.py`,
+`witann_group_subscriptions_pos/models/sale_order.py` y
+`witann_group_subscriptions_pos/models/pos_order.py`.
+
+### Mediciones reales en staging
+
+Tiempo extremo a extremo por XML-RPC, segundos. Antes: una muestra por consulta.
+Despues: mediana de tres muestras por la misma consulta, con identico contexto de
+empresa. No son un benchmark de carga ni un SLA. Empresa 9 = Santa Monica;
+empresa 10 = El Dorado.
+
+| Sede / consulta | Antes | Despues | Reduccion |
+| --- | ---: | ---: | ---: |
+| Santa Monica, resumen | 15.792 | 2.545 | 83.9% |
+| El Dorado, resumen | 12.403 | 2.333 | 81.2% |
+| Santa Monica, primera pagina de 51 candidatos | 2.791 | 0.547 | 80.4% |
+| El Dorado, primera pagina de 51 candidatos | 2.959 | 0.499 | 83.1% |
+| Santa Monica, busqueda QA | 2.915 | 0.198 | 93.2% |
+| El Dorado, busqueda QA | 2.544 | 0.171 | 93.3% |
+
+Las 18 respuestas posteriores conservan exactamente los conteos e IDs de la
+linea base. Una pareja de resumenes simultaneos termino en 2.807/2.451 s, tambien
+sin cambios ni errores. El directorio sigue mostrando la primera pagina antes
+del resumen general. No se introdujo TTL, cache persistente ni reintento de cobros.
+
+En una base aislada con 100 contratos, el perfil SQL paso de 329 a 30 consultas
+para resumen y de 580 a 31 para pagina; la busqueda puntual paso de 119 a 19.
+Los presupuestos de consultas se prueban contra ORM real, no solo mocks.
+
+### Desconexiones: evidencia y limites
+
+- Se reprodujo `502 Bad Gateway` al autenticar por API durante el reinicio del
+  backend que provoca el build de CloudPepper de `7f1cfa3`. Ese intento no llego
+  a ejecutar el upgrade ni operaciones comerciales. Tras terminar el build, la
+  autenticacion y el upgrade funcionaron normalmente.
+- En el core exacto de Odoo 19 (`29cf86bd012cd3bf2a145a4ae3c6266f2b6f9034`),
+  `addons/web/static/src/core/network/rpc.js` convierte HTTP 502 en
+  `ConnectionLostError`; tambien usa ese error para fallos de transporte y
+  respuestas no JSON. El mensaje por si solo no demuestra una falla de red local.
+- Fuera del build, las 20 lecturas finales del directorio, su uso por navegador y
+  ocho sondas `/web/health` terminaron sin desconexiones. Las sondas devolvieron
+  HTTP 200 en 0.196-0.303 s. Consola de la pestaña POS sin errores/advertencias
+  durante la comprobacion final de apertura, busqueda, filtros y detalle.
+- CloudPepper muestra actualmente aproximadamente 8 GB de RAM, cuatro CPU y dos
+  workers por instancia. La vista agregada de 24 h no mostro saturacion sostenida
+  de memoria/CPU. No se alteraron workers, limites, proxy ni infraestructura
+  compartida; esa vista no descarta picos breves, reinicios u OOM historicos.
+- La causa demostrada de una ventana de indisponibilidad es el reinicio durante
+  el despliegue. **No se atribuyen retroactivamente todas las desconexiones
+  anteriores al build**: faltan las entradas historicas de error del proxy y del
+  sistema para correlacionarlas. Se redujo la ocupacion de workers por el
+  directorio, pero eso no prueba que causara cada desconexion previa.
+- No se encontro evidencia de transacciones o bloqueos persistentes despues de
+  las operaciones del gate de dos workers. El gate distingue el arranque inicial
+  del servidor y mantiene comprobaciones inmediatas/estrictas tras cada operacion.
+  Esto no sustituye una prueba prolongada de RSS ni un diagnostico del OOM de
+  backups. Los cursores/entornos de peticion siguen gestionados por Odoo.
+
+### Pruebas y preservacion de datos
+
+- Gate final Enterprise/community con los mismos commits de Odoo que staging:
+  45 tests Access + 210 tests WGS/POS = **255 ORM**, cero fallos/errores.
+- Ocho nuevas regresiones: sitios por lote, presupuesto de resumen/pagina,
+  busqueda selectiva de contactos, codigos/nombres y archivo de productos,
+  exclusion de lineas no recurrentes, lectura y aislamiento de bloqueos, e
+  indices validos fisicamente presentes en PostgreSQL.
+- **135 tests Python standalone aprobados**, mas un placeholder de PostgreSQL
+  omitido al ejecutarse sin DSN. La prueba real de PostgreSQL se ejecuto aparte:
+  **2 tests aprobados**. **40 tests JavaScript aprobados**, sin omisiones.
+- **2 tests HTTP con dos workers aprobados**: colisiones forzadas, reintento
+  nativo real de Odoo, diez solicitudes repetidas, identidades unicas y ningun
+  `idle in transaction`/bloqueo del asignador retenido tras las operaciones.
+- Se hicieron explicitas las vigencias de fixtures de acceso/multisede que antes
+  dependian del valor inicial de `next_invoice_date` y fallaban segun el dia de
+  ejecucion. No se cambio la regla productiva para hacer pasar esas pruebas.
+- Verificacion final solo lectura de las 18 ventas QA existentes: 17 aplicaciones
+  de membresia unicas, sin facturas ni sincronizaciones pendientes, nueve persons
+  activos distintos, mismas vigencias, participantes, pagos domiciliados y
+  ventas visibles en ambas bitacoras. No se registraron nuevas ventas QA.
+
+Evidencia local, fuera de outputs/:
+`/Users/apreza/.codex/visualizations/2026/02/18/019c72fb-fa85-7b22-a4fa-20aa1262c18f/wgs-perf-20261104/`.
+Incluye linea base, tres muestras finales, lectura concurrente, resumen del
+perfil SQL real, gate completo, verificacion QA y capturas de build/directorio.
+El perfilador temporal se desactivo y su disponibilidad global se restauro al
+valor anterior; no quedo captura corriendo.
+
 ## Reporte ejecutivo de cierre, 2026-11-04
 
 **Codigo corregido y desplegado exclusivamente en staging. Sin promocion a main
