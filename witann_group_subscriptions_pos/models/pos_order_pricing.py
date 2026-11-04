@@ -792,16 +792,6 @@ class PosOrderPricingMixin(models.Model):
             plan_id=snapshot.get('plan_id'),
             pricing_id=snapshot.get('pricing_id'),
         )
-        if (
-            target_plan
-            and getattr(target_plan, 'wgs_domiciliation_enabled', False)
-            and not source_order.wgs_domiciliation_contract_id
-            and product != source_line.product_id
-        ):
-            raise UserError(
-                _('Los paquetes domiciliados no se pueden seleccionar desde una renovación normal.')
-            )
-
         renewal_schedule = self._wgs_get_subscription_renewal_schedule(
             source_order,
             plan=target_plan,

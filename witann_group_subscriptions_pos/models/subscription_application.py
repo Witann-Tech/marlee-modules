@@ -57,7 +57,16 @@ class PosSubscriptionApplication(models.Model):
                 'Actualiza la seleccion de mensualidades antes de cobrar; no repitas un pago ya recibido.'
             ))
 
-    def _wgs_assert_subscription_refund(self, subscription):
+    def _wgs_assert_subscription_refund(self, subscription, line=False):
+        reversal = (line.wgs_application_receipt or {}).get('collection_refund') if line else False
+        if reversal:
+            contract = subscription.wgs_domiciliation_contract_id
+            installments = contract.installment_ids.filtered(lambda item: item.id in reversal['installment_ids'])
+            if (contract.id != reversal['contract_id'] or contract.state != 'active'
+                    or len(installments) != len(reversal['installment_ids'])
+                    or any(item.state != 'due' for item in installments)):
+                raise UserError(_('La devolucion no revirtio exactamente las mensualidades del cobro original.'))
+            return
         if subscription.state != 'cancel' and subscription._wgs_get_subscription_state_category() not in ('closed', 'cancel'):
             raise UserError(_('El reembolso total no cancelo la membresia original.'))
         pending = self.env['pos.order.line'].search([

@@ -2,6 +2,51 @@
 
 Registro inicial: 2026-09-28. Rama de trabajo: `staging`.
 
+## Incidencias WhatsApp, 2026-11-04: en validacion
+
+Version POS propuesta: `19.0.1.6.17`. Desarrollo exclusivamente en staging;
+esta entrada no declara despliegue ni reparaciones productivas realizadas.
+Main, outputs/, Payroll e importador bancario sin modificaciones.
+
+- Luis Eduardo Guerrero Pedroza, S01856: venta 15466/linea 27303, $7,200,
+  anualidad pagada el 28/oct local; periodo firmado 29/oct/2026-28/oct/2027.
+  Sigue programada y su revision historica difiere del origen actual. Se agrega
+  recuperacion administrativa dirigida con dry_run, digest, locks y verificacion
+  de firma/pago/orden cronologico. No se debilita la activacion automatica ni se
+  recalculan sus fechas con el catalogo o la fecha de reparacion.
+- Berenice Bautista Nieves, S01236: hay pago POS 13826 por $799 del 7/oct y
+  vigencia al 7/nov. Un upsale historico a S02702 cancelado seguia ocultando
+  el contrato origen; se distingue historial de sucesion operable. No procede
+  retirar acceso por la afirmacion de que no vino al gimnasio.
+- Angelica Padilla Castelo, S02187: Renovar ofrece un destino domiciliado que
+  una guarda backend prohibia. Se permite la transicion por el mismo servicio
+  inicial de cartera, al finalizar el periodo pagado, sin anticipar beneficios.
+- Gilberto Pozo Juarez, S02086: la devolucion completa de una cobranza mensual
+  no debe cancelar la orden facturada ni todo el contrato de doce meses. Se
+  revierten exclusivamente las cuotas liquidadas por esa linea, conservando
+  contrato, facturas y pagos historicos. La devolucion total de una compra no
+  domiciliada con facturas usa cierre comercial nativo, no action_cancel.
+  No se habilitan devoluciones parciales ni una segunda devolucion del cobro.
+- Orlando Briceno Leon, S02701: intentos de $619 cancelados; cuotas de octubre
+  y noviembre pendientes. No se deduce un pago efectivo de amount_paid en una
+  orden cancelada. Carla Jazmin, S01905: nuevo pago de semana del 28/oct ya
+  aplicado hasta 3/nov. No reutilizar capturas de octubre para extender periodos.
+
+Pruebas nuevas: sucesor cancelado, transicion mensual-domiciliado con mes 1/12,
+devolucion con factura historica, reverso/reintento/recobro de cuota domiciliada,
+recuperacion de anualidad legada, firma/contenido de pago, permisos, digest
+invalidado y pago posterior. Pendiente: corrida final Enterprise, despliegue y
+regresion operativa en staging antes de autorizar la promocion tecnica.
+
+Gate aislado completado: 45 ORM Access + 218 ORM WGS/POS = 263, cero fallos o
+errores; dos PostgreSQL y dos HTTP con workers=2 aprobados. 119 standalone
+WGS ejecutados (118 aprobados y placeholder PostgreSQL omitido; las dos pruebas
+reales de PostgreSQL se ejecutaron aparte), 41 JavaScript aprobados. La prueba
+de pago posterior encontro y corrigio un empate de timestamps: se compara por
+fecha y luego ID de linea. Evidencia fuera de outputs/:
+`/tmp/wgs-20261104-incidents-orm3.log` y
+`/var/folders/g4/fxd70d8n40d5mp33wn_z0gr80000gn/T/wgs-isolated.BrIrvH/`.
+
 ## Directorio y desconexiones: diagnostico y cierre, 2026-11-04
 
 Esta seccion actualiza el pendiente de rendimiento/disponibilidad del cierre

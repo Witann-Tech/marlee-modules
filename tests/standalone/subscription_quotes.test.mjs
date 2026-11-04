@@ -57,6 +57,23 @@ function stateFor(mode) {
     state[key] = {holderPartnerId:7, subscriptionId:8, sourceProductId:1, participantIds:[7]};
     return [state,key];
 }
+test('renewing into domiciliation preserves its initial installment quote', async () => {
+    const [state, key] = stateFor('renewal');
+    const response = quote(2);
+    response.pricing.domiciliation = {is_domiciliation:true, selection_mode:'initial',
+        selected_installment_sequences:[1,12], term_months:12,
+        installments:[{sequence:1, amount:35}, {sequence:12, amount:70}]};
+    response.pricing.ticket_charge_now = 105;
+    response.pricing.subscription_start_date = '2026-10-16';
+    response.pricing.subscription_end_date = '2027-09-30';
+    await context.applySelectedRenewalProduct(state, 2, {
+        _t:value => value, renderDetail() {}, fetchSubscriptionQuote:async () => response,
+    });
+    assert.equal(state[key].packageChangeSelected, true);
+    assert.equal(state[key].pricingSnapshot.domiciliation.selection_mode, 'initial');
+    assert.deepEqual(JSON.parse(JSON.stringify(state[key].pricingSnapshot.domiciliation.selected_installment_sequences)), [1,12]);
+    assert.equal(state[key].pricingSnapshot.ticket_charge_now, 105);
+});
 test('pricing readiness rejects absent/unsigned/loading quotes but accepts a signed zero price', () => {
     assert.equal(context.isPricingReady(null), false);
     assert.equal(context.isPricingReady({loading:false, pricingSnapshot:null}), false);

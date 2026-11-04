@@ -11,3 +11,5 @@ from . import subscription_application
 from . import subscription_lifecycle
 
 from . import subscription_period_repair
+from . import subscription_refund
+from . import subscription_activation_repair

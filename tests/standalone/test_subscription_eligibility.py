@@ -115,6 +115,7 @@ def paid_fixture(qty=1):
     line.wgs_subscription_flow = 'new'
     line.qty, line.product_id.recurring_invoice = qty, True
     line.wgs_application_state, line.wgs_sale_order_id = False, False
+    line.wgs_application_receipt = False
     line.wgs_pricing_snapshot_json = '{}'
     line.with_env.return_value = line
 
