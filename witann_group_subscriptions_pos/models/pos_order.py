@@ -58,7 +58,9 @@ class PosOrderLine(models.Model):
 
     wgs_participant_ids_json = fields.Text(string='Participantes de suscripción (POS)', copy=False)
     wgs_pricing_snapshot_json = fields.Text(string='Snapshot pricing suscripción (POS)', copy=False)
-    wgs_sale_order_id = fields.Many2one('sale.order', string='Suscripción generada', copy=False)
+    wgs_sale_order_id = fields.Many2one(
+        'sale.order', string='Suscripción generada', copy=False, index='btree_not_null',
+    )
     wgs_subscription_plan_id = fields.Integer(string='Plan de suscripción (POS)', copy=False)
     wgs_subscription_pricing_id = fields.Integer(string='Tarifa de suscripción (POS)', copy=False)
     wgs_subscription_start_date = fields.Date(string='Fecha inicio de suscripción (POS)', copy=False)
@@ -80,6 +82,7 @@ class PosOrderLine(models.Model):
         'sale.order',
         string='Suscripción origen (POS)',
         copy=False,
+        index='btree_not_null',
     )
     wgs_subscription_pending_move_id = fields.Many2one(
         'account.move',

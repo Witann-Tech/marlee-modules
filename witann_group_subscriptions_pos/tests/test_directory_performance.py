@@ -57,6 +57,23 @@ class TestDirectoryPerformance(TransactionCase):
         self.assertEqual(selected, self.orders)
         self.assertEqual(lookup.call_count, 1)
 
+    def test_pos_history_and_replacement_relations_have_physical_indexes(self):
+        columns = {'wgs_sale_order_id', 'wgs_subscription_source_id'}
+        for name in columns:
+            self.assertEqual(self.env['pos.order.line']._fields[name].index, 'btree_not_null')
+        self.env.cr.execute("""
+            SELECT attribute.attname
+            FROM pg_index AS idx
+            JOIN pg_attribute AS attribute
+              ON attribute.attrelid = idx.indrelid
+             AND attribute.attnum = ANY(idx.indkey)
+            WHERE idx.indrelid = 'pos_order_line'::regclass
+              AND idx.indisvalid AND idx.indisready
+              AND idx.indnkeyatts = 1
+              AND attribute.attname IN %s
+        """, [tuple(sorted(columns))])
+        self.assertEqual({row[0] for row in self.env.cr.fetchall()}, columns)
+
     def test_directory_summary_has_a_constant_query_budget(self):
         with patch.object(type(self.Order), '_wgs_subscription_business_today_for_pos', return_value=date(2026, 11, 4)):
             counts, queries = self._measure(lambda: self.Order.get_partner_directory_summary_for_pos({
