@@ -101,6 +101,7 @@ class LinkedLines(list):
 
 def paid_fixture(qty=1):
     owner, line = MagicMock(), Mock()
+    owner.sudo.return_value = owner
     owner.sorted.return_value = [owner]
     owner.with_company.return_value = owner
     owner.with_context.return_value = owner
@@ -291,9 +292,13 @@ class ParticipantOwnershipTests(unittest.TestCase):
         owner, source, product, buyer = MagicMock(), Mock(), Mock(), Mock()
         owner._wgs_pending_package_changes.return_value = []
         owner._wgs_extract_interval_from_plan.return_value = (1, 'month')
+        owner._wgs_build_period_contract.return_value = {
+            'version': 1, 'mode': 'term', 'start': '2026-10-20',
+            'interval': 1, 'unit': 'month', 'aligned': False, 'cutoff': 20, 'previous_end': False,
+        }
         pricing = {
             'plan_id': 3, 'subscription_start_date': '2026-10-20',
-            'subscription_end_date': '2026-11-20', 'next_billing_date': '2026-11-21',
+            'subscription_end_date': '2026-11-20', 'next_billing_date': '2026-11-21', 'monthly_cutoff_day': 20,
         }
         seal = method(OPS, '_wgs_seal_pricing_payload')
         seal.__globals__['validate_period'] = contract.validate_period

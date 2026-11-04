@@ -1,8 +1,15 @@
 from odoo.exceptions import ValidationError
 from odoo.tests.common import TransactionCase
 
+from .common import ensure_partner_identity_fields
+
 
 class TestResPartnerCurp(TransactionCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        ensure_partner_identity_fields(cls.env)
+
     def setUp(self):
         super().setUp()
         self.curp_field = 'x_studio_curp'

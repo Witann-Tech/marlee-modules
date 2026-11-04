@@ -78,6 +78,10 @@ class SaleOrderWgsLifecycle(models.Model):
         return [row for row in rows if row['so_id'] in native_ids]
 
     def _get_expired_subscriptions(self):
+        # Core uses raw SQL. A preceding operation in this transaction may have
+        # changed these fields without persisting them yet.
+        self.flush_model(['is_subscription', 'state', 'subscription_state', 'next_invoice_date', 'plan_id'])
+        self.env['sale.subscription.plan'].flush_model(['auto_close_limit'])
         return self._wgs_filter_native_expiration_rows(super()._get_expired_subscriptions())
 
     def _get_unpaid_subscriptions(self):

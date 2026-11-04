@@ -21,7 +21,7 @@ def source(*, state='progress', start=date(2026, 9, 19), end=date(2026, 10, 19),
         id=1, state='sale', ensure_one=lambda: None, company_id=1, wgs_domiciliation_contract_id=False,
         _wgs_has_replacement_subscription_for_pos=lambda: replacement,
         _get_native_subscription_state_info_for_pos=lambda: (state, state),
-        _classify_subscription_access_state_for_pos=lambda: access,
+        _classify_subscription_access_state_for_pos=lambda **kwargs: access,
         _wgs_get_subscription_access_period=lambda: {
             'start_date': start, 'valid_until': end, 'next_invoice_date': next_date,
         },

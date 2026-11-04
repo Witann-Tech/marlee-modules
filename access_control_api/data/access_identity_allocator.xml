@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+  <record id="global_user_id_allocator" model="ir.config_parameter">
+    <field name="key">access_control_api.global_user_id_allocator</field>
+    <field name="value">1</field>
+  </record>
+</odoo>

@@ -380,7 +380,9 @@ class SaleOrder(models.Model):
         return False
 
     def _wgs_get_subscription_plan_from_line(self, line):
-        line = line.exists() if line else self.env['sale.order.line']
+        # Internal callers pass ORM relations, not unvalidated RPC ids. Calling
+        # exists() here issues a SELECT for every contract in directory batches.
+        line = line or self.env['sale.order.line']
         if not line:
             return False
         line.ensure_one()
@@ -425,7 +427,6 @@ class SaleOrder(models.Model):
         return relativedelta(months=interval)
 
     def _wgs_get_subscription_plan_auto_close_days(self, plan):
-        plan = plan.exists() if plan else False
         if not plan:
             return 0
 
@@ -680,12 +681,13 @@ class SaleOrder(models.Model):
             return False
         return bool(self._get_subscription_recurring_lines())
 
-    def _wgs_classify_subscription_access_state(self):
+    def _wgs_classify_subscription_access_state(self, today=False):
         self.ensure_one()
         if not self._wgs_is_confirmed_access_subscription_order():
             return False
         if 'subscription_state' not in self._fields:
             return False
+        today = fields.Date.to_date(today) or self._wgs_get_subscription_business_today(company=self.company_id)
 
         # A domiciliation contract owns entitlement for its entire forced term.
         # Native recurring jobs can mark the source order closed after a missed
@@ -693,7 +695,7 @@ class SaleOrder(models.Model):
         # contract and must not prevent its overdue installments from being paid.
         contract = self.wgs_domiciliation_contract_id
         if contract:
-            return contract.wgs_get_operational_status().get('access_state') or False
+            return contract.wgs_get_operational_status(today=today).get('access_state') or False
 
         state_value = (self.subscription_state or '').strip().lower()
         if not state_value:
@@ -705,7 +707,6 @@ class SaleOrder(models.Model):
         if not any(token in state_value for token in self._WGS_ACCESS_ENABLED_STATE_TOKENS):
             return False
 
-        today = self._wgs_get_subscription_business_today(company=self.company_id)
         period = self._wgs_get_subscription_access_period()
         start_date = period['start_date']
         if start_date and start_date > today:
@@ -963,17 +964,30 @@ class SaleOrder(models.Model):
         partner_ids = set(extra_partner_ids or [])
         partner_ids.update(self._wgs_get_access_related_partner_ids())
         if not partner_ids:
-            return
+            return {'checked': 0, 'issues': []}
         partners = self.env['res.partner'].sudo().browse(sorted(partner_ids)).exists()
         profiles = self._wgs_get_access_profiles_for_partners(partners)
         people_by_partner = self._wgs_get_access_people_by_partner(partners)
         self._wgs_assign_missing_access_global_ids(profiles, people_by_partner)
         for partner in partners:
-            self._wgs_sync_access_control_partner(
+            people_by_partner[partner.id] = self._wgs_sync_access_control_partner(
                 partner,
                 profile=profiles[partner.id],
                 person=people_by_partner.get(partner.id),
             )
+        issues = []
+        for partner in partners:
+            profile = profiles[partner.id]
+            person = people_by_partner.get(partner.id)
+            if profile['access_state'] == 'enabled':
+                if (not profile['site_ids'] or not person or not person.active
+                        or person.access_state != 'enabled' or not person.global_user_id
+                        or set(person.site_ids.ids) != set(profile['site_ids'])
+                        or person.access_timezone_id.id != (profile.get('access_timezone_id') or False)):
+                    issues.append({'partner_id': partner.id, 'reason': 'enabled_projection_missing'})
+            elif person and (profile.get('blocked') or person.managed_by_subscription) and person.active:
+                issues.append({'partner_id': partner.id, 'reason': 'disabled_projection_still_active'})
+        return {'checked': len(partners), 'issues': issues}
 
     def _wgs_sync_access_control_people_if_not_deferred(self, extra_partner_ids=None):
         if self.env.context.get(self._WGS_DEFER_ACCESS_SYNC_CONTEXT_KEY):

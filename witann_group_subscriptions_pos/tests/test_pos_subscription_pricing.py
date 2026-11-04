@@ -1,19 +1,20 @@
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
+from dateutil.relativedelta import relativedelta
 
 from odoo import Command, fields
 
 from odoo.exceptions import UserError
 from odoo.tests.common import TransactionCase
 
-from .common import create_recurring_price
+from .common import create_recurring_price, create_tax
 
 
 class TestPosSubscriptionPricing(TransactionCase):
     def setUp(self):
         super().setUp()
         self.PosOrder = self.env['pos.order']
-        self.tax_16 = self.env['account.tax'].create(
+        self.tax_16 = create_tax(self.env,
             {
                 'name': 'IVA 16 POS',
                 'amount': 16.0,
@@ -61,7 +62,9 @@ class TestPosSubscriptionPricing(TransactionCase):
             }
         )
         order.action_confirm()
-        order_updates = {}
+        start = fields.Date.to_date(start_date)
+        boundary = start + relativedelta(months=1)
+        order_updates = {'start_date': start}
         for field_name in ('wgs_effective_start_date', 'start_date', 'date_start', 'subscription_start_date'):
             if field_name in order._fields:
                 order_updates[field_name] = start_date
@@ -71,11 +74,11 @@ class TestPosSubscriptionPricing(TransactionCase):
                 order_updates[field_name] = '3_progress'
         for field_name in ('recurring_next_date', 'next_invoice_date'):
             if field_name in order._fields:
-                order_updates[field_name] = '2026-04-26'
+                order_updates[field_name] = boundary
                 break
         for field_name in ('end_date', 'date_end', 'subscription_end_date', 'recurring_end_date'):
             if field_name in order._fields:
-                order_updates[field_name] = '2026-04-25'
+                order_updates[field_name] = boundary - timedelta(days=1)
                 break
         if order_updates:
             order.write(order_updates)

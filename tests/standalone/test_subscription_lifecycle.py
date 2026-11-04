@@ -74,6 +74,8 @@ class Env:
         self.model, self.context = model, context
 
     def __getitem__(self, model_name):
+        if model_name == 'sale.subscription.plan':
+            return SimpleNamespace(flush_model=lambda names: self.model.stats.setdefault('plan_flushes', []).append(names))
         assert model_name == 'sale.order'
         return self.model.browse([])
 
@@ -86,6 +88,9 @@ class NativeBase:
 
     def __bool__(self):
         return bool(self.ids)
+
+    def flush_model(self, names):
+        self.stats.setdefault('order_flushes', []).append(names)
 
     def browse(self, ids):
         return type(self)(self.rows, ids, self.env.context, self.stats)

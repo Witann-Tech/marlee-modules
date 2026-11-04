@@ -7,6 +7,7 @@ function buildPricingSnapshotFromCharge(charge, {
 } = {}) {
     return {
         commercial_quote: charge?.commercial_quote || false,
+        period_contract: charge?.period_contract || charge?.commercial_quote?.payload?.pricing?.period_contract || false,
         product_id: charge?.commercial_quote?.payload?.product_id || charge?.product_id || false,
         company_id: charge?.commercial_quote?.payload?.company_id || false,
         partner_id: charge?.commercial_quote?.payload?.partner_id || false,

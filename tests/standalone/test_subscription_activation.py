@@ -28,7 +28,7 @@ def recovery_fixture():
     owner._wgs_source_revision.side_effect = lambda record: contract.fingerprint(values)
     owner._wgs_is_automatic_inclusive_close.return_value = True
     owner._wgs_reactivate_subscription_order_for_pos.side_effect = lambda record: values.update(subscription_state='active')
-    return owner, source, SimpleNamespace(wgs_activation_revision=expected), values
+    return owner, source, SimpleNamespace(wgs_activation_revision=expected, wgs_activation_contract=False), values
 
 
 class Reasons(list):
@@ -90,6 +90,7 @@ class ActivationTests(unittest.TestCase):
         owner._wgs_verify_commercial_quote.return_value = {'pricing': {'plan_id': 17}}
         owner.env = MagicMock()
         owner.env['sale.subscription.plan'].browse().exists.return_value = False
+        owner._wgs_find_plan_record_by_id.return_value = False
         with self.assertRaisesRegex(UserError, 'antes de cobrar'):
             method(OPS, '_wgs_normalize_commercial_config')(
                 owner, {'flow': 'renewal', 'pricing_snapshot': {}},

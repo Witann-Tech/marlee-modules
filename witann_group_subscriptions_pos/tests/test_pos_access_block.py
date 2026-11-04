@@ -1,10 +1,78 @@
+import json
+from datetime import timedelta
+from unittest.mock import patch
+
+from dateutil.relativedelta import relativedelta
+
 from odoo import Command
+from odoo.exceptions import UserError
 from odoo.tests.common import TransactionCase
 
 
 class TestPosAccessBlock(TransactionCase):
+    def _current_period(self):
+        today = self.env['sale.order']._wgs_get_subscription_business_today()
+        boundary = today + relativedelta(months=1)
+        return {'start_date': today, 'end_date': boundary - timedelta(days=1), 'next_invoice_date': boundary}
+
+    def _external_access_device(self, site=False):
+        return self.env['access_control.device'].create({
+            'name': 'POS provider test door', 'device_serial': 'POS-PROVIDER-QA',
+            'site_id': (site or self.site).id, 'active': True,
+        })
+
+    def test_external_provider_access_logs_only_the_selected_customer_without_a_subscription(self):
+        device = self._external_access_device()
+        Device = type(device)
+        for provider in ('wellhub', 'totalpass'):
+            with self.subTest(provider=provider), patch.object(Device, 'open_door_via_adms', return_value={'ok': True, 'queued': True}) as send:
+                result = self.env['pos.order'].wgs_grant_external_access_for_pos(
+                    self.owner.id, provider, {'company_id': self.env.company.id, 'device_id': device.id},
+                )
+                self.assertTrue(result['ok'])
+                event = self.env['access_control.access_event'].browse(result['access_event_id'])
+                self.assertEqual(event.device_id, device)
+                self.assertEqual(event.modality, provider)
+                self.assertEqual(event.result, 'allowed')
+                self.assertEqual(json.loads(event.raw_payload)['partnerId'], self.owner.id)
+                self.assertEqual(json.loads(event.raw_payload)['provider'], provider)
+                self.assertFalse(event.person_id)
+                send.assert_called_once_with(door_id=1, open_time_seconds=5,
+                    reason='subscription_external_access_%s' % provider, operator_user=self.env.user)
+        self.assertFalse(self.env['sale.order'].search([('partner_id', '=', self.owner.id)]))
+
+    def test_external_provider_does_not_log_success_if_adms_rejects_the_command(self):
+        device = self._external_access_device()
+        with patch.object(type(device), 'open_door_via_adms', side_effect=UserError('ADMS command rejected')):
+            with self.assertRaises(UserError):
+                self.env['pos.order'].wgs_grant_external_access_for_pos(
+                    self.owner.id, 'wellhub', {'company_id': self.env.company.id, 'device_id': device.id},
+                )
+        self.assertFalse(self.env['access_control.access_event'].search([('device_id', '=', device.id)]))
+
+    def test_external_provider_rejects_a_door_from_another_company_before_http(self):
+        device = self._external_access_device(self.other_site)
+        with patch.object(type(device), 'open_door_via_adms') as send:
+            with self.assertRaises(UserError):
+                self.env['pos.order'].wgs_grant_external_access_for_pos(
+                    self.owner.id, 'totalpass', {'company_id': self.env.company.id, 'device_id': device.id},
+                )
+            send.assert_not_called()
+
+    def test_external_provider_rejects_unknown_provider_before_http(self):
+        device = self._external_access_device()
+        with patch.object(type(device), 'open_door_via_adms') as send:
+            with self.assertRaises(UserError):
+                self.env['pos.order'].wgs_grant_external_access_for_pos(
+                    self.owner.id, 'unknown', {'company_id': self.env.company.id, 'device_id': device.id},
+                )
+            send.assert_not_called()
+
     def setUp(self):
         super().setUp()
+        self.plan = self.env['sale.subscription.plan'].create({
+            'name': 'POS access QA monthly', 'billing_period_value': 1, 'billing_period_unit': 'month',
+        })
         self.owner = self.env['res.partner'].create({'name': 'Titular POS acceso'})
         self.participant = self.env['res.partner'].create({'name': 'Participante POS acceso'})
         self.site = self.env['access_control.site'].create(
@@ -17,12 +85,13 @@ class TestPosAccessBlock(TransactionCase):
         self.product = self.env['product.product'].create(
             {
                 'name': 'Plan POS acceso',
-                'detailed_type': 'service',
+                'type': 'service',
                 'list_price': 100,
                 'recurring_invoice': True,
                 'max_participants_total': 2,
             }
         )
+        self.product = self.product.with_env(self.env)
         self.other_company = self.env['res.company'].create({'name': 'Otra empresa POS acceso'})
         self.other_site = self.env['access_control.site'].create(
             {
@@ -38,7 +107,7 @@ class TestPosAccessBlock(TransactionCase):
             self.other_product.write({'company_id': self.other_company.id})
         self.env.user.write(
             {
-                'groups_id': [
+                'group_ids': [
                     Command.link(self.env.ref('point_of_sale.group_pos_user').id),
                 ]
             }
@@ -66,13 +135,16 @@ class TestPosAccessBlock(TransactionCase):
             {
                 'partner_id': self.owner.id,
                 'company_id': self.env.company.id,
+                'plan_id': self.plan.id,
+                'state': 'sale',
+                **self._current_period(),
                 'order_line': [
                     Command.create(
                         {
                             'product_id': self.product.id,
                             'name': self.product.name,
                             'product_uom_qty': 1,
-                            'product_uom': self.product.uom_id.id,
+                            'product_uom_id': self.product.uom_id.id,
                             'price_unit': self.product.list_price,
                         }
                     )
@@ -87,13 +159,16 @@ class TestPosAccessBlock(TransactionCase):
             {
                 'partner_id': self.owner.id,
                 'company_id': self.other_company.id,
+                'plan_id': self.plan.id,
+                'state': 'sale',
+                **self._current_period(),
                 'order_line': [
                     Command.create(
                         {
                             'product_id': self.other_product.id,
                             'name': self.other_product.name,
                             'product_uom_qty': 1,
-                            'product_uom': self.other_product.uom_id.id,
+                            'product_uom_id': self.other_product.uom_id.id,
                             'price_unit': self.other_product.list_price,
                         }
                     )
@@ -109,13 +184,16 @@ class TestPosAccessBlock(TransactionCase):
             {
                 'partner_id': self.owner.id,
                 'company_id': company.id,
+                'plan_id': self.plan.id,
+                'state': 'sale',
+                **self._current_period(),
                 'order_line': [
                     Command.create(
                         {
                             'product_id': product.id,
                             'name': product.name,
                             'product_uom_qty': 1,
-                            'product_uom': product.uom_id.id,
+                            'product_uom_id': product.uom_id.id,
                             'price_unit': product.list_price,
                         }
                     )

@@ -6,6 +6,7 @@ import {
 } from "./subscription_discount_render";
 import { renderDomiciliationInstallmentSelector } from "./subscription_domiciliation_render";
 import { buildChargeFromSnapshot } from "./subscription_pricing_snapshot";
+import { isPricingReady } from "./subscription_quote_request";
 
 function renderRenewalForm({
     item,
@@ -185,7 +186,7 @@ function renderRenewalForm({
                 </div>
             ` : ""}
             <div class="wgs-inline-actions">
-                <button type="button" class="wgs-primary-action-btn" data-action="${escapeHtml(saveAction)}" ${renewalForm.loading ? "disabled" : ""}>${escapeHtml(submitLabel)}</button>
+                <button type="button" class="wgs-primary-action-btn" data-action="${escapeHtml(saveAction)}" ${isPricingReady(renewalForm) ? "" : "disabled"}>${escapeHtml(submitLabel)}</button>
                 <button type="button" class="wgs-secondary-action-btn" data-action="${escapeHtml(cancelAction)}">${escapeHtml(_t("Cancelar"))}</button>
             </div>
         </div>

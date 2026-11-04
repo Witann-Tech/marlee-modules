@@ -2,6 +2,523 @@
 
 Registro inicial: 2026-09-28. Rama de trabajo: `staging`.
 
+## Directorio y desconexiones: diagnostico y cierre, 2026-11-04
+
+Esta seccion actualiza el pendiente de rendimiento/disponibilidad del cierre
+anterior. Las secciones siguientes conservan el historial de cada build.
+
+**Correcciones desplegadas y verificadas exclusivamente en staging. Main y
+produccion sin cambios. No se modificaron pagos, suscripciones ni accesos
+operativos; tampoco outputs/, Payroll o importador bancario.**
+
+Runtime: `7f1cfa32e164d56449534ad19f2714e019aa3aad`. Commits funcionales:
+`45b3a81` y `7f1cfa3`. Versiones instaladas/codigo verificadas por API:
+Access API `19.0.2.0.87` (sin cambios), WGS `19.0.1.1.62` y POS
+`19.0.1.6.16`. Base neutralizada, sin upgrades pendientes y crons WGS
+66/67/72 conservados inactivos. Main local/remoto sigue en
+`ca0910cbaf862fb423a0b1a89ec4980c57a9b3a4`.
+
+### Causas confirmadas de lentitud
+
+- Impacto medio/alto en operacion: consultas N+1 en el directorio. Por contrato
+  se buscaban nuevamente los sitios de la sede y se ejecutaban dos `exists()`
+  para relaciones ORM ya validadas. Un resumen real genero 6,287 consultas en
+  Santa Monica y 4,758 en El Dorado. Los sitios ahora se resuelven una vez por
+  lote; se mantienen las validaciones de IDs en las entradas RPC.
+- Impacto medio: los cuatro atributos de bloqueo manual se consultaban con
+  `get_param` por cada contacto. `_compute_wgs_access_block` ahora lee las claves
+  del lote en una sola busqueda, conservando almacenamiento, permisos, motivo,
+  fecha, operador e invalidacion existente. No se agrego cache comercial propia.
+- Impacto medio: buscar por cliente tambien cargaba y clasificaba todo el
+  historial local para comparar nombres de productos. Se coteja el catalogo
+  recurrente, incluidos productos archivados/codigos/variantes, y se restringen
+  las ordenes desde el dominio antes de clasificarlas.
+- Impacto medio/alto en operacion: faltaban indices sobre
+  `pos.order.line.wgs_sale_order_id` y `wgs_subscription_source_id`. Tras quitar
+  los N+1 todavia habia 10-12 s de demora. El perfil SQL real identifico 6.634 s
+  en cuatro selecciones de candidatos y 2.097 s en cuatro busquedas de contratos:
+  subconsultas de pagos/historial atravesaban esas relaciones sin indice. Se
+  declararon indices `btree_not_null`, creados por el upgrade estandar de Odoo;
+  no se altero el dominio comercial para ocultar contratos/pagos historicos.
+
+Archivos principales: `witann_group_subscriptions/models/res_partner.py`,
+`witann_group_subscriptions/models/sale_order.py`,
+`witann_group_subscriptions_pos/models/sale_order.py` y
+`witann_group_subscriptions_pos/models/pos_order.py`.
+
+### Mediciones reales en staging
+
+Tiempo extremo a extremo por XML-RPC, segundos. Antes: una muestra por consulta.
+Despues: mediana de tres muestras por la misma consulta, con identico contexto de
+empresa. No son un benchmark de carga ni un SLA. Empresa 9 = Santa Monica;
+empresa 10 = El Dorado.
+
+| Sede / consulta | Antes | Despues | Reduccion |
+| --- | ---: | ---: | ---: |
+| Santa Monica, resumen | 15.792 | 2.545 | 83.9% |
+| El Dorado, resumen | 12.403 | 2.333 | 81.2% |
+| Santa Monica, primera pagina de 51 candidatos | 2.791 | 0.547 | 80.4% |
+| El Dorado, primera pagina de 51 candidatos | 2.959 | 0.499 | 83.1% |
+| Santa Monica, busqueda QA | 2.915 | 0.198 | 93.2% |
+| El Dorado, busqueda QA | 2.544 | 0.171 | 93.3% |
+
+Las 18 respuestas posteriores conservan exactamente los conteos e IDs de la
+linea base. Una pareja de resumenes simultaneos termino en 2.807/2.451 s, tambien
+sin cambios ni errores. El directorio sigue mostrando la primera pagina antes
+del resumen general. No se introdujo TTL, cache persistente ni reintento de cobros.
+
+En una base aislada con 100 contratos, el perfil SQL paso de 329 a 30 consultas
+para resumen y de 580 a 31 para pagina; la busqueda puntual paso de 119 a 19.
+Los presupuestos de consultas se prueban contra ORM real, no solo mocks.
+
+### Desconexiones: evidencia y limites
+
+- Se reprodujo `502 Bad Gateway` al autenticar por API durante el reinicio del
+  backend que provoca el build de CloudPepper de `7f1cfa3`. Ese intento no llego
+  a ejecutar el upgrade ni operaciones comerciales. Tras terminar el build, la
+  autenticacion y el upgrade funcionaron normalmente.
+- En el core exacto de Odoo 19 (`29cf86bd012cd3bf2a145a4ae3c6266f2b6f9034`),
+  `addons/web/static/src/core/network/rpc.js` convierte HTTP 502 en
+  `ConnectionLostError`; tambien usa ese error para fallos de transporte y
+  respuestas no JSON. El mensaje por si solo no demuestra una falla de red local.
+- Fuera del build, las 20 lecturas finales del directorio, su uso por navegador y
+  ocho sondas `/web/health` terminaron sin desconexiones. Las sondas devolvieron
+  HTTP 200 en 0.196-0.303 s. Consola de la pestaña POS sin errores/advertencias
+  durante la comprobacion final de apertura, busqueda, filtros y detalle.
+- CloudPepper muestra actualmente aproximadamente 8 GB de RAM, cuatro CPU y dos
+  workers por instancia. La vista agregada de 24 h no mostro saturacion sostenida
+  de memoria/CPU. No se alteraron workers, limites, proxy ni infraestructura
+  compartida; esa vista no descarta picos breves, reinicios u OOM historicos.
+- La causa demostrada de una ventana de indisponibilidad es el reinicio durante
+  el despliegue. **No se atribuyen retroactivamente todas las desconexiones
+  anteriores al build**: faltan las entradas historicas de error del proxy y del
+  sistema para correlacionarlas. Se redujo la ocupacion de workers por el
+  directorio, pero eso no prueba que causara cada desconexion previa.
+- No se encontro evidencia de transacciones o bloqueos persistentes despues de
+  las operaciones del gate de dos workers. El gate distingue el arranque inicial
+  del servidor y mantiene comprobaciones inmediatas/estrictas tras cada operacion.
+  Esto no sustituye una prueba prolongada de RSS ni un diagnostico del OOM de
+  backups. Los cursores/entornos de peticion siguen gestionados por Odoo.
+
+### Pruebas y preservacion de datos
+
+- Gate final Enterprise/community con los mismos commits de Odoo que staging:
+  45 tests Access + 210 tests WGS/POS = **255 ORM**, cero fallos/errores.
+- Ocho nuevas regresiones: sitios por lote, presupuesto de resumen/pagina,
+  busqueda selectiva de contactos, codigos/nombres y archivo de productos,
+  exclusion de lineas no recurrentes, lectura y aislamiento de bloqueos, e
+  indices validos fisicamente presentes en PostgreSQL.
+- **135 tests Python standalone aprobados**, mas un placeholder de PostgreSQL
+  omitido al ejecutarse sin DSN. La prueba real de PostgreSQL se ejecuto aparte:
+  **2 tests aprobados**. **40 tests JavaScript aprobados**, sin omisiones.
+- **2 tests HTTP con dos workers aprobados**: colisiones forzadas, reintento
+  nativo real de Odoo, diez solicitudes repetidas, identidades unicas y ningun
+  `idle in transaction`/bloqueo del asignador retenido tras las operaciones.
+- Se hicieron explicitas las vigencias de fixtures de acceso/multisede que antes
+  dependian del valor inicial de `next_invoice_date` y fallaban segun el dia de
+  ejecucion. No se cambio la regla productiva para hacer pasar esas pruebas.
+- Verificacion final solo lectura de las 18 ventas QA existentes: 17 aplicaciones
+  de membresia unicas, sin facturas ni sincronizaciones pendientes, nueve persons
+  activos distintos, mismas vigencias, participantes, pagos domiciliados y
+  ventas visibles en ambas bitacoras. No se registraron nuevas ventas QA.
+
+Evidencia local, fuera de outputs/:
+`/Users/apreza/.codex/visualizations/2026/02/18/019c72fb-fa85-7b22-a4fa-20aa1262c18f/wgs-perf-20261104/`.
+Incluye linea base, tres muestras finales, lectura concurrente, resumen del
+perfil SQL real, gate completo, verificacion QA y capturas de build/directorio.
+El perfilador temporal se desactivo y su disponibilidad global se restauro al
+valor anterior; no quedo captura corriendo.
+
+## Reporte ejecutivo de cierre, 2026-11-04
+
+**Codigo corregido y desplegado exclusivamente en staging. Sin promocion a main
+ni modificaciones productivas. Resultado aprobado en los escenarios ejecutados;
+no se promete ausencia absoluta de fallos fuera de esta cobertura.**
+
+Runtime desplegado: `35cc33c2d4d3f74a7faed3cbbfff101bee3cd92a`.
+Access API `19.0.2.0.87`, WGS base `19.0.1.1.61`, WGS POS `19.0.1.6.14`.
+Build y upgrades verificados por API contra staging-portal.spinbike.mx, base
+neutralizada. Main/origin-main conservan `ca0910cbaf862fb423a0b1a89ec4980c57a9b3a4`.
+Los cambios posteriores de esta bitacora y cobertura de proveedores son solo
+documentacion/tests; no cambian el runtime desplegado. Outputs/, Payroll e
+importador bancario no se tocaron.
+
+### Correcciones principales
+
+- El calendario comprado queda firmado y se verifica contra plazo, unidad,
+  corte y alineacion, no solo contra sus propias fechas. Plan/precio/paquete
+  destino provienen del catalogo o de la cartera domiciliada correspondiente.
+- Venta, pago y aplicacion comercial comparten la transaccion nativa. Las
+  postcondiciones verifican plan, estado, fechas y participantes. Se conserva
+  idempotencia de UUID/linea y no se reabre un contrato expirado al reenviar un
+  pago viejo. Los cambios de beneficios esperan al fin del periodo actual.
+- La entrada sync_from_ui es inmutable por intento: core consume una copia
+  profunda, no los argumentos RPC que Odoo reutiliza al reintentar. Este fallo
+  se descubrio con dos clientes HTTP reales y se corrigio en la frontera del
+  flujo, no mediante excepciones para personas o productos especificos.
+- Se eliminaron caches comerciales propias que retenian recordsets y precios
+  retirados. Se preservan permisos POS/empresa antes de elevar la aplicacion
+  interna; no se conceden permisos Sales generales al cajero.
+- Se corrigieron invalidacion de bloqueo manual, edicion de motivo, flush del
+  ciclo domiciliado anterior y flush antes del SQL de expiracion nativa. La
+  evaluacion de vigencia usa una sola fecha local de negocio.
+- Se verifica la proyeccion de acceso antes de darla por terminada. Fallar la
+  proyeccion no vuelve a cobrar ni extiende otra vez la vigencia; mantiene retry
+  operativo. El asignador de identidades rechaza permisos antes del lock y
+  fuerza el reintento estandar de Odoo ante snapshots concurrentes antiguos.
+- Los cuatro formularios exigen cotizacion firmada lista antes de tocar el
+  ticket; precio cero autorizado sigue siendo valido. Cambiar fecha durante
+  la primera consulta invalida y recotiza. Respuestas/errores viejos y modales
+  cerrados ya no sobreescriben estados nuevos.
+
+### Pruebas ejecutadas
+
+| Capa | Resultado final |
+| --- | --- |
+| ORM Odoo 19 Enterprise real | 45 Access API + 202 WGS/base/POS = 247 aprobadas, cero fallos/errores |
+| Python aislado | 135 aprobadas; un placeholder PostgreSQL omitido sin DSN en ese comando, ejecutado aparte |
+| JavaScript real de los modulos | 40 aprobadas, sin omisiones |
+| PostgreSQL 16 Repeatable Read | 2 aprobadas con conexiones reales, rollback y locks |
+| HTTP Odoo con workers=2, DB desechable | 2 aprobadas: colisiones reales, reintentos nativos e identidad estable; sin idle-in-transaction ni lock residual |
+| Staging, clientes HTTP concurrentes .14 | Alta: uno cobra y otro rechaza historial. Renovacion: uno extiende y otro rechaza revision vieja. Dos reenvios adicionales no duplican pago/plazo |
+| Navegador, ambas sucursales | 15 tickets ficticios; mas 3 tickets del smoke HTTP = 18 ordenes QA pagadas, incluido reembolso y venta normal |
+| Comprobacion final por API | 18 UUID unicos, 17 aplicaciones de membresia unicas, cero facturas, cero pendientes/errores de proyeccion, 9 personas activas distintas |
+| Gate estatico | Sintaxis Python/JS/shell, nombres globales, registro de tests y diff sin errores |
+
+La matriz de navegador es acumulativa de los builds de este pase; cada fallo
+encontrado se repitio despues de su correccion. No se afirma haber revendido
+las 15 operaciones completas despues de cada build. Sobre .14 se repitieron
+el gate automatizado completo, concurrencia comercial real y checkout
+domiciliado SM por navegador; todas las ordenes anteriores se comprobaron de
+nuevo por API al cierre.
+
+Los tests Enterprise se ejecutaron en una base local desechable, red Docker
+interna, puertos no publicados y limites de memoria. No se ejecuto test-enable
+contra la base operativa de staging. Contenedores/red de prueba eliminados al
+terminar. Los crons de la copia de staging permanecen inactivos; los tests de
+cierre, activacion y limites de dia se ejecutaron en la base desechable.
+
+### Matriz operativa observada
+
+| Flujo | Evidencia / resultado |
+| --- | --- |
+| Alta mensual ED | S03637 / POS13940, $799, 3/nov-3/dic inclusive, siguiente corte 4/dic; acceso activo |
+| Renovar individual a pareja futura | POS13941, $1398.99, 4/dic-3/ene; actual individual intacto, participante futuro sin acceso anticipado |
+| Day Pass retroactivo y cambio a mes | S03638 / POS13942-13943, dia 1/nov exacto; compra mensual 3/nov-3/dic por $799, plan mensual y acceso habilitado |
+| Domiciliado ED primer + ultimo | S03639 / cartera159 / POS13944, 15/sep-30/sep proporcional + cuota12, $949.15; dos adeudos, sin acceso |
+| Abono y liquidacion domiciliada | POS13945 paga octubre: sigue sin acceso. POS13946 paga noviembre y diciembre: cero adeudos, acceso activo, anticipo permitido |
+| Alta con descuento SM | S03640 / POS13947, 25% cotiza $599.25; 100% aplicado con plazo completo y sin ingreso |
+| Renovacion posterior al descuento | POS13948, $799 con descuento cero, sin heredar autorizacion previa |
+| Reembolso | POS13949, -$799 total, cancela y retira acceso. Parcial y duplicado rechazados antes de otro pago |
+| Semestral a mensual diferido | S03641 / POS13950-13951: semestre hasta 2/may/2027; compra mensual $799 para 3/may-3/jun, plan15 en snapshot. No hereda seis meses ni adelanta beneficios |
+| Restauracion del borrador | UUID 0d66708e-80d4-4c25-b974-9137820a1d34 sobrevive recarga con metadata; una sola venta/aplicacion |
+| Reinscribir cancelada como pareja | S03642 / POS13952, titular correcto y dos participantes elegidos; dos accesos activos, historial cancelado conservado |
+| Edicion de participantes | Retirar QA9493 suspende solo a esa persona; restaurarlo vuelve a dos activos. Plan, plazo y pagos intactos |
+| Producto sin tarifa | Producto QA1823 rechazado, envio deshabilitado; cambiar a paquete valido recupera flujo. Sin venta/contrato para el producto defectuoso, luego archivado |
+| Venta ordinaria | POS13953, agua $17, sin contrato/persona de suscripcion; no bloquea posterior primera membresia |
+| Alta HTTP previa al fix | QA9497 / POS13954: una sola venta, sin duplicados; el mensaje incorrecto del segundo intento detono .14 |
+| Alta/renovacion concurrente .14 | QA9498 / S03644 / POS13955-13956: dos ventas totales, una alta y una renovacion, no cuatro. Reenvio no extiende de nuevo |
+| Domiciliado SM solo proporcional | QA9495 / S03645 / POS13957, $577.74, 3/nov-30/nov; solo cuota1 pagada, cuota12 no forzosa, acceso activo |
+| Bloqueo/desbloqueo/resync | API dirigida QA9491, motivo no desbloquea; acceso restaurado y resumen comprobado, sin tocar pagos |
+| Facturacion e informacion | Recibo/Factura deshabilitado en pago e historial; Informacion deshabilitada con producto seleccionado |
+| Bitacoras | Accesos muestra 00:00-23:59 locales. Historial API contiene los 18 tickets: 11 SM y 7 ED, sin perder ventas nocturnas por UTC |
+| Proveedores externos | Cuatro regresiones ORM nuevas: Wellhub/TotalPass, rechazo ADMS, puerta de otra empresa y proveedor invalido; HTTP simulado, no apertura fisica |
+
+Las altas de navegador se hicieron despues de las 18:00 locales, incluso a las
+23:xx, y conservaron 3/nov aunque UTC ya era 4/nov. Los importes citados incluyen
+IVA cuando corresponde y coinciden entre cotizacion, ticket y pago. Las
+diferencias de un centavo respecto de nombres comerciales como 619/1399 son los
+importes efectivos del catalogo/impuestos de esta copia; no se alteraron tarifas
+reales para maquillar la prueba.
+
+Ademas, ORM cubre CURP/edad/prueba unica, quincena/trimestre/semestre/anual,
+reinscripcion mismo/distinto paquete alineado con proporcional, legacy
+domiciliado con plan/precio historico distintos, ciclos y pagos conservados,
+colas futuras encadenadas, fallo de acceso, ultimo dia completo, fin de mes y
+recuperacion de corte, crons WGS vs nativos, multisede y horarios, auditoria
+dirigida y rollback de postcondiciones. No se presenta como si todos esos
+escenarios se hubieran repetido tambien por navegador.
+
+### Limites y riesgos restantes
+
+- Integracion fisica: no se abrieron puertas ni se enviaron comandos a SpeedFace
+  productivos. Falta una prueba con dispositivo/gateway de laboratorio aislado.
+  Tampoco hubo impresora disponible; se comprobo recibo/logica, no impresion fisica.
+- Red/disponibilidad: hubo ConnectionLostError y cargas lentas del POS durante
+  el pase. Los tickets se recuperaron sin duplicarse y se corrigieron estados
+  obsoletos de interfaz; no hay evidencia suficiente para atribuir esas
+  desconexiones a Odoo, al proxy o a la red local. Requiere correlacion de metricas
+  antes de afirmar que la disponibilidad es estable. No se declara resuelto el
+  incidente OOM de pg_dump con estas pruebas.
+- Rendimiento, severidad media: resumen general SM 14.653 s y ED 12.243 s frente
+  a linea base 17.240/14.633 s. Son muestras aisladas, no benchmark de carga.
+  Sigue pendiente perfilar/reducir el costo global del directorio en otra
+  iteracion controlada; no se introdujo cache persistente para esconderlo.
+- Memoria: el gate demuestra liberacion transaccional/locks, no estabilidad RSS
+  bajo horas de carga o backups concurrentes. El pool estandar Odoo puede mantener
+  conexiones abiertas reutilizables; no necesitan cierre manual desde el cron.
+  Falta soak/telemetria en infraestructura equivalente a los 4 GB del servidor.
+
+**Conclusion:** las fallas reproducidas en el alcance comercial se corrigieron
+con regresiones y se validaron sobre .14; no quedan fallos comerciales conocidos
+en esos escenarios. Esto no equivale a certificar todos los equipos, redes y
+combinaciones futuras. Main queda sin tocar y no se autoriza liberacion implicita.
+
+### Evidencia y repeticion
+
+Evidencia local de esta ejecucion:
+`/Users/apreza/.codex/visualizations/2026/02/18/019c72fb-fa85-7b22-a4fa-20aa1262c18f/wgs-qa-20261103/`.
+Incluye capturas y comprobaciones finales QA, sin llaves API. Logs del ultimo
+gate: `/tmp/wgs-20261103-enterprise-final.log` y
+`/var/folders/g4/fxd70d8n40d5mp33wn_z0gr80000gn/T/wgs-isolated.7NboIb/`.
+Concurrencia staging: `/tmp/wgs-qa-20261103/concurrent-checkout14.log`.
+Las secciones anteriores/intermedias de abajo se conservan como bitacora;
+este cierre prevalece sobre sus estados de "pendiente" y conteos provisionales.
+
+## Gate Enterprise y correcciones integrales, 2026-11-03
+
+Esta entrada sustituye los pendientes tecnicos de la entrada anterior. Solo
+staging: main, produccion, outputs/, Payroll e importador bancario sin cambios.
+Versiones preparadas: API 19.0.2.0.87, base 19.0.1.1.61, POS 19.0.1.6.11.
+
+Hallazgos reproducidos y corregidos:
+
+- El cajero no tiene permisos Sales para aplicar una compra. La aplicacion
+  interna usa sudo solo despues de validar rol POS y acceso de escritura a
+  la orden/empresa; la venta y sus invariantes siguen validados. Tests de cajero
+  sin Sales, usuario no POS y caja de otra empresa.
+- Se eliminan caches comerciales propias del Environment: retenian recordsets
+  y precios/planes retirados despues de editar el catalogo. El ORM gestiona su
+  invalidacion. La lectura privilegiada se limita al catalogo seleccionado.
+- El bloqueo manual invalida sus campos calculados tambien en entornos sudo;
+  editar solo la razon no desbloquea ni muta el diccionario recibido.
+- El cambio de ciclo domiciliado hace flush del estado del ciclo anterior antes
+  del INSERT sujeto al indice parcial. Conserva cuotas y pagos anteriores.
+- La expiracion nativa hace flush de sus campos antes del SQL de Odoo. No agrega
+  cursores, commits ni transacciones manuales. La evaluacion de acceso usa una
+  sola fecha de negocio, incluida la cartera, para evitar decisiones mixtas
+  alrededor de medianoche.
+- El directorio conserva sudo y prefetch al agrupar suscripciones y evalua los
+  reemplazos de origen por lote. Incluye ID/nombre de suscripcion en su respuesta.
+- Access API rechaza permisos antes de adquirir el lock del asignador; un
+  usuario no autorizado no ocupa ese recurso. No cambia IDs ni protocolo facial.
+
+Validacion real en PostgreSQL 16 y Odoo 19 Enterprise, en red Docker interna,
+base desechable, sin puertos publicados ni conexiones a bases operativas:
+
+- 45 pruebas ORM Access API y 197 WGS/base/POS: cero fallos y errores, sin omitir
+  los escenarios comerciales. Se corrigieron fixtures obsoletos para Odoo 19,
+  impuestos multicompania e identidades Studio solo en la base desechable.
+- Dos pruebas PostgreSQL con conexiones Repeatable Read y dos HTTP con workers=2
+  aprobadas. Tres colisiones simultaneas forzadas ejecutaron reintentos nativos
+  (12 mensajes de serialization/retry), IDs distintos y positivos. Diez ciclos
+  HTTP adicionales conservaron identidad y liberaron transacciones y locks.
+- El consumo Docker frio/caliente observado fue 98/368 MiB; no demuestra fuga
+  ni estabilidad a largo plazo. No se presenta como una prueba de soak/RSS.
+- Evidencia: /tmp/wgs-20261103-enterprise-worker-gate2.log y
+  /var/folders/g4/fxd70d8n40d5mp33wn_z0gr80000gn/T/wgs-isolated.NNVWC4/.
+- Primer QA por navegador en staging: cliente sintetico 9488, S03637, POS13940,
+  recibo 263-3-000137, $799 efectivo ficticio. Mensual 3/nov-3/dic inclusive,
+  siguiente corte 4/dic, persona 5199 habilitada y sin pendiente de proyeccion.
+  No se generaron facturas. Falta repetir la matriz tras este nuevo upgrade.
+
+Pendientes: desplegar estas tres versiones, ampliar matriz de navegador en
+ambas sucursales, comparar directorio y emitir reporte ejecutivo. La entrega
+fisica a SpeedFace no puede verificarse con el gateway aislado; no se opera
+hardware productivo ni se habilitan crons globales sobre datos clonados.
+
+### Segundo pase por navegador
+
+- Build 157ddf7 y upgrade de los tres addons confirmados por API: .87/.61/.11.
+  Directorio: SM 14.653 s, ED 12.243 s; conteos congruentes con los ocho contactos
+  sinteticos de este pase (no se corrigen clientes clonados). Sigue siendo una
+  consulta costosa; la diferencia de tiempo no equivale a un benchmark de carga.
+- Renovacion individual a pareja de S03637: ticket 263-3-000139, POS13941,
+  $1398.99 con IVA, periodo programado 4/dic/2026-3/ene/2027. El contrato vigente
+  conserva producto individual y participante original; no se adelanta acceso.
+  Una interrupcion de red previa al pago se recupero con el mismo UUID. El
+  reenvio nativo encontro paid y no duplico la operacion. Sin impresora de prueba.
+- Se reprodujo una carrera adicional: cambiar fecha durante la primera consulta
+  del producto dejaba el calendario anterior en alta/reinscripcion, porque aun
+  no habia un plan en el snapshot. POS .12 reinicia la misma consulta con el
+  guard de solicitudes existente y la fecha actual. Dos regresiones reproducen
+  respuestas invertidas y comprueban calendario, loading y rechazo de la vieja.
+  Total JavaScript: 29 aprobadas. No se cobro el ticket que expuso esa carrera.
+- La repeticion en .12 confirma fecha del Day Pass elegida durante la consulta:
+  S03638 del 1/nov al 1/nov, POS13942; renovacion POS13943 por $799 aplica
+  MENSUALIDAD ED 3/nov-3/dic, corte 3, acceso habilitado. No hereda DIA.
+- Cartera QA159/S03639 retroactiva 15/sep: POS13944 paga cuotas 1 y 12 por
+  $949.15; conserva dos adeudos y sin acceso. POS13945 paga octubre por $619.01,
+  queda noviembre pendiente y sin acceso. POS13946 paga noviembre y diciembre
+  por $1238.02: cero adeudos y persona 5201 habilitada en ambas sedes. Permite
+  cotizar enero aun estando al corriente. Importes con IVA en tarjetas/ticket.
+- Bloqueo/desbloqueo/resincronizacion dirigidos por API solo al QA9491: motivo
+  editado conserva bloqueo; vuelve a enabled al desbloquear. Pagos intactos.
+  El dialogo nativo de Chrome bloqueo la automatizacion de esa pestaña; el
+  mismo flujo backend se completo por API. No se atribuye a una fuga Odoo.
+- SM QA9494/S03640: 25% cotiza $599.25; 100% autoriza y aplica POS13947 con
+  importe cero y plazo mensual integro. Renovacion POS13948 vuelve a $799 con
+  descuento cero. Reembolso total por navegador cancela y retira acceso;
+  preflight API rechaza parcial y segundo reembolso sin crear pagos nuevos.
+- Navegador detecto desconexiones transitorias de RPC, distintas de excepciones
+  comerciales: el mismo ticket se recupera sin doble venta. No se afirma causa
+  de infraestructura sin metricas de red/servidor. POS .13 unifica readiness:
+  los cuatro formularios y sus handlers exigen cotizacion firmada cargada antes
+  de tocar cliente/ticket, sin rechazar precio cero. Una busqueda vieja fallida
+  no sobreescribe otra nueva; cerrar el modal impide render tardio. 40 tests JS
+  aprobados, incluidos errores, cierre de modal y render real de los formularios.
+- El pase adicional de concurrencia HTTP en staging (.13) encontro consumo de
+  argumentos entre reintentos: un alta se aplicaba una vez, pero el otro intento
+  devolvia "Falta la configuracion" en lugar del rechazo de historial esperado.
+  Core y WGS hacen pop de metadata y modifican comandos anidados sobre los mismos
+  objetos que reutiliza service.retrying. No se duplico ni se volvio a cobrar.
+- POS .14 establece propiedad de los argumentos en sync_from_ui: entrega a core
+  una copia profunda local por intento; conserva intacta la entrada RPC original.
+  No crea Environment, cursor, commit, retry propio ni cache persistente. La
+  copia vive solo durante la llamada y es proporcional al payload del ticket.
+- Nueva regresion ORM fuerza SerializationFailure despues de consumir el payload
+  nativo, revierte el savepoint, repite los mismos argumentos y reenvia el pago
+  ya aplicado: una linea, un pago y una vigencia; argumentos intactos. Dos tests
+  aislados adicionales comprueban consumo profundo y repeticion, no solo un pop
+  superficial. Gate repetido: 45 ORM API + 198 base/POS, 2 PostgreSQL y 2 HTTP con
+  workers=2 aprobados. Python aislado: 135 aprobadas y un placeholder omitido por
+  no suministrar DSN en ese comando; PostgreSQL se ejecuto por separado. JS: 40.
+  Evidencia /tmp/wgs-20261103-enterprise-rpc-retry.log y wgs-isolated.bb7tmr/.
+- Pendiente desplegar .14 y repetir el alta/renovacion HTTP concurrente y un
+  checkout por navegador; no se cuenta ese escenario como aprobado aun.
+
+## Validacion integral de los tres addons, 2026-11-03
+
+Alcance autorizado: access_control_api, witann_group_subscriptions y
+witann_group_subscriptions_pos, exclusivamente en staging. Main y produccion
+no se modifican; outputs/, Payroll e importador bancario quedan fuera.
+
+- Despliegue de los invariantes descritos abajo: API 19.0.2.0.86, base
+  19.0.1.1.60 y POS 19.0.1.6.10. La matriz comercial sigue abierta hasta
+  completar pruebas ORM y navegador; no es una aprobacion para produccion.
+- Repeticion local: 132 tests Python de suscripciones/calendario/contratos de
+  fuente, 2 de payload de administrador y 27 JavaScript aprobados. Dos pruebas
+  PostgreSQL de concurrencia y 44 ORM de Access API tambien aprobadas.
+- El primer intento comercial se detuvo antes de ejecutar tests: Community
+  de la imagen oficial (agosto) es anterior a Enterprise instalado en staging.
+  No se cuenta como aprobado. El runner admite WGS_COMMUNITY_SOURCE y
+  WGS_ENTERPRISE_ADDONS fijados para repetir con versiones compatibles.
+- Enterprise obtenido mediante acceso licenciado, revision de staging
+  ef5d91503c8951a2fdd905f257d1e2c0af689366. Community de la misma fecha:
+  29cf86bd012cd3bf2a145a4ae3c6266f2b6f9034. No se actualiza el core del servidor.
+- Se corrigieron nombres obsoletos solo en fixtures POS para Odoo 19: type,
+  product_uom_id y group_ids. El gate de sintaxis y registro se limita a los
+  tres addons; la suite conjunta incluye sus 235 tests registrados.
+- Linea base del resumen por API: Santa Monica 17.240 s, El Dorado 14.633 s.
+  Se compararan conteos y tiempos despues del upgrade, antes de crear datos QA.
+- Staging neutralizado; dispositivos con ultima sincronizacion 7/oct/2026.
+  El gateway productivo permanece aislado. No se prueba apertura fisica ni
+  entrega real de comandos; no se activan crons globales en la copia de datos.
+
+Pendientes de esta ejecucion: build/upgrade, gate Enterprise, matriz de POS
+en ambas sucursales y reporte ejecutivo con evidencias y limites.
+
+## Cierre integral de invariantes, 2026-10-30
+
+**Implementado solo en la rama staging. Sin despliegue, pagos ni reparaciones
+en produccion; main permanece en ca0910c. Pendiente QA comercial Enterprise.**
+
+### Alcance y decisiones
+
+- WGS POS `19.0.1.6.10`: cada cotizacion nueva no domiciliada incorpora los
+  insumos de calendario firmados (plazo, unidad, corte, alineacion, ancla y
+  continuidad). Se verifica que las fechas correspondan a esos insumos antes
+  de firmar, al verificar la firma y en la postcondicion. Un mes con tres meses
+  de vigencia ya no pasa por coincidir consigo mismo. El upsale conserva
+  explicitamente el periodo origen; no se convierte en una nueva vigencia.
+- No se cambia RULES_VERSION ni se reescriben compras historicas. Los periodos
+  programados ya pagados conservan sus fechas anteriores. Una cotizacion vieja
+  aun no cobrada debe actualizarse; los reintentos de pagos ya aplicados siguen
+  siendo idempotentes. Domiciliados conserva su cartera como autoridad.
+- La aplicacion verifica que el contrato quede confirmado, reconocido como
+  suscripcion y en progreso. Solo la cobranza de una cartera activa conserva
+  la excepcion del estado nativo historico. Una renovacion aplicada sale del
+  estado nativo de renovacion; un cambio futuro no adelanta sus beneficios.
+- Los cambios pagados guardan su contrato de activacion. Editar los participantes
+  actuales no cambia los participantes comprados para la vigencia futura, ni
+  permite cambiar precio, titular, empresa, plan, plazo o cuotas. Se comparan
+  huellas canonicas para soportar el roundtrip JSON de tuplas y numeros.
+- Una cola anterior sin ese contrato se enriquece antes de una edicion de
+  participantes, bajo los mismos locks y solo si su revision aun coincide.
+  Una cola historica ya divergente no se normaliza a ciegas. Los fallos mantienen
+  recuperacion automatica con backoff de 15 minutos a 6 horas, no un estado
+  terminal nuevo de revision.
+- La reinscripcion del titular tambien comprueba otras membresias activas o
+  futuras. Dos altas nuevas incompatibles se rechazan tanto en preflight como
+  antes de procesar el pago nativo, no despues de aplicar la primera linea.
+- WGS base `19.0.1.1.60`: la proyeccion de acceso devuelve un resultado
+  comprobado por persona (estado, ID, sitios y horario). Falta de sitios o
+  proyeccion incompleta conserva el pendiente; no se habilita sin derecho ni
+  se vuelve a aplicar/cobrar la venta. Bloqueos y altas futuras siguen sin acceso.
+- Access Control API `19.0.2.0.86`: la reserva de identidades versiona una fila
+  tecnica dentro de la transaccion Odoo. Un snapshot concurrente antiguo provoca
+  SerializationFailure y deja que Odoo reintente; no basta un advisory lock.
+  La consulta SQL de IDs hace flush previo de global_user_id.
+- Los tests ORM detectaron que Odoo Integer persiste False como 0, incompatible
+  con las restricciones anteriores al liberar un ID. El upgrade retira UNIQUE
+  global y crea un indice unico solo para IDs positivos; permite 0/NULL no
+  asignados y exige ID positivo para personas activas. No renumera personas,
+  borra historial ni cambia el protocolo/comandos SpeedFace.
+- El resumen y el filtro sin suscripcion ahora clasifican solo contactos con
+  historial local o acceso fisico relevante mediante dominios EXISTS y lotes
+  por ID. Los restantes se cuentan como none sin recorrer todas sus fichas.
+- Se registra el test de bloqueo de factura que faltaba en tests/__init__.py.
+  Un gate comprueba que todos los tests ORM de los tres addons esten importados.
+- Sin cambios de Payroll, importador bancario, logs horarios de acceso, crons
+  nativos, dispositivos productivos ni outputs/. Los ajustes a los tests de
+  controlador simulan request.env y comprueban prioridades por recordset;
+  no cambian codigo productivo del parser de eventos.
+
+### Verificacion ejecutada y limites
+
+- 117 pruebas Python de suscripciones y 15 de calendario/contratos de fuente:
+  aprobadas. El grupo PostgreSQL se omite en ese comando sin DSN deliberado,
+  y se ejecuta por separado contra una base local desechable.
+- 27 pruebas JavaScript: aprobadas, incluido el transporte del calendario
+  firmado sin perder sus insumos al restaurar el ticket.
+- 2 pruebas reales PostgreSQL 16 con dos conexiones Repeatable Read: aprobadas
+  (snapshot concurrente rechazado, nueva transaccion usa otro ID, rollback
+  libera identidad y lock). Ejecutan los cuerpos reales del asignador/SQL,
+  no el bucle completo de reintentos del servicio Odoo.
+- 44 tests ORM de Access Control API en Odoo 19 Community: aprobados. Tambien
+  se probo instalar la version anterior, actualizar a esta y conservar una
+  identidad preexistente 9900. La prueba no conecta con staging ni produccion.
+- 67 tests ORM comerciales de WGS preparados, incluidos los nuevos casos de
+  calendario incorrecto, estado cerrado, participantes actuales vs futuros,
+  cola anterior, acceso silencioso, otra membresia, doble alta y directorio.
+  **No ejecutados**: el runtime local no contiene sale_subscription Enterprise.
+  El gate no los presenta como aprobados por pasar las pruebas aisladas.
+- Logs locales: /tmp/wgs-integral-{python,calendar,js,isolated-run,upgrade-run}.log.
+  Evidencia ORM/upgrade: /var/folders/g4/fxd70d8n40d5mp33wn_z0gr80000gn/T/wgs-isolated.BCTmDB/.
+
+### Repeticion y siguiente paso en staging
+
+1. Local: python -m unittest discover -s tests/standalone -p 'test_subscription*.py';
+   PYTHONPATH=tests/standalone python -m unittest test_monthly_cutoff test_source_contracts;
+   node --test tests/standalone/subscription*.test.mjs.
+2. Aislado: WGS_RUN_ISOLATED=1 bash tests/run_wgs_isolated.sh. Crea un PostgreSQL
+   desechable en red Docker interna sin publicar puertos; monta solo addons/tests
+   necesarios como lectura y elimina contenedores/red al terminar. Nunca recibe
+   un DSN remoto. WGS_BASELINE_ACCESS_ADDON permite repetir el upgrade anterior.
+3. Gate Enterprise: agregar WGS_ENTERPRISE_ADDONS con una copia licenciada de
+   addons Odoo 19 y WGS_REQUIRE_COMMERCIAL_ORM=1 al comando anterior. Sin esa copia
+   el gate informa NOT RUN y, si se exige, termina con error; no simula el addon.
+4. Antes del QA por navegador, build y upgrade en staging, en este orden:
+   access_control_api 19.0.2.0.86, witann_group_subscriptions 19.0.1.1.60,
+   witann_group_subscriptions_pos 19.0.1.6.10. No basta actualizar solo POS.
+5. Probar alta mensual, dia -> mensual, semestre -> mensual, cambio futuro
+   despues de editar participantes, cola de dos cambios, domiciliado con plan
+   nativo distinto, descuento 100%, bloqueo/futuro sin acceso, reembolso total,
+   restauracion/reintento del ticket y conteos manual/multisede/sin suscripcion.
+   No repetir cobros viejos para actualizar una cotizacion; no borrar pendientes.
+6. No liberar a main ni produccion hasta completar el QA comercial y obtener
+   autorizacion del usuario. El runner de Community no sustituye esas pruebas.
+
 ## Cobranza domiciliada con plan nativo historico, 2026-10-30
 
 **Correccion WGS POS `19.0.1.6.9` validada en staging y liberada a produccion

@@ -10,6 +10,9 @@ from odoo.tests.common import TransactionCase
 class TestSubscriptionAccessControl(TransactionCase):
     def setUp(self):
         super().setUp()
+        self.plan = self.env['sale.subscription.plan'].create({
+            'name': 'Access QA monthly', 'billing_period_value': 1, 'billing_period_unit': 'month',
+        })
         self.owner = self.env['res.partner'].create({'name': 'Titular acceso'})
         self.participant = self.env['res.partner'].create({'name': 'Participante acceso'})
         self.site = self.env['access_control.site'].create(
@@ -33,8 +36,12 @@ class TestSubscriptionAccessControl(TransactionCase):
                 'list_price': 100,
                 'recurring_invoice': True,
                 'max_participants_total': 3,
+                'wgs_access_site_ids': [Command.set(self.site.ids)],
             }
         )
+        # Native create returns a context that suppresses variant creation;
+        # rebrowse before copying a product, as a later UI request would do.
+        self.product = self.product.with_env(self.env)
 
     def _find_subscription_state_value(self, *tokens):
         field = self.env['sale.order']._fields.get('subscription_state')
@@ -177,11 +184,16 @@ class TestSubscriptionAccessControl(TransactionCase):
             contract.wgs_get_renewal_quote(installment_sequences=[9], today='2026-08-05')
 
     def _create_subscription_order_for_product(self, product):
+        today = self.env['sale.order']._wgs_get_subscription_business_today()
         order = self.env['sale.order'].create(
             {
                 'partner_id': self.owner.id,
                 'company_id': self.env.company.id,
+                'plan_id': self.plan.id,
                 'state': 'sale',
+                'subscription_state': '3_progress',
+                'start_date': today - timedelta(days=30),
+                'next_invoice_date': today + timedelta(days=30),
                 'order_line': [
                     Command.create(
                         {
@@ -223,8 +235,8 @@ class TestSubscriptionAccessControl(TransactionCase):
 
         order.write({'subscription_state': progress_state})
 
-        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
-        participant_person = self.env['access_control.person'].search([('partner_id', '=', self.participant.id)], limit=1)
+        owner_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.owner.id)], limit=1)
+        participant_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.participant.id)], limit=1)
 
         self.assertTrue(owner_person)
         self.assertTrue(participant_person)
@@ -240,6 +252,7 @@ class TestSubscriptionAccessControl(TransactionCase):
             {
                 'partner_id': self.owner.id,
                 'company_id': self.env.company.id,
+                'plan_id': self.plan.id,
                 'order_line': [
                     Command.create(
                         {
@@ -258,8 +271,8 @@ class TestSubscriptionAccessControl(TransactionCase):
 
         order.write({'subscription_state': progress_state})
 
-        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
-        participant_person = self.env['access_control.person'].search([('partner_id', '=', self.participant.id)], limit=1)
+        owner_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.owner.id)], limit=1)
+        participant_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.participant.id)], limit=1)
 
         self.assertFalse(owner_person and owner_person.active)
         self.assertFalse(participant_person and participant_person.active)
@@ -269,7 +282,7 @@ class TestSubscriptionAccessControl(TransactionCase):
         progress_state = self._find_subscription_state_value('progress', 'en progreso')
 
         order.write({'subscription_state': progress_state})
-        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
+        owner_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.owner.id)], limit=1)
         self.assertTrue(owner_person.active)
         self.assertEqual(owner_person.access_state, 'enabled')
 
@@ -304,8 +317,8 @@ class TestSubscriptionAccessControl(TransactionCase):
         progress_state = self._find_subscription_state_value('progress', 'en progreso')
 
         order.write({'subscription_state': progress_state})
-        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
-        participant_person = self.env['access_control.person'].search([('partner_id', '=', self.participant.id)], limit=1)
+        owner_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.owner.id)], limit=1)
+        participant_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.participant.id)], limit=1)
         self.assertTrue(owner_person.active)
         self.assertTrue(participant_person.active)
 
@@ -325,6 +338,27 @@ class TestSubscriptionAccessControl(TransactionCase):
         self.assertTrue(participant_person.active)
         self.assertEqual(participant_person.access_state, 'enabled')
 
+    def test_block_storage_invalidates_all_cached_views_and_preserves_reason_only_edits(self):
+        order = self._create_subscription_order()
+        order.write({'subscription_state': '3_progress'})
+        person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.owner.id)], limit=1)
+        self.assertTrue(person.active)
+        self.assertFalse(self.owner.wgs_access_blocked)
+        self.assertFalse(self.owner.sudo().wgs_access_blocked)
+        values = {'wgs_access_blocked': True, 'wgs_access_block_reason': 'Initial block'}
+        self.owner.write(values)
+        self.assertEqual(values, {'wgs_access_blocked': True, 'wgs_access_block_reason': 'Initial block'})
+        self.assertTrue(self.owner.wgs_access_blocked)
+        self.assertTrue(self.owner.sudo().wgs_access_blocked)
+        self.assertFalse(person.active)
+        self.owner.write({'wgs_access_block_reason': 'Updated reason'})
+        self.assertTrue(self.owner.wgs_access_blocked)
+        self.assertEqual(self.owner.wgs_access_block_reason, 'Updated reason')
+        self.assertFalse(person.active)
+        self.owner.write({'wgs_access_blocked': False})
+        self.assertFalse(self.owner.wgs_access_blocked)
+        self.assertTrue(person.active)
+
     def test_paused_subscription_suspends_access_without_deleting_person(self):
         order = self._create_subscription_order()
         progress_state = self._find_subscription_state_value('progress', 'en progreso')
@@ -333,8 +367,8 @@ class TestSubscriptionAccessControl(TransactionCase):
         order.write({'subscription_state': progress_state})
         order.write({'subscription_state': pause_state})
 
-        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
-        participant_person = self.env['access_control.person'].search([('partner_id', '=', self.participant.id)], limit=1)
+        owner_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.owner.id)], limit=1)
+        participant_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.participant.id)], limit=1)
 
         self.assertFalse(owner_person.active)
         self.assertFalse(participant_person.active)
@@ -349,8 +383,8 @@ class TestSubscriptionAccessControl(TransactionCase):
         order.write({'subscription_state': progress_state})
         order.write({'subscription_state': renew_state})
 
-        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
-        participant_person = self.env['access_control.person'].search([('partner_id', '=', self.participant.id)], limit=1)
+        owner_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.owner.id)], limit=1)
+        participant_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.participant.id)], limit=1)
 
         self.assertTrue(owner_person)
         self.assertTrue(participant_person)
@@ -374,13 +408,13 @@ class TestSubscriptionAccessControl(TransactionCase):
             self.skipTest('No existe campo de próxima fecha de cobro en este runtime.')
 
         order.write({'subscription_state': progress_state})
-        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
+        owner_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.owner.id)], limit=1)
         self.assertTrue(owner_person.active)
 
-        order.write({next_field: fields.Date.context_today(order)})
+        order.write({next_field: order._wgs_get_subscription_business_today()})
 
-        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
-        participant_person = self.env['access_control.person'].search([('partner_id', '=', self.participant.id)], limit=1)
+        owner_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.owner.id)], limit=1)
+        participant_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.participant.id)], limit=1)
 
         self.assertFalse(owner_person.active)
         self.assertFalse(participant_person.active)
@@ -407,15 +441,15 @@ class TestSubscriptionAccessControl(TransactionCase):
         if not next_field or not end_field:
             self.skipTest('El runtime no expone campos de próxima fecha y fin de suscripción.')
 
-        today = fields.Date.context_today(order)
+        today = order._wgs_get_subscription_business_today()
         order.write({'subscription_state': progress_state})
         order.write({
             next_field: today,
             end_field: today,
         })
 
-        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
-        participant_person = self.env['access_control.person'].search([('partner_id', '=', self.participant.id)], limit=1)
+        owner_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.owner.id)], limit=1)
+        participant_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.participant.id)], limit=1)
 
         self.assertTrue(owner_person.active)
         self.assertTrue(participant_person.active)
@@ -430,8 +464,8 @@ class TestSubscriptionAccessControl(TransactionCase):
         order.write({'subscription_state': progress_state})
         order.write({'subscription_state': cancel_state})
 
-        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
-        participant_person = self.env['access_control.person'].search([('partner_id', '=', self.participant.id)], limit=1)
+        owner_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.owner.id)], limit=1)
+        participant_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.participant.id)], limit=1)
 
         self.assertTrue(owner_person)
         self.assertTrue(participant_person)
@@ -460,7 +494,7 @@ class TestSubscriptionAccessControl(TransactionCase):
         self.assertTrue(reactivated_person.global_user_id)
 
     def test_cron_deactivates_stale_managed_person_without_valid_subscription(self):
-        person = self.env['access_control.person'].create(
+        person = self.env['access_control.person'].with_context(active_test=False).create(
             {
                 'partner_id': self.owner.id,
                 'active': True,
@@ -479,7 +513,7 @@ class TestSubscriptionAccessControl(TransactionCase):
     def test_access_audit_source_rotates_managed_people_in_bounded_pages(self):
         first_partner = self.env['res.partner'].create({'name': 'Auditoría página uno'})
         second_partner = self.env['res.partner'].create({'name': 'Auditoría página dos'})
-        Person = self.env['access_control.person']
+        Person = self.env['access_control.person'].with_context(active_test=False)
         first_person = Person.create({
             'partner_id': first_partner.id,
             'active': True,
@@ -508,7 +542,7 @@ class TestSubscriptionAccessControl(TransactionCase):
         self.assertEqual(second_page['next_person_after_id'], second_person.id)
 
     def test_audit_reports_and_repairs_stale_managed_person_without_valid_subscription(self):
-        person = self.env['access_control.person'].create(
+        person = self.env['access_control.person'].with_context(active_test=False).create(
             {
                 'partner_id': self.owner.id,
                 'active': True,
@@ -533,7 +567,7 @@ class TestSubscriptionAccessControl(TransactionCase):
         self.assertEqual(person.access_state, 'suspended')
 
     def test_audit_does_not_repair_manual_access_without_subscription(self):
-        person = self.env['access_control.person'].create(
+        person = self.env['access_control.person'].with_context(active_test=False).create(
             {
                 'partner_id': self.owner.id,
                 'active': True,
@@ -555,7 +589,7 @@ class TestSubscriptionAccessControl(TransactionCase):
         order = self._create_subscription_order()
         progress_state = self._find_subscription_state_value('progress', 'en progreso')
         order.write({'subscription_state': progress_state})
-        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
+        owner_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.owner.id)], limit=1)
         owner_person.unlink()
 
         audit = self.env['sale.order'].wgs_audit_subscription_access_control(repair=False)
@@ -563,7 +597,7 @@ class TestSubscriptionAccessControl(TransactionCase):
         self.assertIn('missing_person', {line['issue'] for line in audit['lines']})
 
         self.env['sale.order'].wgs_audit_subscription_access_control(repair=True)
-        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
+        owner_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.owner.id)], limit=1)
         self.assertTrue(owner_person)
         self.assertTrue(owner_person.active)
         self.assertTrue(owner_person.managed_by_subscription)
@@ -585,12 +619,12 @@ class TestSubscriptionAccessControl(TransactionCase):
             self.skipTest('No existe campo de próxima fecha de cobro en este runtime.')
 
         order.write({'subscription_state': progress_state})
-        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
+        owner_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.owner.id)], limit=1)
         self.assertTrue(owner_person.active)
 
         order.write({
             'subscription_state': renew_state,
-            next_field: fields.Date.context_today(order) - timedelta(days=3),
+            next_field: order._wgs_get_subscription_business_today() - timedelta(days=3),
         })
 
         closed_count = self.env['sale.order']._cron_wgs_close_overdue_subscriptions()
@@ -653,8 +687,8 @@ class TestSubscriptionAccessControl(TransactionCase):
         paused_order = self._create_subscription_order()
         paused_order.write({'subscription_state': pause_state})
 
-        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
-        participant_person = self.env['access_control.person'].search([('partner_id', '=', self.participant.id)], limit=1)
+        owner_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.owner.id)], limit=1)
+        participant_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.participant.id)], limit=1)
 
         self.assertEqual(owner_person.access_state, 'enabled')
         self.assertEqual(participant_person.access_state, 'enabled')
@@ -672,8 +706,8 @@ class TestSubscriptionAccessControl(TransactionCase):
         paused_order = self._create_subscription_order_for_product(restricted_product)
         paused_order.write({'subscription_state': pause_state})
 
-        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
-        participant_person = self.env['access_control.person'].search([('partner_id', '=', self.participant.id)], limit=1)
+        owner_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.owner.id)], limit=1)
+        participant_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.participant.id)], limit=1)
 
         self.assertEqual(owner_person.access_state, 'enabled')
         self.assertEqual(participant_person.access_state, 'enabled')
@@ -692,8 +726,8 @@ class TestSubscriptionAccessControl(TransactionCase):
         active_restricted_order = self._create_subscription_order_for_product(restricted_product)
         active_restricted_order.write({'subscription_state': progress_state})
 
-        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
-        participant_person = self.env['access_control.person'].search([('partner_id', '=', self.participant.id)], limit=1)
+        owner_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.owner.id)], limit=1)
+        participant_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.participant.id)], limit=1)
 
         self.assertEqual(owner_person.access_timezone_id, general_timezone)
         self.assertEqual(participant_person.access_timezone_id, general_timezone)
@@ -705,7 +739,7 @@ class TestSubscriptionAccessControl(TransactionCase):
         order = self._create_subscription_order_for_product(self.product)
         order.write({'subscription_state': progress_state})
 
-        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
+        owner_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.owner.id)], limit=1)
         owner_person.write({'access_timezone_id': restricted_timezone.id})
 
         audit = self.env['sale.order'].wgs_audit_subscription_access_control(repair=False)
@@ -729,8 +763,8 @@ class TestSubscriptionAccessControl(TransactionCase):
 
         order.write({'subscription_state': progress_state})
 
-        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
-        participant_person = self.env['access_control.person'].search([('partner_id', '=', self.participant.id)], limit=1)
+        owner_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.owner.id)], limit=1)
+        participant_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.participant.id)], limit=1)
 
         self.assertEqual(set(owner_person.site_ids.ids), {self.site_b.id})
         self.assertEqual(set(participant_person.site_ids.ids), {self.site_b.id})
@@ -739,8 +773,8 @@ class TestSubscriptionAccessControl(TransactionCase):
         order = self._create_subscription_order()
         progress_state = self._find_subscription_state_value('progress', 'en progreso')
         order.write({'subscription_state': progress_state})
-        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
-        participant_person = self.env['access_control.person'].search([('partner_id', '=', self.participant.id)], limit=1)
+        owner_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.owner.id)], limit=1)
+        participant_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.participant.id)], limit=1)
         self.assertEqual(set(owner_person.site_ids.ids), {self.site.id})
         self.assertEqual(set(participant_person.site_ids.ids), {self.site.id})
 
@@ -765,6 +799,7 @@ class TestSubscriptionAccessControl(TransactionCase):
             {
                 'partner_id': new_owner.id,
                 'company_id': self.env.company.id,
+                'plan_id': self.plan.id,
                 'state': 'sale',
                 'order_line': [
                     Command.create(
@@ -786,8 +821,8 @@ class TestSubscriptionAccessControl(TransactionCase):
         order = self._create_subscription_order()
         progress_state = self._find_subscription_state_value('progress', 'en progreso')
         order.write({'subscription_state': progress_state})
-        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
-        participant_person = self.env['access_control.person'].search([('partner_id', '=', self.participant.id)], limit=1)
+        owner_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.owner.id)], limit=1)
+        participant_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.participant.id)], limit=1)
         general_timezone = self.env.ref('access_control_api.access_timezone_general')
         restricted_timezone = self.env['access_control.timezone'].create(
             {
@@ -817,6 +852,7 @@ class TestSubscriptionAccessControl(TransactionCase):
             {
                 'partner_id': new_owner.id,
                 'company_id': self.env.company.id,
+                'plan_id': self.plan.id,
                 'state': 'sale',
                 'order_line': [
                     Command.create(
@@ -838,8 +874,8 @@ class TestSubscriptionAccessControl(TransactionCase):
         order = self._create_subscription_order()
         progress_state = self._find_subscription_state_value('progress', 'en progreso')
         order.write({'subscription_state': progress_state})
-        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
-        participant_person = self.env['access_control.person'].search([('partner_id', '=', self.participant.id)], limit=1)
+        owner_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.owner.id)], limit=1)
+        participant_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.participant.id)], limit=1)
         original_timezone = owner_person.access_timezone_id
         restricted_timezone = self.env['access_control.timezone'].create(
             {
@@ -872,29 +908,11 @@ class TestSubscriptionAccessControl(TransactionCase):
             'max_participants_total': 3,
         })
         second_product.product_tmpl_id.write({'wgs_access_site_ids': [Command.set([self.site_b.id])]})
-        order_b = self.env['sale.order'].create(
-            {
-                'partner_id': self.owner.id,
-                'company_id': self.env.company.id,
-                'state': 'sale',
-                'order_line': [
-                    Command.create(
-                        {
-                            'product_id': second_product.id,
-                            'name': second_product.name,
-                            'product_uom_qty': 1,
-                            'product_uom_id': second_product.uom_id.id,
-                            'price_unit': second_product.list_price,
-                        }
-                    )
-                ],
-            }
-        )
-        order_b.write({'participant_ids': [Command.set([self.owner.id, self.participant.id])]})
+        order_b = self._create_subscription_order_for_product(second_product)
         order_b.write({'subscription_state': progress_state})
 
-        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
-        participant_person = self.env['access_control.person'].search([('partner_id', '=', self.participant.id)], limit=1)
+        owner_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.owner.id)], limit=1)
+        participant_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.participant.id)], limit=1)
 
         self.assertEqual(set(owner_person.site_ids.ids), {self.site.id, self.site_b.id})
         self.assertEqual(set(participant_person.site_ids.ids), {self.site.id, self.site_b.id})
@@ -910,8 +928,8 @@ class TestSubscriptionAccessControl(TransactionCase):
 
         order = self._create_subscription_order()
         order.write({'subscription_state': progress_state})
-        owner_person = self.env['access_control.person'].search([('partner_id', '=', self.owner.id)], limit=1)
-        participant_person = self.env['access_control.person'].search([('partner_id', '=', self.participant.id)], limit=1)
+        owner_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.owner.id)], limit=1)
+        participant_person = self.env['access_control.person'].with_context(active_test=False).search([('partner_id', '=', self.participant.id)], limit=1)
         self.assertEqual(set(order.wgs_access_site_ids.ids), {self.site.id})
         self.assertEqual(set(owner_person.site_ids.ids), {self.site.id})
         self.assertEqual(set(participant_person.site_ids.ids), {self.site.id})

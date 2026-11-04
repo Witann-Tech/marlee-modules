@@ -3,14 +3,23 @@ from datetime import date, datetime
 from odoo.tests.common import TransactionCase
 from odoo import Command, fields
 from odoo.exceptions import ValidationError
+from psycopg2 import IntegrityError
+from odoo.addons.witann_group_subscriptions.tests.common import ensure_partner_identity_fields
+from .common import create_recurring_price
 
 
 class TestPosPartnerCurp(TransactionCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        ensure_partner_identity_fields(cls.env)
+
     def setUp(self):
         super().setUp()
         self.PosOrder = self.env['pos.order']
         self.Partner = self.env['res.partner']
         self.Employee = self.env['hr.employee']
+        self.partner = self.Partner.create({'name': 'POS identity QA customer'})
         self.curp_field = 'x_studio_curp'
         self.birthday_field = next(
             (
@@ -35,7 +44,7 @@ class TestPosPartnerCurp(TransactionCase):
         self.product = self.env['product.product'].create(
             {
                 'name': 'Plan CURP POS',
-                'detailed_type': 'service',
+                'type': 'service',
                 'list_price': 100.0,
                 'sale_ok': True,
                 'available_in_pos': True,
@@ -46,7 +55,7 @@ class TestPosPartnerCurp(TransactionCase):
         self.student_product = self.env['product.product'].create(
             {
                 'name': 'Plan Estudiante POS',
-                'detailed_type': 'service',
+                'type': 'service',
                 'list_price': 120.0,
                 'sale_ok': True,
                 'available_in_pos': True,
@@ -57,7 +66,7 @@ class TestPosPartnerCurp(TransactionCase):
         self.day_pass_product = self.env['product.product'].create(
             {
                 'name': 'Pase 1 día POS',
-                'detailed_type': 'service',
+                'type': 'service',
                 'list_price': 80.0,
                 'sale_ok': True,
                 'available_in_pos': True,
@@ -68,7 +77,7 @@ class TestPosPartnerCurp(TransactionCase):
         self.family_product = self.env['product.product'].create(
             {
                 'name': 'Plan Familiar POS',
-                'detailed_type': 'service',
+                'type': 'service',
                 'list_price': 319.0,
                 'sale_ok': True,
                 'available_in_pos': True,
@@ -79,7 +88,7 @@ class TestPosPartnerCurp(TransactionCase):
         self.trial_product = self.env['product.product'].create(
             {
                 'name': 'Trial gratis POS',
-                'detailed_type': 'service',
+                'type': 'service',
                 'list_price': 0.0,
                 'sale_ok': True,
                 'available_in_pos': True,
@@ -90,10 +99,20 @@ class TestPosPartnerCurp(TransactionCase):
         self.plan = self.env['sale.subscription.plan'].create(
             {
                 'name': 'Plan test descuentos POS',
-                'recurring_interval': 1,
-                'recurring_rule_type': 'month',
+                'billing_period_value': 1,
+                'billing_period_unit': 'month',
             }
         )
+        day_plan = self.env['sale.subscription.plan'].create({
+            'name': 'POS identity daily', 'billing_period_value': 1,
+            'billing_period_unit': 'week', 'wgs_single_day_plan': True,
+        })
+        for product, plan, price in (
+            (self.product, self.plan, 100), (self.student_product, self.plan, 120),
+            (self.family_product, self.plan, 319), (self.day_pass_product, day_plan, 80),
+            (self.trial_product, day_plan, 0),
+        ):
+            create_recurring_price(self.env, product, plan, price)
 
     def _create_subscription_like_order(
         self,
@@ -106,6 +125,8 @@ class TestPosPartnerCurp(TransactionCase):
         order = self.env['sale.order'].create(
             {
                 'partner_id': partner.id,
+                'plan_id': self.plan.id,
+                'start_date': '2026-01-01',
                 'order_line': [
                     Command.create(
                         {
@@ -119,16 +140,11 @@ class TestPosPartnerCurp(TransactionCase):
             }
         )
         order.action_confirm()
-        line = order.order_line[:1]
-        line_updates = {}
-        for field_name in ('subscription_plan_id', 'plan_id', 'recurring_plan_id'):
-            if field_name in line._fields:
-                line_updates[field_name] = self.plan.id
-        if line_updates:
-            line.write(line_updates)
         order_updates = {}
         if 'subscription_state' in order._fields:
-            order_updates['subscription_state'] = subscription_state
+            order_updates['subscription_state'] = {
+                'progress': '3_progress', 'renew': '2_renewal', 'closed': '6_churn',
+            }.get(subscription_state, subscription_state)
         if next_invoice_date:
             for field_name in ('recurring_next_date', 'next_invoice_date'):
                 if field_name in order._fields:
@@ -159,7 +175,7 @@ class TestPosPartnerCurp(TransactionCase):
         )
 
         self.assertFalse(result['ok'])
-        self.assertEqual(result['error_code'], 'active_subscription_exists')
+        self.assertEqual(result['error_code'], 'subscription_history_exists')
 
     def test_pricing_for_new_blocks_when_partner_has_active_subscription(self):
         partner = self.Partner.create({'name': 'Cliente activo quote bloqueado'})
@@ -170,7 +186,7 @@ class TestPosPartnerCurp(TransactionCase):
             next_invoice_date='2026-05-01',
         )
 
-        with self.assertRaisesRegex(Exception, 'upsale o una renovación'):
+        with self.assertRaisesRegex(Exception, 'Nueva suscripción solo aplica para personas sin historial'):
             self.PosOrder.sudo().wgs_get_subscription_pricing_for_pos(
                 partner_id=partner.id,
                 product_id=self.product.id,
@@ -235,11 +251,12 @@ class TestPosPartnerCurp(TransactionCase):
             },
         )
 
-        partner.invalidate_recordset(['name', 'phone', 'mobile', 'email', self.curp_field])
+        partner.invalidate_recordset(['name', 'phone', 'email', self.curp_field])
         self.assertTrue(result['ok'])
         self.assertEqual(partner.name, 'Cliente edición POS actualizada')
         self.assertEqual(partner.phone, '4491234567')
-        self.assertEqual(partner.mobile, '4491234567')
+        if 'mobile' in partner._fields:
+            self.assertEqual(partner.mobile, '4491234567')
         self.assertEqual(partner.email, 'cliente@example.com')
         self.assertEqual(partner[self.curp_field], 'MOPL900101MDFABC01')
 
@@ -543,13 +560,8 @@ class TestPosPartnerCurp(TransactionCase):
                 'wgs_authorization_pin': '975310',
             }
         )
-        with self.assertRaises(ValidationError):
-            self.Employee.create(
-                {
-                    'name': 'Supervisor dos',
-                    'wgs_authorization_pin': '975310',
-                }
-            )
+        with self.assertRaises(IntegrityError), self.env.cr.savepoint():
+            self.Employee.create({'name': 'Supervisor dos', 'wgs_authorization_pin': '975310'})
 
     def test_authorization_pin_rotation_uses_calendar_days(self):
         employee = self.Employee.create(

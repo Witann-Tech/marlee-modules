@@ -98,6 +98,7 @@ def collection_fixture(*, historical_price=533.62, historical_discount=0, histor
         owner, sub, product=line.product_id, installment_sequences=[2],
     )
     pricing['snapshot'].update(quote)
+    pricing['snapshot'].pop('period_contract', None)
     return owner, line, sub, pricing, contract
 
 

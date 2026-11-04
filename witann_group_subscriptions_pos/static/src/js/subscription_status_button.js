@@ -19,6 +19,7 @@ import {
 } from "./subscription_ticket";
 import { createSubscriptionPosApi } from "./subscription_pos_api";
 import { buildChargeFromSnapshot, getCurrentPlanChoice } from "./subscription_pricing_snapshot";
+import { isPricingReady } from "./subscription_quote_request";
 import {
     getDefaultExistingPartnerForm,
     getDefaultNewPartnerForm,
@@ -1609,7 +1610,7 @@ patch(ControlButtons.prototype, {
                         </div>
                     ` : ""}
                     <div class="wgs-inline-actions">
-                        <button type="button" class="wgs-primary-action-btn" data-action="save-new" ${newSubscriptionForm.loading ? "disabled" : ""}>${this._escapeHtml(_t("Agregar al ticket"))}</button>
+                        <button type="button" class="wgs-primary-action-btn" data-action="save-new" ${isPricingReady(newSubscriptionForm) ? "" : "disabled"}>${this._escapeHtml(_t("Agregar al ticket"))}</button>
                         <button type="button" class="wgs-secondary-action-btn" data-action="cancel-new">${this._escapeHtml(_t("Cancelar"))}</button>
                     </div>
                 </div>

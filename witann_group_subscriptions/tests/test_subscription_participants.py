@@ -6,6 +6,9 @@ from odoo.tests.common import TransactionCase
 class TestSubscriptionParticipants(TransactionCase):
     def setUp(self):
         super().setUp()
+        self.plan = self.env['sale.subscription.plan'].create({
+            'name': 'Participants QA monthly', 'billing_period_value': 1, 'billing_period_unit': 'month',
+        })
         self.partner_owner = self.env['res.partner'].create({'name': 'Titular'})
         self.partners = self.env['res.partner'].create(
             [
@@ -41,6 +44,7 @@ class TestSubscriptionParticipants(TransactionCase):
         return self.env['sale.order'].create(
             {
                 'partner_id': self.partner_owner.id,
+                'plan_id': self.plan.id,
                 'order_line': [
                     Command.create(
                         {

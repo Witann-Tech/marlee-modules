@@ -1,6 +1,6 @@
 /** @odoo-module **/
 
-import { beginPricingRequest, capturePricingSelection } from "./subscription_quote_request";
+import { beginPricingRequest, capturePricingSelection, isPricingReady } from "./subscription_quote_request";
 
 import { getRequestedDiscountPercent } from "./subscription_discount_render";
 import { getToggledDomiciliationInstallmentSequences } from "./subscription_domiciliation_selection";
@@ -954,6 +954,13 @@ function buildSubscriptionInlineActionHandlers({
             if (state.subscriptionTicketPending) {
                 return;
             }
+            const form = action === "save-new" ? state.newSubscriptionForm
+                : action === "save-upsale" ? state.upsaleForm : state.renewalForm;
+            if (!isPricingReady(form)) {
+                state.formError = _t("Espera una cotizacion valida antes de agregar la membresia al ticket. Vuelve a seleccionar el paquete o plan para reintentar.");
+                renderDetail(state.currentDetail);
+                return;
+            }
             state.subscriptionTicketPending = true;
             try {
                 return await submit(...args);
@@ -999,6 +1006,10 @@ async function handleSubscriptionInlineFieldChange({ field, target }, {
         const selectedChoice = `${Number(snapshot.plan_id || 0)}:${Number(snapshot.pricing_id || 0)}`;
         if (Number(state.newSubscriptionForm.productId || 0) && selectedChoice !== "0:0") {
             await updateSelectedPlan(selectedChoice, snapshot.domiciliation?.selected_installment_sequences || false);
+        } else if (Number(state.newSubscriptionForm.productId || 0)) {
+            // A date can change while the product's first quote is in flight.
+            // Restart it through the same request guard, even without a plan yet.
+            await applySelectedProduct(state.newSubscriptionForm.productId);
         }
     } else if (state.formMode === "new" && field === "domiciliation_installment_toggle") {
         const snapshot = state.newSubscriptionForm.pricingSnapshot || {};
@@ -1027,6 +1038,8 @@ async function handleSubscriptionInlineFieldChange({ field, target }, {
         const selectedChoice = `${Number(snapshot.plan_id || 0)}:${Number(snapshot.pricing_id || 0)}`;
         if (Number(state.renewalForm.productId || 0) && selectedChoice !== "0:0") {
             await updateSelectedReenrollPlan(selectedChoice, snapshot.domiciliation?.selected_installment_sequences || false);
+        } else if (Number(state.renewalForm.productId || 0)) {
+            await applySelectedReenrollProduct(state.renewalForm.productId);
         }
     } else if (state.formMode === "reenroll" && field === "domiciliation_installment_toggle") {
         const snapshot = state.renewalForm.pricingSnapshot || {};

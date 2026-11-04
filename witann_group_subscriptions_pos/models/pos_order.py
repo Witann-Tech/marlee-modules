@@ -1,5 +1,6 @@
 import json
 import logging
+from copy import deepcopy
 from datetime import date, datetime, time, timedelta
 
 import pytz
@@ -57,7 +58,9 @@ class PosOrderLine(models.Model):
 
     wgs_participant_ids_json = fields.Text(string='Participantes de suscripción (POS)', copy=False)
     wgs_pricing_snapshot_json = fields.Text(string='Snapshot pricing suscripción (POS)', copy=False)
-    wgs_sale_order_id = fields.Many2one('sale.order', string='Suscripción generada', copy=False)
+    wgs_sale_order_id = fields.Many2one(
+        'sale.order', string='Suscripción generada', copy=False, index='btree_not_null',
+    )
     wgs_subscription_plan_id = fields.Integer(string='Plan de suscripción (POS)', copy=False)
     wgs_subscription_pricing_id = fields.Integer(string='Tarifa de suscripción (POS)', copy=False)
     wgs_subscription_start_date = fields.Date(string='Fecha inicio de suscripción (POS)', copy=False)
@@ -79,6 +82,7 @@ class PosOrderLine(models.Model):
         'sale.order',
         string='Suscripción origen (POS)',
         copy=False,
+        index='btree_not_null',
     )
     wgs_subscription_pending_move_id = fields.Many2one(
         'account.move',
@@ -163,6 +167,13 @@ class PosOrder(models.Model):
         'pause',
         'upsell',
     )
+
+    @api.model
+    def sync_from_ui(self, orders):
+        # Core and WGS consume nested line commands and subscription metadata.
+        # Odoo retries the RPC with the same argument objects after a database
+        # conflict, so only a transaction-local copy may be consumed.
+        return super().sync_from_ui(deepcopy(orders))
 
     def action_pos_order_invoice(self):
         """POS is ticket-only; invoices must not be issued from its history views."""
@@ -1177,7 +1188,7 @@ class PosOrder(models.Model):
         candidates = list(snapshot.get('candidates') or [])
         candidates.sort(key=lambda row: (row['sequence'], row.get('pricing_id') or 0))
         flags = self._wgs_get_subscription_product_flags_for_pos(product)
-        plan = self.env['sale.subscription.plan'].browse(int(snapshot.get('plan_id') or 0)).exists()
+        plan = self._wgs_find_plan_record_by_id(snapshot.get('plan_id'))
         domiciliation = {}
         if plan and plan.wgs_domiciliation_enabled:
             schedule = self.env['wgs.subscription.domiciliation.contract'].wgs_build_initial_schedule(
@@ -1530,7 +1541,7 @@ class PosOrder(models.Model):
                 is_renewal=normalized_flow == 'renewal',
                 is_reenroll=False,
             )
-            plan = self.env['sale.subscription.plan'].browse(pricing.get('plan_id') or []).exists()
+            plan = self._wgs_find_plan_record_by_id(pricing.get('plan_id'))
             if plan and plan.wgs_domiciliation_enabled and not source_order.wgs_domiciliation_contract_id:
                 legacy_product = product or source_order._get_recurring_lines()[:1].product_id
                 pricing = self._wgs_build_product_pricing_payload_for_pos(
@@ -1964,6 +1975,7 @@ class PosOrder(models.Model):
     def _wgs_validate_native_order_configuration(self, order, existing_order, configs):
         """Reject mismatched commercial amounts before native payment processing."""
         by_uuid = {config.get('line_uuid'): config for config in configs}
+        pending_lines, pending_configs = [], []
         for command in order.get('lines') or []:
             if len(command) < 3 or not isinstance(command[2], dict):
                 continue
@@ -1987,6 +1999,17 @@ class PosOrder(models.Model):
                 raise UserError(_('El importe enviado a cobro difiere de la cotizacion de la membresia.'))
             if abs(float(values.get('discount') or 0) - float(config.get('discount_percent') or 0)) > 0.00001:
                 raise UserError(_('El descuento del ticket difiere del evento autorizado.'))
+            pending_lines.append(values)
+            partner_id = self._wgs_to_int(order.get('partner_id')) or (existing_order.partner_id.id if existing_order else False)
+            session = self.env['pos.session'].browse(self._wgs_to_int(order.get('session_id'))).exists()
+            if not session and existing_order:
+                session = existing_order.session_id
+            if not partner_id or not session:
+                raise UserError(_('La membresia requiere el titular y la sesion POS antes de cobrar.'))
+            pending_configs.append(self._wgs_normalize_commercial_config(
+                config, partner_id=partner_id, company_id=session.company_id.id,
+            ))
+        self._wgs_validate_ticket_memberships(pending_lines, pending_configs)
 
     @api.model
     def _wgs_get_ui_order_containers(self, ui_order):
@@ -2662,6 +2685,8 @@ class PosOrder(models.Model):
             recurring_plan_id=pricing_state['plan_id'],
             monthly_cutoff_day=pricing_state['monthly_cutoff_day'],
         )
+        if source_order._wgs_get_subscription_state_category() != 'progress':
+            self._wgs_reactivate_subscription_order_for_pos(source_order)
         if initial_contract:
             self._wgs_apply_domiciliation_contract_from_pos_line(source_order, line, pricing_state)
         if apply_participants:
@@ -2708,8 +2733,6 @@ class PosOrder(models.Model):
         """Never transfer ownership or revive a natively cancelled sale."""
         source.ensure_one()
         buyer.ensure_one()
-        if buyer == source.partner_id and source.state != 'cancel':
-            return False
         if buyer != source.partner_id and buyer not in source.participant_ids:
             raise UserError(_('El cliente no es titular ni participante de la suscripcion origen.'))
         candidates = self._wgs_find_subscription_history_for_partner(buyer, company=source.company_id) - source
@@ -2720,7 +2743,7 @@ class PosOrder(models.Model):
                     'El cliente ya tiene otra membresia vigente o programada (%s). '
                     'Opera sobre esa membresia; no repitas la reinscripcion del contrato anterior.'
                 ) % candidate.display_name)
-        return True
+        return buyer != source.partner_id or source.state == 'cancel'
 
     def _wgs_process_subscription_reenroll_line(self, line):
         self.ensure_one()
@@ -3272,7 +3295,7 @@ class PosOrder(models.Model):
                 )
 
         if signed:
-            plan_record = self.env['sale.subscription.plan'].browse(recurring_plan_id or []).exists()
+            plan_record = self._wgs_find_plan_record_by_id(recurring_plan_id)
             if not plan_record:
                 raise UserError(_('El plan contratado ya no existe. La operacion requiere revision.'))
         elif recurring_pricing_id and not recurring_plan_id and 'sale.subscription.pricing' in self.env.registry:

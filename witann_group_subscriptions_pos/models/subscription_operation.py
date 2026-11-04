@@ -16,7 +16,7 @@ from odoo import _, api, fields, models
 from odoo.exceptions import UserError
 from odoo.fields import Domain
 
-from ..subscription_contract import RULES_VERSION, canonical_json, fingerprint, validate_period
+from ..subscription_contract import RULES_VERSION, canonical_json, fingerprint, validate_commercial_period, validate_period
 
 
 _logger = logging.getLogger(__name__)
@@ -48,6 +48,7 @@ class PosSubscriptionOperationLine(models.Model):
     )
     wgs_application_date = fields.Date(copy=False, index=True, readonly=True)
     wgs_activation_revision = fields.Char(copy=False, readonly=True)
+    wgs_activation_contract = fields.Json(copy=False, readonly=True)
     wgs_activation_error = fields.Text(copy=False, readonly=True)
     wgs_activation_attempts = fields.Integer(copy=False, readonly=True)
     wgs_activation_retry_at = fields.Datetime(copy=False, index=True, readonly=True)
@@ -108,6 +109,36 @@ class PosSubscriptionOperation(models.Model):
             raise UserError(_('No esta configurada la firma de cotizaciones de esta base de datos.'))
         return hmac.new(secret.encode(), canonical_json(payload).encode(), hashlib.sha256).hexdigest()
 
+    def _wgs_build_period_contract(self, pricing, request, plan):
+        interval, unit = self._wgs_extract_interval_from_plan(plan)
+        start = fields.Date.to_date(pricing['subscription_start_date'])
+        source = request['source_order']
+        if request['flow'] == 'upsale':
+            schedule = self._wgs_get_upsale_schedule_from_source(source)
+            return {
+                'version': 1, 'mode': 'source_period',
+                'start': fields.Date.to_string(schedule['subscription_start_date']),
+                'end': fields.Date.to_string(schedule['subscription_end_date']),
+                'next': fields.Date.to_string(schedule['next_billing_date']) or False,
+            }
+        cutoff, previous_end = 0, False
+        aligned = self._wgs_should_align_plan_to_calendar_month(plan)
+        if request['flow'] == 'renewal':
+            schedule = self._wgs_get_subscription_renewal_schedule(source, plan=plan)
+            if start != schedule['renewal_anchor']:
+                raise UserError(_('El inicio de renovacion no corresponde al periodo ya pagado.'))
+            cutoff = schedule['monthly_cutoff_day']
+            # The renewal calculator records whether the anchor continues a
+            # paid period; late renewals must not invent a previous end.
+            previous_end = (schedule.get('previous_end') or False) if cutoff else False
+        elif self._wgs_uses_fixed_monthly_cutoff(plan):
+            cutoff = start.day
+        return {
+            'version': 1, 'mode': 'term', 'start': start.isoformat(),
+            'interval': interval, 'unit': unit, 'aligned': aligned,
+            'cutoff': cutoff, 'previous_end': fields.Date.to_string(previous_end) or False,
+        }
+
     def _wgs_seal_pricing_payload(self, pricing, request):
         source = request['source_order']
         if source:
@@ -133,7 +164,7 @@ class PosSubscriptionOperation(models.Model):
             'source_revision': self._wgs_source_revision(source, include_scheduled=True),
             'pricing': {**pricing, 'max_participants_total': product.max_participants_total or 1},
         }
-        plan = self.env['sale.subscription.plan'].browse(pricing.get('plan_id') or []).exists()
+        plan = self._wgs_find_plan_record_by_id(pricing.get('plan_id'))
         if not plan:
             raise UserError(_('La cotizacion requiere un plan recurrente existente.'))
         interval, unit = self._wgs_extract_interval_from_plan(plan)
@@ -143,8 +174,10 @@ class PosSubscriptionOperation(models.Model):
             payload['pricing']['next_billing_date'] = False
         if not pricing.get('domiciliation'):
             try:
-                validate_period(pricing['subscription_start_date'], pricing['subscription_end_date'],
-                                pricing.get('next_billing_date'))
+                payload['pricing']['period_contract'] = self._wgs_build_period_contract(pricing, request, plan)
+                validate_period(payload['pricing']['subscription_start_date'], payload['pricing']['subscription_end_date'],
+                                payload['pricing'].get('next_billing_date'))
+                validate_commercial_period(payload['pricing'])
             except (ValueError, TypeError, KeyError) as error:
                 raise UserError(_('La cotizacion no contiene una vigencia completa y coherente.')) from error
         return {**payload['pricing'], 'commercial_quote': {'payload': payload, 'signature': self._wgs_quote_signature(payload)}}
@@ -161,6 +194,10 @@ class PosSubscriptionOperation(models.Model):
         }
         if any(payload.get(key) != value for key, value in identity.items()):
             raise UserError(_('La cotizacion no corresponde al cliente, empresa, paquete u operacion del ticket.'))
+        try:
+            validate_commercial_period(payload['pricing'])
+        except (ValueError, TypeError, KeyError) as error:
+            raise UserError(_('La vigencia no corresponde al plazo contratado. Actualiza la cotizacion antes de cobrar.')) from error
         return payload
 
     def _wgs_validate_operation_source(self, payload):
@@ -251,6 +288,8 @@ class PosSubscriptionOperation(models.Model):
             source_id=self._wgs_to_int(config.get('source_subscription_id')),
         )
         if check_source:
+            if not payload['pricing'].get('domiciliation') and not payload['pricing'].get('period_contract'):
+                raise UserError(_('Esta cotizacion usa un calendario anterior. Actualiza la operacion antes de cobrar.'))
             source = self._wgs_validate_operation_source(payload)
             eligibility = self.with_company(company_id).wgs_validate_subscription_product_eligibility_for_pos(
                 partner_id, payload['product_id'], payload['flow'], source.id or False,
@@ -258,7 +297,7 @@ class PosSubscriptionOperation(models.Model):
             if not eligibility or not eligibility.get('ok'):
                 raise UserError((eligibility or {}).get('error_message') or _('El cliente no puede contratar este paquete.'))
         pricing = payload['pricing']
-        if not self.env['sale.subscription.plan'].browse(pricing.get('plan_id') or []).exists():
+        if not self._wgs_find_plan_record_by_id(pricing.get('plan_id')):
             raise UserError(_('El plan cotizado ya no existe. Actualiza el paquete antes de cobrar.'))
         locked_price = (config.get('pricing_lock') or {}).get('price_unit')
         if locked_price is not None and abs(float(locked_price) - float(pricing['ticket_charge_now'])) > 0.01:
@@ -291,6 +330,7 @@ class PosSubscriptionOperation(models.Model):
         recurring_ids = set(products.filtered('recurring_invoice').ids)
         trial_ids = set(products.filtered(lambda product: product.wgs_free_trial_day).ids)
         seen_sources = set()
+        purchases = []
         trial_seen = False
         for line in lines:
             if self._wgs_to_int(line.get('product_id')) not in recurring_ids or float(line.get('qty') or 0) <= 0:
@@ -316,6 +356,10 @@ class PosSubscriptionOperation(models.Model):
                 raise UserError(_('Agrega una sola operacion por suscripcion en cada ticket.'))
             if source_id:
                 seen_sources.add(source_id)
+            if config.get('flow') != 'pending_charge':
+                purchases.append(config)
+        if len(purchases) > 1 and any(config.get('flow') == 'new' for config in purchases):
+            raise UserError(_('Una nueva membresia no puede combinarse con otra operacion de membresia en el mismo ticket.'))
 
     def _wgs_check_applied_config_replay(self, line, config):
         """A lost HTTP response is not a new commercial operation."""
@@ -380,7 +424,7 @@ class PosSubscriptionOperation(models.Model):
         try:
             with self.env.cr.savepoint():
                 sources._wgs_update_access_snapshot(force=True)
-                sources.with_context(wgs_defer_access_sync=False, access_sync_priority=True)._wgs_sync_access_control_people(
+                result = sources.with_context(wgs_defer_access_sync=False, access_sync_priority=True)._wgs_sync_access_control_people(
                     extra_partner_ids=affected,
                 )
         except (DeadlockDetected, SerializationFailure):
@@ -390,7 +434,13 @@ class PosSubscriptionOperation(models.Model):
             _logger.exception('WGS paid order %s has pending access projection', self.id)
             self.write({'wgs_access_sync_error': str(error)[:2000]})
         else:
-            self.write({'wgs_access_sync_pending': False, 'wgs_access_sync_error': False, 'wgs_access_sync_partners': False})
+            if not isinstance(result, dict) or result.get('issues') or result.get('checked') != len(affected):
+                self.write({'wgs_access_sync_error': json.dumps(
+                    result if isinstance(result, dict) else {'error': 'Access projection did not return a verification result'},
+                    ensure_ascii=True, default=str,
+                )[:2000]})
+            else:
+                self.write({'wgs_access_sync_pending': False, 'wgs_access_sync_error': False, 'wgs_access_sync_partners': False})
 
     @api.model
     def _wgs_retry_paid_access(self, limit=100):
@@ -406,7 +456,13 @@ class PosSubscriptionOperation(models.Model):
             order._wgs_finalize_paid_access(order.lines.mapped('wgs_sale_order_id'), order.wgs_access_sync_partners or [])
 
     def _wgs_sync_subscription_sales(self):
-        for order in self.sorted('id'):
+        if not self.env.su:
+            self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para aplicar ventas de suscripciones POS.'))
+            self.check_access('write')
+        # POS cashiers need not have backend Sales rights. Elevate only the
+        # internal application, after POS ACL/company checks; native payments
+        # and signed-quote/source/postcondition checks remain unchanged.
+        for order in self.sudo().sorted('id'):
             if order.state not in ('paid', 'done', 'invoiced'):
                 continue
             lines = order.lines.filtered(lambda line: line.qty and line.product_id.recurring_invoice)
@@ -466,6 +522,7 @@ class PosSubscriptionOperation(models.Model):
                     'wgs_application_hash': fingerprint(order._wgs_line_operation_input(line)),
                     'wgs_application_state': line.wgs_application_state or 'applied',
                     'wgs_activation_revision': order._wgs_source_revision(result),
+                    'wgs_activation_contract': order._wgs_source_contract(result) if line.wgs_application_state == 'scheduled' else False,
                     'wgs_application_receipt': {
                         'rules_version': RULES_VERSION, 'before': before,
                         'after': order._wgs_source_revision(result), 'subscription_id': result.id,
@@ -501,6 +558,9 @@ class PosSubscriptionOperation(models.Model):
             pricing_state = self._wgs_get_persisted_subscription_pricing_from_pos_line(line)
             if not pricing_state['snapshot'].get('commercial_quote'):
                 raise UserError(_('La operacion requiere su cotizacion firmada antes de aplicarse.'))
+            if (not activation and not pricing_state['snapshot'].get('domiciliation')
+                    and not pricing_state['snapshot'].get('period_contract')):
+                raise UserError(_('Actualiza la cotizacion anterior antes de cobrar; no se modificara su calendario.'))
             ticket_price = pricing_state['snapshot'].get('ticket_charge_now')
             if ticket_price is None or self.currency_id.compare_amounts(line.price_unit, ticket_price):
                 raise UserError(_('El precio de la membresia pagada no coincide con su cotizacion firmada.'))
@@ -638,6 +698,13 @@ class PosSubscriptionOperation(models.Model):
         values = self._wgs_source_contract(source)
         if fingerprint(values) == line.wgs_activation_revision:
             return False
+        frozen = line.wgs_activation_contract
+        if frozen and fingerprint(frozen) == line.wgs_activation_revision:
+            # Current-period participants can be edited. The future period
+            # still applies exactly the participants frozen on its paid line.
+            values = {**values, 'participants': frozen['participants']}
+            if fingerprint(values) == line.wgs_activation_revision:
+                return False
         active_values = {**values, 'subscription_state': 'active'}
         if (fingerprint(active_values) != line.wgs_activation_revision
                 or not self._wgs_is_automatic_inclusive_close(source, line)):
@@ -645,7 +712,10 @@ class PosSubscriptionOperation(models.Model):
         scoped = self.with_context(wgs_defer_access_sync=True)
         scoped._wgs_reactivate_subscription_order_for_pos(source.with_env(scoped.env))
         source.with_context(wgs_defer_access_sync=True).write({'close_reason_id': False})
-        if self._wgs_source_revision(source) != line.wgs_activation_revision:
+        recovered = self._wgs_source_contract(source)
+        if frozen:
+            recovered['participants'] = frozen['participants']
+        if fingerprint(recovered) != line.wgs_activation_revision:
             raise UserError(_('No se recupero exactamente el contrato previo al cierre automatico.'))
         return True
 
@@ -679,7 +749,10 @@ class PosSubscriptionOperation(models.Model):
                     'activated_at': fields.Datetime.to_string(fields.Datetime.now()),
                     **({'automatic_close_recovered': True} if recovered else {}),
                 }, 'wgs_activation_error': False, 'wgs_activation_retry_at': False})
-                order._wgs_pending_package_changes(source).write({'wgs_activation_revision': after})
+                order._wgs_pending_package_changes(source).write({
+                    'wgs_activation_revision': after,
+                    'wgs_activation_contract': order._wgs_source_contract(source),
+                })
                 order._wgs_finalize_paid_access(sources, affected)
                 return True
         except (DeadlockDetected, SerializationFailure):
@@ -694,7 +767,9 @@ class PosSubscriptionOperation(models.Model):
                 'wgs_application_state': 'scheduled',
                 'wgs_activation_error': str(error)[:2000],
                 'wgs_activation_attempts': line.wgs_activation_attempts + 1,
-                'wgs_activation_retry_at': fields.Datetime.now() + timedelta(minutes=15),
+                'wgs_activation_retry_at': fields.Datetime.now() + timedelta(
+                    minutes=min(360, 15 * (2 ** min(line.wgs_activation_attempts, 5))),
+                ),
             })
             _logger.exception('WGS paid activation will retry automatically: line=%s', line.id)
             return False
@@ -706,6 +781,25 @@ class SaleOrderOperationCron(models.Model):
     wgs_subscription_operation_line_ids = fields.One2many(
         'pos.order.line', 'wgs_subscription_source_id', readonly=True, copy=False,
     )
+
+    def write(self, values):
+        if 'participant_ids' in values:
+            # Enrich legacy queues only while their original revision still
+            # matches. Never bless an already-divergent historical contract.
+            pending = self.env['pos.order.line'].sudo().search([
+                ('wgs_subscription_source_id', 'in', self.ids),
+                ('wgs_application_state', 'in', ['scheduled', 'review']),
+                ('order_id.state', 'in', ['paid', 'done', 'invoiced']),
+                ('wgs_activation_contract', '=', False),
+            ])
+            if pending:
+                orders = pending.mapped('order_id')
+                orders._wgs_lock_operation_records(pending)
+                for line in pending:
+                    source = orders._wgs_source_contract(line.wgs_subscription_source_id)
+                    if fingerprint(source) == line.wgs_activation_revision:
+                        line.write({'wgs_activation_contract': source})
+        return super().write(values)
 
     @api.model
     def get_partner_subscription_detail_for_pos(self, partner_id, company_id=False):

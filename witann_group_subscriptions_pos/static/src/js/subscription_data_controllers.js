@@ -30,14 +30,14 @@ async function loadDirectoryRowsInBackground(state, {
     const requestLimit = loadAll ? batchSize : batchSize + 1;
     try {
         while (overlay.isConnected) {
-            if (state.directoryLoadToken !== requestToken) {
+            if (state.directoryLoadToken !== requestToken || !overlay.isConnected) {
                 break;
             }
             const batch = await fetchPartnerDirectoryBatch(offset, requestLimit, {
                 stateFilter,
                 searchTerm,
             });
-            if (state.directoryLoadToken !== requestToken) {
+            if (state.directoryLoadToken !== requestToken || !overlay.isConnected) {
                 break;
             }
             if (!Array.isArray(batch) || !batch.length) {
@@ -65,12 +65,15 @@ async function loadDirectoryRowsInBackground(state, {
             }
         }
     } catch (error) {
+        if (state.directoryLoadToken !== requestToken || !overlay.isConnected) {
+            return;
+        }
         console.error("Error al consultar suscripciones en POS", error);
         state.directoryLoadError = _t("No se pudo cargar el directorio completo en este momento.");
     } finally {
         if (state.directoryLoadToken === requestToken) {
             state.directoryLoading = false;
-            render();
+            if (overlay.isConnected) { render(); }
         }
     }
 }

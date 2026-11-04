@@ -7,7 +7,7 @@ import test from 'node:test';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../witann_group_subscriptions_pos/static/src/js');
 const context = vm.createContext({ console, canOpenNewSubscription: () => true });
-for (const file of ['subscription_quote_request.js', 'subscription_pricing_snapshot.js', 'subscription_flow_controllers.js']) {
+for (const file of ['subscription_quote_request.js', 'subscription_pricing_snapshot.js', 'subscription_flow_controllers.js', 'subscription_inline_form_handlers.js']) {
     const source = fs.readFileSync(path.join(root, file), 'utf8')
         .replace(/^import[\s\S]*?;\s*$/gm, '')
         .replace(/^export\s*\{[\s\S]*?\};?\s*$/gm, '')
@@ -40,6 +40,15 @@ test('initial proportional end is separate from the domiciliation forced-term en
     assert.equal(persisted.first_period_end_date, '2026-10-31');
     assert.equal(persisted.subscription_end_date, '2027-09-30');
 });
+
+test('purchased calendar inputs survive restoration from the signed quote', () => {
+    const terms = {version:1, mode:'term', start:'2027-03-01', interval:1, unit:'month',
+        cutoff:31, previous_end:'2027-02-28', aligned:false};
+    const signed = {payload:{pricing:{period_contract:terms}}, signature:'server-signature'};
+    const snapshot = JSON.parse(JSON.stringify(context.buildPricingSnapshotFromCharge({commercial_quote:signed})));
+    assert.deepEqual(snapshot.period_contract, terms);
+    assert.deepEqual(snapshot.commercial_quote, signed);
+});
 function stateFor(mode) {
     const state = {formMode:mode, selectedPartnerId:7, currentDetail:{}, productCatalog:[
         {id:1, name:'Daily'}, {id:2, name:'Monthly'},
@@ -47,6 +56,70 @@ function stateFor(mode) {
     const key = mode === 'new' ? 'newSubscriptionForm' : mode === 'upsale' ? 'upsaleForm' : 'renewalForm';
     state[key] = {holderPartnerId:7, subscriptionId:8, sourceProductId:1, participantIds:[7]};
     return [state,key];
+}
+test('pricing readiness rejects absent/unsigned/loading quotes but accepts a signed zero price', () => {
+    assert.equal(context.isPricingReady(null), false);
+    assert.equal(context.isPricingReady({loading:false, pricingSnapshot:null}), false);
+    assert.equal(context.isPricingReady({pricingSnapshot:quote(1).pricing}), false);
+    const form = {loading:false, pricingSnapshot:{...quote(1).pricing, ticket_charge_now:0,
+        commercial_quote:{payload:{product_id:1}, signature:'server-signature'}}};
+    assert.equal(context.isPricingReady(form), true);
+    form.loading = true;
+    assert.equal(context.isPricingReady(form), false);
+});
+for (const [mode, action] of [['new','save-new'], ['renewal','save-renewal'],
+    ['reenroll','save-reenroll'], ['upsale','save-upsale']]) {
+    test(`${mode}: failed quote cannot assign a customer or add a line through the action handler`, async () => {
+        const [state, key] = stateFor(mode);
+        state[key].loading = false;
+        state[key].pricingSnapshot = null;
+        let renders = 0;
+        const handlers = context.buildSubscriptionInlineActionHandlers({state,
+            renderDetail() { renders++; }, _t: value => value,
+            getCurrentOrder() { assert.fail('No ticket access before valid quote'); },
+        });
+        await handlers[action]({});
+        assert.equal(renders, 1);
+        assert.match(state.formError, /cotizacion valida/);
+        assert.equal(state.subscriptionTicketPending, undefined);
+    });
+}
+for (const [mode, handler, field] of [
+    ['new', 'applySelectedProduct', 'start_date'],
+    ['reenroll', 'applySelectedReenrollProduct', 'reenroll_start_date'],
+]) {
+    test(`${mode}: date changed during first product quote replaces the in-flight calendar`, async () => {
+        const [state, key] = stateFor(mode);
+        state[key].startDate = '2026-11-03';
+        const requests = [];
+        const deps = {
+            renderDetail() {}, _t: value => value,
+            fetchSubscriptionQuote(...args) {
+                const response = deferred();
+                requests.push({args, response});
+                return response.promise;
+            },
+        };
+        const apply = id => context[handler](state, id, deps);
+        const first = apply(1);
+        const changed = context.handleSubscriptionInlineFieldChange({field, target:{value:'2026-11-01'}}, {
+            state, clearFeedback() {}, renderDetail() {},
+            applySelectedProduct: apply, applySelectedReenrollProduct: apply,
+            formatTodayISO: () => '2026-11-03',
+        });
+        assert.equal(requests.length, 2);
+        assert.equal(requests[0].args[8], '2026-11-03');
+        assert.equal(requests[1].args[8], '2026-11-01');
+        requests[0].response.resolve({pricing:{...quote(1).pricing, subscription_start_date:'2026-11-03'}});
+        await first;
+        assert.equal(state[key].pricingSnapshot, null);
+        assert.equal(state[key].loading, true);
+        requests[1].response.resolve({pricing:{...quote(1).pricing, subscription_start_date:'2026-11-01'}});
+        await changed;
+        assert.equal(state[key].startDate, '2026-11-01');
+        assert.equal(state[key].pricingSnapshot.subscription_start_date, '2026-11-01');
+        assert.equal(state[key].loading, false);
+    });
 }
 for (const [mode, handler] of [
     ['new','applySelectedProduct'], ['renewal','applySelectedRenewalProduct'],

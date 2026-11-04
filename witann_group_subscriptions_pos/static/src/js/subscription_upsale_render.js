@@ -1,6 +1,7 @@
 /** @odoo-module **/
 
 import { buildChargeFromSnapshot, getCurrentPlanChoice } from "./subscription_pricing_snapshot";
+import { isPricingReady } from "./subscription_quote_request";
 import {
     getDiscountedDisplayAmount,
     renderDiscountAuthorizationSection,
@@ -110,7 +111,7 @@ function renderUpsaleForm({
                 </div>
             ` : ""}
             <div class="wgs-inline-actions">
-                <button type="button" class="wgs-primary-action-btn" data-action="save-upsale" ${upsaleForm.loading ? "disabled" : ""}>${escapeHtml(_t("Agregar al ticket"))}</button>
+                <button type="button" class="wgs-primary-action-btn" data-action="save-upsale" ${isPricingReady(upsaleForm) ? "" : "disabled"}>${escapeHtml(_t("Agregar al ticket"))}</button>
                 <button type="button" class="wgs-secondary-action-btn" data-action="cancel-upsale">${escapeHtml(_t("Cancelar"))}</button>
             </div>
         </div>
