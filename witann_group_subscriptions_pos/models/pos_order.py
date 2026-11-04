@@ -1,5 +1,6 @@
 import json
 import logging
+from copy import deepcopy
 from datetime import date, datetime, time, timedelta
 
 import pytz
@@ -163,6 +164,13 @@ class PosOrder(models.Model):
         'pause',
         'upsell',
     )
+
+    @api.model
+    def sync_from_ui(self, orders):
+        # Core and WGS consume nested line commands and subscription metadata.
+        # Odoo retries the RPC with the same argument objects after a database
+        # conflict, so only a transaction-local copy may be consumed.
+        return super().sync_from_ui(deepcopy(orders))
 
     def action_pos_order_invoice(self):
         """POS is ticket-only; invoices must not be issued from its history views."""

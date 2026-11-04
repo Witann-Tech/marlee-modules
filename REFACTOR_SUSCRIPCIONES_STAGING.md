@@ -94,6 +94,25 @@ hardware productivo ni se habilitan crons globales sobre datos clonados.
   de tocar cliente/ticket, sin rechazar precio cero. Una busqueda vieja fallida
   no sobreescribe otra nueva; cerrar el modal impide render tardio. 40 tests JS
   aprobados, incluidos errores, cierre de modal y render real de los formularios.
+- El pase adicional de concurrencia HTTP en staging (.13) encontro consumo de
+  argumentos entre reintentos: un alta se aplicaba una vez, pero el otro intento
+  devolvia "Falta la configuracion" en lugar del rechazo de historial esperado.
+  Core y WGS hacen pop de metadata y modifican comandos anidados sobre los mismos
+  objetos que reutiliza service.retrying. No se duplico ni se volvio a cobrar.
+- POS .14 establece propiedad de los argumentos en sync_from_ui: entrega a core
+  una copia profunda local por intento; conserva intacta la entrada RPC original.
+  No crea Environment, cursor, commit, retry propio ni cache persistente. La
+  copia vive solo durante la llamada y es proporcional al payload del ticket.
+- Nueva regresion ORM fuerza SerializationFailure despues de consumir el payload
+  nativo, revierte el savepoint, repite los mismos argumentos y reenvia el pago
+  ya aplicado: una linea, un pago y una vigencia; argumentos intactos. Dos tests
+  aislados adicionales comprueban consumo profundo y repeticion, no solo un pop
+  superficial. Gate repetido: 45 ORM API + 198 base/POS, 2 PostgreSQL y 2 HTTP con
+  workers=2 aprobados. Python aislado: 135 aprobadas y un placeholder omitido por
+  no suministrar DSN en ese comando; PostgreSQL se ejecuto por separado. JS: 40.
+  Evidencia /tmp/wgs-20261103-enterprise-rpc-retry.log y wgs-isolated.bb7tmr/.
+- Pendiente desplegar .14 y repetir el alta/renovacion HTTP concurrente y un
+  checkout por navegador; no se cuenta ese escenario como aprobado aun.
 
 ## Validacion integral de los tres addons, 2026-11-03
 

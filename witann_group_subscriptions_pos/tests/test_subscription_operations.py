@@ -1,11 +1,13 @@
 """Commercial integration gate. Run on a disposable Odoo 19 Enterprise database."""
 
 import json
+from copy import deepcopy
 from datetime import datetime
 from unittest.mock import patch
 from uuid import uuid4
 
 from psycopg2 import IntegrityError
+from psycopg2.errors import SerializationFailure
 
 from odoo import Command, fields
 from odoo.exceptions import AccessError, UserError, ValidationError
@@ -77,7 +79,7 @@ class TestSubscriptionOperations(CommonPosTest):
             domiciliation_installment_sequences=months,
         )
 
-    def _paid(self, product, plan, flow='new', source=False, participants=False, start='2026-09-15', months=False, discount=0):
+    def _paid(self, product, plan, flow='new', source=False, participants=False, start='2026-09-15', months=False, discount=0, submit=False):
         quote = self._quote(product, plan, flow, source, start, months)
         config = {
             'line_uuid': str(uuid4()), 'product_id': product.id, 'quantity': 1,
@@ -134,7 +136,10 @@ class TestSubscriptionOperations(CommonPosTest):
                 'amount': amount, 'payment_date': fields.Datetime.now(),
             }]] if amount else [],
         }
-        self.Pos._process_order(payload, order)
+        if submit:
+            submit(order, payload)
+        else:
+            self.Pos._process_order(payload, order)
         self.assertEqual(order.state, 'paid')
         self.assertEqual(sum(order.payment_ids.mapped('amount')), amount)
         # Inspect backend state as an administrator; the checkout above runs
@@ -401,6 +406,39 @@ class TestSubscriptionOperations(CommonPosTest):
             self.Pos.wgs_stage_subscription_config_for_uuid(order.uuid, [config], {
                 'partner_id': self.holder.id, 'company_id': order.company_id.id,
             })
+
+    def test_native_sync_retry_does_not_consume_rpc_arguments_or_duplicate_payment(self):
+        def retry_checkout(order, payload):
+            arguments = [payload]
+            original = deepcopy(arguments)
+            Order = type(order)
+            saved = Order._process_saved_order
+            fail_once = True
+
+            def fail_after_native_payload_consumption(records, draft):
+                nonlocal fail_once
+                if fail_once:
+                    fail_once = False
+                    raise SerializationFailure('test native transaction retry')
+                return saved(records, draft)
+
+            with patch.object(Order, '_process_saved_order', fail_after_native_payload_consumption):
+                with self.assertRaises(SerializationFailure), self.env.cr.savepoint():
+                    self.Pos.sync_from_ui(arguments)
+                self.assertEqual(arguments, original)
+                self.Pos.sync_from_ui(arguments)
+            self.assertEqual(arguments, original)
+            end = order.lines.wgs_sale_order_id.sudo().end_date
+            self.Pos.sync_from_ui(arguments)
+            self.assertEqual(arguments, original)
+            self.assertEqual(order.lines.wgs_sale_order_id.sudo().end_date, end)
+            self.assertEqual(len(order.payment_ids), 1)
+            self.assertEqual(len(order.lines), 1)
+
+        order, subscription = self._paid(self.solo, self.month, submit=retry_checkout)
+        self.assertEqual(order.lines.wgs_application_state, 'applied')
+        self.assertEqual(subscription.plan_id, self.month)
+        self.assertEqual(subscription.end_date, fields.Date.to_date('2026-10-15'))
 
     def test_daily_to_monthly_reenrollment_replaces_plan_and_period(self):
         _order, subscription = self._paid(self.daily, self.day)
