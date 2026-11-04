@@ -1177,7 +1177,7 @@ class PosOrder(models.Model):
         candidates = list(snapshot.get('candidates') or [])
         candidates.sort(key=lambda row: (row['sequence'], row.get('pricing_id') or 0))
         flags = self._wgs_get_subscription_product_flags_for_pos(product)
-        plan = self.env['sale.subscription.plan'].browse(int(snapshot.get('plan_id') or 0)).exists()
+        plan = self._wgs_find_plan_record_by_id(snapshot.get('plan_id'))
         domiciliation = {}
         if plan and plan.wgs_domiciliation_enabled:
             schedule = self.env['wgs.subscription.domiciliation.contract'].wgs_build_initial_schedule(
@@ -1530,7 +1530,7 @@ class PosOrder(models.Model):
                 is_renewal=normalized_flow == 'renewal',
                 is_reenroll=False,
             )
-            plan = self.env['sale.subscription.plan'].browse(pricing.get('plan_id') or []).exists()
+            plan = self._wgs_find_plan_record_by_id(pricing.get('plan_id'))
             if plan and plan.wgs_domiciliation_enabled and not source_order.wgs_domiciliation_contract_id:
                 legacy_product = product or source_order._get_recurring_lines()[:1].product_id
                 pricing = self._wgs_build_product_pricing_payload_for_pos(
@@ -3284,7 +3284,7 @@ class PosOrder(models.Model):
                 )
 
         if signed:
-            plan_record = self.env['sale.subscription.plan'].browse(recurring_plan_id or []).exists()
+            plan_record = self._wgs_find_plan_record_by_id(recurring_plan_id)
             if not plan_record:
                 raise UserError(_('El plan contratado ya no existe. La operacion requiere revision.'))
         elif recurring_pricing_id and not recurring_plan_id and 'sale.subscription.pricing' in self.env.registry:

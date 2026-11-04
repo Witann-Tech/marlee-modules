@@ -128,6 +128,7 @@ class ContractTests(unittest.TestCase):
         sync = method(OPS, '_wgs_sync_subscription_sales')
         for legacy in (False, True):
             order = Mock()
+            order.sudo.return_value = order
             order.sorted.return_value = [order]
             order.state = 'paid'
             order.partner_id.ids = [7]

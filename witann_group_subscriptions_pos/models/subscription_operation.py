@@ -164,7 +164,7 @@ class PosSubscriptionOperation(models.Model):
             'source_revision': self._wgs_source_revision(source, include_scheduled=True),
             'pricing': {**pricing, 'max_participants_total': product.max_participants_total or 1},
         }
-        plan = self.env['sale.subscription.plan'].browse(pricing.get('plan_id') or []).exists()
+        plan = self._wgs_find_plan_record_by_id(pricing.get('plan_id'))
         if not plan:
             raise UserError(_('La cotizacion requiere un plan recurrente existente.'))
         interval, unit = self._wgs_extract_interval_from_plan(plan)
@@ -297,7 +297,7 @@ class PosSubscriptionOperation(models.Model):
             if not eligibility or not eligibility.get('ok'):
                 raise UserError((eligibility or {}).get('error_message') or _('El cliente no puede contratar este paquete.'))
         pricing = payload['pricing']
-        if not self.env['sale.subscription.plan'].browse(pricing.get('plan_id') or []).exists():
+        if not self._wgs_find_plan_record_by_id(pricing.get('plan_id')):
             raise UserError(_('El plan cotizado ya no existe. Actualiza el paquete antes de cobrar.'))
         locked_price = (config.get('pricing_lock') or {}).get('price_unit')
         if locked_price is not None and abs(float(locked_price) - float(pricing['ticket_charge_now'])) > 0.01:
@@ -456,7 +456,13 @@ class PosSubscriptionOperation(models.Model):
             order._wgs_finalize_paid_access(order.lines.mapped('wgs_sale_order_id'), order.wgs_access_sync_partners or [])
 
     def _wgs_sync_subscription_sales(self):
-        for order in self.sorted('id'):
+        if not self.env.su:
+            self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para aplicar ventas de suscripciones POS.'))
+            self.check_access('write')
+        # POS cashiers need not have backend Sales rights. Elevate only the
+        # internal application, after POS ACL/company checks; native payments
+        # and signed-quote/source/postcondition checks remain unchanged.
+        for order in self.sudo().sorted('id'):
             if order.state not in ('paid', 'done', 'invoiced'):
                 continue
             lines = order.lines.filtered(lambda line: line.qty and line.product_id.recurring_invoice)

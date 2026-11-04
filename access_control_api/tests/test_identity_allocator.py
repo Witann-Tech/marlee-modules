@@ -1,12 +1,31 @@
 from uuid import uuid4
+from unittest.mock import patch
 
-from odoo.exceptions import UserError, ValidationError
+from odoo import Command
+from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.tests import tagged
 from odoo.tests.common import TransactionCase
 
 
 @tagged('post_install', '-at_install', 'wgs_identity')
 class TestIdentityAllocator(TransactionCase):
+    def test_unauthorized_identity_changes_do_not_acquire_the_allocator(self):
+        user = self.env['res.users'].create({
+            'name': 'Readonly identity QA', 'login': str(uuid4()),
+            'group_ids': [Command.set(self.env.ref('base.group_user').ids)],
+        })
+        Person = self.env['access_control.person']
+        partner = self.env['res.partner'].create({'name': 'ACL identity QA'})
+        person = Person.create({'partner_id': partner.id})
+        with patch.object(type(Person), '_lock_global_user_id_allocator', autospec=True) as lock:
+            with self.assertRaises(AccessError):
+                Person.with_user(user).create({'partner_id': partner.id})
+            with self.assertRaises(AccessError):
+                person.with_user(user).write({'global_user_id': 9999})
+            with self.assertRaises(AccessError):
+                person.with_user(user).action_assign_global_user_id()
+            lock.assert_not_called()
+
     def test_auto_assigned_ids_are_distinct_and_explicit_writes_use_the_guard(self):
         Person = self.env['access_control.person']
         partners = self.env['res.partner'].create([{'name': 'Identity QA %s' % uuid4()} for _ in range(2)])

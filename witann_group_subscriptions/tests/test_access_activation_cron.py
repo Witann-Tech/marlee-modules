@@ -1,7 +1,7 @@
 from datetime import date, timedelta
 from unittest.mock import patch
 
-from odoo.fields import Command
+from odoo.fields import Command, Domain
 from odoo.tests.common import TransactionCase
 
 
@@ -51,7 +51,7 @@ class TestAccessActivationCron(TransactionCase):
     def _pending_orders(self, orders):
         return self.Order.search(
             self.Order._wgs_get_pending_access_activation_domain(self.business_clock.return_value)
-            & [('id', 'in', orders.ids)]
+            & Domain('id', 'in', orders.ids)
         )
 
     def test_cron_activates_due_pair_outside_historical_page_and_is_idempotent(self):
@@ -91,6 +91,7 @@ class TestAccessActivationCron(TransactionCase):
         self.assertFalse(self._pending_orders(other_order))
         other_order.with_context(wgs_defer_access_sync=True).write({
             'subscription_state': '3_progress', 'end_date': self.today, 'next_invoice_date': self.today,
+            'start_date': self.today, 'wgs_effective_start_date': self.today,
         })
         self.assertFalse(self._pending_orders(other_order))
 

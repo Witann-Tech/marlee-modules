@@ -101,6 +101,7 @@ class LinkedLines(list):
 
 def paid_fixture(qty=1):
     owner, line = MagicMock(), Mock()
+    owner.sudo.return_value = owner
     owner.sorted.return_value = [owner]
     owner.with_company.return_value = owner
     owner.with_context.return_value = owner

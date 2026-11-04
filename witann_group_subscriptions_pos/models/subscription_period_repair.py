@@ -29,7 +29,7 @@ class SubscriptionPeriodRepair(models.Model):
             ('wgs_subscription_refund_origin_line_id', '=', line.id),
         ]):
             raise UserError(_('El pago fue reembolsado; no se puede restaurar su periodo.'))
-        plan = self.env['sale.subscription.plan'].browse(int(options.get('plan_id') or 0)).exists()
+        plan = self._wgs_find_plan_record_by_id(options.get('plan_id'))
         if not plan or plan.wgs_domiciliation_enabled:
             raise UserError(_('Selecciona explicitamente el plan historico contratado no domiciliado.'))
         start = fields.Date.to_date(options.get('start_date'))

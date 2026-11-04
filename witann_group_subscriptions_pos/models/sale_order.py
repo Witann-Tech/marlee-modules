@@ -1886,6 +1886,8 @@ class SaleOrder(models.Model):
             'phone': status.get('phone') or phone_fallback,
             'state': status.get('state') or 'none',
             'state_label': status.get('state_label') or _('Sin suscripción'),
+            'subscription_id': status.get('subscription_id') or False,
+            'subscription_name': status.get('subscription_name') or False,
             'package_label': status.get('package_label') or False,
             'access_origin_label': status.get('access_origin_label') or False,
             'access_origin_message': status.get('access_origin_message') or False,
@@ -2423,7 +2425,7 @@ class SaleOrder(models.Model):
         subscriptions = self._filter_local_pos_subscriptions_for_pos(subscriptions, company=company)
         subscriptions = subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
 
-        subscriptions_by_partner = {partner.id: self.browse() for partner in partners}
+        subscription_ids_by_partner = {partner.id: [] for partner in partners}
         partner_id_set = set(partner_ids)
 
         for subscription in subscriptions:
@@ -2431,9 +2433,12 @@ class SaleOrder(models.Model):
             if subscription.partner_id and subscription.partner_id.id in partner_id_set:
                 shared_partner_ids.add(subscription.partner_id.id)
             for partner_id in shared_partner_ids:
-                subscriptions_by_partner[partner_id] |= subscription
+                subscription_ids_by_partner[partner_id].append(subscription.id)
 
-        return subscriptions_by_partner
+        return {
+            partner_id: subscriptions.browse(ids).with_prefetch(subscriptions.ids)
+            for partner_id, ids in subscription_ids_by_partner.items()
+        }
 
     @api.model
     def _wgs_subscription_history_state_domain_for_pos(self):
@@ -2556,9 +2561,10 @@ class SaleOrder(models.Model):
         origin_domain = self._get_subscription_access_origin_domain_for_pos(company=company)
         today = self._wgs_subscription_business_today_for_pos(company=company)
         partner_id_set = set(partner_ids)
+        replacement_status = {}
 
         def add_subscription_origin(subscription, candidate_partner_ids=False):
-            item = subscription._build_pos_subscription_directory_status_item(today)
+            item = subscription._build_pos_subscription_directory_status_item(today, replacement_status=replacement_status)
             if not item or item.get('access_state') != 'enabled':
                 return
             item = dict(item)
@@ -2579,6 +2585,8 @@ class SaleOrder(models.Model):
             domain = fields.Domain.AND([origin_domain, partner_domain])
             subscriptions = self.sudo().search(domain, order='id desc')
             subscriptions = subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
+            replaced = subscriptions._wgs_replacement_subscription_ids_for_pos()
+            replacement_status.update({order.id: order.id in replaced for order in subscriptions})
             for subscription in subscriptions:
                 add_subscription_origin(subscription)
 
@@ -2596,6 +2604,8 @@ class SaleOrder(models.Model):
             fallback_domain = self._wgs_and_domains_for_pos(base_domain, fallback_partner_domain)
             fallback_subscriptions = self.sudo().search(fallback_domain, order='id desc')
             fallback_subscriptions = fallback_subscriptions.filtered(lambda order: order._is_subscription_record_for_pos())
+            replaced = fallback_subscriptions._wgs_replacement_subscription_ids_for_pos()
+            replacement_status.update({order.id: order.id in replaced for order in fallback_subscriptions})
             for subscription in fallback_subscriptions:
                 add_subscription_origin(subscription, candidate_partner_ids=fallback_partner_ids)
 
@@ -2652,7 +2662,7 @@ class SaleOrder(models.Model):
 
         period = self._wgs_get_subscription_access_period()
         state_key, label = self._get_native_subscription_state_info_for_pos()
-        access_state = self._classify_subscription_access_state_for_pos()
+        access_state = self._classify_subscription_access_state_for_pos(today=today)
         deadline = self._wgs_get_subscription_auto_close_deadline_from_order(today=today)
         reason = _('La suscripcion no esta en progreso.')
         if replacement:
@@ -3036,11 +3046,11 @@ class SaleOrder(models.Model):
         names = sorted(set(name for name in names if name))
         return ', '.join(names) if names else False
 
-    def _classify_subscription_access_state_for_pos(self):
+    def _classify_subscription_access_state_for_pos(self, today=False):
         self.ensure_one()
         core_classifier = getattr(self, '_wgs_classify_subscription_access_state', None)
         if callable(core_classifier):
-            return core_classifier() or False
+            return core_classifier(today=today) or False
         if 'subscription_state' not in self._fields:
             return False
 

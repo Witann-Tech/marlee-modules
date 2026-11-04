@@ -13,7 +13,10 @@ runtime_command=(--entrypoint odoo odoo:19.0)
 core_addons=/usr/lib/python3/dist-packages/odoo/addons
 if [[ -n "${WGS_COMMUNITY_SOURCE:-}" ]]; then
     [[ -f "$WGS_COMMUNITY_SOURCE/odoo-bin" && -d "$WGS_COMMUNITY_SOURCE/addons" ]]
-    runtime_mount=(-v "$WGS_COMMUNITY_SOURCE:/mnt/odoo:ro")
+    # Odoo 19 is a namespace package: mask the image's old core as well, or
+    # Python can silently import old bundled addons ahead of --addons-path.
+    runtime_mount=(-v "$WGS_COMMUNITY_SOURCE:/mnt/odoo:ro"
+                   -v "$WGS_COMMUNITY_SOURCE/odoo:/usr/lib/python3/dist-packages/odoo:ro")
     runtime_command=(--entrypoint python3 odoo:19.0 /mnt/odoo/odoo-bin)
     core_addons=/mnt/odoo/addons,/mnt/odoo/odoo/addons
 fi
@@ -21,9 +24,12 @@ logdir=$(mktemp -d "${TMPDIR:-/tmp}/wgs-isolated.XXXXXX")
 qa="wgs-test-$(date +%s)-$$"
 pg="$qa-pg"
 runner="$qa-odoo"
+http="$qa-http"
 net="$qa-net"
 cleanup() {
-    docker rm -f "$runner" "$pg" >/dev/null 2>&1 || true
+    docker logs "$http" > "$logdir/worker-server.log" 2>&1 || true
+    docker stop --time 10 "$http" >/dev/null 2>&1 || true
+    docker rm -f "$runner" "$http" "$pg" >/dev/null 2>&1 || true
     docker network rm "$net" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -101,6 +107,48 @@ if [[ -n "${WGS_ENTERPRISE_ADDONS:-}" ]]; then
     else
         tail -80 "$logdir/commercial-orm.log"
         exit 1
+    fi
+    if [[ "${WGS_HTTP_WORKERS:-1}" == 1 ]]; then
+        docker run --rm -i --name "$runner" --network "$net" --memory 1536m --cpus 2 \
+            -e WGS_RUN_ISOLATED=1 -e WGS_TEST_RPC_PASSWORD=wgs_disposable_rpc_only \
+            -v "$PWD/access_control_api:/mnt/extra-addons/access_control_api:ro" \
+            -v "$PWD/witann_group_subscriptions:/mnt/extra-addons/witann_group_subscriptions:ro" \
+            -v "$PWD/witann_group_subscriptions_pos:/mnt/extra-addons/witann_group_subscriptions_pos:ro" \
+            -v "$WGS_ENTERPRISE_ADDONS:/mnt/enterprise:ro" \
+            "${runtime_mount[@]}" "${runtime_command[@]}" shell \
+            --db_host="$pg" --db_user=wgs --db_password=wgs_disposable_test_only \
+            -d wgs_test_identity --addons-path="/mnt/extra-addons,/mnt/enterprise,$core_addons" \
+            --max-cron-threads=0 --workers=0 --no-http \
+            < tests/wgs_worker_setup.py > "$logdir/worker-setup.log" 2>&1
+        docker run -d --name "$http" --network "$net" --memory 1536m --cpus 2 \
+            -v "$PWD/access_control_api:/mnt/extra-addons/access_control_api:ro" \
+            -v "$PWD/witann_group_subscriptions:/mnt/extra-addons/witann_group_subscriptions:ro" \
+            -v "$PWD/witann_group_subscriptions_pos:/mnt/extra-addons/witann_group_subscriptions_pos:ro" \
+            -v "$WGS_ENTERPRISE_ADDONS:/mnt/enterprise:ro" \
+            "${runtime_mount[@]}" "${runtime_command[@]}" \
+            --db_host="$pg" --db_user=wgs --db_password=wgs_disposable_test_only \
+            -d wgs_test_identity --addons-path="/mnt/extra-addons,/mnt/enterprise,$core_addons" \
+            --max-cron-threads=0 --workers=2 --http-port=8069 --no-database-list \
+            --db-filter='^wgs_test_identity$' --limit-time-real=90 --limit-time-cpu=60 >/dev/null
+        docker stats --no-stream --format '{{.MemUsage}}' "$http" > "$logdir/worker-memory-before.log"
+        if docker run --rm --name "$runner" --network "$net" --memory 384m --cpus 1 \
+            -e WGS_RUN_ISOLATED=1 -e WGS_TEST_RPC_PASSWORD=wgs_disposable_rpc_only \
+            -e "WGS_TEST_DSN=host=$pg dbname=wgs_test_identity user=wgs password=wgs_disposable_test_only" \
+            -e "WGS_TEST_RPC_URL=http://$http:8069" -v "$PWD/tests:/work/tests:ro" \
+            --entrypoint python3 odoo:19.0 /work/tests/wgs_worker_gate.py \
+            > "$logdir/worker-http.log" 2>&1; then
+            cat "$logdir/worker-http.log"
+        else
+            cat "$logdir/worker-http.log"
+            exit 1
+        fi
+        docker stats --no-stream --format '{{.MemUsage}}' "$http" > "$logdir/worker-memory-after.log"
+        docker logs "$http" > "$logdir/worker-server.log" 2>&1
+        # A successful pair alone does not prove the native retry path ran.
+        grep -Eq 'SERIALIZATION_FAILURE|could not serialize access' "$logdir/worker-server.log"
+        echo "Two-worker logs: $logdir"
+    else
+        echo 'NOT RUN: two-worker HTTP gate disabled by WGS_HTTP_WORKERS.'
     fi
 else
     echo 'NOT RUN: WGS commercial ORM suite requires licensed WGS_ENTERPRISE_ADDONS (Odoo 19).'

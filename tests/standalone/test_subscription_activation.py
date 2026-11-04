@@ -90,6 +90,7 @@ class ActivationTests(unittest.TestCase):
         owner._wgs_verify_commercial_quote.return_value = {'pricing': {'plan_id': 17}}
         owner.env = MagicMock()
         owner.env['sale.subscription.plan'].browse().exists.return_value = False
+        owner._wgs_find_plan_record_by_id.return_value = False
         with self.assertRaisesRegex(UserError, 'antes de cobrar'):
             method(OPS, '_wgs_normalize_commercial_config')(
                 owner, {'flow': 'renewal', 'pricing_snapshot': {}},

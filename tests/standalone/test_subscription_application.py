@@ -194,6 +194,7 @@ class ApplicationTests(unittest.TestCase):
         owner._wgs_to_int = lambda value: int(value or 0)
         owner._wgs_verify_commercial_quote = Mock(return_value={'pricing': signed_pricing})
         owner._wgs_resolve_plan_record = Mock()
+        owner._wgs_find_plan_record_by_id = lambda value: owner.env['sale.subscription.plan'].browse(value).exists()
         line.ensure_one = lambda: None
         line.wgs_subscription_flow = 'new'
         line.wgs_subscription_source_id = MagicMock(id=False)

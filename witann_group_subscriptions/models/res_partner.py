@@ -98,7 +98,7 @@ class ResPartner(models.Model):
 
         ICP = self.env['ir.config_parameter'].sudo()
         for partner in self:
-            blocked = bool(data.get('wgs_access_blocked'))
+            blocked = bool(data.get('wgs_access_blocked', partner.wgs_access_blocked))
             if not blocked:
                 keys = [
                     partner._wgs_access_block_param_key(partner.id, 'blocked'),
@@ -109,17 +109,21 @@ class ResPartner(models.Model):
                 ICP.search([('key', 'in', keys)]).unlink()
                 continue
 
-            blocked_at = data.get('wgs_access_blocked_at') or fields.Datetime.now()
-            blocked_by = data.get('wgs_access_blocked_by_id') or self.env.user.id
+            blocked_at = data.get('wgs_access_blocked_at') or partner.wgs_access_blocked_at or fields.Datetime.now()
+            blocked_by = data.get('wgs_access_blocked_by_id') or partner.wgs_access_blocked_by_id or self.env.user.id
+            reason = data.get('wgs_access_block_reason', partner.wgs_access_block_reason) or ''
             if isinstance(blocked_by, models.BaseModel):
                 blocked_by = blocked_by.id
             ICP.set_param(partner._wgs_access_block_param_key(partner.id, 'blocked'), '1')
-            ICP.set_param(partner._wgs_access_block_param_key(partner.id, 'reason'), data.get('wgs_access_block_reason') or '')
+            ICP.set_param(partner._wgs_access_block_param_key(partner.id, 'reason'), reason)
             ICP.set_param(
                 partner._wgs_access_block_param_key(partner.id, 'blocked_at'),
                 fields.Datetime.to_string(fields.Datetime.to_datetime(blocked_at)),
             )
             ICP.set_param(partner._wgs_access_block_param_key(partner.id, 'blocked_by_id'), str(int(blocked_by or 0)))
+        # Parameter changes do not invalidate non-stored computed partner fields.
+        # Entitlement must see the new block in this transaction, including sudo.
+        self.invalidate_recordset(list(block_fields))
         return True
 
     @api.model
@@ -204,7 +208,7 @@ class ResPartner(models.Model):
         return partners
 
     def write(self, vals):
-        normalized_vals = self._wgs_normalize_curp_in_vals(vals)
+        normalized_vals = dict(self._wgs_normalize_curp_in_vals(vals))
         access_block_fields = {
             'wgs_access_blocked',
             'wgs_access_block_reason',

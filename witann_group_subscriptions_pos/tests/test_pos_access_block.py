@@ -5,6 +5,9 @@ from odoo.tests.common import TransactionCase
 class TestPosAccessBlock(TransactionCase):
     def setUp(self):
         super().setUp()
+        self.plan = self.env['sale.subscription.plan'].create({
+            'name': 'POS access QA monthly', 'billing_period_value': 1, 'billing_period_unit': 'month',
+        })
         self.owner = self.env['res.partner'].create({'name': 'Titular POS acceso'})
         self.participant = self.env['res.partner'].create({'name': 'Participante POS acceso'})
         self.site = self.env['access_control.site'].create(
@@ -23,6 +26,7 @@ class TestPosAccessBlock(TransactionCase):
                 'max_participants_total': 2,
             }
         )
+        self.product = self.product.with_env(self.env)
         self.other_company = self.env['res.company'].create({'name': 'Otra empresa POS acceso'})
         self.other_site = self.env['access_control.site'].create(
             {
@@ -66,6 +70,8 @@ class TestPosAccessBlock(TransactionCase):
             {
                 'partner_id': self.owner.id,
                 'company_id': self.env.company.id,
+                'plan_id': self.plan.id,
+                'state': 'sale',
                 'order_line': [
                     Command.create(
                         {
@@ -87,6 +93,8 @@ class TestPosAccessBlock(TransactionCase):
             {
                 'partner_id': self.owner.id,
                 'company_id': self.other_company.id,
+                'plan_id': self.plan.id,
+                'state': 'sale',
                 'order_line': [
                     Command.create(
                         {
@@ -109,6 +117,8 @@ class TestPosAccessBlock(TransactionCase):
             {
                 'partner_id': self.owner.id,
                 'company_id': company.id,
+                'plan_id': self.plan.id,
+                'state': 'sale',
                 'order_line': [
                     Command.create(
                         {

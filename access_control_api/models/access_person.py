@@ -281,6 +281,7 @@ class AccessPerson(models.Model):
 
     @api.model_create_multi
     def create(self, vals_list):
+        self.check_access('create')
         self._lock_global_user_id_allocator()
         used_ids = self._used_global_user_ids()
         normalized_vals_list = []
@@ -308,6 +309,7 @@ class AccessPerson(models.Model):
         return records
 
     def write(self, vals):
+        self.check_access('write')
         vals = self._normalize_face_vals(vals)
         vals = self._fill_face_from_partner(vals)
         admin_devices = self._local_admin_devices()
@@ -445,6 +447,7 @@ class AccessPerson(models.Model):
 
     def action_assign_global_user_id(self):
         """Asigna el ID global disponible más bajo (1..10000)."""
+        self.check_access('write')
         self._lock_global_user_id_allocator()
         used = self._used_global_user_ids()
         for rec in self:

@@ -2,6 +2,58 @@
 
 Registro inicial: 2026-09-28. Rama de trabajo: `staging`.
 
+## Gate Enterprise y correcciones integrales, 2026-11-03
+
+Esta entrada sustituye los pendientes tecnicos de la entrada anterior. Solo
+staging: main, produccion, outputs/, Payroll e importador bancario sin cambios.
+Versiones preparadas: API 19.0.2.0.87, base 19.0.1.1.61, POS 19.0.1.6.11.
+
+Hallazgos reproducidos y corregidos:
+
+- El cajero no tiene permisos Sales para aplicar una compra. La aplicacion
+  interna usa sudo solo despues de validar rol POS y acceso de escritura a
+  la orden/empresa; la venta y sus invariantes siguen validados. Tests de cajero
+  sin Sales, usuario no POS y caja de otra empresa.
+- Se eliminan caches comerciales propias del Environment: retenian recordsets
+  y precios/planes retirados despues de editar el catalogo. El ORM gestiona su
+  invalidacion. La lectura privilegiada se limita al catalogo seleccionado.
+- El bloqueo manual invalida sus campos calculados tambien en entornos sudo;
+  editar solo la razon no desbloquea ni muta el diccionario recibido.
+- El cambio de ciclo domiciliado hace flush del estado del ciclo anterior antes
+  del INSERT sujeto al indice parcial. Conserva cuotas y pagos anteriores.
+- La expiracion nativa hace flush de sus campos antes del SQL de Odoo. No agrega
+  cursores, commits ni transacciones manuales. La evaluacion de acceso usa una
+  sola fecha de negocio, incluida la cartera, para evitar decisiones mixtas
+  alrededor de medianoche.
+- El directorio conserva sudo y prefetch al agrupar suscripciones y evalua los
+  reemplazos de origen por lote. Incluye ID/nombre de suscripcion en su respuesta.
+- Access API rechaza permisos antes de adquirir el lock del asignador; un
+  usuario no autorizado no ocupa ese recurso. No cambia IDs ni protocolo facial.
+
+Validacion real en PostgreSQL 16 y Odoo 19 Enterprise, en red Docker interna,
+base desechable, sin puertos publicados ni conexiones a bases operativas:
+
+- 45 pruebas ORM Access API y 197 WGS/base/POS: cero fallos y errores, sin omitir
+  los escenarios comerciales. Se corrigieron fixtures obsoletos para Odoo 19,
+  impuestos multicompania e identidades Studio solo en la base desechable.
+- Dos pruebas PostgreSQL con conexiones Repeatable Read y dos HTTP con workers=2
+  aprobadas. Tres colisiones simultaneas forzadas ejecutaron reintentos nativos
+  (12 mensajes de serialization/retry), IDs distintos y positivos. Diez ciclos
+  HTTP adicionales conservaron identidad y liberaron transacciones y locks.
+- El consumo Docker frio/caliente observado fue 98/368 MiB; no demuestra fuga
+  ni estabilidad a largo plazo. No se presenta como una prueba de soak/RSS.
+- Evidencia: /tmp/wgs-20261103-enterprise-worker-gate2.log y
+  /var/folders/g4/fxd70d8n40d5mp33wn_z0gr80000gn/T/wgs-isolated.NNVWC4/.
+- Primer QA por navegador en staging: cliente sintetico 9488, S03637, POS13940,
+  recibo 263-3-000137, $799 efectivo ficticio. Mensual 3/nov-3/dic inclusive,
+  siguiente corte 4/dic, persona 5199 habilitada y sin pendiente de proyeccion.
+  No se generaron facturas. Falta repetir la matriz tras este nuevo upgrade.
+
+Pendientes: desplegar estas tres versiones, ampliar matriz de navegador en
+ambas sucursales, comparar directorio y emitir reporte ejecutivo. La entrega
+fisica a SpeedFace no puede verificarse con el gateway aislado; no se opera
+hardware productivo ni se habilitan crons globales sobre datos clonados.
+
 ## Validacion integral de los tres addons, 2026-11-03
 
 Alcance autorizado: access_control_api, witann_group_subscriptions y

@@ -680,12 +680,13 @@ class SaleOrder(models.Model):
             return False
         return bool(self._get_subscription_recurring_lines())
 
-    def _wgs_classify_subscription_access_state(self):
+    def _wgs_classify_subscription_access_state(self, today=False):
         self.ensure_one()
         if not self._wgs_is_confirmed_access_subscription_order():
             return False
         if 'subscription_state' not in self._fields:
             return False
+        today = fields.Date.to_date(today) or self._wgs_get_subscription_business_today(company=self.company_id)
 
         # A domiciliation contract owns entitlement for its entire forced term.
         # Native recurring jobs can mark the source order closed after a missed
@@ -693,7 +694,7 @@ class SaleOrder(models.Model):
         # contract and must not prevent its overdue installments from being paid.
         contract = self.wgs_domiciliation_contract_id
         if contract:
-            return contract.wgs_get_operational_status().get('access_state') or False
+            return contract.wgs_get_operational_status(today=today).get('access_state') or False
 
         state_value = (self.subscription_state or '').strip().lower()
         if not state_value:
@@ -705,7 +706,6 @@ class SaleOrder(models.Model):
         if not any(token in state_value for token in self._WGS_ACCESS_ENABLED_STATE_TOKENS):
             return False
 
-        today = self._wgs_get_subscription_business_today(company=self.company_id)
         period = self._wgs_get_subscription_access_period()
         start_date = period['start_date']
         if start_date and start_date > today:

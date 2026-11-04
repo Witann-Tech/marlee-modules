@@ -298,7 +298,8 @@ class PosOrderPricingMixin(models.Model):
     def _wgs_find_plan_record_by_id(self, plan_id):
         if not plan_id:
             return False
-        return self.env['sale.subscription.plan'].browse(int(plan_id)).exists()
+        # Cashiers can read the selected catalog plan without backend Sales ACLs.
+        return self.env['sale.subscription.plan'].sudo().browse(int(plan_id)).exists()
 
     def _wgs_get_plan_min_end_threshold(self, plan, start_date, periods_count=1):
         """Historical interval boundary, retained for explicitly approved repairs."""
@@ -977,11 +978,6 @@ class PosOrderPricingMixin(models.Model):
         if model_name not in self.env.registry:
             return ()
 
-        cache = self._wgs_get_env_cache('_wgs_direct_subscription_pricing_records_cache')
-        cache_key = (product._name, product.id, product.product_tmpl_id.id)
-        if cache_key in cache:
-            return cache[cache_key]
-
         records = self.env[model_name].browse()
         for source in (product, product.product_tmpl_id):
             relation_field_names = self._wgs_get_relation_field_names(
@@ -998,9 +994,7 @@ class PosOrderPricingMixin(models.Model):
                 if not value:
                     continue
                 records |= value if field.type in ('one2many', 'many2many') else value.exists()
-        result = tuple(records)
-        cache[cache_key] = result
-        return result
+        return tuple(records)
 
     def _wgs_search_related_records(
         self,
@@ -1013,17 +1007,6 @@ class PosOrderPricingMixin(models.Model):
     ):
         if model_name not in self.env.registry:
             return ()
-
-        cache = self._wgs_get_env_cache('_wgs_search_related_records_cache')
-        cache_key = (
-            model_name,
-            product.id if product else 0,
-            template.id if template else 0,
-            tuple(product_field_names or ()),
-            tuple(template_field_names or ()),
-        )
-        if cache_key in cache:
-            return cache[cache_key]
 
         model = self.env[model_name]
         product_field_names = self._wgs_get_relation_field_names(
@@ -1054,19 +1037,12 @@ class PosOrderPricingMixin(models.Model):
                     )
                 )
             )
-        cache[cache_key] = result
         return result
 
     def _wgs_get_recurring_pricing_candidates(self, product):
         product.ensure_one()
-        cache = getattr(self.env, '_wgs_recurring_pricing_candidates_cache', None)
-        if cache is None:
-            cache = {}
-            setattr(self.env, '_wgs_recurring_pricing_candidates_cache', cache)
-        cache_key = (product._name, product.id, product.product_tmpl_id.id)
-        if cache_key in cache:
-            return [dict(candidate) for candidate in cache[cache_key]]
-
+        # Prices and plan relations are mutable business data. Let ORM cache
+        # invalidation handle writes; do not retain recordsets on Environment.
         candidates = []
         seen_pricing_ids = set()
 
@@ -1100,9 +1076,7 @@ class PosOrderPricingMixin(models.Model):
                 bool(getattr(product.product_tmpl_id, 'recurring_invoice', False)),
             )
 
-        normalized_candidates = self._wgs_normalize_recurring_pricing_candidates(candidates)
-        cache[cache_key] = [dict(candidate) for candidate in normalized_candidates]
-        return [dict(candidate) for candidate in normalized_candidates]
+        return self._wgs_normalize_recurring_pricing_candidates(candidates)
 
     def _wgs_normalize_recurring_pricing_candidates(self, candidates):
         if not candidates:
@@ -1253,6 +1227,7 @@ class PosOrderPricingMixin(models.Model):
         return f'{interval_value} {interval_unit}'
 
     def _wgs_extract_plan_record_from_pricing(self, pricing):
+        pricing = pricing.sudo()
         if self._wgs_is_plan_model_name(pricing._name):
             return pricing
 

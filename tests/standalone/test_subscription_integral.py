@@ -19,6 +19,7 @@ class IntegralCommercialTests(unittest.TestCase):
         owner, _source = calculator()
         owner.env = MagicMock()
         owner.env['sale.subscription.plan'].browse().exists.return_value = plan()
+        owner._wgs_find_plan_record_by_id = lambda value: plan()
         owner._wgs_build_period_contract = MethodType(method(OPS, '_wgs_build_period_contract'), owner)
         owner._wgs_quote_signature = Mock(return_value='local-test-signature')
         owner._wgs_source_revision = lambda *args, **kw: False

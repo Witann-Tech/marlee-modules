@@ -227,6 +227,8 @@ class WgsSubscriptionDomiciliationContract(models.Model):
         }
         if existing:
             existing.write({'state': 'completed' if existing.term_end_date < schedule['access_start_date'] else 'cancelled'})
+            # The partial unique index sees SQL state, not an ORM pending write.
+            existing.flush_recordset(['state'])
         contract = self.create(contract_values)
         subscription.write({'wgs_domiciliation_contract_id': contract.id})
         if pos_line:
