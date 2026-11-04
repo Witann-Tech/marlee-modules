@@ -26,6 +26,9 @@ class TestSubscriptionOperations(CommonPosTest):
         self.addCleanup(self.clock.stop)
         self.holder = self.env['res.partner'].create({'name': 'Commercial flow holder'})
         self.member = self.env['res.partner'].create({'name': 'Commercial flow participant'})
+        self.site = self.env['access_control.site'].sudo().create({
+            'name': 'Commercial QA site', 'code': str(uuid4()), 'company_id': self.env.company.id,
+        })
         self.month = self.env['sale.subscription.plan'].create({
             'name': 'Monthly contract test', 'billing_period_value': 1, 'billing_period_unit': 'month',
         })
@@ -43,6 +46,7 @@ class TestSubscriptionOperations(CommonPosTest):
             'name': name, 'type': 'service', 'recurring_invoice': True,
             'available_in_pos': True, 'list_price': amount, 'taxes_id': [Command.clear()],
             'max_participants_total': capacity,
+            'wgs_access_site_ids': [Command.set(self.site.ids)],
         })
         create_recurring_price(self.env, product, plan, amount)
         return product
@@ -757,7 +761,14 @@ class TestSubscriptionOperations(CommonPosTest):
                 'monthly_cutoff_day': 0,
             }
 
-        with patch.object(type(self.Pos), '_wgs_get_sale_period_schedule', legacy_schedule):
+        def legacy_contract(records, pricing, request, plan):
+            return {
+                'version': 1, 'mode': 'term', 'start': pricing['subscription_start_date'],
+                'interval': 1, 'unit': 'month', 'aligned': False, 'cutoff': 0, 'previous_end': False,
+            }
+
+        with patch.object(type(self.Pos), '_wgs_get_sale_period_schedule', legacy_schedule), \
+                patch.object(type(self.Pos), '_wgs_build_period_contract', legacy_contract):
             _order, subscription = self._paid(self.solo, self.month)
             queued, _subscription = self._paid(
                 self.pair, self.month, 'renewal', subscription, (self.holder | self.member).ids,
@@ -772,6 +783,134 @@ class TestSubscriptionOperations(CommonPosTest):
         self.assertEqual(quote['subscription_start_date'], '2026-11-15')
         self.assertEqual(quote['subscription_end_date'], '2026-12-15')
         self.assertEqual(quote['monthly_cutoff_day'], 15)
+
+    def test_invalid_monthly_duration_is_rejected_before_any_paid_order(self):
+        OrderType = type(self.Pos)
+        original = OrderType._wgs_build_product_pricing_payload_for_pos
+
+        def wrong_duration(records, *args, **kwargs):
+            result = original(records, *args, **kwargs)
+            return {**result, 'subscription_end_date': '2026-12-15', 'next_billing_date': '2026-12-16'}
+
+        before = self.Pos.search_count([('partner_id', '=', self.holder.id)])
+        with patch.object(OrderType, '_wgs_build_product_pricing_payload_for_pos', wrong_duration):
+            with self.assertRaises(UserError):
+                self._paid(self.solo, self.month)
+        self.assertEqual(self.Pos.search_count([('partner_id', '=', self.holder.id)]), before)
+
+    def test_cancelled_native_result_rolls_back_the_whole_payment(self):
+        OrderType = type(self.Pos)
+        original = OrderType._wgs_create_subscription_sale_order_from_line
+
+        def closed_result(records, line):
+            result = original(records, line)
+            result.write({'subscription_state': '6_churn'})
+            return result
+
+        before = self.Pos.search_count([('partner_id', '=', self.holder.id)])
+        with self.assertRaises(UserError), self.env.cr.savepoint():
+            with patch.object(OrderType, '_wgs_create_subscription_sale_order_from_line', closed_result):
+                self._paid(self.solo, self.month)
+        self.assertEqual(self.Pos.search_count([('partner_id', '=', self.holder.id)]), before)
+
+    def _check_current_participant_edit_before_paid_activation(self, legacy=False):
+        _order, subscription = self._paid(self.pair, self.month, participants=(self.holder | self.member).ids)
+        renewal, _subscription = self._paid(self.solo, self.month, 'renewal', subscription)
+        line = renewal.lines
+        if legacy:
+            line.wgs_activation_contract = False
+        paid_hash, period = line.wgs_application_hash, subscription.end_date
+        replacement = self.env['res.partner'].create({'name': 'Edited current member'})
+        self.env['sale.order'].wgs_update_subscription_participants_for_pos(
+            subscription.id, (self.holder | replacement).ids,
+        )
+        self.assertTrue(line.wgs_activation_contract)
+        self.assertEqual(subscription.end_date, period)
+        self.assertEqual(line.wgs_application_hash, paid_hash)
+        self.assertEqual(line.wgs_get_participant_ids(), self.holder.ids)
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 10, 16, 12)):
+            self.Pos._wgs_apply_due_package_changes()
+        self.assertEqual(line.wgs_application_state, 'applied')
+        self.assertFalse(line.wgs_activation_error)
+        self.assertEqual(subscription.participant_ids, self.holder)
+        self.assertEqual(subscription.end_date, fields.Date.to_date('2026-11-15'))
+        self.assertEqual(line.wgs_application_hash, paid_hash)
+
+    def test_current_participants_can_change_without_blocking_paid_future_package(self):
+        self._check_current_participant_edit_before_paid_activation()
+
+    def test_legacy_queue_freezes_only_its_matching_revision_before_participant_edit(self):
+        self._check_current_participant_edit_before_paid_activation(legacy=True)
+
+    def test_silent_access_failure_keeps_recovery_pending_without_replaying_payment(self):
+        with patch.object(type(self.env['sale.order']), '_wgs_get_access_site_ids', return_value=[]):
+            order, subscription = self._paid(self.solo, self.month)
+        self.assertEqual(order.lines.wgs_application_state, 'applied')
+        self.assertTrue(order.wgs_access_sync_pending)
+        payments = order.payment_ids.read(['amount', 'payment_method_id'])
+        end = subscription.end_date
+        order._wgs_finalize_paid_access(subscription, self.holder.ids)
+        self.assertFalse(order.wgs_access_sync_pending)
+        self.assertEqual(order.payment_ids.read(['amount', 'payment_method_id']), payments)
+        self.assertEqual(subscription.end_date, end)
+        self.assertEqual(subscription._wgs_get_access_profile_for_partner(self.holder)['access_state'], 'enabled')
+
+    def test_paid_renewal_leaves_native_renew_state_and_enables_access(self):
+        _order, subscription = self._paid(self.solo, self.month)
+        renewal_state = next((value for value, _label in
+                              subscription._fields['subscription_state']._description_selection(self.env)
+                              if subscription._wgs_get_subscription_state_category_from_value(value) == 'renew'), False)
+        if not renewal_state:
+            self.skipTest('This native schema has no renewable subscription state.')
+        subscription.write({'subscription_state': renewal_state})
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 10, 16, 12)):
+            order, subscription = self._paid(self.solo, self.month, 'renewal', subscription)
+        self.assertEqual(subscription._wgs_get_subscription_state_category(), 'progress')
+        self.assertEqual(subscription.end_date, fields.Date.to_date('2026-11-15'))
+        self.assertFalse(order.wgs_access_sync_pending)
+
+    def test_reenrollment_from_old_holder_contract_rejects_another_active_membership(self):
+        _order, subscription = self._paid(self.solo, self.month)
+        old = subscription.copy({'state': 'sale', 'subscription_state': '6_churn',
+                                 'end_date': '2026-05-31', 'next_invoice_date': '2026-06-01'})
+        with self.assertRaises(UserError):
+            self._quote(self.solo, self.month, 'reenroll', old)
+        self.assertEqual(subscription.subscription_state, '3_progress')
+
+    def test_ticket_preflight_rejects_two_new_contracts_without_buffer_or_payment(self):
+        configs, lines = [], []
+        for product in (self.solo, self.pair):
+            quote = self._quote(product, self.month)
+            uid = str(uuid4())
+            configs.append({'line_uuid': uid, 'product_id': product.id, 'quantity': 1,
+                            'flow': 'new', 'participant_ids': self.holder.ids,
+                            'pricing_snapshot': quote})
+            lines.append({'uuid': uid, 'product_id': product.id, 'qty': 1,
+                          'price_unit': quote['ticket_charge_now'], 'discount': 0})
+        uid = str(uuid4())
+        with self.assertRaises(UserError):
+            self.Pos.wgs_stage_subscription_config_for_uuid(uid, configs, {
+                'partner_id': self.holder.id, 'company_id': self.env.company.id, 'lines': lines,
+            })
+        self.assertFalse(self.env['wgs.pos.subscription.buffer'].search([('order_uuid', '=', uid)]))
+
+    def test_directory_counts_omit_unrelated_contacts_from_business_classification(self):
+        _order, _subscription = self._paid(self.solo, self.month)
+        Order = self.env['sale.order']
+        before = Order.get_partner_directory_summary_for_pos({'company_id': self.env.company.id})
+        unrelated = self.env['res.partner'].create([{'name': 'No subscription QA %s' % i} for i in range(25)])
+        called = set()
+        original = type(Order)._get_partner_subscription_directory_status_map_for_pos
+
+        def record_batch(records, partners, *args, **kwargs):
+            called.update(partners.ids)
+            return original(records, partners, *args, **kwargs)
+
+        with patch.object(type(Order), '_get_partner_subscription_directory_status_map_for_pos', record_batch):
+            after = Order.get_partner_directory_summary_for_pos({'company_id': self.env.company.id})
+        self.assertFalse(called.intersection(unrelated.ids))
+        self.assertEqual(after['total'] - before['total'], len(unrelated))
+        self.assertEqual(after['none'] - before['none'], len(unrelated))
 
     def test_semester_to_month_uses_catalog_plan_and_defers_application(self):
         semester = self.env['sale.subscription.plan'].create({

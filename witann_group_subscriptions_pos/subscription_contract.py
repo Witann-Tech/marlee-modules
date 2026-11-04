@@ -64,3 +64,36 @@ def validate_period(start, end, next_date):
     if next_date and date.fromisoformat(next_date) != end + timedelta(days=1):
         raise ValueError('The next billing date must follow the inclusive end.')
     return start, end
+
+
+def validate_commercial_period(pricing):
+    """Check purchased calendar inputs, not just agreement between two outputs.
+
+    The signed inputs survive catalog edits and deferred activation. Old paid
+    quotes without this contract keep their historical calendar; newly sealed
+    quotes always carry it.
+    """
+    terms = pricing.get('period_contract')
+    if not terms:
+        return
+    if terms.get('version') != 1:
+        raise ValueError('Unsupported commercial calendar contract.')
+    if terms['mode'] == 'source_period':
+        expected = (terms['start'], terms['end'], terms['next'])
+    elif terms['mode'] == 'term':
+        start, end, boundary = period(
+            terms['start'], terms['interval'], terms['unit'],
+            aligned=terms['aligned'], monthly_cutoff_day=terms['cutoff'],
+            previous_end=terms['previous_end'] or None,
+        )
+        expected = (start.isoformat(), end.isoformat(),
+                    False if terms['unit'] == 'day' and terms['interval'] == 1 else boundary.isoformat())
+    else:
+        raise ValueError('Unsupported commercial calendar mode.')
+    actual = tuple(pricing.get(key) or False for key in (
+        'subscription_start_date', 'subscription_end_date', 'next_billing_date',
+    ))
+    if actual != expected:
+        raise ValueError('The quoted period does not match the purchased term.')
+    if terms['mode'] == 'term' and int(pricing.get('monthly_cutoff_day') or 0) != terms['cutoff']:
+        raise ValueError('The quoted cutoff does not match the purchased calendar.')

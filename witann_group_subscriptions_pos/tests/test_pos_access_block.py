@@ -17,7 +17,7 @@ class TestPosAccessBlock(TransactionCase):
         self.product = self.env['product.product'].create(
             {
                 'name': 'Plan POS acceso',
-                'detailed_type': 'service',
+                'type': 'service',
                 'list_price': 100,
                 'recurring_invoice': True,
                 'max_participants_total': 2,
@@ -38,7 +38,7 @@ class TestPosAccessBlock(TransactionCase):
             self.other_product.write({'company_id': self.other_company.id})
         self.env.user.write(
             {
-                'groups_id': [
+                'group_ids': [
                     Command.link(self.env.ref('point_of_sale.group_pos_user').id),
                 ]
             }
@@ -72,7 +72,7 @@ class TestPosAccessBlock(TransactionCase):
                             'product_id': self.product.id,
                             'name': self.product.name,
                             'product_uom_qty': 1,
-                            'product_uom': self.product.uom_id.id,
+                            'product_uom_id': self.product.uom_id.id,
                             'price_unit': self.product.list_price,
                         }
                     )
@@ -93,7 +93,7 @@ class TestPosAccessBlock(TransactionCase):
                             'product_id': self.other_product.id,
                             'name': self.other_product.name,
                             'product_uom_qty': 1,
-                            'product_uom': self.other_product.uom_id.id,
+                            'product_uom_id': self.other_product.uom_id.id,
                             'price_unit': self.other_product.list_price,
                         }
                     )
@@ -115,7 +115,7 @@ class TestPosAccessBlock(TransactionCase):
                             'product_id': product.id,
                             'name': product.name,
                             'product_uom_qty': 1,
-                            'product_uom': product.uom_id.id,
+                            'product_uom_id': product.uom_id.id,
                             'price_unit': product.list_price,
                         }
                     )

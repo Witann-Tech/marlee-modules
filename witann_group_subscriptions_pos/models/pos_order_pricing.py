@@ -442,6 +442,7 @@ class PosOrderPricingMixin(models.Model):
             **schedule,
             'renewal_anchor': renewal_anchor,
             'period_aligned': False,
+            'previous_end': period_end - timedelta(days=1) if monthly_cutoff_day and renewal_anchor == period_end else False,
         }
 
     def _wgs_extract_interval_from_plan(self, plan):

@@ -28,7 +28,7 @@ def recovery_fixture():
     owner._wgs_source_revision.side_effect = lambda record: contract.fingerprint(values)
     owner._wgs_is_automatic_inclusive_close.return_value = True
     owner._wgs_reactivate_subscription_order_for_pos.side_effect = lambda record: values.update(subscription_state='active')
-    return owner, source, SimpleNamespace(wgs_activation_revision=expected), values
+    return owner, source, SimpleNamespace(wgs_activation_revision=expected, wgs_activation_contract=False), values
 
 
 class Reasons(list):

@@ -40,6 +40,11 @@ class TestFaceSyncDelta(TransactionCase):
 
     def setUp(self):
         super().setUp()
+        # Direct controller helper calls still need the request environment
+        # normally supplied by Odoo's HTTP dispatcher.
+        request_patch = patch('odoo.addons.access_control_api.controllers.main.request', SimpleNamespace(env=self.env))
+        request_patch.start()
+        self.addCleanup(request_patch.stop)
         self.Change.search([]).unlink()
 
     def _make_image_b64(self, size=(900, 900), color=(180, 40, 40)):
@@ -577,7 +582,7 @@ class TestFaceSyncDelta(TransactionCase):
         self.assertEqual(len(timezone_changes), 2)
         self.assertIn(timezone.id, timezone_changes.mapped("access_timezone_id").ids)
         self.assertIn(self.env.ref("access_control_api.access_timezone_general").id, timezone_changes.mapped("access_timezone_id").ids)
-        self.assertTrue(timezone_changes.priority)
+        self.assertTrue(all(timezone_changes.mapped('priority')))
         self.assertEqual(user_changes.mapped("global_user_id"), [person_1.global_user_id, person_2.global_user_id])
         self.assertTrue(all(user_changes.mapped("priority")))
 

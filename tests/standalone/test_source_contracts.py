@@ -8,12 +8,20 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
+ADDONS = ('access_control_api', 'witann_group_subscriptions', 'witann_group_subscriptions_pos')
 
 
 class SourceContracts(unittest.TestCase):
+    def test_all_wgs_orm_test_files_are_registered(self):
+        for addon in ADDONS:
+            folder = ROOT / addon / 'tests'
+            imports = ast.parse((folder / '__init__.py').read_text())
+            loaded = {alias.name for node in imports.body if isinstance(node, ast.ImportFrom) for alias in node.names}
+            self.assertEqual({path.stem for path in folder.glob('test_*.py')}, loaded, addon)
+
     def test_addons_compile_and_have_no_unresolved_global_names(self):
-        for manifest in ROOT.glob('*/__manifest__.py'):
-            for path in manifest.parent.rglob('*.py'):
+        for addon in ADDONS:
+            for path in (ROOT / addon).rglob('*.py'):
                 with self.subTest(path=str(path.relative_to(ROOT))):
                     source = path.read_text()
                     ast.parse(source, filename=str(path))

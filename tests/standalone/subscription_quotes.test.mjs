@@ -40,6 +40,15 @@ test('initial proportional end is separate from the domiciliation forced-term en
     assert.equal(persisted.first_period_end_date, '2026-10-31');
     assert.equal(persisted.subscription_end_date, '2027-09-30');
 });
+
+test('purchased calendar inputs survive restoration from the signed quote', () => {
+    const terms = {version:1, mode:'term', start:'2027-03-01', interval:1, unit:'month',
+        cutoff:31, previous_end:'2027-02-28', aligned:false};
+    const signed = {payload:{pricing:{period_contract:terms}}, signature:'server-signature'};
+    const snapshot = JSON.parse(JSON.stringify(context.buildPricingSnapshotFromCharge({commercial_quote:signed})));
+    assert.deepEqual(snapshot.period_contract, terms);
+    assert.deepEqual(snapshot.commercial_quote, signed);
+});
 function stateFor(mode) {
     const state = {formMode:mode, selectedPartnerId:7, currentDetail:{}, productCatalog:[
         {id:1, name:'Daily'}, {id:2, name:'Monthly'},

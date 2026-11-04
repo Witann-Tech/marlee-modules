@@ -35,7 +35,7 @@ class TestPosPartnerCurp(TransactionCase):
         self.product = self.env['product.product'].create(
             {
                 'name': 'Plan CURP POS',
-                'detailed_type': 'service',
+                'type': 'service',
                 'list_price': 100.0,
                 'sale_ok': True,
                 'available_in_pos': True,
@@ -46,7 +46,7 @@ class TestPosPartnerCurp(TransactionCase):
         self.student_product = self.env['product.product'].create(
             {
                 'name': 'Plan Estudiante POS',
-                'detailed_type': 'service',
+                'type': 'service',
                 'list_price': 120.0,
                 'sale_ok': True,
                 'available_in_pos': True,
@@ -57,7 +57,7 @@ class TestPosPartnerCurp(TransactionCase):
         self.day_pass_product = self.env['product.product'].create(
             {
                 'name': 'Pase 1 día POS',
-                'detailed_type': 'service',
+                'type': 'service',
                 'list_price': 80.0,
                 'sale_ok': True,
                 'available_in_pos': True,
@@ -68,7 +68,7 @@ class TestPosPartnerCurp(TransactionCase):
         self.family_product = self.env['product.product'].create(
             {
                 'name': 'Plan Familiar POS',
-                'detailed_type': 'service',
+                'type': 'service',
                 'list_price': 319.0,
                 'sale_ok': True,
                 'available_in_pos': True,
@@ -79,7 +79,7 @@ class TestPosPartnerCurp(TransactionCase):
         self.trial_product = self.env['product.product'].create(
             {
                 'name': 'Trial gratis POS',
-                'detailed_type': 'service',
+                'type': 'service',
                 'list_price': 0.0,
                 'sale_ok': True,
                 'available_in_pos': True,

@@ -37,6 +37,8 @@ def fixture():
     holder, company = object(), object()
     currency = SimpleNamespace(compare_amounts=lambda a, b: round(a - b, 2))
     subscription = SimpleNamespace(
+        state='sale', is_subscription=True, subscription_state='3_progress',
+        _wgs_get_subscription_state_category=lambda: 'progress', wgs_domiciliation_contract_id=False,
         ensure_one=lambda: None, flush_recordset=lambda: None, invalidate_recordset=lambda names: None,
         company_id=company, partner_id=holder, currency_id=currency, plan_id=SimpleNamespace(id=3),
         order_line=Lines([SimpleNamespace(product_id=product, product_uom_qty=1, price_unit=619, discount=0)]),
@@ -53,6 +55,12 @@ def fixture():
         'subscription_end_date': date(2026, 11, 14), 'next_billing_date': date(2026, 11, 15),
         'monthly_cutoff_day': 14, 'snapshot': {'ticket_charge_now': 619, 'commercial_quote': {'signature': 'signed'}},
     }
+    pricing['snapshot'].update({
+        'period_contract': {'version': 1, 'mode': 'term', 'start': '2026-10-14',
+                            'interval': 1, 'unit': 'month', 'aligned': False, 'cutoff': 14, 'previous_end': False},
+        'subscription_start_date': '2026-10-14', 'subscription_end_date': '2026-11-14',
+        'next_billing_date': '2026-11-15', 'monthly_cutoff_day': 14,
+    })
     owner = SimpleNamespace(
         company_id=company, partner_id=holder, currency_id=currency,
         _wgs_resolve_subscription_participant_ids_for_pos_line=lambda **kw: [8],
@@ -107,6 +115,7 @@ class ApplicationTests(unittest.TestCase):
 
     def test_domiciliation_checks_selected_paid_installments_not_ordinary_period(self):
         owner, line, subscription, pricing = fixture()
+        pricing['snapshot'].pop('period_contract', None)
         contract = SimpleNamespace(
             state='active', subscription_id=subscription, company_id=owner.company_id,
             partner_id=owner.partner_id, product_id=line.product_id, plan_id=subscription.plan_id,

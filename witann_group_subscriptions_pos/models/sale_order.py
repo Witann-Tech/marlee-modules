@@ -10,8 +10,18 @@ from dateutil.relativedelta import relativedelta
 
 from odoo import _, api, fields, models
 from odoo.exceptions import AccessError, UserError, ValidationError
+from odoo.fields import Domain
 
 _logger = logging.getLogger(__name__)
+
+
+class SubscriptionDirectoryPartner(models.Model):
+    _inherit = 'res.partner'
+
+    wgs_owned_subscription_ids = fields.One2many('sale.order', 'partner_id', copy=False)
+    wgs_participating_subscription_ids = fields.Many2many(
+        'sale.order', 'sale_order_subscription_participant_rel', 'partner_id', 'order_id', copy=False,
+    )
 
 
 class SaleOrder(models.Model):
@@ -1593,7 +1603,11 @@ class SaleOrder(models.Model):
             'stale_access': 0,
         }
 
-        for state in self._get_partner_directory_summary_state_counts_for_pos(company=company).values():
+        states = self._get_partner_directory_summary_state_counts_for_pos(company=company)
+        counts['none'] = total - sum(state != 'none' for state in states.values())
+        for state in states.values():
+            if state == 'none':
+                continue
             if state == 'closed':
                 counts['closed'] += 1
                 counts['cancel'] += 1
@@ -2028,39 +2042,38 @@ class SaleOrder(models.Model):
 
     @api.model
     def _get_partner_ids_with_visible_pos_subscription_state_for_pos(self, company=False):
-        Partner = self._wgs_partner_model_for_pos()
-        partner_domain = self._wgs_get_partner_company_domain_for_pos(company or self.env.company)
-        partner_ids = []
-        batch_size = 500
-        offset = 0
-        while True:
-            partners = Partner.search(partner_domain, order='id asc', offset=offset, limit=batch_size)
-            if not partners:
-                break
-            status_map = self._get_partner_subscription_directory_status_map_for_pos(
-                partners,
-                include_profile_fields=False,
-                company=company,
-            )
-            partner_ids.extend(
-                partner_id
-                for partner_id, status in status_map.items()
-                if (status.get('state') or 'none') != 'none'
-            )
-            if len(partners) < batch_size:
-                break
-            offset += len(partners)
-        return sorted(set(partner_ids))
+        states = self._get_partner_directory_summary_state_counts_for_pos(company=company)
+        return sorted(partner_id for partner_id, state in states.items() if state != 'none')
+
+    @api.model
+    def _wgs_directory_state_candidate_domain(self, company):
+        """Partners with local history or physical access; all others are none.
+
+        EXISTS domains shortlist records without loading every contact or
+        duplicating the business classifier in SQL. Multisite/manual/stale
+        access remains classified through the same active-person predicate.
+        """
+        history = Domain(self._get_subscription_action_domain_for_pos(company=company))
+        sites = self._wgs_get_pos_access_sites_for_pos(company)
+        return (
+            Domain('wgs_owned_subscription_ids', 'any', history)
+            | Domain('wgs_participating_subscription_ids', 'any', history)
+            | Domain('access_person_ids', 'any', Domain([
+                ('active', '=', True), ('access_state', '=', 'enabled'),
+                ('global_user_id', '!=', False), ('site_ids', 'in', sites.ids),
+            ]))
+        )
 
     @api.model
     def _get_partner_directory_summary_state_counts_for_pos(self, company=False):
         Partner = self._wgs_partner_model_for_pos()
-        partner_domain = self._wgs_get_partner_company_domain_for_pos(company or self.env.company)
+        company = company or self.env.company
+        partner_domain = Domain(self._wgs_get_partner_company_domain_for_pos(company)) & self._wgs_directory_state_candidate_domain(company)
         states_by_partner = {}
         batch_size = 500
-        offset = 0
+        after_id = 0
         while True:
-            partners = Partner.search(partner_domain, order='id asc', offset=offset, limit=batch_size)
+            partners = Partner.search(partner_domain & Domain('id', '>', after_id), order='id asc', limit=batch_size)
             if not partners:
                 break
             status_map = self._get_partner_subscription_directory_status_map_for_pos(
@@ -2072,7 +2085,7 @@ class SaleOrder(models.Model):
                 states_by_partner[partner_id] = status.get('state') or 'none'
             if len(partners) < batch_size:
                 break
-            offset += len(partners)
+            after_id = partners[-1].id
         return states_by_partner
 
     @api.model

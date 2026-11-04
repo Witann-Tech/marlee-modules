@@ -2,6 +2,138 @@
 
 Registro inicial: 2026-09-28. Rama de trabajo: `staging`.
 
+## Validacion integral de los tres addons, 2026-11-03
+
+Alcance autorizado: access_control_api, witann_group_subscriptions y
+witann_group_subscriptions_pos, exclusivamente en staging. Main y produccion
+no se modifican; outputs/, Payroll e importador bancario quedan fuera.
+
+- Despliegue de los invariantes descritos abajo: API 19.0.2.0.86, base
+  19.0.1.1.60 y POS 19.0.1.6.10. La matriz comercial sigue abierta hasta
+  completar pruebas ORM y navegador; no es una aprobacion para produccion.
+- Repeticion local: 132 tests Python de suscripciones/calendario/contratos de
+  fuente, 2 de payload de administrador y 27 JavaScript aprobados. Dos pruebas
+  PostgreSQL de concurrencia y 44 ORM de Access API tambien aprobadas.
+- El primer intento comercial se detuvo antes de ejecutar tests: Community
+  de la imagen oficial (agosto) es anterior a Enterprise instalado en staging.
+  No se cuenta como aprobado. El runner admite WGS_COMMUNITY_SOURCE y
+  WGS_ENTERPRISE_ADDONS fijados para repetir con versiones compatibles.
+- Enterprise obtenido mediante acceso licenciado, revision de staging
+  ef5d91503c8951a2fdd905f257d1e2c0af689366. Community de la misma fecha:
+  29cf86bd012cd3bf2a145a4ae3c6266f2b6f9034. No se actualiza el core del servidor.
+- Se corrigieron nombres obsoletos solo en fixtures POS para Odoo 19: type,
+  product_uom_id y group_ids. El gate de sintaxis y registro se limita a los
+  tres addons; la suite conjunta incluye sus 235 tests registrados.
+- Linea base del resumen por API: Santa Monica 17.240 s, El Dorado 14.633 s.
+  Se compararan conteos y tiempos despues del upgrade, antes de crear datos QA.
+- Staging neutralizado; dispositivos con ultima sincronizacion 7/oct/2026.
+  El gateway productivo permanece aislado. No se prueba apertura fisica ni
+  entrega real de comandos; no se activan crons globales en la copia de datos.
+
+Pendientes de esta ejecucion: build/upgrade, gate Enterprise, matriz de POS
+en ambas sucursales y reporte ejecutivo con evidencias y limites.
+
+## Cierre integral de invariantes, 2026-10-30
+
+**Implementado solo en la rama staging. Sin despliegue, pagos ni reparaciones
+en produccion; main permanece en ca0910c. Pendiente QA comercial Enterprise.**
+
+### Alcance y decisiones
+
+- WGS POS `19.0.1.6.10`: cada cotizacion nueva no domiciliada incorpora los
+  insumos de calendario firmados (plazo, unidad, corte, alineacion, ancla y
+  continuidad). Se verifica que las fechas correspondan a esos insumos antes
+  de firmar, al verificar la firma y en la postcondicion. Un mes con tres meses
+  de vigencia ya no pasa por coincidir consigo mismo. El upsale conserva
+  explicitamente el periodo origen; no se convierte en una nueva vigencia.
+- No se cambia RULES_VERSION ni se reescriben compras historicas. Los periodos
+  programados ya pagados conservan sus fechas anteriores. Una cotizacion vieja
+  aun no cobrada debe actualizarse; los reintentos de pagos ya aplicados siguen
+  siendo idempotentes. Domiciliados conserva su cartera como autoridad.
+- La aplicacion verifica que el contrato quede confirmado, reconocido como
+  suscripcion y en progreso. Solo la cobranza de una cartera activa conserva
+  la excepcion del estado nativo historico. Una renovacion aplicada sale del
+  estado nativo de renovacion; un cambio futuro no adelanta sus beneficios.
+- Los cambios pagados guardan su contrato de activacion. Editar los participantes
+  actuales no cambia los participantes comprados para la vigencia futura, ni
+  permite cambiar precio, titular, empresa, plan, plazo o cuotas. Se comparan
+  huellas canonicas para soportar el roundtrip JSON de tuplas y numeros.
+- Una cola anterior sin ese contrato se enriquece antes de una edicion de
+  participantes, bajo los mismos locks y solo si su revision aun coincide.
+  Una cola historica ya divergente no se normaliza a ciegas. Los fallos mantienen
+  recuperacion automatica con backoff de 15 minutos a 6 horas, no un estado
+  terminal nuevo de revision.
+- La reinscripcion del titular tambien comprueba otras membresias activas o
+  futuras. Dos altas nuevas incompatibles se rechazan tanto en preflight como
+  antes de procesar el pago nativo, no despues de aplicar la primera linea.
+- WGS base `19.0.1.1.60`: la proyeccion de acceso devuelve un resultado
+  comprobado por persona (estado, ID, sitios y horario). Falta de sitios o
+  proyeccion incompleta conserva el pendiente; no se habilita sin derecho ni
+  se vuelve a aplicar/cobrar la venta. Bloqueos y altas futuras siguen sin acceso.
+- Access Control API `19.0.2.0.86`: la reserva de identidades versiona una fila
+  tecnica dentro de la transaccion Odoo. Un snapshot concurrente antiguo provoca
+  SerializationFailure y deja que Odoo reintente; no basta un advisory lock.
+  La consulta SQL de IDs hace flush previo de global_user_id.
+- Los tests ORM detectaron que Odoo Integer persiste False como 0, incompatible
+  con las restricciones anteriores al liberar un ID. El upgrade retira UNIQUE
+  global y crea un indice unico solo para IDs positivos; permite 0/NULL no
+  asignados y exige ID positivo para personas activas. No renumera personas,
+  borra historial ni cambia el protocolo/comandos SpeedFace.
+- El resumen y el filtro sin suscripcion ahora clasifican solo contactos con
+  historial local o acceso fisico relevante mediante dominios EXISTS y lotes
+  por ID. Los restantes se cuentan como none sin recorrer todas sus fichas.
+- Se registra el test de bloqueo de factura que faltaba en tests/__init__.py.
+  Un gate comprueba que todos los tests ORM de los tres addons esten importados.
+- Sin cambios de Payroll, importador bancario, logs horarios de acceso, crons
+  nativos, dispositivos productivos ni outputs/. Los ajustes a los tests de
+  controlador simulan request.env y comprueban prioridades por recordset;
+  no cambian codigo productivo del parser de eventos.
+
+### Verificacion ejecutada y limites
+
+- 117 pruebas Python de suscripciones y 15 de calendario/contratos de fuente:
+  aprobadas. El grupo PostgreSQL se omite en ese comando sin DSN deliberado,
+  y se ejecuta por separado contra una base local desechable.
+- 27 pruebas JavaScript: aprobadas, incluido el transporte del calendario
+  firmado sin perder sus insumos al restaurar el ticket.
+- 2 pruebas reales PostgreSQL 16 con dos conexiones Repeatable Read: aprobadas
+  (snapshot concurrente rechazado, nueva transaccion usa otro ID, rollback
+  libera identidad y lock). Ejecutan los cuerpos reales del asignador/SQL,
+  no el bucle completo de reintentos del servicio Odoo.
+- 44 tests ORM de Access Control API en Odoo 19 Community: aprobados. Tambien
+  se probo instalar la version anterior, actualizar a esta y conservar una
+  identidad preexistente 9900. La prueba no conecta con staging ni produccion.
+- 67 tests ORM comerciales de WGS preparados, incluidos los nuevos casos de
+  calendario incorrecto, estado cerrado, participantes actuales vs futuros,
+  cola anterior, acceso silencioso, otra membresia, doble alta y directorio.
+  **No ejecutados**: el runtime local no contiene sale_subscription Enterprise.
+  El gate no los presenta como aprobados por pasar las pruebas aisladas.
+- Logs locales: /tmp/wgs-integral-{python,calendar,js,isolated-run,upgrade-run}.log.
+  Evidencia ORM/upgrade: /var/folders/g4/fxd70d8n40d5mp33wn_z0gr80000gn/T/wgs-isolated.BCTmDB/.
+
+### Repeticion y siguiente paso en staging
+
+1. Local: python -m unittest discover -s tests/standalone -p 'test_subscription*.py';
+   PYTHONPATH=tests/standalone python -m unittest test_monthly_cutoff test_source_contracts;
+   node --test tests/standalone/subscription*.test.mjs.
+2. Aislado: WGS_RUN_ISOLATED=1 bash tests/run_wgs_isolated.sh. Crea un PostgreSQL
+   desechable en red Docker interna sin publicar puertos; monta solo addons/tests
+   necesarios como lectura y elimina contenedores/red al terminar. Nunca recibe
+   un DSN remoto. WGS_BASELINE_ACCESS_ADDON permite repetir el upgrade anterior.
+3. Gate Enterprise: agregar WGS_ENTERPRISE_ADDONS con una copia licenciada de
+   addons Odoo 19 y WGS_REQUIRE_COMMERCIAL_ORM=1 al comando anterior. Sin esa copia
+   el gate informa NOT RUN y, si se exige, termina con error; no simula el addon.
+4. Antes del QA por navegador, build y upgrade en staging, en este orden:
+   access_control_api 19.0.2.0.86, witann_group_subscriptions 19.0.1.1.60,
+   witann_group_subscriptions_pos 19.0.1.6.10. No basta actualizar solo POS.
+5. Probar alta mensual, dia -> mensual, semestre -> mensual, cambio futuro
+   despues de editar participantes, cola de dos cambios, domiciliado con plan
+   nativo distinto, descuento 100%, bloqueo/futuro sin acceso, reembolso total,
+   restauracion/reintento del ticket y conteos manual/multisede/sin suscripcion.
+   No repetir cobros viejos para actualizar una cotizacion; no borrar pendientes.
+6. No liberar a main ni produccion hasta completar el QA comercial y obtener
+   autorizacion del usuario. El runner de Community no sustituye esas pruebas.
+
 ## Cobranza domiciliada con plan nativo historico, 2026-10-30
 
 **Correccion WGS POS `19.0.1.6.9` validada en staging y liberada a produccion

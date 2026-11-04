@@ -83,6 +83,7 @@ class AccessPerson(models.Model):
 
     @api.model
     def _used_global_user_ids(self):
+        self.flush_model(['global_user_id'])
         self.env.cr.execute(
             """
             SELECT global_user_id
@@ -91,6 +92,24 @@ class AccessPerson(models.Model):
             """
         )
         return {row[0] for row in self.env.cr.fetchall() if row and row[0]}
+
+    @api.model
+    def _lock_global_user_id_allocator(self):
+        """Version a shared row so competing Repeatable Read snapshots retry.
+
+        An advisory lock alone would serialize writers but retain their stale
+        ID snapshots. This no-op UPDATE makes PostgreSQL raise SerializationFailure
+        for an overlapping allocator; Odoo retries its complete transaction.
+        The cursor and lock lifetime remain owned by that transaction.
+        """
+        guard = self.env.ref('access_control_api.global_user_id_allocator', raise_if_not_found=False)
+        if not guard:
+            raise ValidationError('Actualiza Access Control API antes de asignar identidades de acceso.')
+        self.env.cr.execute(
+            'UPDATE ir_config_parameter SET value = value WHERE id = %s RETURNING id', [guard.id],
+        )
+        if not self.env.cr.fetchone():
+            raise ValidationError('Actualiza Access Control API antes de asignar identidades de acceso.')
 
     @api.model
     def _next_available_global_user_id(self, used):
@@ -146,19 +165,22 @@ class AccessPerson(models.Model):
                 rec.face_image = img
                 rec.face_pic_b64 = img
 
-    _global_user_id_uniq = models.Constraint(
-        "unique(global_user_id)",
-        "El ID global debe ser único.",
-    )
+    _global_user_id_positive_uniq = models.UniqueIndex('(global_user_id) WHERE global_user_id > 0')
     _global_user_id_range = models.Constraint(
-        "CHECK(global_user_id IS NULL OR (global_user_id >= 1 AND global_user_id <= 10000))",
+        "CHECK(global_user_id IS NULL OR (global_user_id >= 0 AND global_user_id <= 10000))",
         "El ID global debe estar entre 1 y 10000.",
     )
+
+    def init(self):
+        # Odoo Integer fields persist False as zero, not NULL. The positive-ID
+        # partial index preserves uniqueness while archived/unassigned rows can
+        # share the zero sentinel. No physical identity is rewritten here.
+        self.env.cr.execute('ALTER TABLE access_control_person DROP CONSTRAINT IF EXISTS access_control_person_global_user_id_uniq')
 
     @api.constrains("active", "global_user_id", "site_ids")
     def _check_active_requirements(self):
         for rec in self:
-            if rec.active and rec.global_user_id is None:
+            if rec.active and not rec.global_user_id:
                 raise ValidationError("Las personas activas deben tener un ID global (1..10000).")
             if rec.active and not rec.site_ids:
                 raise ValidationError("Las personas activas deben estar asignadas a al menos un sitio.")
@@ -259,6 +281,7 @@ class AccessPerson(models.Model):
 
     @api.model_create_multi
     def create(self, vals_list):
+        self._lock_global_user_id_allocator()
         used_ids = self._used_global_user_ids()
         normalized_vals_list = []
         for vals in vals_list:
@@ -306,6 +329,8 @@ class AccessPerson(models.Model):
         # Al dar de baja, se libera el ID global para reutilización futura.
         if vals.get("active") is False and "global_user_id" not in vals and not admin_devices:
             vals["global_user_id"] = False
+        if 'global_user_id' in vals or vals.get('active') or 'partner_id' in vals:
+            self._lock_global_user_id_allocator()
         before = {}
         if not skip_sync_queue:
             before = {
@@ -420,6 +445,7 @@ class AccessPerson(models.Model):
 
     def action_assign_global_user_id(self):
         """Asigna el ID global disponible más bajo (1..10000)."""
+        self._lock_global_user_id_allocator()
         used = self._used_global_user_ids()
         for rec in self:
             if rec.global_user_id:

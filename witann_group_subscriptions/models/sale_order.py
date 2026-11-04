@@ -963,17 +963,30 @@ class SaleOrder(models.Model):
         partner_ids = set(extra_partner_ids or [])
         partner_ids.update(self._wgs_get_access_related_partner_ids())
         if not partner_ids:
-            return
+            return {'checked': 0, 'issues': []}
         partners = self.env['res.partner'].sudo().browse(sorted(partner_ids)).exists()
         profiles = self._wgs_get_access_profiles_for_partners(partners)
         people_by_partner = self._wgs_get_access_people_by_partner(partners)
         self._wgs_assign_missing_access_global_ids(profiles, people_by_partner)
         for partner in partners:
-            self._wgs_sync_access_control_partner(
+            people_by_partner[partner.id] = self._wgs_sync_access_control_partner(
                 partner,
                 profile=profiles[partner.id],
                 person=people_by_partner.get(partner.id),
             )
+        issues = []
+        for partner in partners:
+            profile = profiles[partner.id]
+            person = people_by_partner.get(partner.id)
+            if profile['access_state'] == 'enabled':
+                if (not profile['site_ids'] or not person or not person.active
+                        or person.access_state != 'enabled' or not person.global_user_id
+                        or set(person.site_ids.ids) != set(profile['site_ids'])
+                        or person.access_timezone_id.id != (profile.get('access_timezone_id') or False)):
+                    issues.append({'partner_id': partner.id, 'reason': 'enabled_projection_missing'})
+            elif person and (profile.get('blocked') or person.managed_by_subscription) and person.active:
+                issues.append({'partner_id': partner.id, 'reason': 'disabled_projection_still_active'})
+        return {'checked': len(partners), 'issues': issues}
 
     def _wgs_sync_access_control_people_if_not_deferred(self, extra_partner_ids=None):
         if self.env.context.get(self._WGS_DEFER_ACCESS_SYNC_CONTEXT_KEY):

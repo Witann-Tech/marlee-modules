@@ -55,6 +55,7 @@ def method(file, name):
           'ValidationError': UserError, '_': lambda value: value,
           'RULES_VERSION': contract.RULES_VERSION, 'hmac': hmac, 'hashlib': hashlib,
           'canonical_json': contract.canonical_json, 'fingerprint': contract.fingerprint,
+          'validate_period': contract.validate_period, 'validate_commercial_period': contract.validate_commercial_period,
           'json': json, 'timedelta': timedelta, 'period': contract.period, 'relativedelta': relativedelta}
     exec(compile(ast.Module(body=[node], type_ignores=[]), str(file), 'exec'), ns)
     return ns[name]

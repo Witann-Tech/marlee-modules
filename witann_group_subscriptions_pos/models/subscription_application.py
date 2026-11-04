@@ -7,7 +7,7 @@ and domiciliation owns installment balances. No balances are duplicated here.
 from odoo import _, fields, models
 from odoo.exceptions import UserError
 
-from ..subscription_contract import fingerprint
+from ..subscription_contract import fingerprint, validate_commercial_period
 
 
 class PosSubscriptionApplication(models.Model):
@@ -102,7 +102,27 @@ class PosSubscriptionApplication(models.Model):
                     or self._wgs_source_revision(preserved_source) != before):
                 raise UserError(_('La reinscripcion de un participante debe conservar intacto el contrato historico.'))
         snapshot = pricing['snapshot']
-        if line.wgs_application_state == 'scheduled' and not activation:
+        try:
+            validate_commercial_period(snapshot)
+        except (ValueError, TypeError, KeyError) as error:
+            raise UserError(_('La vigencia aplicada no corresponde al plazo comprado.')) from error
+        subscription.flush_recordset()
+        subscription.invalidate_recordset(['state', 'is_subscription', 'subscription_state'])
+        contract = subscription.wgs_domiciliation_contract_id
+        domiciliation = snapshot.get('domiciliation') or {}
+        collection = (
+            line.wgs_subscription_flow == 'renewal'
+            and domiciliation.get('is_domiciliation')
+            and domiciliation.get('selection_mode') == 'renewal'
+        )
+        scheduled = line.wgs_application_state == 'scheduled' and not activation
+        category = subscription._wgs_get_subscription_state_category()
+        wallet_collection = collection and contract and contract.state == 'active'
+        allowed_categories = ('progress', 'renew') if scheduled else ('progress',)
+        if (subscription.state not in ('sale', 'done') or not subscription.is_subscription
+                or (not wallet_collection and category not in allowed_categories)):
+            raise UserError(_('La venta no dejo una suscripcion confirmada y operable.'))
+        if scheduled:
             if (subscription != line.wgs_subscription_source_id
                     or line.wgs_application_date != pricing['subscription_start_date']
                     or self._wgs_source_revision(subscription) != before):
@@ -118,11 +138,6 @@ class PosSubscriptionApplication(models.Model):
         )
         if len(recurring) != 1 or recurring.product_id != line.product_id:
             raise UserError(_('El paquete o plan aplicado no coincide con la cotizacion pagada.'))
-        domiciliation = snapshot.get('domiciliation') or {}
-        collection = (
-            line.wgs_subscription_flow == 'renewal' and domiciliation.get('is_domiciliation')
-            and domiciliation.get('selection_mode') == 'renewal'
-        )
         if collection:
             self._wgs_assert_domiciliation_collection_application(
                 line, subscription, pricing, collection_before,

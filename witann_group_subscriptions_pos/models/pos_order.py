@@ -1964,6 +1964,7 @@ class PosOrder(models.Model):
     def _wgs_validate_native_order_configuration(self, order, existing_order, configs):
         """Reject mismatched commercial amounts before native payment processing."""
         by_uuid = {config.get('line_uuid'): config for config in configs}
+        pending_lines, pending_configs = [], []
         for command in order.get('lines') or []:
             if len(command) < 3 or not isinstance(command[2], dict):
                 continue
@@ -1987,6 +1988,17 @@ class PosOrder(models.Model):
                 raise UserError(_('El importe enviado a cobro difiere de la cotizacion de la membresia.'))
             if abs(float(values.get('discount') or 0) - float(config.get('discount_percent') or 0)) > 0.00001:
                 raise UserError(_('El descuento del ticket difiere del evento autorizado.'))
+            pending_lines.append(values)
+            partner_id = self._wgs_to_int(order.get('partner_id')) or (existing_order.partner_id.id if existing_order else False)
+            session = self.env['pos.session'].browse(self._wgs_to_int(order.get('session_id'))).exists()
+            if not session and existing_order:
+                session = existing_order.session_id
+            if not partner_id or not session:
+                raise UserError(_('La membresia requiere el titular y la sesion POS antes de cobrar.'))
+            pending_configs.append(self._wgs_normalize_commercial_config(
+                config, partner_id=partner_id, company_id=session.company_id.id,
+            ))
+        self._wgs_validate_ticket_memberships(pending_lines, pending_configs)
 
     @api.model
     def _wgs_get_ui_order_containers(self, ui_order):
@@ -2662,6 +2674,8 @@ class PosOrder(models.Model):
             recurring_plan_id=pricing_state['plan_id'],
             monthly_cutoff_day=pricing_state['monthly_cutoff_day'],
         )
+        if source_order._wgs_get_subscription_state_category() != 'progress':
+            self._wgs_reactivate_subscription_order_for_pos(source_order)
         if initial_contract:
             self._wgs_apply_domiciliation_contract_from_pos_line(source_order, line, pricing_state)
         if apply_participants:
@@ -2708,8 +2722,6 @@ class PosOrder(models.Model):
         """Never transfer ownership or revive a natively cancelled sale."""
         source.ensure_one()
         buyer.ensure_one()
-        if buyer == source.partner_id and source.state != 'cancel':
-            return False
         if buyer != source.partner_id and buyer not in source.participant_ids:
             raise UserError(_('El cliente no es titular ni participante de la suscripcion origen.'))
         candidates = self._wgs_find_subscription_history_for_partner(buyer, company=source.company_id) - source
@@ -2720,7 +2732,7 @@ class PosOrder(models.Model):
                     'El cliente ya tiene otra membresia vigente o programada (%s). '
                     'Opera sobre esa membresia; no repitas la reinscripcion del contrato anterior.'
                 ) % candidate.display_name)
-        return True
+        return buyer != source.partner_id or source.state == 'cancel'
 
     def _wgs_process_subscription_reenroll_line(self, line):
         self.ensure_one()
