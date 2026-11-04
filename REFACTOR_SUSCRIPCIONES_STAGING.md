@@ -47,6 +47,42 @@ fecha y luego ID de linea. Evidencia fuera de outputs/:
 `/tmp/wgs-20261104-incidents-orm3.log` y
 `/var/folders/g4/fxd70d8n40d5mp33wn_z0gr80000gn/T/wgs-isolated.BrIrvH/`.
 
+### Validacion del despliegue de staging
+
+Build `0d61a975694179c3fd9921ad037cb1dede9e50c7`, upgrade POS completado y
+version instalada/latest `19.0.1.6.17`, base neutralizada. Se ejecutaron ventas
+ficticias por la API publica sync_from_ui con clientes nuevos QA y reenvio de
+cada payload para comprobar idempotencia; ninguna base productiva fue escrita.
+
+- Berenice real en la copia de staging: vuelve a progress/S01236, sin cambiar
+  pagos, vigencia ni acceso. Su vigencia clonada al 6/nov no se traslada a main,
+  donde la fecha auditada es 7/nov.
+- UI El Dorado: S03649 de QA VAT, Todo Incluido mensual vigente hasta 4/nov,
+  renovada a Premium 570 domiciliado. Primer proporcional $494 + mes 12 $570:
+  ticket 263-3-000146 por $1,064 con IVA. El origen conserva plan mensual y acceso
+  hasta hoy; la compra queda programada para 5/nov con cuotas [1,12]. La
+  activacion en el cambio de dia fue cubierta por el ORM con reloj controlado.
+- Santa Monica: cobro QA S03650 de noviembre por $309.51 (50% autorizado),
+  devolucion integra -$309.51 y cartera activa; octubre sigue pagado, noviembre
+  vuelve a pendiente y sin acceso. En navegador Renovar ofrece de nuevo esa
+  cuota al precio completo $619.01, sin heredar descuento. El centavo corresponde
+  al catalogo de staging, no se modifica la tarifa congelada de produccion.
+- S03652 QA: devolucion total -$799 con factura borrador ligada por el campo
+  nativo account.move.line.subscription_id. Cierre comercial correcto; factura
+  conservada en borrador, nunca publicada, timbrada ni enviada.
+- S03653 QA: reconstruccion controlada de origen mensual divergente y activacion
+  anual por dry_run/digest. Plan anual y periodo firmado 4/nov/2026-3/nov/2027;
+  mismos registros de pago, sin nueva venta, y acceso habilitado.
+- 17 verificaciones adicionales de sintaxis/nombres, corte mensual y payloads
+  de dispositivos aprobadas. El POS inactivo se bloqueo por su temporizador
+  normal y pudo volver a desbloquearse. La impresora fisica no esta disponible
+  en staging: se continuo sin imprimir; no se modifico su configuracion.
+
+Evidencia y fixtures QA fuera de outputs/:
+`/Users/apreza/.codex/visualizations/2026/02/18/019c72fb-fa85-7b22-a4fa-20aa1262c18f/wgs-incidents-20261104/`.
+Los intentos de preparacion de fixtures tambien quedan identificados como QA;
+no representan cobros reales ni se copian a produccion.
+
 ## Directorio y desconexiones: diagnostico y cierre, 2026-11-04
 
 Esta seccion actualiza el pendiente de rendimiento/disponibilidad del cierre
