@@ -1,8 +1,65 @@
+import json
+from unittest.mock import patch
+
 from odoo import Command
+from odoo.exceptions import UserError
 from odoo.tests.common import TransactionCase
 
 
 class TestPosAccessBlock(TransactionCase):
+    def _external_access_device(self, site=False):
+        return self.env['access_control.device'].create({
+            'name': 'POS provider test door', 'device_serial': 'POS-PROVIDER-QA',
+            'site_id': (site or self.site).id, 'active': True,
+        })
+
+    def test_external_provider_access_logs_only_the_selected_customer_without_a_subscription(self):
+        device = self._external_access_device()
+        Device = type(device)
+        for provider in ('wellhub', 'totalpass'):
+            with self.subTest(provider=provider), patch.object(Device, 'open_door_via_adms', return_value={'ok': True, 'queued': True}) as send:
+                result = self.env['pos.order'].wgs_grant_external_access_for_pos(
+                    self.owner.id, provider, {'company_id': self.env.company.id, 'device_id': device.id},
+                )
+                self.assertTrue(result['ok'])
+                event = self.env['access_control.access_event'].browse(result['access_event_id'])
+                self.assertEqual(event.device_id, device)
+                self.assertEqual(event.modality, provider)
+                self.assertEqual(event.result, 'allowed')
+                self.assertEqual(json.loads(event.raw_payload)['partnerId'], self.owner.id)
+                self.assertEqual(json.loads(event.raw_payload)['provider'], provider)
+                self.assertFalse(event.person_id)
+                send.assert_called_once_with(door_id=1, open_time_seconds=5,
+                    reason='subscription_external_access_%s' % provider, operator_user=self.env.user)
+        self.assertFalse(self.env['sale.order'].search([('partner_id', '=', self.owner.id)]))
+
+    def test_external_provider_does_not_log_success_if_adms_rejects_the_command(self):
+        device = self._external_access_device()
+        with patch.object(type(device), 'open_door_via_adms', side_effect=UserError('ADMS command rejected')):
+            with self.assertRaises(UserError):
+                self.env['pos.order'].wgs_grant_external_access_for_pos(
+                    self.owner.id, 'wellhub', {'company_id': self.env.company.id, 'device_id': device.id},
+                )
+        self.assertFalse(self.env['access_control.access_event'].search([('device_id', '=', device.id)]))
+
+    def test_external_provider_rejects_a_door_from_another_company_before_http(self):
+        device = self._external_access_device(self.other_site)
+        with patch.object(type(device), 'open_door_via_adms') as send:
+            with self.assertRaises(UserError):
+                self.env['pos.order'].wgs_grant_external_access_for_pos(
+                    self.owner.id, 'totalpass', {'company_id': self.env.company.id, 'device_id': device.id},
+                )
+            send.assert_not_called()
+
+    def test_external_provider_rejects_unknown_provider_before_http(self):
+        device = self._external_access_device()
+        with patch.object(type(device), 'open_door_via_adms') as send:
+            with self.assertRaises(UserError):
+                self.env['pos.order'].wgs_grant_external_access_for_pos(
+                    self.owner.id, 'unknown', {'company_id': self.env.company.id, 'device_id': device.id},
+                )
+            send.assert_not_called()
+
     def setUp(self):
         super().setUp()
         self.plan = self.env['sale.subscription.plan'].create({

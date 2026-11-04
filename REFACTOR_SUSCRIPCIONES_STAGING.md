@@ -2,6 +2,152 @@
 
 Registro inicial: 2026-09-28. Rama de trabajo: `staging`.
 
+## Reporte ejecutivo de cierre, 2026-11-04
+
+**Codigo corregido y desplegado exclusivamente en staging. Sin promocion a main
+ni modificaciones productivas. Resultado aprobado en los escenarios ejecutados;
+no se promete ausencia absoluta de fallos fuera de esta cobertura.**
+
+Runtime desplegado: `35cc33c2d4d3f74a7faed3cbbfff101bee3cd92a`.
+Access API `19.0.2.0.87`, WGS base `19.0.1.1.61`, WGS POS `19.0.1.6.14`.
+Build y upgrades verificados por API contra staging-portal.spinbike.mx, base
+neutralizada. Main/origin-main conservan `ca0910cbaf862fb423a0b1a89ec4980c57a9b3a4`.
+Los cambios posteriores de esta bitacora y cobertura de proveedores son solo
+documentacion/tests; no cambian el runtime desplegado. Outputs/, Payroll e
+importador bancario no se tocaron.
+
+### Correcciones principales
+
+- El calendario comprado queda firmado y se verifica contra plazo, unidad,
+  corte y alineacion, no solo contra sus propias fechas. Plan/precio/paquete
+  destino provienen del catalogo o de la cartera domiciliada correspondiente.
+- Venta, pago y aplicacion comercial comparten la transaccion nativa. Las
+  postcondiciones verifican plan, estado, fechas y participantes. Se conserva
+  idempotencia de UUID/linea y no se reabre un contrato expirado al reenviar un
+  pago viejo. Los cambios de beneficios esperan al fin del periodo actual.
+- La entrada sync_from_ui es inmutable por intento: core consume una copia
+  profunda, no los argumentos RPC que Odoo reutiliza al reintentar. Este fallo
+  se descubrio con dos clientes HTTP reales y se corrigio en la frontera del
+  flujo, no mediante excepciones para personas o productos especificos.
+- Se eliminaron caches comerciales propias que retenian recordsets y precios
+  retirados. Se preservan permisos POS/empresa antes de elevar la aplicacion
+  interna; no se conceden permisos Sales generales al cajero.
+- Se corrigieron invalidacion de bloqueo manual, edicion de motivo, flush del
+  ciclo domiciliado anterior y flush antes del SQL de expiracion nativa. La
+  evaluacion de vigencia usa una sola fecha local de negocio.
+- Se verifica la proyeccion de acceso antes de darla por terminada. Fallar la
+  proyeccion no vuelve a cobrar ni extiende otra vez la vigencia; mantiene retry
+  operativo. El asignador de identidades rechaza permisos antes del lock y
+  fuerza el reintento estandar de Odoo ante snapshots concurrentes antiguos.
+- Los cuatro formularios exigen cotizacion firmada lista antes de tocar el
+  ticket; precio cero autorizado sigue siendo valido. Cambiar fecha durante
+  la primera consulta invalida y recotiza. Respuestas/errores viejos y modales
+  cerrados ya no sobreescriben estados nuevos.
+
+### Pruebas ejecutadas
+
+| Capa | Resultado final |
+| --- | --- |
+| ORM Odoo 19 Enterprise real | 45 Access API + 202 WGS/base/POS = 247 aprobadas, cero fallos/errores |
+| Python aislado | 135 aprobadas; un placeholder PostgreSQL omitido sin DSN en ese comando, ejecutado aparte |
+| JavaScript real de los modulos | 40 aprobadas, sin omisiones |
+| PostgreSQL 16 Repeatable Read | 2 aprobadas con conexiones reales, rollback y locks |
+| HTTP Odoo con workers=2, DB desechable | 2 aprobadas: colisiones reales, reintentos nativos e identidad estable; sin idle-in-transaction ni lock residual |
+| Staging, clientes HTTP concurrentes .14 | Alta: uno cobra y otro rechaza historial. Renovacion: uno extiende y otro rechaza revision vieja. Dos reenvios adicionales no duplican pago/plazo |
+| Navegador, ambas sucursales | 15 tickets ficticios; mas 3 tickets del smoke HTTP = 18 ordenes QA pagadas, incluido reembolso y venta normal |
+| Comprobacion final por API | 18 UUID unicos, 17 aplicaciones de membresia unicas, cero facturas, cero pendientes/errores de proyeccion, 9 personas activas distintas |
+| Gate estatico | Sintaxis Python/JS/shell, nombres globales, registro de tests y diff sin errores |
+
+La matriz de navegador es acumulativa de los builds de este pase; cada fallo
+encontrado se repitio despues de su correccion. No se afirma haber revendido
+las 15 operaciones completas despues de cada build. Sobre .14 se repitieron
+el gate automatizado completo, concurrencia comercial real y checkout
+domiciliado SM por navegador; todas las ordenes anteriores se comprobaron de
+nuevo por API al cierre.
+
+Los tests Enterprise se ejecutaron en una base local desechable, red Docker
+interna, puertos no publicados y limites de memoria. No se ejecuto test-enable
+contra la base operativa de staging. Contenedores/red de prueba eliminados al
+terminar. Los crons de la copia de staging permanecen inactivos; los tests de
+cierre, activacion y limites de dia se ejecutaron en la base desechable.
+
+### Matriz operativa observada
+
+| Flujo | Evidencia / resultado |
+| --- | --- |
+| Alta mensual ED | S03637 / POS13940, $799, 3/nov-3/dic inclusive, siguiente corte 4/dic; acceso activo |
+| Renovar individual a pareja futura | POS13941, $1398.99, 4/dic-3/ene; actual individual intacto, participante futuro sin acceso anticipado |
+| Day Pass retroactivo y cambio a mes | S03638 / POS13942-13943, dia 1/nov exacto; compra mensual 3/nov-3/dic por $799, plan mensual y acceso habilitado |
+| Domiciliado ED primer + ultimo | S03639 / cartera159 / POS13944, 15/sep-30/sep proporcional + cuota12, $949.15; dos adeudos, sin acceso |
+| Abono y liquidacion domiciliada | POS13945 paga octubre: sigue sin acceso. POS13946 paga noviembre y diciembre: cero adeudos, acceso activo, anticipo permitido |
+| Alta con descuento SM | S03640 / POS13947, 25% cotiza $599.25; 100% aplicado con plazo completo y sin ingreso |
+| Renovacion posterior al descuento | POS13948, $799 con descuento cero, sin heredar autorizacion previa |
+| Reembolso | POS13949, -$799 total, cancela y retira acceso. Parcial y duplicado rechazados antes de otro pago |
+| Semestral a mensual diferido | S03641 / POS13950-13951: semestre hasta 2/may/2027; compra mensual $799 para 3/may-3/jun, plan15 en snapshot. No hereda seis meses ni adelanta beneficios |
+| Restauracion del borrador | UUID 0d66708e-80d4-4c25-b974-9137820a1d34 sobrevive recarga con metadata; una sola venta/aplicacion |
+| Reinscribir cancelada como pareja | S03642 / POS13952, titular correcto y dos participantes elegidos; dos accesos activos, historial cancelado conservado |
+| Edicion de participantes | Retirar QA9493 suspende solo a esa persona; restaurarlo vuelve a dos activos. Plan, plazo y pagos intactos |
+| Producto sin tarifa | Producto QA1823 rechazado, envio deshabilitado; cambiar a paquete valido recupera flujo. Sin venta/contrato para el producto defectuoso, luego archivado |
+| Venta ordinaria | POS13953, agua $17, sin contrato/persona de suscripcion; no bloquea posterior primera membresia |
+| Alta HTTP previa al fix | QA9497 / POS13954: una sola venta, sin duplicados; el mensaje incorrecto del segundo intento detono .14 |
+| Alta/renovacion concurrente .14 | QA9498 / S03644 / POS13955-13956: dos ventas totales, una alta y una renovacion, no cuatro. Reenvio no extiende de nuevo |
+| Domiciliado SM solo proporcional | QA9495 / S03645 / POS13957, $577.74, 3/nov-30/nov; solo cuota1 pagada, cuota12 no forzosa, acceso activo |
+| Bloqueo/desbloqueo/resync | API dirigida QA9491, motivo no desbloquea; acceso restaurado y resumen comprobado, sin tocar pagos |
+| Facturacion e informacion | Recibo/Factura deshabilitado en pago e historial; Informacion deshabilitada con producto seleccionado |
+| Bitacoras | Accesos muestra 00:00-23:59 locales. Historial API contiene los 18 tickets: 11 SM y 7 ED, sin perder ventas nocturnas por UTC |
+| Proveedores externos | Cuatro regresiones ORM nuevas: Wellhub/TotalPass, rechazo ADMS, puerta de otra empresa y proveedor invalido; HTTP simulado, no apertura fisica |
+
+Las altas de navegador se hicieron despues de las 18:00 locales, incluso a las
+23:xx, y conservaron 3/nov aunque UTC ya era 4/nov. Los importes citados incluyen
+IVA cuando corresponde y coinciden entre cotizacion, ticket y pago. Las
+diferencias de un centavo respecto de nombres comerciales como 619/1399 son los
+importes efectivos del catalogo/impuestos de esta copia; no se alteraron tarifas
+reales para maquillar la prueba.
+
+Ademas, ORM cubre CURP/edad/prueba unica, quincena/trimestre/semestre/anual,
+reinscripcion mismo/distinto paquete alineado con proporcional, legacy
+domiciliado con plan/precio historico distintos, ciclos y pagos conservados,
+colas futuras encadenadas, fallo de acceso, ultimo dia completo, fin de mes y
+recuperacion de corte, crons WGS vs nativos, multisede y horarios, auditoria
+dirigida y rollback de postcondiciones. No se presenta como si todos esos
+escenarios se hubieran repetido tambien por navegador.
+
+### Limites y riesgos restantes
+
+- Integracion fisica: no se abrieron puertas ni se enviaron comandos a SpeedFace
+  productivos. Falta una prueba con dispositivo/gateway de laboratorio aislado.
+  Tampoco hubo impresora disponible; se comprobo recibo/logica, no impresion fisica.
+- Red/disponibilidad: hubo ConnectionLostError y cargas lentas del POS durante
+  el pase. Los tickets se recuperaron sin duplicarse y se corrigieron estados
+  obsoletos de interfaz; no hay evidencia suficiente para atribuir esas
+  desconexiones a Odoo, al proxy o a la red local. Requiere correlacion de metricas
+  antes de afirmar que la disponibilidad es estable. No se declara resuelto el
+  incidente OOM de pg_dump con estas pruebas.
+- Rendimiento, severidad media: resumen general SM 14.653 s y ED 12.243 s frente
+  a linea base 17.240/14.633 s. Son muestras aisladas, no benchmark de carga.
+  Sigue pendiente perfilar/reducir el costo global del directorio en otra
+  iteracion controlada; no se introdujo cache persistente para esconderlo.
+- Memoria: el gate demuestra liberacion transaccional/locks, no estabilidad RSS
+  bajo horas de carga o backups concurrentes. El pool estandar Odoo puede mantener
+  conexiones abiertas reutilizables; no necesitan cierre manual desde el cron.
+  Falta soak/telemetria en infraestructura equivalente a los 4 GB del servidor.
+
+**Conclusion:** las fallas reproducidas en el alcance comercial se corrigieron
+con regresiones y se validaron sobre .14; no quedan fallos comerciales conocidos
+en esos escenarios. Esto no equivale a certificar todos los equipos, redes y
+combinaciones futuras. Main queda sin tocar y no se autoriza liberacion implicita.
+
+### Evidencia y repeticion
+
+Evidencia local de esta ejecucion:
+`/Users/apreza/.codex/visualizations/2026/02/18/019c72fb-fa85-7b22-a4fa-20aa1262c18f/wgs-qa-20261103/`.
+Incluye capturas y comprobaciones finales QA, sin llaves API. Logs del ultimo
+gate: `/tmp/wgs-20261103-enterprise-final.log` y
+`/var/folders/g4/fxd70d8n40d5mp33wn_z0gr80000gn/T/wgs-isolated.7NboIb/`.
+Concurrencia staging: `/tmp/wgs-qa-20261103/concurrent-checkout14.log`.
+Las secciones anteriores/intermedias de abajo se conservan como bitacora;
+este cierre prevalece sobre sus estados de "pendiente" y conteos provisionales.
+
 ## Gate Enterprise y correcciones integrales, 2026-11-03
 
 Esta entrada sustituye los pendientes tecnicos de la entrada anterior. Solo
