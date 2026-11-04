@@ -2851,7 +2851,9 @@ class SaleOrder(models.Model):
             return replaced
 
         def accept(source, target):
-            return bool(target and target != source and target._is_subscription_record_for_pos()
+            # A cancelled successor remains history, not an active replacement.
+            return bool(target and target != source and target.state != 'cancel'
+                        and target._is_subscription_record_for_pos()
                         and (not source.partner_id or not target.partner_id or source.partner_id == target.partner_id))
 
         lines = self.env['pos.order.line'].sudo().search([

@@ -1360,3 +1360,135 @@ class TestSubscriptionOperations(CommonPosTest):
         contract = subscription.wgs_domiciliation_contract_id
         self.assertEqual(contract.state, 'active')
         self.assertEqual(contract.installment_ids.filtered(lambda item: item.state == 'paid').mapped('sequence'), [1, 2])
+
+    def test_cancelled_upsale_does_not_hide_a_reactivated_paid_source(self):
+        _initial, source = self._paid(self.solo, self.month)
+        _upgrade, target = self._paid(self.pair, self.month, 'upsale', source, (self.holder | self.member).ids)
+        self.assertTrue(source._wgs_has_replacement_subscription_for_pos())
+        target.action_cancel()
+        self.Pos._wgs_reactivate_subscription_order_for_pos(source)
+        self.assertFalse(source._wgs_has_replacement_subscription_for_pos())
+        row = self.Pos.wgs_get_partner_directory_row_for_pos(self.holder.id, source.company_id.id)
+        self.assertEqual(row['subscription_id'], source.id)
+        self.assertEqual(row['state'], 'progress')
+
+    def test_monthly_to_different_domiciliation_package_waits_for_paid_period(self):
+        _initial, source = self._paid(self.solo, self.month)
+        plan = self.month.copy({'name': 'New domiciliation', 'wgs_domiciliation_enabled': True,
+                                'wgs_domiciliation_term_months': 12})
+        target = self._product('Domiciliation destination', plan, 70)
+        renewal, result = self._paid(target, plan, 'renewal', source, months=[1, 12])
+        self.assertEqual(result, source)
+        self.assertEqual(source.plan_id, self.month)
+        self.assertFalse(source.wgs_domiciliation_contract_id)
+        self.assertEqual(renewal.lines.wgs_application_state, 'scheduled')
+        self.assertEqual(renewal.amount_total, 106.13)
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 10, 16, 12)):
+            self.Pos._wgs_apply_due_package_changes()
+        self.assertEqual(renewal.lines.wgs_application_state, 'applied')
+        self.assertEqual(source.plan_id, plan)
+        self.assertEqual(source.wgs_domiciliation_contract_id.product_id, target)
+        self.assertEqual(source.wgs_domiciliation_contract_id.installment_ids.filtered(
+            lambda item: item.state == 'paid').mapped('sequence'), [1, 12])
+
+    def _full_refund(self, payment):
+        original = payment.lines
+        refund, _unused = self.create_backend_pos_order({
+            'order_data': {'partner_id': self.holder.id, 'state': 'paid'},
+            'line_data': [{'product_id': original.product_id.id, 'qty': -1,
+                           'price_unit': original.price_unit, 'discount': original.discount,
+                           'refunded_orderline_id': original.id}],
+        })
+        refund._wgs_sync_subscription_sales()
+        return refund
+
+    def test_full_membership_refund_closes_invoiced_subscription_without_cancelling_invoices(self):
+        payment, source = self._paid(self.solo, self.month)
+        # A historical invoice predates the POS event. Do not change today's
+        # recurring invoice eligibility merely to build the incident fixture.
+        values = source._prepare_invoice()
+        values['invoice_line_ids'] = [Command.create(source._get_recurring_lines()._prepare_invoice_line())]
+        invoices = self.env['account.move'].create(values)
+        self.assertTrue(invoices)
+        before = invoices.read(['state', 'amount_total', 'payment_state'])
+        refund = self._full_refund(payment)
+        self.assertEqual(refund.lines.wgs_application_state, 'applied')
+        self.assertEqual(source.subscription_state, '6_churn')
+        self.assertEqual(invoices.read(['state', 'amount_total', 'payment_state']), before)
+        self.assertFalse(source._wgs_subscription_operation_policy_for_pos()['access_state'])
+
+    def test_full_domiciliation_collection_refund_reverses_only_its_months_once(self):
+        _initial, source, contract = self._historical_domiciliation()
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 10, 5, 12)):
+            payment, _source = self._paid(self.solo, self.month, 'renewal', source, months=[2], discount=50)
+            before = self.Pos._wgs_domiciliation_collection_state(source, selected_sequences=[2])
+            financial = payment.payment_ids.read(['amount', 'payment_method_id'])
+            refund = self._full_refund(payment)
+            self.assertEqual(refund.lines.wgs_application_state, 'applied')
+            self.assertEqual(contract.state, 'active')
+            self.assertEqual(self.Pos._wgs_domiciliation_collection_state(source, selected_sequences=[2]), before)
+            self.assertEqual(contract.installment_ids.filtered(lambda item: item.sequence == 2).state, 'due')
+            self.assertEqual(payment.payment_ids.read(['amount', 'payment_method_id']), financial)
+            self.assertFalse(contract.is_access_current)
+            refund._wgs_sync_subscription_sales()
+            with self.assertRaises(UserError), self.env.cr.savepoint():
+                self._full_refund(payment)
+            recollection, _source = self._paid(self.solo, self.month, 'renewal', source, months=[2])
+            self.assertEqual(recollection.amount_total, 619)
+            self.assertTrue(contract.is_access_current)
+
+    def test_legacy_paid_activation_recovery_is_explicit_and_preserves_the_payment(self):
+        _initial, source = self._paid(self.solo, self.month)
+        annual = self.month.copy({'name': 'Recovered annual', 'billing_period_value': 12})
+        target = self._product('Recovered annual package', annual, 1200)
+        payment, _source = self._paid(target, annual, 'renewal', source)
+        payment.lines.wgs_activation_contract = False
+        source.order_line.filtered(lambda item: item.product_uom_qty > 0).name = 'Historical edit'
+        source.wgs_monthly_cutoff_day = 14
+        financial = payment.read(['amount_total', 'amount_paid', 'payment_ids'])[0]
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 10, 20, 12)):
+            self.Pos._wgs_apply_due_package_changes()
+            self.assertEqual(payment.lines.wgs_application_state, 'scheduled')
+            proposal = self.Pos.wgs_recover_paid_activation_for_pos(payment.lines.id)
+            self.assertEqual(payment.lines.wgs_application_state, 'scheduled')
+            with self.assertRaises(UserError), self.env.cr.savepoint():
+                self.Pos.wgs_recover_paid_activation_for_pos(payment.lines.id, 'incorrect', dry_run=False)
+            result = self.Pos.wgs_recover_paid_activation_for_pos(
+                payment.lines.id, proposal['approval_digest'], dry_run=False,
+            )
+        self.assertEqual(result['state'], 'applied')
+        self.assertEqual(source.plan_id, annual)
+        self.assertEqual(source.end_date, fields.Date.to_date('2027-10-15'))
+        self.assertEqual(payment.read(['amount_total', 'amount_paid', 'payment_ids'])[0], financial)
+        self.assertTrue(payment.lines.wgs_application_receipt['approved_recovery'])
+        with self.assertRaises(UserError):
+            self.Pos.wgs_recover_paid_activation_for_pos(payment.lines.id)
+
+    def test_paid_activation_recovery_rejects_changed_paid_line_and_non_manager(self):
+        _initial, source = self._paid(self.solo, self.month)
+        payment, _source = self._paid(self.pair, self.month, 'renewal', source, (self.holder | self.member).ids)
+        with self.assertRaises(UserError):
+            self.Pos.with_user(self.env.ref('base.public_user')).wgs_recover_paid_activation_for_pos(payment.lines.id)
+        payment.lines.price_unit += 1
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 10, 20, 12)):
+            with self.assertRaisesRegex(UserError, 'contenido del pago'):
+                self.Pos.wgs_recover_paid_activation_for_pos(payment.lines.id)
+
+    def test_paid_activation_recovery_approval_expires_when_source_changes(self):
+        _initial, source = self._paid(self.solo, self.month)
+        payment, _source = self._paid(self.pair, self.month, 'renewal', source, (self.holder | self.member).ids)
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 10, 20, 12)):
+            proposal = self.Pos.wgs_recover_paid_activation_for_pos(payment.lines.id)
+            source.wgs_monthly_cutoff_day = 14
+            with self.assertRaisesRegex(UserError, 'propuesta cambio'), self.env.cr.savepoint():
+                self.Pos.wgs_recover_paid_activation_for_pos(payment.lines.id, proposal['approval_digest'], dry_run=False)
+        self.assertEqual(payment.lines.wgs_application_state, 'scheduled')
+        self.assertEqual(source._get_recurring_lines().product_id, self.solo)
+
+    def test_paid_activation_recovery_never_overwrites_a_later_paid_purchase(self):
+        _initial, source = self._paid(self.solo, self.month)
+        first, _source = self._paid(self.pair, self.month, 'renewal', source, (self.holder | self.member).ids)
+        self._paid(self.solo, self.month, 'renewal', source)
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 10, 20, 12)):
+            with self.assertRaisesRegex(UserError, 'pago posterior'):
+                self.Pos.wgs_recover_paid_activation_for_pos(first.lines.id)

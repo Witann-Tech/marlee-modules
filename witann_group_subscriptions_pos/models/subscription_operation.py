@@ -524,6 +524,7 @@ class PosSubscriptionOperation(models.Model):
                     'wgs_activation_revision': order._wgs_source_revision(result),
                     'wgs_activation_contract': order._wgs_source_contract(result) if line.wgs_application_state == 'scheduled' else False,
                     'wgs_application_receipt': {
+                        **(line.wgs_application_receipt or {}),
                         'rules_version': RULES_VERSION, 'before': before,
                         'after': order._wgs_source_revision(result), 'subscription_id': result.id,
                         'period_start': str(line.wgs_subscription_start_date or ''),
@@ -591,7 +592,7 @@ class PosSubscriptionOperation(models.Model):
                 collection_before=collection_before,
             )
         elif line.qty < 0:
-            self._wgs_assert_subscription_refund(result)
+            self._wgs_assert_subscription_refund(result, line=line)
         return result
 
     def _wgs_dispatch_subscription_operation(self, line, *, activation=False):
@@ -600,6 +601,8 @@ class PosSubscriptionOperation(models.Model):
             if original and (original.product_id != line.product_id or original.order_id.company_id != self.company_id):
                 raise UserError(_('El reembolso debe corresponder al producto y empresa del pago original.'))
             self._wgs_validate_full_membership_refund(original, line.qty, line.price_unit, line.discount, line)
+            if self._wgs_refund_domiciliation_collection(line, original):
+                return line.wgs_sale_order_id
             self._wgs_cancel_subscription_from_refund_line(line)
             scheduled = self.env['pos.order.line'].search([
                 ('wgs_subscription_source_id', '=', line.wgs_sale_order_id.id),

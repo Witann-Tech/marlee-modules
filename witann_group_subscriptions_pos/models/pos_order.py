@@ -2575,7 +2575,12 @@ class PosOrder(models.Model):
             ('qty', '>', 0),
         ]
         if line_date:
-            domain.append(('order_id.date_order', '>', line_date))
+            # POS timestamps have second resolution. Tie-break paid operations
+            # by their persisted line ID instead of losing same-second sales.
+            domain += ['|', ('order_id.date_order', '>', line_date),
+                       '&', ('order_id.date_order', '=', line_date), ('id', '>', line.id)]
+        else:
+            domain.append(('id', '>', line.id))
         return self.env['pos.order.line'].sudo().search(domain, order='id desc', limit=1)
 
     def _wgs_process_subscription_renewal_line(self, line, *, activation=False):
@@ -4357,7 +4362,12 @@ class PosOrder(models.Model):
             line.wgs_sale_order_id = sale_order.id
             return
 
-        sale_order.action_cancel()
+        # Native Odoo forbids cancelling an invoiced sale. Close its commercial
+        # entitlement instead; historical invoices/payments must remain intact.
+        if sale_order._get_subscription_invoices().filtered_domain([('state', 'in', ['draft', 'posted'])]):
+            sale_order._wgs_close_subscription_commercially(origin='pos_refund')
+        else:
+            sale_order.action_cancel()
         line.wgs_sale_order_id = sale_order.id
 
         _logger.info(
