@@ -54,6 +54,24 @@ ambas sucursales, comparar directorio y emitir reporte ejecutivo. La entrega
 fisica a SpeedFace no puede verificarse con el gateway aislado; no se opera
 hardware productivo ni se habilitan crons globales sobre datos clonados.
 
+### Segundo pase por navegador
+
+- Build 157ddf7 y upgrade de los tres addons confirmados por API: .87/.61/.11.
+  Directorio: SM 14.653 s, ED 12.243 s; conteos congruentes con los ocho contactos
+  sinteticos de este pase (no se corrigen clientes clonados). Sigue siendo una
+  consulta costosa; la diferencia de tiempo no equivale a un benchmark de carga.
+- Renovacion individual a pareja de S03637: ticket 263-3-000139, POS13941,
+  $1398.99 con IVA, periodo programado 4/dic/2026-3/ene/2027. El contrato vigente
+  conserva producto individual y participante original; no se adelanta acceso.
+  Una interrupcion de red previa al pago se recupero con el mismo UUID. El
+  reenvio nativo encontro paid y no duplico la operacion. Sin impresora de prueba.
+- Se reprodujo una carrera adicional: cambiar fecha durante la primera consulta
+  del producto dejaba el calendario anterior en alta/reinscripcion, porque aun
+  no habia un plan en el snapshot. POS .12 reinicia la misma consulta con el
+  guard de solicitudes existente y la fecha actual. Dos regresiones reproducen
+  respuestas invertidas y comprueban calendario, loading y rechazo de la vieja.
+  Total JavaScript: 29 aprobadas. No se cobro el ticket que expuso esa carrera.
+
 ## Validacion integral de los tres addons, 2026-11-03
 
 Alcance autorizado: access_control_api, witann_group_subscriptions y

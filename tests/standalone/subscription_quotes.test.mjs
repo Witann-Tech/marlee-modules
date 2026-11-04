@@ -7,7 +7,7 @@ import test from 'node:test';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../witann_group_subscriptions_pos/static/src/js');
 const context = vm.createContext({ console, canOpenNewSubscription: () => true });
-for (const file of ['subscription_quote_request.js', 'subscription_pricing_snapshot.js', 'subscription_flow_controllers.js']) {
+for (const file of ['subscription_quote_request.js', 'subscription_pricing_snapshot.js', 'subscription_flow_controllers.js', 'subscription_inline_form_handlers.js']) {
     const source = fs.readFileSync(path.join(root, file), 'utf8')
         .replace(/^import[\s\S]*?;\s*$/gm, '')
         .replace(/^export\s*\{[\s\S]*?\};?\s*$/gm, '')
@@ -56,6 +56,43 @@ function stateFor(mode) {
     const key = mode === 'new' ? 'newSubscriptionForm' : mode === 'upsale' ? 'upsaleForm' : 'renewalForm';
     state[key] = {holderPartnerId:7, subscriptionId:8, sourceProductId:1, participantIds:[7]};
     return [state,key];
+}
+for (const [mode, handler, field] of [
+    ['new', 'applySelectedProduct', 'start_date'],
+    ['reenroll', 'applySelectedReenrollProduct', 'reenroll_start_date'],
+]) {
+    test(`${mode}: date changed during first product quote replaces the in-flight calendar`, async () => {
+        const [state, key] = stateFor(mode);
+        state[key].startDate = '2026-11-03';
+        const requests = [];
+        const deps = {
+            renderDetail() {}, _t: value => value,
+            fetchSubscriptionQuote(...args) {
+                const response = deferred();
+                requests.push({args, response});
+                return response.promise;
+            },
+        };
+        const apply = id => context[handler](state, id, deps);
+        const first = apply(1);
+        const changed = context.handleSubscriptionInlineFieldChange({field, target:{value:'2026-11-01'}}, {
+            state, clearFeedback() {}, renderDetail() {},
+            applySelectedProduct: apply, applySelectedReenrollProduct: apply,
+            formatTodayISO: () => '2026-11-03',
+        });
+        assert.equal(requests.length, 2);
+        assert.equal(requests[0].args[8], '2026-11-03');
+        assert.equal(requests[1].args[8], '2026-11-01');
+        requests[0].response.resolve({pricing:{...quote(1).pricing, subscription_start_date:'2026-11-03'}});
+        await first;
+        assert.equal(state[key].pricingSnapshot, null);
+        assert.equal(state[key].loading, true);
+        requests[1].response.resolve({pricing:{...quote(1).pricing, subscription_start_date:'2026-11-01'}});
+        await changed;
+        assert.equal(state[key].startDate, '2026-11-01');
+        assert.equal(state[key].pricingSnapshot.subscription_start_date, '2026-11-01');
+        assert.equal(state[key].loading, false);
+    });
 }
 for (const [mode, handler] of [
     ['new','applySelectedProduct'], ['renewal','applySelectedRenewalProduct'],
