@@ -1,5 +1,7 @@
 /** @odoo-module **/
 
+import { renderAccessRecovery } from "./subscription_access_recovery_render";
+
 function renderSubscriptionCard({
     item,
     stateClass,
@@ -83,6 +85,10 @@ function renderSubscriptionCard({
                     ${item.can_upsale ? "" : "disabled"}
                 >${escapeHtml(_t("Cambiar Plan"))}</button>
                 ${participantActionHtml}
+                <select class="wgs-input" data-role="resync-device" aria-label="${escapeHtml(_t("Equipo para recuperar acceso"))}">
+                    <option value="0">${escapeHtml(_t("Todos los equipos autorizados"))}</option>
+                    ${(item.resync_devices || []).map((device) => `<option value="${escapeHtml(String(device.id))}">${escapeHtml(device.name)}</option>`).join("")}
+                </select>
                 <button
                     type="button"
                     class="wgs-action-btn${resyncClass}"
@@ -90,7 +96,9 @@ function renderSubscriptionCard({
                     data-subscription-id="${escapeHtml(String(item.subscription_id || 0))}"
                     ${resyncDisabled ? "disabled" : ""}
                 >${escapeHtml(resyncLabel)}</button>
+                ${item.access_recovery ? `<button type="button" class="wgs-action-btn" data-action="check-resync-access" data-subscription-id="${escapeHtml(String(item.subscription_id || 0))}">${escapeHtml(_t("Consultar estado de equipos"))}</button>` : ""}
             </div>
+            ${renderAccessRecovery(item.access_recovery, escapeHtml, _t)}
             ${inlineFormsHtml || ""}
         </div>
     `;

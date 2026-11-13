@@ -288,6 +288,7 @@ class SaleOrder(models.Model):
 
         items = self._filter_partner_subscription_detail_items_for_pos(items)
         items = sorted(items, key=self._sort_subscription_status_item_key_for_pos)
+        self._wgs_add_access_recovery_detail(items, subscriptions)
         status_map = self.get_partner_subscription_status_map_for_pos([partner.id], company_id=company.id)
         summary = status_map.get(partner.id, {})
 
@@ -1161,83 +1162,8 @@ class SaleOrder(models.Model):
         }
 
     @api.model
-    def wgs_resync_subscription_access_for_pos(self, subscription_id):
-        self._wgs_ensure_pos_user_for_pos(_('No tienes permisos para resincronizar acceso desde Punto de Venta.'))
-
-        subscription = self._wgs_browse_subscription_for_pos(subscription_id)
-        if not subscription:
-            raise AccessError(_('La suscripción seleccionada no existe.'))
-        if not subscription._is_subscription_record_for_pos():
-            raise AccessError(_('La orden seleccionada no corresponde a una suscripción válida.'))
-
-        self.env.cr.execute('SELECT id FROM sale_order WHERE id = %s FOR UPDATE', [subscription.id])
-        ICP = self.env['ir.config_parameter'].sudo()
-        cooldown_key = 'witann_group_subscriptions_pos.access_resync_last_at.%s' % subscription.id
-        now = fields.Datetime.now()
-        last_resync_raw = ICP.get_param(cooldown_key)
-        last_resync = fields.Datetime.to_datetime(last_resync_raw) if last_resync_raw else False
-        if last_resync:
-            elapsed = (now - last_resync).total_seconds()
-            remaining = int(self._WGS_POS_ACCESS_RESYNC_COOLDOWN_SECONDS - elapsed)
-            if remaining > 0:
-                raise UserError(
-                    _('Espera %s segundos antes de volver a resincronizar el acceso de esta suscripción.') % remaining
-                )
-        ICP.set_param(cooldown_key, fields.Datetime.to_string(now))
-
-        Change = self.env['access_control.sync_change'].sudo()
-        last_change = Change.search([], order='id desc', limit=1)
-        last_change_id = last_change.id or 0
-
-        if hasattr(subscription, '_wgs_update_access_snapshot'):
-            subscription._wgs_update_access_snapshot(force=False)
-        site_ids = subscription._wgs_get_access_site_ids() if hasattr(subscription, '_wgs_get_access_site_ids') else []
-        Timezone = self.env['access_control.timezone'].sudo() if 'access_control.timezone' in self.env.registry else False
-        if Timezone:
-            Timezone.queue_active_timezones_for_sites(site_ids=site_ids, reason='manual_subscription_resync')
-
-        if hasattr(subscription, '_ensure_subscription_owner_is_participant'):
-            subscription._ensure_subscription_owner_is_participant()
-        if hasattr(subscription, '_wgs_sync_access_control_people'):
-            subscription.with_context(access_sync_priority=True)._wgs_sync_access_control_people()
-
-        partners = self._wgs_partner_model_for_pos().browse(sorted(subscription._wgs_get_access_related_partner_ids())).exists()
-        if partners and hasattr(partners, '_sync_access_person_face'):
-            partners.with_context(access_sync_priority=True)._sync_access_person_face()
-        Person = self._wgs_person_model_for_pos()
-        if Person is not False and partners:
-            people = Person.search([
-                ('partner_id', 'in', partners.ids),
-                ('active', '=', True),
-                ('global_user_id', '!=', False),
-            ])
-            for person in people:
-                Change.with_context(access_sync_priority=True).queue_upsert_for_person(
-                    person,
-                    site_ids=person.site_ids,
-                    reason='manual_subscription_resync_user',
-                    include_face_pic=False,
-                    priority=True,
-                )
-
-        manual_resync_changes = Change.search([
-            ('id', '>', last_change_id),
-            ('action', 'in', ('upsert', 'delete')),
-        ])
-        if manual_resync_changes:
-            manual_resync_changes.write({'priority': True})
-            _logger.info(
-                'WGS POS access resync marked priority subscription_id=%s change_ids=%s',
-                subscription.id,
-                manual_resync_changes.ids,
-            )
-
-        return {
-            'ok': True,
-            'subscription_id': subscription.id,
-            'access_summary': subscription._wgs_get_access_people_summary_for_pos(),
-            'cooldown_seconds': self._WGS_POS_ACCESS_RESYNC_COOLDOWN_SECONDS,
-        }
+    def wgs_resync_subscription_access_for_pos(self, subscription_id, device_id=False):
+        return self._wgs_request_access_recovery(subscription_id, device_id=device_id)
 
     def _wgs_get_access_people_summary_for_pos(self):
         self.ensure_one()

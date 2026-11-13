@@ -836,15 +836,19 @@ class AccessControlApi(http.Controller):
                     synced_people |= person
                 continue
 
-            upserts.append(
-                self._person_sync_payload(
+            user_payload = self._person_sync_payload(
                     person,
                     include_face_pic=bool(include_biophoto and (state["include_face_pic"] or is_admin)),
                     clear_face_pic=bool(include_biophoto and state["clear_face_pic"] and not is_admin),
                     priority=bool(state["priority"]),
                     device=device,
                 )
-            )
+            if change.resync_target_id and device:
+                recovery = change.resync_target_id._recovery_metadata(person, device)
+                if not recovery or not user_payload.get('facePicB64'):
+                    continue
+                user_payload['recovery'] = recovery
+            upserts.append(user_payload)
             synced_people |= person
 
         next_cursor = changes[-1].id

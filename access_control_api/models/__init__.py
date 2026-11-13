@@ -7,3 +7,4 @@ from . import res_partner
 
 from . import access_sync_change
 from . import access_event
+from . import access_resync

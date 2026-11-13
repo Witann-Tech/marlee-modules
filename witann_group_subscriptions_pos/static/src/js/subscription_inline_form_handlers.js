@@ -205,6 +205,7 @@ function buildSubscriptionInlineActionHandlers({
     openUpsaleForm,
     openParticipantEditForm,
     fetchResyncAccess,
+    fetchAccessRecoveryStatus,
     getResyncAccessState,
     setResyncAccessLoading,
     startResyncAccessCooldown,
@@ -244,6 +245,7 @@ function buildSubscriptionInlineActionHandlers({
         },
         "resync-access": async ({ actionButton }) => {
             const subscriptionId = Number(actionButton.dataset.subscriptionId || 0);
+            const partnerId = state.selectedPartnerId;
             if (!subscriptionId) {
                 return;
             }
@@ -255,29 +257,51 @@ function buildSubscriptionInlineActionHandlers({
             if (typeof setResyncAccessLoading === "function") {
                 setResyncAccessLoading(subscriptionId, true);
             }
+            const deviceId = Number(actionButton.closest(".wgs-subscription-card")?.querySelector('[data-role="resync-device"]')?.value || 0);
             renderDetail(state.currentDetail);
             try {
-                const result = await fetchResyncAccess(subscriptionId);
-                const summary = result && result.access_summary ? result.access_summary : {};
+                const result = await fetchResyncAccess(subscriptionId, deviceId || false);
                 if (typeof startResyncAccessCooldown === "function") {
                     startResyncAccessCooldown(subscriptionId, Number(result && result.cooldown_seconds ? result.cooldown_seconds : 60));
                 }
-                state.formNotice = _t("Acceso resincronizado. Personas activas: %s. Personas sin registro: %s.")
-                    .replace("%s", String(summary.active_count || 0))
-                    .replace("%s", String(summary.missing_count || 0));
+                if (state.selectedPartnerId !== partnerId) { return; }
+                state.formNotice = _t("Solicitud de recuperacion preparada. Consulta el estado de los equipos; aun no confirma acceso fisico.");
                 if (state.currentDetail && state.currentDetail.partner_id) {
                     detailCache.delete(Number(state.currentDetail.partner_id || 0));
                 }
                 await loadDetail(state.selectedPartnerId, { force: true });
             } catch (error) {
                 console.error("Error al resincronizar acceso desde POS", error);
-                state.formError = (error && error.message) ? error.message : _t("No se pudo resincronizar el acceso de esta suscripción.");
-                renderDetail(state.currentDetail);
+                if (state.selectedPartnerId === partnerId) {
+                    state.formError = (error && error.message) ? error.message : _t("No se pudo resincronizar el acceso de esta suscripción.");
+                    renderDetail(state.currentDetail);
+                }
             } finally {
                 if (typeof setResyncAccessLoading === "function") {
                     setResyncAccessLoading(subscriptionId, false);
                 }
-                renderDetail(state.currentDetail);
+                if (state.selectedPartnerId === partnerId) { renderDetail(state.currentDetail); }
+            }
+        },
+        "check-resync-access": async ({ actionButton }) => {
+            const subscriptionId = Number(actionButton.dataset.subscriptionId || 0);
+            const partnerId = state.selectedPartnerId;
+            if (!subscriptionId || typeof fetchAccessRecoveryStatus !== "function") {
+                return;
+            }
+            clearFeedback();
+            actionButton.disabled = true;
+            try {
+                await fetchAccessRecoveryStatus(subscriptionId);
+                if (state.selectedPartnerId !== partnerId) { return; }
+                await loadDetail(state.selectedPartnerId, { force: true });
+            } catch (error) {
+                if (state.selectedPartnerId === partnerId) {
+                    state.formError = error?.message || _t("No se pudo consultar la confirmacion de los equipos.");
+                    renderDetail(state.currentDetail);
+                }
+            } finally {
+                actionButton.disabled = false;
             }
         },
         "cancel-renewal": async () => {

@@ -450,8 +450,8 @@ patch(ControlButtons.prototype, {
         return this.subscriptionPosApi.saveSubscriptionParticipants(subscriptionId, participantIds || []);
     },
 
-    async _resyncSubscriptionAccess(subscriptionId) {
-        return this.subscriptionPosApi.resyncSubscriptionAccess(subscriptionId);
+    async _resyncSubscriptionAccess(subscriptionId, deviceId = false) {
+        return this.subscriptionPosApi.resyncSubscriptionAccess(subscriptionId, deviceId);
     },
 
     _showSubscriptionsModal(rows) {
@@ -2152,7 +2152,8 @@ patch(ControlButtons.prototype, {
                 openReenrollForm,
                 openUpsaleForm,
                 openParticipantEditForm,
-                fetchResyncAccess: (subscriptionId) => this._resyncSubscriptionAccess(subscriptionId),
+                fetchResyncAccess: (subscriptionId, deviceId) => this._resyncSubscriptionAccess(subscriptionId, deviceId),
+                fetchAccessRecoveryStatus: (subscriptionId) => this.subscriptionPosApi.fetchAccessRecoveryStatus(subscriptionId),
                 getResyncAccessState,
                 setResyncAccessLoading,
                 startResyncAccessCooldown,

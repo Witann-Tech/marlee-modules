@@ -2,6 +2,54 @@
 
 Registro inicial: 2026-09-28. Rama de trabajo: `staging`.
 
+## Recuperacion dirigida de acceso, 2026-11-13: desarrollo en staging
+
+Alcance: Access API `19.0.2.0.88`, WGS POS `19.0.1.6.18` y gateway `0.2.1`.
+WGS base sin cambios. No promover esta funcionalidad a main ni desplegarla en
+produccion sin validar. El unico push de gateway/main autorizado fue `3035a44`,
+que registra exactamente el codigo ya compilado en produccion (verificacion
+byte por byte; no represento un despliegue).
+
+### Inventario y diagnostico
+
+Puerta 2 de El Dorado: `SYZ8253801100`, firmware
+`ZAM180-NF50VA-Ver3.4.10`. La consulta de solo lectura del 13/nov fue entregada y
+rechazada: comandos 219334/219335, ambos Return=-629. No devolvio tablas de
+usuarios/autorizaciones. El contador cero del marcador de consulta local no es
+inventario fisico. No se enviaron altas, bajas, cambios de foto ni apertura de
+puerta en produccion. La cache del gateway si contenia los cuatro PIN reportados,
+lo cual acredita su estado logico esperado, no presencia fisica ni reconocimiento.
+
+### Diseno y limites
+
+- La resincronizacion manual pasa por un servicio separado de las operaciones
+  comerciales. Se valida sede de origen, permisos POS y equipo autorizado;
+  se vuelve a evaluar la politica existente, sin cambiar plan, precio, fechas,
+  participantes ni pagos. Mantiene el cursor/transaccion estandar de Odoo.
+- Una solicitud agrupa destinos persona/equipo, con token independiente,
+  huella de autorizacion y vencimiento de diez minutos. Reutiliza la identidad
+  vigente sin renumerarla; si falta, se aplica la proyeccion normal autorizada.
+  Sin rostro valido queda fallo explicito, nunca un borrado de foto.
+- Se reenvian horario, usuario, autorizacion y rostro aunque la foto sea igual.
+  El gateway separa recuperacion de deduplicacion incremental, respeta presupuesto
+  de fotos y limita reintentos locales fallidos a tres. Un cambio posterior de
+  usuario o baja sustituye la recuperacion anterior. No se entregan comandos
+  pendientes caducados.
+- El POS permite elegir equipo y consultar estado sin volver a encolar. Solo
+  cuatro ACK Return=0 del serial correcto significan comandos confirmados.
+  No se confunde encolado/entregado con aplicado; tampoco ACK con paso fisico.
+  Fotos, permisos y datos de otra sede no se exponen en la consulta de estado.
+- Solicitudes/ACK sobreviven a reinicio; metadatos de gateway acotados a 2,048
+  recibos y 24 horas tras caducidad. Los archivos de estado con biometria
+  pendiente usan modo 0600. No se agregaron crons, threads ni tareas Odoo.
+- Los cambios de reinscripcion y acceso multisede permanecen intactos: Katiuska
+  se administra en Santa Monica. Daniel tiene dos pagos comprobados; no se
+  recorta su periodo al 29/nov.
+
+Pendiente al registrar esta entrada: finalizar regresion completa y validacion
+de staging con seriales QA. Produccion de Odoo, pagos, vigencias, Payroll,
+importador bancario y outputs/ siguen fuera del cambio.
+
 ## Incidencias WhatsApp: cierre tecnico y liberacion, 2026-11-04
 
 Esta entrada actualiza el estado inicial y la validacion de staging que se
