@@ -14,7 +14,9 @@ export function renderAccessRecovery(recovery, escapeHtml, _t) {
         superseded: _t("Sustituida por un cambio posterior"),
     };
     const rows = Array.isArray(recovery.targets) ? recovery.targets : [];
-    return `<div class="wgs-inline-notice" data-role="access-recovery-status">
+    const hasFailure = !rows.length || rows.some((row) => ["failed", "expired", "superseded"].includes(row.state));
+    const feedbackClass = hasFailure ? "wgs-inline-error" : "wgs-inline-notice";
+    return `<div class="${feedbackClass}" data-role="access-recovery-status">
         <strong>${escapeHtml(_t("Recuperacion de acceso"))}</strong>
         ${rows.map((row) => `<p>${escapeHtml(row.name || "")} · ${escapeHtml(row.device_name || "")}: ${escapeHtml(labels[row.state] || _t("Pendiente"))}${row.error ? ` · ${escapeHtml(row.error)}` : ""}</p>`).join("")}
         ${!rows.length ? `<p>${escapeHtml(_t("Sin destinos preparados. Verifica el acceso autorizado y los equipos."))}</p>` : ""}

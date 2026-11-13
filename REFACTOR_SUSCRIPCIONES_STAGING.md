@@ -4,7 +4,7 @@ Registro inicial: 2026-09-28. Rama de trabajo: `staging`.
 
 ## Recuperacion dirigida de acceso, 2026-11-13: desarrollo en staging
 
-Alcance: Access API `19.0.2.0.88`, WGS POS `19.0.1.6.18` y gateway `0.2.1`.
+Alcance: Access API `19.0.2.0.88`, WGS POS `19.0.1.6.19` y gateway `0.2.1`.
 WGS base sin cambios. No promover esta funcionalidad a main ni desplegarla en
 produccion sin validar. El unico push de gateway/main autorizado fue `3035a44`,
 que registra exactamente el codigo ya compilado en produccion (verificacion
@@ -46,9 +46,62 @@ lo cual acredita su estado logico esperado, no presencia fisica ni reconocimient
   se administra en Santa Monica. Daniel tiene dos pagos comprobados; no se
   recorta su periodo al 29/nov.
 
-Pendiente al registrar esta entrada: finalizar regresion completa y validacion
-de staging con seriales QA. Produccion de Odoo, pagos, vigencias, Payroll,
-importador bancario y outputs/ siguen fuera del cambio.
+### Despliegue y pruebas completadas en staging
+
+- Odoo: codigo `c7b8d19`, build CloudPepper y upgrade exclusivos de Access API
+  `19.0.2.0.88` y WGS POS `19.0.1.6.19`, ambos installed/latest iguales. Base
+  `19.0.1.1.62` sin cambios. Gateway `0.2.1`, codigo final `f5e5e07` en staging.
+- Se corrigio el aislamiento del entorno: la URL ADMS clonada apuntaba a 8080
+  y ambos servicios compartian ejecutable. Staging usa ahora 18080/18081,
+  `/opt/adms-server-staging/bin/adms-server`, sus tokens existentes y archivos
+  QA independientes con modo 0600. La API interna de staging quedo autenticada.
+  `ORCH_SITE_CODE=QA-WGS-RESYNC-20261113` limita el ciclo a dos seriales ficticios;
+  no prepara fotos de los equipos operativos clonados. El filtro vacio conserva
+  el comportamiento anterior de todos los sitios; tiene pruebas de regresion.
+- La prueba con backlog detecto que fotos ordinarias podian consumir el lote y
+  presupuesto antes de la recuperacion. Se corrigio la seleccion de reintentos
+  antes de aplicar ambos limites. Una recuperacion completa descarta reintentos
+  anteriores solo de la misma identidad/equipo; las bajas posteriores conservan
+  autoridad. Regresion con 250 fotos previas, lote=1 y presupuesto=1 aprobada.
+- Pruebas locales con fuentes Community/Enterprise instaladas en el servidor,
+  copiadas a temporal sin bases ni credenciales: 280 ORM reales (56 Access y
+  224 WGS/POS), 135 standalone Python, 53 JavaScript, dos PostgreSQL reales y
+  dos HTTP con workers=2 aprobadas. Un placeholder de PostgreSQL se omite en
+  standalone y queda sustituido por las dos pruebas PostgreSQL reales.
+- Gateway: suite completa aprobada con `go test -race ./...`; 130 casos y
+  subcasos reportados por el runner. Incluye preservacion de privilegios,
+  igualdad de foto, ACK equivocado/parcial, caducidad, reinicio, revocacion,
+  reintentos acotados, cola saturada y aislamiento de sitios.
+- Integracion sobre staging: membresia sintetica S03654, persona 5216/PIN 967,
+  sitio QA y dispositivos QA Puerta 1/2. Se probaron reenvio de foto identica,
+  rechazo BIOPHOTO Return=-629, tres ACK con foto entregada sin confirmar,
+  reinicio con ese estado pendiente y cuarto ACK posterior confirmado.
+- Navegador POS: seleccionar Puerta 2 preparo un unico destino, mostro el aviso
+  pendiente y enfriamiento, y consultar estado mostro tanto el rechazo explicito
+  como la confirmacion posterior. Consultar no genera otra recuperacion. No se
+  pagaron ni borraron los tickets de prueba antiguos que estaban abiertos.
+- La revision visual tambien corrigio el fondo verde generico en resultados
+  rechazados, caducados, sustituidos o sin destinos: se usa el estilo de error,
+  con regresion propia. No cambia politica ni el envio de comandos.
+- El servicio final de staging tiene solo dos cursores QA y cero reintentos.
+  Comparacion antes/despues: identidad, plan, fechas, participantes, lineas e
+  importe de S03654 identicos; cero ordenes POS para ese contacto. Se utilizo
+  una imagen sintetica, no fotos de clientes para el simulador.
+
+### Limite de la validacion y siguiente paso
+
+No se comprobo reconocimiento facial ni paso fisico: los ACK anteriores son del
+simulador QA. Puerta 2 real rechazo las dos consultas de inventario probadas;
+no se afirma que su inventario este vacio ni que falte especificamente un rostro.
+Queda pendiente validar en hardware real con autorizacion de despliegue, sin
+confundir un ACK de comando con un evento de acceso permitido.
+
+Produccion de Odoo/main sigue en `024fa06`. El gateway productivo sigue con el
+mismo proceso (PID 1907495 desde 12/nov) y SHA-256
+`28111b8131c2025f658321724e65524699aa6b17200bba32ec90be1097490794`.
+Solo se registro en gateway/main la base ya desplegada `3035a44`; la recuperacion
+nueva permanece en staging. No se modificaron pagos, vigencias ni suscripciones
+productivas. Payroll, importador bancario y outputs/ quedaron fuera.
 
 ## Incidencias WhatsApp: cierre tecnico y liberacion, 2026-11-04
 

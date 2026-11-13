@@ -29,6 +29,14 @@ test('confirmed status and actionable errors render safely', () => {
     assert.match(html, /Falta foto &lt;img&gt;/);
     assert.doesNotMatch(html, /<script>/);
 });
+test('rejected, expired, superseded and empty results never use a green success notice', () => {
+    for (const targets of [[], ...['failed', 'expired', 'superseded'].map(state => [{state}]),
+        [{state:'confirmed'}, {state:'failed'}]]) {
+        const html = context.renderAccessRecovery({targets}, escape, translate);
+        assert.match(html, /class="wgs-inline-error"/);
+        assert.doesNotMatch(html, /class="wgs-inline-notice"/);
+    }
+});
 
 function fixture(overrides = {}) {
     const state = {selectedPartnerId: 7, currentDetail: {partner_id:7}};
