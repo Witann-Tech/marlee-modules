@@ -48,7 +48,8 @@ lo cual acredita su estado logico esperado, no presencia fisica ni reconocimient
 
 ### Despliegue y pruebas completadas en staging
 
-- Odoo: codigo `c7b8d19`, build CloudPepper y upgrade exclusivos de Access API
+- Odoo: base `c7b8d19` y cierre visual `ae40f6d`, build CloudPepper y upgrade
+  exclusivos de Access API
   `19.0.2.0.88` y WGS POS `19.0.1.6.19`, ambos installed/latest iguales. Base
   `19.0.1.1.62` sin cambios. Gateway `0.2.1`, codigo final `f5e5e07` en staging.
 - Se corrigio el aislamiento del entorno: la URL ADMS clonada apuntaba a 8080
