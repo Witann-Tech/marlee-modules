@@ -2,6 +2,59 @@
 
 Registro inicial: 2026-09-28. Rama de trabajo: `staging`.
 
+## Liberacion de recuperacion dirigida: produccion, 2026-11-17
+
+Autorizacion: promover WGS y gateway a main, desplegar y validar una sola
+recuperacion en Puerta 2 de El Dorado, sin pagos ni vigencias. No se repitieron
+consultas de inventario a los SpeedFace: se utilizaron los ACK de comandos.
+
+### Promocion y despliegue
+
+- Odoo: merge main `3912425`; arbol identico al staging validado `16d84d9`.
+  Los unicos conflictos de historial eran bitacora y version del manifest;
+  se conservaron exactamente los archivos validados. El diff productivo excluye
+  Payroll, importador bancario y outputs/.
+- Build CloudPepper de `3912425` completado. Upgrade exclusivo de Access API
+  `19.0.2.0.88` y WGS POS `19.0.1.6.19`; ambas versiones installed/latest iguales.
+  WGS base permanece `19.0.1.1.62`, sin upgrade.
+- Gateway main `f5e5e07`, version `0.2.1`, compilado con Go 1.25.4 linux/amd64,
+  CGO=0, vcs.modified=false. SHA-256 productivo:
+  `38d734f1c16642f896d3d9f92f00ff2ef99dbbca188ab6b6654315835fcff2cd`.
+  Servicio productivo reiniciado a las 23:46:59 UTC, PID 2021670.
+- Se conservaron los cinco cursores y archivos de estado productivos, con cero
+  reintentos y sin errores de equipos tras el despliegue. No se copio el filtro
+  QA ni la configuracion de staging. Los archivos de estado pasaron de modo 0644
+  a 0600. Binario anterior y copia local de los dos archivos de estado conservados
+  en el servidor; no hubo pg_dump, copia de base ni transferencia de biometria
+  a esta Mac. Staging no se reinicio ni se modifico en el servidor.
+- Antes de liberar se repitieron y aprobaron 53 pruebas JavaScript y la suite
+  Go con detector de carreras. La evidencia ORM/HTTP/PostgreSQL del ensayo de
+  staging se conserva en la entrada del 13/nov.
+
+### Prueba real limitada y resultado
+
+- Socia: Veronica Yoeli Flores Mata, contacto 2089, contrato individual S02328,
+  persona existente 2722, PIN 492. Contrato vigente y foto presentes antes de
+  intervenir; no se dio acceso a un contrato vencido ni se genero otra identidad.
+- Solicitud 1, creada a las 23:51:08 UTC: un unico destino, dispositivo 4,
+  Puerta 2, serial `SYZ8253801100`. Unico cambio de esta persona desde la
+  solicitud: 41025, upsert dirigido al dispositivo 4, foto incluida y prioridad.
+  No se enviaron cambios de esta prueba a otras puertas o socios.
+- El ciclo normal del gateway recogio la solicitud; no se forzo un cron ni un
+  ciclo global. Comandos 222990/222991/222992/222993 (horario, usuario,
+  autorizacion y BIOPHOTO), todos confirmados por el serial correcto con
+  Return=0. Ultimo ACK: 23:53:11 UTC, 17:53:11 en America/Mexico_City.
+- Odoo confirma solicitud/destino en estado confirmed, sin error. La consulta
+  posterior no creo otra solicitud ni volvio a encolar comandos.
+- Snapshot de contrato, lineas, venta POS, pagos, movimientos contables e
+  identidad identico antes del upgrade y despues de resincronizar. Digest
+  SHA-256: `987c7aa311cf60752c7cdfddd3beec2c17f403a9cbfd409d7ea4a65ecbb1af96`.
+  No se tocaron pagos, precios, plan, participantes ni vigencias.
+- No habia eventos fisicos posteriores de Veronica en Puerta 2 al cerrar la
+  comprobacion. Los cuatro ACK acreditan aceptacion de los comandos reales,
+  no reconocimiento facial ni paso presencial. Ese paso queda por comprobar
+  cuando la socia se presente; no se infiere desde la cache del gateway.
+
 ## Recuperacion dirigida de acceso, 2026-11-13: desarrollo en staging
 
 Alcance: Access API `19.0.2.0.88`, WGS POS `19.0.1.6.19` y gateway `0.2.1`.
