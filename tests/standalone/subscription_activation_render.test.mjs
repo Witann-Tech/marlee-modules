@@ -5,7 +5,9 @@ import test from 'node:test';
 
 const source = fs.readFileSync(new URL('../../witann_group_subscriptions_pos/static/src/js/subscription_card_render.js', import.meta.url), 'utf8');
 const context = vm.createContext({});
-vm.runInContext(source.replace(/export\s*\{[^}]*\};?\s*$/, ''), context);
+const recoverySource = fs.readFileSync(new URL('../../witann_group_subscriptions_pos/static/src/js/subscription_access_recovery_render.js', import.meta.url), 'utf8');
+vm.runInContext(recoverySource.replace('export function ', 'function '), context);
+vm.runInContext(source.replace(/^import .*;\s*$/gm, '').replace(/export\s*\{[^}]*\};?\s*$/, ''), context);
 
 function render(change) {
     return context.renderSubscriptionCard({

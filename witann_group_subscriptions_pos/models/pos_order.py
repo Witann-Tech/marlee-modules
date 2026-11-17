@@ -827,8 +827,12 @@ class PosOrder(models.Model):
         return self.env['sale.order'].wgs_update_partner_photo_for_pos(partner_id, image_1920)
 
     @api.model
-    def wgs_resync_subscription_access_for_pos(self, subscription_id):
-        return self.env['sale.order'].wgs_resync_subscription_access_for_pos(subscription_id)
+    def wgs_resync_subscription_access_for_pos(self, subscription_id, device_id=False):
+        return self.env['sale.order'].wgs_resync_subscription_access_for_pos(subscription_id, device_id=device_id)
+
+    @api.model
+    def wgs_get_access_recovery_status_for_pos(self, subscription_id):
+        return self.env['sale.order'].wgs_get_access_recovery_status_for_pos(subscription_id)
 
     @api.model
     def _wgs_get_birthdate_from_curp_for_pos(self, curp):

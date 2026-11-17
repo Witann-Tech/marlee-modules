@@ -50,7 +50,7 @@ if [[ -n "${WGS_BASELINE_ACCESS_ADDON:-}" ]]; then
     [[ -f "$WGS_BASELINE_ACCESS_ADDON/__manifest__.py" ]]
     docker run --rm --name "$runner" --network "$net" --memory 1536m --cpus 2 \
         -v "$WGS_BASELINE_ACCESS_ADDON:/mnt/extra-addons/access_control_api:ro" \
-        "${runtime_mount[@]}" "${runtime_command[@]}" --db_host="$pg" --db_user=wgs --db_password=wgs_disposable_test_only \
+        ${runtime_mount[@]+"${runtime_mount[@]}"} "${runtime_command[@]}" --db_host="$pg" --db_user=wgs --db_password=wgs_disposable_test_only \
         -d wgs_test_identity --addons-path="/mnt/extra-addons,$core_addons" \
         -i access_control_api --without-demo --stop-after-init --max-cron-threads=0 --workers=0 --no-http \
         > "$logdir/baseline-install.log" 2>&1
@@ -72,7 +72,7 @@ cat "$logdir/postgres.log"
 
 if docker run --rm --name "$runner" --network "$net" --memory 1536m --cpus 2 \
     -v "$PWD/access_control_api:/mnt/extra-addons/access_control_api:ro" \
-    "${runtime_mount[@]}" "${runtime_command[@]}" --db_host="$pg" --db_user=wgs --db_password=wgs_disposable_test_only \
+    ${runtime_mount[@]+"${runtime_mount[@]}"} "${runtime_command[@]}" --db_host="$pg" --db_user=wgs --db_password=wgs_disposable_test_only \
     -d wgs_test_identity --addons-path="/mnt/extra-addons,$core_addons" \
     "$module_action" access_control_api --without-demo --test-enable --test-tags=/access_control_api \
     --stop-after-init --max-cron-threads=0 --workers=0 --no-http --log-level=test \
@@ -97,7 +97,7 @@ if [[ -n "${WGS_ENTERPRISE_ADDONS:-}" ]]; then
         -v "$PWD/witann_group_subscriptions:/mnt/extra-addons/witann_group_subscriptions:ro" \
         -v "$PWD/witann_group_subscriptions_pos:/mnt/extra-addons/witann_group_subscriptions_pos:ro" \
         -v "$WGS_ENTERPRISE_ADDONS:/mnt/enterprise:ro" \
-        "${runtime_mount[@]}" "${runtime_command[@]}" --db_host="$pg" --db_user=wgs --db_password=wgs_disposable_test_only \
+        ${runtime_mount[@]+"${runtime_mount[@]}"} "${runtime_command[@]}" --db_host="$pg" --db_user=wgs --db_password=wgs_disposable_test_only \
         -d wgs_test_identity --addons-path="/mnt/extra-addons,/mnt/enterprise,$core_addons" \
         -i witann_group_subscriptions_pos --without-demo --test-enable \
         --test-tags="${WGS_TEST_TAGS:-/access_control_api,/witann_group_subscriptions,/witann_group_subscriptions_pos}" \
@@ -115,7 +115,7 @@ if [[ -n "${WGS_ENTERPRISE_ADDONS:-}" ]]; then
             -v "$PWD/witann_group_subscriptions:/mnt/extra-addons/witann_group_subscriptions:ro" \
             -v "$PWD/witann_group_subscriptions_pos:/mnt/extra-addons/witann_group_subscriptions_pos:ro" \
             -v "$WGS_ENTERPRISE_ADDONS:/mnt/enterprise:ro" \
-            "${runtime_mount[@]}" "${runtime_command[@]}" shell \
+            ${runtime_mount[@]+"${runtime_mount[@]}"} "${runtime_command[@]}" shell \
             --db_host="$pg" --db_user=wgs --db_password=wgs_disposable_test_only \
             -d wgs_test_identity --addons-path="/mnt/extra-addons,/mnt/enterprise,$core_addons" \
             --max-cron-threads=0 --workers=0 --no-http \
@@ -125,7 +125,7 @@ if [[ -n "${WGS_ENTERPRISE_ADDONS:-}" ]]; then
             -v "$PWD/witann_group_subscriptions:/mnt/extra-addons/witann_group_subscriptions:ro" \
             -v "$PWD/witann_group_subscriptions_pos:/mnt/extra-addons/witann_group_subscriptions_pos:ro" \
             -v "$WGS_ENTERPRISE_ADDONS:/mnt/enterprise:ro" \
-            "${runtime_mount[@]}" "${runtime_command[@]}" \
+            ${runtime_mount[@]+"${runtime_mount[@]}"} "${runtime_command[@]}" \
             --db_host="$pg" --db_user=wgs --db_password=wgs_disposable_test_only \
             -d wgs_test_identity --addons-path="/mnt/extra-addons,/mnt/enterprise,$core_addons" \
             --max-cron-threads=0 --workers=2 --http-port=8069 --no-database-list \

@@ -128,12 +128,16 @@ export function createSubscriptionPosApi(orm, getCompanyId = () => false) {
                 [subscriptionId, participantIds || []]
             );
         },
-        async resyncSubscriptionAccess(subscriptionId) {
+        async resyncSubscriptionAccess(subscriptionId, deviceId = false) {
             return orm.call(
                 "pos.order",
                 "wgs_resync_subscription_access_for_pos",
-                [subscriptionId]
+                [subscriptionId, deviceId || false],
+                quoteContext()
             );
+        },
+        async fetchAccessRecoveryStatus(subscriptionId) {
+            return orm.call("pos.order", "wgs_get_access_recovery_status_for_pos", [subscriptionId], quoteContext());
         },
     };
 }

@@ -1,3 +1,5 @@
+import base64
+import io
 import json
 from datetime import timedelta
 from unittest.mock import patch
@@ -5,11 +7,83 @@ from unittest.mock import patch
 from dateutil.relativedelta import relativedelta
 
 from odoo import Command
-from odoo.exceptions import UserError
+from odoo.exceptions import AccessError, UserError
 from odoo.tests.common import TransactionCase
 
 
 class TestPosAccessBlock(TransactionCase):
+    def _access_recovery_fixture(self, with_photo=True):
+        if with_photo:
+            from PIL import Image
+            image = io.BytesIO()
+            Image.new('RGB', (400, 400), (70, 110, 140)).save(image, format='JPEG')
+            (self.owner | self.participant).write({'image_1920': base64.b64encode(image.getvalue()).decode()})
+        order = self._create_subscription_order()
+        order.write({'subscription_state': self._find_subscription_state_value('progress', 'en progreso')})
+        devices = self.env['access_control.device'].create([
+            {'name': name, 'device_serial': name, 'site_id': self.site.id}
+            for name in ('WGS-RECOVERY-1', 'WGS-RECOVERY-2')
+        ])
+        return order, devices
+
+    def test_full_access_recovery_preserves_commercial_records_and_identity(self):
+        order, devices = self._access_recovery_fixture()
+        commercial = ['plan_id', 'start_date', 'end_date', 'next_invoice_date', 'participant_ids', 'order_line', 'amount_total']
+        before = order.read(commercial)
+        people = self.env['access_control.person'].search([('partner_id', 'in', [self.owner.id, self.participant.id]), ('active', '=', True)])
+        identities = people.read(['partner_id', 'global_user_id'])
+        pos_count = self.env['pos.order'].search_count([])
+        result = self.env['pos.order'].wgs_resync_subscription_access_for_pos(order.id, devices[1].id)
+        self.assertTrue(result['ok'])
+        self.assertEqual(before, order.read(commercial))
+        self.assertEqual(identities, people.read(['partner_id', 'global_user_id']))
+        self.assertEqual(pos_count, self.env['pos.order'].search_count([]))
+        request = order.wgs_last_access_resync_id
+        self.assertEqual(len(request.target_ids), 2)
+        self.assertEqual(request.target_ids.device_id, devices[1])
+        changes = self.env['access_control.sync_change'].search([('resync_target_id', 'in', request.target_ids.ids)])
+        self.assertEqual(len(changes), 2)
+        self.assertTrue(all(changes.mapped('include_face_pic')))
+
+    def test_access_recovery_cooldown_does_not_enqueue_duplicates(self):
+        order, devices = self._access_recovery_fixture()
+        self.env['pos.order'].wgs_resync_subscription_access_for_pos(order.id, devices[0].id)
+        count = self.env['access_control.resync_target'].sudo().search_count([])
+        with self.assertRaises(UserError), self.env.cr.savepoint():
+            self.env['pos.order'].wgs_resync_subscription_access_for_pos(order.id, devices[0].id)
+        self.assertEqual(count, self.env['access_control.resync_target'].sudo().search_count([]))
+
+    def test_access_recovery_rejects_an_unrelated_site_before_queueing(self):
+        order, _devices = self._access_recovery_fixture()
+        other = self._external_access_device(self.other_site)
+        with self.assertRaises(AccessError), self.env.cr.savepoint():
+            self.env['pos.order'].wgs_resync_subscription_access_for_pos(order.id, other.id)
+        self.assertFalse(order.wgs_last_access_resync_id)
+
+    def test_other_branch_cannot_recover_or_query_the_origin_subscription(self):
+        order, devices = self._access_recovery_fixture()
+        pos = self.env['pos.order'].with_context(allowed_company_ids=[self.other_company.id])
+        for method, args in [('wgs_resync_subscription_access_for_pos', [order.id, devices[0].id]),
+                             ('wgs_get_access_recovery_status_for_pos', [order.id])]:
+            with self.assertRaises(AccessError), self.env.cr.savepoint():
+                getattr(pos, method)(*args)
+
+    def test_access_recovery_without_faces_is_actionable_not_false_success(self):
+        order, devices = self._access_recovery_fixture(with_photo=False)
+        result = self.env['pos.order'].wgs_resync_subscription_access_for_pos(order.id, devices[0].id)
+        self.assertEqual(result['recovery']['state'], 'failed')
+        self.assertTrue(all(row['error'] for row in result['recovery']['targets']))
+
+    def test_expired_membership_cannot_be_enabled_by_manual_recovery(self):
+        order, devices = self._access_recovery_fixture()
+        today = order._wgs_get_subscription_business_today()
+        order.write({'start_date': today - timedelta(days=32), 'end_date': today - timedelta(days=2),
+                     'next_invoice_date': today - timedelta(days=1)})
+        order.write({'subscription_state': self._find_subscription_state_value('closed', 'churn')})
+        with self.assertRaises(UserError), self.env.cr.savepoint():
+            self.env['pos.order'].wgs_resync_subscription_access_for_pos(order.id, devices[0].id)
+        self.assertFalse(order.wgs_last_access_resync_id)
+
     def _current_period(self):
         today = self.env['sale.order']._wgs_get_subscription_business_today()
         boundary = today + relativedelta(months=1)
