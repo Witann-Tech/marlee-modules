@@ -10,6 +10,8 @@
                 <field name="journal_id"/>
                 <field name="currency_id" column_invisible="True"/>
                 <field name="amount" sum="Total salidas"/>
+                <field name="witann_purchase_order_id" optional="show"/>
+                <field name="witann_purchase_remaining_amount" optional="show" sum="Reservado por aplicar"/>
                 <field name="witann_vendor_bill_ids" widget="many2many_tags"/>
                 <field name="witann_vendor_reconciliation_state" widget="badge"/>
                 <field name="company_id" groups="base.group_multi_company"/>
@@ -28,8 +30,15 @@
                             class="oe_highlight" groups="account.group_account_user"
                             invisible="witann_vendor_reconciliation_state != 'pending'"/>
                     <button name="action_witann_undo_vendor_reconciliation" type="object" string="Deshacer conciliación"
-                            groups="account.group_account_user" invisible="not witann_vendor_bill_ids"
-                            confirm="Se reabrirán los saldos de las facturas y la salida quedará pendiente. ¿Continuar?"/>
+                            groups="account.group_account_user" invisible="not witann_vendor_bill_ids and not (witann_purchase_order_id and witann_vendor_reconciliation_state == 'other')"
+                            confirm="Se reabrirán los saldos aplicados. Si hay una OC vinculada, el efectivo volverá a quedar reservado para ella. ¿Continuar?"/>
+                    <button name="action_witann_link_purchase" type="object" string="Vincular con OC"
+                            groups="account.group_account_user" invisible="witann_vendor_reconciliation_state != 'pending'"/>
+                    <button name="action_witann_apply_purchase" type="object" string="Aplicar a facturas publicadas"
+                            groups="account.group_account_user" invisible="witann_vendor_reconciliation_state not in ('reserved', 'partial')"/>
+                    <button name="action_witann_unlink_purchase" type="object" string="Desvincular OC"
+                            groups="account.group_account_user" invisible="witann_vendor_reconciliation_state != 'reserved'"
+                            confirm="Se liberará la reserva para poder asignar la salida a otro destino. ¿Continuar?"/>
                 </header>
                 <sheet>
                     <group>
@@ -45,6 +54,9 @@
                             <field name="currency_id"/>
                             <field name="amount"/>
                             <field name="witann_vendor_reconciliation_state" widget="badge"/>
+                            <field name="witann_purchase_order_id" invisible="not witann_purchase_order_id"/>
+                            <field name="witann_purchase_applied_amount" invisible="not witann_purchase_order_id"/>
+                            <field name="witann_purchase_remaining_amount" invisible="not witann_purchase_order_id"/>
                         </group>
                     </group>
                     <field name="witann_vendor_bill_ids">
@@ -70,8 +82,10 @@
                 <field name="payment_ref"/>
                 <field name="pos_session_id"/>
                 <field name="journal_id"/>
-                <filter name="pending" string="Pendientes" domain="[('witann_vendor_reconciliation_state', '=', 'pending')]"/>
+                <field name="witann_purchase_order_id"/>
+                <filter name="pending" string="Pendientes de aplicar" domain="[('witann_vendor_reconciliation_state', 'in', ['pending', 'reserved', 'partial'])]"/>
                 <filter name="reconciled" string="Conciliadas con proveedor" domain="[('witann_vendor_reconciliation_state', '=', 'reconciled')]"/>
+                <filter name="reserved" string="Reservadas para OC" domain="[('witann_vendor_reconciliation_state', 'in', ['reserved', 'partial'])]"/>
                 <filter name="other" string="Revisar / otro destino" domain="[('witann_vendor_reconciliation_state', '=', 'other')]"/>
                 <separator/>
                 <filter name="date" string="Fecha de salida" date="date"/>

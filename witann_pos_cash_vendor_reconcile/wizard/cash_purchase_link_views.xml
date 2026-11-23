@@ -1,0 +1,28 @@
+<odoo>
+    <record id="view_cash_purchase_wizard_form" model="ir.ui.view">
+        <field name="name">witann.pos.cash.purchase.wizard.form</field>
+        <field name="model">witann.pos.cash.purchase.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Vincular efectivo con OC">
+                <div class="alert alert-info" role="alert">
+                    Reserva el importe completo de esta salida para una OC confirmada del mismo grupo de matriz y sucursales.
+                    Al publicar facturas vinculadas mediante las líneas de la OC, se aplicará el efectivo disponible.
+                    El remanente queda reservado para facturas posteriores. Activa la matriz y las sucursales involucradas.
+                </div>
+                <group>
+                    <field name="statement_line_id" options="{'no_open': True}"/>
+                    <field name="company_id" groups="base.group_multi_company"/>
+                    <field name="accounting_company_id" invisible="1"/>
+                    <field name="currency_id" invisible="1"/>
+                    <field name="amount"/>
+                    <field name="order_id" options="{'no_create': True}"
+                           domain="[('state', '=', 'purchase'), ('company_id', 'child_of', accounting_company_id), ('currency_id', '=', currency_id)]"/>
+                </group>
+                <footer>
+                    <button name="action_link" type="object" string="Vincular y reservar efectivo" class="btn-primary"/>
+                    <button string="Cancelar" special="cancel" class="btn-secondary"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+</odoo>

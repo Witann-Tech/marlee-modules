@@ -33,6 +33,48 @@ La versión `19.0.1.1.1` elimina los valores predeterminados del asistente al
 ejecutar la conciliación y su reversión. Así, los asientos nativos de impuestos
 por pago no heredan una referencia incorrecta a la salida de caja de la sucursal.
 
+## Efectivo reservado para órdenes de compra (1.2.0)
+
+1. Registrar la salida de efectivo habitual y abrirla desde **Salidas de efectivo POS**.
+2. Pulsar **Vincular con OC** y elegir una orden confirmada de la misma matriz
+   y en la moneda de la salida. Se reserva el importe completo de la salida.
+3. Crear la factura de proveedor desde la OC, o incorporar sus líneas mediante
+   el mecanismo nativo de Compras. Mientras esté en borrador, no se aplica efectivo.
+4. Al publicar la factura, se concilia automáticamente el menor importe entre
+   el efectivo reservado disponible, el saldo de la factura y sus líneas de esa OC.
+5. Si quedan fondos, continúan reservados para otras facturas de la OC. Si falta
+   efectivo, la factura conserva el saldo pendiente. Los estados y montos se ven
+   tanto en la salida como en la pestaña **Efectivo POS** de la OC.
+
+Se admiten varias salidas para una OC y facturas parciales. Las reservas se
+consumen por orden de creación; las facturas de una operación por fecha e ID.
+Una factura que mezcla órdenes o conceptos ajenos recibe como máximo el importe
+atribuible a las líneas de cada OC vinculada. El texto de origen o referencia,
+por sí solo, no establece una relación de compra.
+
+La vinculación no aplica pagos a facturas ya publicadas. Para ellas, o después
+de deshacer aplicaciones, usar **Aplicar a facturas publicadas** desde la salida
+o la pestaña de la OC. La acción es idempotente.
+
+**Deshacer conciliación** revierte las aplicaciones de esa salida y devuelve
+todo su efectivo a la reserva. Para cambiarla de destino, deshacer primero las
+aplicaciones y pulsar **Desvincular OC**. Se conserva el historial; las salidas
+con historial de compra no se eliminan. Se debe desvincular antes de cambiar
+proveedor, moneda o empresa de la OC, o cancelarla. Una factura con efectivo
+de OC aplicado debe deshacerse desde la salida antes de pasar a borrador.
+
+La matriz y las sucursales deben estar activas, y el usuario que publica debe
+tener permisos contables para aplicar su efectivo. Si hay una reserva que no
+puede aplicarse, la publicación falla dentro de la misma transacción, sin dejar
+la factura publicada con un pago omitido. Los totales almacenados de la reserva
+se muestran en la OC bajo sus reglas de empresa; aplicar o liberar los fondos
+siempre comprueba acceso a los movimientos reales de caja, sin escrituras elevadas.
+
+La OC no puede recibir reservas superiores a su importe total. No se generan
+pagos adicionales, retiros adicionales ni asientos de anticipo al vincular.
+Se mantiene en suspenso el efectivo pendiente y se reclasifica únicamente el
+importe aplicado al publicarse las facturas, con impuestos por pago nativos.
+
 ## Contabilidad y trazabilidad
 
 La salida ya acredita caja. El módulo sustituye su contrapartida de suspenso por
@@ -62,9 +104,10 @@ puede eliminarse directamente desde el POS.
   disponibles para la sucursal de la salida. Se conservan las reglas de acceso
   y la selección de empresas activas; no se cruzan empresas matrices distintas.
   Importes positivos, sin duplicados, sobrepagos ni diferencias.
-- Primera versión limitada a la moneda de la empresa. No realiza conversiones,
-  anticipos, ajustes por diferencia, asignaciones a varios proveedores ni deja
-  parte de una salida sin asignar.
+- Limitado a la moneda de la empresa. No realiza conversiones, documentos de
+  anticipo, ajustes por diferencia ni asignaciones a varios proveedores.
+  La conciliación directa distribuye la salida completa; el flujo de OC
+  permite conservar un remanente reservado entre facturas parciales.
 - Salidas con destino contable ya asignado (gastos, reembolsos de clientes o
   diferencias de caja) se muestran para revisión y no se reaplican.
 - Se respetan los bloqueos fiscales y asientos protegidos de Odoo; no se

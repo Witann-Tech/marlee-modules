@@ -8,11 +8,21 @@ from odoo.tools import SQL, clean_context
 class AccountBankStatementLine(models.Model):
     _inherit = 'account.bank.statement.line'
 
+    witann_purchase_link_ids = fields.One2many(
+        'witann.pos.cash.purchase.link', 'statement_line_id', string='Vínculos con OC')
+    witann_purchase_order_id = fields.Many2one(
+        'purchase.order', compute='_compute_witann_vendor_reconciliation', store=True,
+        string='OC vinculada', index=True)
+    witann_purchase_applied_amount = fields.Monetary(
+        compute='_compute_witann_vendor_reconciliation', store=True, string='Aplicado a facturas de OC')
+    witann_purchase_remaining_amount = fields.Monetary(
+        compute='_compute_witann_vendor_reconciliation', store=True, string='Reservado por aplicar')
     witann_vendor_bill_ids = fields.Many2many(
         'account.move', compute='_compute_witann_vendor_reconciliation',
         store=True, string='Facturas conciliadas')
     witann_vendor_reconciliation_state = fields.Selection([
         ('pending', 'Pendiente'), ('reconciled', 'Conciliada con proveedor'),
+        ('reserved', 'Reservada para OC'), ('partial', 'OC aplicada parcialmente'),
         ('other', 'Revisar / otro destino'),
     ], compute='_compute_witann_vendor_reconciliation', store=True,
         string='Conciliación con proveedor', index=True)
@@ -24,9 +34,15 @@ class AccountBankStatementLine(models.Model):
         'move_id.line_ids.amount_residual', 'move_id.line_ids.amount_residual_currency',
         'move_id.line_ids.matched_credit_ids.credit_move_id.move_id.move_type',
         'move_id.line_ids.matched_debit_ids.debit_move_id.move_id.move_type',
+        'witann_purchase_link_ids.state', 'witann_purchase_link_ids.order_id',
+        'witann_purchase_link_ids.applied_amount', 'witann_purchase_link_ids.remaining_amount',
     )
     def _compute_witann_vendor_reconciliation(self):
         for line in self:
+            link = line.witann_purchase_link_ids.filtered(lambda r: r.state == 'active')
+            line.witann_purchase_order_id = link.order_id
+            line.witann_purchase_applied_amount = link.applied_amount if link else 0
+            line.witann_purchase_remaining_amount = link.remaining_amount if link else 0
             liquidity, suspense, other = line._seek_for_lines()
             counterparts = (
                 other.matched_credit_ids.credit_move_id
@@ -42,7 +58,10 @@ class AccountBankStatementLine(models.Model):
                 other and all(aml.account_id.account_type == 'liability_payable'
                               and aml.reconciled for aml in other))
             if is_cash_out and plain_suspense:
-                line.witann_vendor_reconciliation_state = 'pending'
+                line.witann_vendor_reconciliation_state = 'reserved' if link else 'pending'
+            elif (is_cash_out and link and len(suspense) == 1 and len(liquidity) == 1
+                  and bills and paid_payables and suspense.balance > 0):
+                line.witann_vendor_reconciliation_state = 'partial'
             elif is_cash_out and bills and not suspense and paid_payables:
                 line.witann_vendor_reconciliation_state = 'reconciled'
             else:
@@ -66,6 +85,29 @@ class AccountBankStatementLine(models.Model):
             'context': {'default_statement_line_id': self.id},
         }
 
+    def action_witann_link_purchase(self):
+        self.ensure_one()
+        self._witann_check_accountant()
+        if self.witann_vendor_reconciliation_state != 'pending':
+            raise UserError(_('Solo puedes vincular una salida pendiente sin otro destino.'))
+        return {
+            'type': 'ir.actions.act_window', 'name': _('Vincular efectivo con OC'),
+            'res_model': 'witann.pos.cash.purchase.wizard', 'view_mode': 'form', 'target': 'new',
+            'context': {'default_statement_line_id': self.id},
+        }
+
+    def action_witann_unlink_purchase(self):
+        self.ensure_one()
+        link = self.witann_purchase_link_ids.filtered(lambda r: r.state == 'active')
+        if not link:
+            raise UserError(_('La salida no tiene una OC vinculada.'))
+        return link.action_cancel()
+
+    def action_witann_apply_purchase(self):
+        self.ensure_one()
+        self._witann_check_accountant()
+        return self.witann_purchase_order_id.action_witann_apply_cash()
+
     def _witann_lock_reconciliation(self, bills):
         """Version the accounting rows so concurrent stale requests are retried by Odoo.
 
@@ -83,7 +125,7 @@ class AccountBankStatementLine(models.Model):
                 'UPDATE account_move_line SET write_date = write_date WHERE id = %s', aml_id))
         self.env.invalidate_all()
 
-    def _witann_reconcile_vendor_bills(self, allocations):
+    def _witann_reconcile_vendor_bills(self, allocations, purchase_link=None):
         # Wizard defaults must not become defaults on native accounting entries
         # (notably cash-basis tax moves created while reconciling a parent bill).
         self = self.with_context(clean_context(self.env.context))
@@ -97,7 +139,11 @@ class AccountBankStatementLine(models.Model):
         if len(set(bill_ids)) != len(allocations) or len(bills) != len(allocations):
             raise UserError(_('Selecciona cada factura una sola vez y verifica que exista.'))
         self._witann_lock_reconciliation(bills)
-        if (self.witann_vendor_reconciliation_state != 'pending'
+        if purchase_link:
+            purchase_link = purchase_link.with_env(self.env)
+            purchase_link._check_application(self, bills)
+        states = ('reserved', 'partial') if purchase_link else ('pending',)
+        if (self.witann_vendor_reconciliation_state not in states
                 or self.journal_id != self.pos_session_id.cash_journal_id):
             raise UserError(_('La salida no es una salida de caja pendiente de esta sesión.'))
         if self.company_id not in self.env.companies:
@@ -125,6 +171,9 @@ class AccountBankStatementLine(models.Model):
                 raise UserError(_('Los importes deben respetar los decimales de la moneda.'))
             if currency.compare_amounts(amount, bill.amount_residual) > 0:
                 raise UserError(_('El importe supera el saldo pendiente de %s.', bill.display_name))
+            if purchase_link and currency.compare_amounts(
+                    amount, purchase_link.order_id._witann_bill_cash_capacity(bill)) > 0:
+                raise UserError(_('El importe supera las líneas de la OC pendientes de aplicar en esta factura.'))
             payable = bill.line_ids.filtered(
                 lambda aml: aml.account_id.account_type == 'liability_payable'
                 and not aml.reconciled)
@@ -136,13 +185,22 @@ class AccountBankStatementLine(models.Model):
                 raise UserError(_('La cuenta por pagar de la factura no está disponible para la sucursal de la salida.'))
             validated.append((bill, currency.round(amount), payable))
             total += currency.round(amount)
-        if currency.compare_amounts(total, -self.amount) != 0:
+        liquidity, suspense, other = self._seek_for_lines()
+        available = suspense.balance
+        if purchase_link and currency.compare_amounts(total, available) > 0:
+            raise UserError(_('El importe supera el efectivo reservado disponible.'))
+        if not purchase_link and currency.compare_amounts(total, -self.amount) != 0:
             raise UserError(_('Distribuye exactamente el importe de la salida entre las facturas.'))
 
         # Replace only the suspense counterpart of the existing cash entry.
         # The original liquidity line, cash amount, date and session remain intact.
-        liquidity, suspense, other = self._seek_for_lines()
+        previous_lines = self.move_id.line_ids
+        remaining = currency.round(available - total)
         commands = []
+        if remaining:
+            commands.append(Command.update(suspense.id, {
+                'debit': remaining, 'credit': 0, 'amount_currency': remaining,
+            }))
         for index, (bill, amount, payable) in enumerate(validated):
             values = {
                 'account_id': payable.account_id.id,
@@ -151,14 +209,16 @@ class AccountBankStatementLine(models.Model):
                 'amount_currency': amount, 'debit': amount, 'credit': 0,
                 'name': _('Efectivo POS: %s', bill.display_name),
             }
-            commands.append(Command.update(suspense.id, values) if index == 0
+            commands.append(Command.update(suspense.id, values) if index == 0 and not remaining
                             else Command.create(values))
         # Keep the cash-movement label and cashier partner untouched. Changing
         # the statement partner would regenerate its original suspense lines.
         # Native statement reconciliation also permits editing the counterpart
         # of a posted cash entry. Fiscal locks and integrity hashes still apply.
         self.move_id.with_context(skip_readonly_check=True).write({'line_ids': commands})
-        payable_lines = self.move_id.line_ids - liquidity
+        payable_lines = self.move_id.line_ids - previous_lines
+        if not remaining:
+            payable_lines |= suspense
         for (bill, amount, payable), counterpart in zip(validated, payable_lines.sorted('id')):
             (counterpart | payable.sorted(lambda aml: (aml.date_maturity or aml.date, aml.id))).reconcile()
             if not counterpart.reconciled:
@@ -180,7 +240,8 @@ class AccountBankStatementLine(models.Model):
         self.ensure_one()
         self._witann_check_accountant()
         self._witann_lock_reconciliation(self.witann_vendor_bill_ids)
-        if not self.witann_vendor_bill_ids:
+        if not self.witann_vendor_bill_ids and not (
+                self.witann_purchase_order_id and self.witann_vendor_reconciliation_state == 'other'):
             raise UserError(_('No hay facturas de proveedor conciliadas con esta salida.'))
         bills = self.witann_vendor_bill_ids
         self.action_undo_reconciliation()
@@ -193,5 +254,5 @@ class AccountBankStatementLine(models.Model):
 
     @api.ondelete(at_uninstall=False)
     def _witann_check_reconciled_cash_unlink(self):
-        if any(line.witann_vendor_bill_ids for line in self):
-            raise UserError(_('Deshaz la conciliación con proveedor antes de eliminar la salida.'))
+        if any(line.witann_vendor_bill_ids or line.witann_purchase_link_ids for line in self):
+            raise UserError(_('La salida tiene conciliaciones o historial de OC y no puede eliminarse.'))
