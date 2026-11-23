@@ -4,7 +4,8 @@ Módulo independiente: `witann_pos_cash_vendor_reconcile`. Depende de `point_of_
 y `account`; no requiere los módulos de suscripciones.
 
 Desplegado y probado en staging el 23 de noviembre de 2026, versión
-`19.0.1.0.0`. Ver el [reporte de resultados](tests/STAGING_RESULTS_2026-11-23.md).
+`19.0.1.1.0`. Ver el [reporte de matrices y sucursales](tests/STAGING_BRANCHES_2026-11-23.md)
+y la [validación inicial de 1.0.0](tests/STAGING_RESULTS_2026-11-23.md).
 
 ## Uso
 
