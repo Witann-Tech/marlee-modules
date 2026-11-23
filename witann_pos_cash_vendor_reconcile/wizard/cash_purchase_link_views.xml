@@ -10,11 +10,11 @@
                     El remanente queda reservado para facturas posteriores. Activa la matriz y las sucursales involucradas.
                 </div>
                 <group>
-                    <field name="statement_line_id" options="{'no_open': True}"/>
-                    <field name="company_id" groups="base.group_multi_company"/>
+                    <field name="statement_line_id" string="Salida de efectivo" options="{'no_open': True}"/>
+                    <field name="company_id" string="Sucursal de la salida" groups="base.group_multi_company"/>
                     <field name="accounting_company_id" invisible="1"/>
                     <field name="currency_id" invisible="1"/>
-                    <field name="amount"/>
+                    <field name="amount" string="Importe de la salida"/>
                     <field name="order_id" options="{'no_create': True}"
                            domain="[('state', '=', 'purchase'), ('company_id', 'child_of', accounting_company_id), ('currency_id', '=', currency_id)]"/>
                 </group>
