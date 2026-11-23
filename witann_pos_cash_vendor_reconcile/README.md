@@ -14,13 +14,18 @@ Desplegado y probado en staging el 23 de noviembre de 2026, versión
    **POS → Informes → Salidas de efectivo a proveedores**, o abrir la sesión y
    pulsar **Efectivo a proveedores**.
 4. Abrir una salida pendiente y pulsar **Conciliar con proveedor**.
-5. Elegir proveedor y facturas publicadas. Ajustar los importes hasta asignar
+5. Activar en el selector de empresas la matriz y las sucursales involucradas.
+   Elegir proveedor y facturas publicadas. Ajustar los importes hasta asignar
    exactamente el total de la salida y confirmar.
 
 Una salida puede aplicarse a varias facturas del mismo proveedor; una factura puede
 recibir varias salidas. Una aplicación menor que el saldo deja la factura con pago
 parcial. Solo el saldo completamente conciliado produce el estado nativo `paid`.
 Se admiten sesiones abiertas y cerradas y salidas históricas que sigan en suspenso.
+Desde la versión `19.0.1.1.0` se permiten conciliaciones entre la matriz y sus
+sucursales, o entre sucursales de una misma matriz, usando la jerarquía nativa
+`res.company.root_id`. Esta regla se aplica a cualquier empresa, sin nombres o
+IDs fijos. La salida conserva su sucursal y la factura conserva su empresa.
 
 ## Contabilidad y trazabilidad
 
@@ -44,8 +49,11 @@ puede eliminarse directamente desde el POS.
   acceso contables y multiempresa, sin `sudo()` en el proceso de conciliación.
   Este grupo recibe acceso de lectura a sesiones y configuraciones POS, sin
   permisos para crearlas, modificarlas ni eliminarlas.
-- Facturas publicadas de proveedor, del mismo proveedor comercial, empresa y
-  moneda. Importes positivos, sin duplicados, sobrepagos ni diferencias.
+- Facturas publicadas del mismo proveedor comercial, la misma empresa matriz
+  (incluidas sus sucursales) y moneda. Las cuentas por pagar deben estar
+  disponibles para la sucursal de la salida. Se conservan las reglas de acceso
+  y la selección de empresas activas; no se cruzan empresas matrices distintas.
+  Importes positivos, sin duplicados, sobrepagos ni diferencias.
 - Primera versión limitada a la moneda de la empresa. No realiza conversiones,
   anticipos, ajustes por diferencia, asignaciones a varios proveedores ni deja
   parte de una salida sin asignar.

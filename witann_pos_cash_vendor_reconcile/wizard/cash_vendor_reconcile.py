@@ -10,7 +10,10 @@ class CashVendorReconcile(models.TransientModel):
     statement_line_id = fields.Many2one(
         'account.bank.statement.line', string='Salida de efectivo', required=True,
         check_company=True, ondelete='cascade')
-    company_id = fields.Many2one(related='statement_line_id.company_id', store=True)
+    company_id = fields.Many2one(
+        related='statement_line_id.company_id', store=True, string='Sucursal de la salida')
+    accounting_company_id = fields.Many2one(
+        related='statement_line_id.company_id.root_id', string='Empresa matriz')
     currency_id = fields.Many2one(related='statement_line_id.currency_id')
     session_id = fields.Many2one(related='statement_line_id.pos_session_id', string='Sesión POS')
     date = fields.Date(related='statement_line_id.date', string='Fecha de la salida')
@@ -19,8 +22,11 @@ class CashVendorReconcile(models.TransientModel):
     allocated_amount = fields.Monetary(compute='_compute_amounts', string='Total asignado')
     difference = fields.Monetary(compute='_compute_amounts', string='Por asignar')
     partner_id = fields.Many2one(
-        'res.partner', string='Proveedor', required=True, check_company=True,
-        domain="[('parent_id', '=', False)]")
+        'res.partner', string='Proveedor', required=True,
+        # The service validates the accounting root, allowing parent-owned
+        # suppliers while retaining native partner record rules.
+        domain="[('parent_id', '=', False), '|', ('company_id', '=', False), "
+               "('company_id', 'child_of', accounting_company_id)]")
     line_ids = fields.One2many(
         'witann.pos.cash.vendor.reconcile.line', 'wizard_id', string='Facturas')
 
@@ -57,7 +63,10 @@ class CashVendorReconcileLine(models.TransientModel):
     company_id = fields.Many2one(related='wizard_id.company_id', store=True)
     currency_id = fields.Many2one(related='wizard_id.currency_id')
     bill_id = fields.Many2one(
-        'account.move', string='Factura de proveedor', required=True, check_company=True)
+        # Exact-company consistency would reject a parent invoice paid by a
+        # branch. The service enforces root equality and all native ACLs.
+        'account.move', string='Factura de proveedor', required=True)
+    bill_company_id = fields.Many2one(related='bill_id.company_id', string='Empresa de factura')
     invoice_date = fields.Date(related='bill_id.invoice_date', string='Fecha de factura')
     ref = fields.Char(related='bill_id.ref', string='Referencia proveedor')
     residual = fields.Monetary(related='bill_id.amount_residual', string='Saldo pendiente')

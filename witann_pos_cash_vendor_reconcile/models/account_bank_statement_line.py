@@ -104,12 +104,17 @@ class AccountBankStatementLine(models.Model):
         if len(bills.commercial_partner_id) != 1:
             raise UserError(_('Todas las facturas deben ser del mismo proveedor.'))
         partner = bills.commercial_partner_id
+        accounting_company = self.company_id.root_id
+        if partner.company_id and partner.company_id.root_id != accounting_company:
+            raise UserError(_('El proveedor debe ser compartido o pertenecer a la misma empresa matriz.'))
         total = 0.0
         validated = []
         for bill, amount in allocations:
             if (bill.state != 'posted' or bill.move_type != 'in_invoice'
-                    or bill.company_id != self.company_id or bill.currency_id != currency):
-                raise UserError(_('Selecciona facturas publicadas de proveedor de la misma empresa y moneda.'))
+                    or bill.company_id.root_id != accounting_company or bill.currency_id != currency):
+                raise UserError(_(
+                    'Selecciona facturas publicadas de proveedor de la misma empresa matriz '
+                    'o sus sucursales, en la moneda de la salida.'))
             if not math.isfinite(amount) or currency.compare_amounts(amount, 0) <= 0:
                 raise UserError(_('Cada importe debe ser positivo.'))
             if not math.isclose(amount, currency.round(amount), rel_tol=0, abs_tol=1e-9):
@@ -122,6 +127,9 @@ class AccountBankStatementLine(models.Model):
             if (len(payable.account_id) != 1 or not payable.account_id.reconcile
                     or any(aml.balance >= 0 for aml in payable)):
                 raise UserError(_('La factura requiere revisión de sus partidas por pagar.'))
+            if not payable.account_id.filtered_domain(
+                    payable.account_id._check_company_domain(self.company_id)):
+                raise UserError(_('La cuenta por pagar de la factura no está disponible para la sucursal de la salida.'))
             validated.append((bill, currency.round(amount), payable))
             total += currency.round(amount)
         if currency.compare_amounts(total, -self.amount) != 0:
