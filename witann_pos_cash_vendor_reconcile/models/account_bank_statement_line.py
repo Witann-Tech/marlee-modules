@@ -2,7 +2,7 @@ import math
 
 from odoo import _, api, Command, fields, models
 from odoo.exceptions import AccessError, UserError
-from odoo.tools import SQL
+from odoo.tools import SQL, clean_context
 
 
 class AccountBankStatementLine(models.Model):
@@ -84,6 +84,10 @@ class AccountBankStatementLine(models.Model):
         self.env.invalidate_all()
 
     def _witann_reconcile_vendor_bills(self, allocations):
+        # Wizard defaults must not become defaults on native accounting entries
+        # (notably cash-basis tax moves created while reconciling a parent bill).
+        self = self.with_context(clean_context(self.env.context))
+        allocations = [(bill.with_env(self.env), amount) for bill, amount in allocations]
         self.ensure_one()
         self._witann_check_accountant()
         if not allocations:
@@ -171,6 +175,8 @@ class AccountBankStatementLine(models.Model):
             bills=', '.join(bills.mapped('name')), amount=total, currency=currency.name))
 
     def action_witann_undo_vendor_reconciliation(self):
+        # Native undo can create reversing tax entries as well.
+        self = self.with_context(clean_context(self.env.context))
         self.ensure_one()
         self._witann_check_accountant()
         self._witann_lock_reconciliation(self.witann_vendor_bill_ids)

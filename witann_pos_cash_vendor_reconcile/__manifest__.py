@@ -1,6 +1,6 @@
 {
     'name': 'Witann POS Cash Vendor Reconciliation',
-    'version': '19.0.1.1.0',
+    'version': '19.0.1.1.1',
     'summary': 'Concilia salidas de efectivo del POS con facturas de proveedor',
     'description': 'Aplica salidas manuales de caja POS a las deudas de proveedores mediante conciliación contable nativa.',
     'category': 'Accounting/Accounting',

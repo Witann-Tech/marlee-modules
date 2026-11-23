@@ -44,7 +44,8 @@ class TestCashVendorReconcile(CommonPosTest):
 
     def _wizard(self, cash, allocations, partner=None, user=None):
         return self.env['witann.pos.cash.vendor.reconcile'].with_context(
-            cash.env.context).with_user(user or self.env.user).create({
+            cash.env.context, **cash.action_witann_reconcile_vendor()['context']
+        ).with_user(user or self.env.user).create({
             'statement_line_id': cash.id, 'partner_id': (partner or self.vendor).id,
             'line_ids': [Command.create({'bill_id': bill.id, 'amount': amount})
                          for bill, amount in allocations],
@@ -82,6 +83,69 @@ class TestCashVendorReconcile(CommonPosTest):
             'journal_id': cash_journal.id, 'pos_session_id': session.id,
             'amount': -amount, 'date': fields.Date.today(), 'payment_ref': name + ' vendor cash out',
         })
+
+    def _cash_basis_bill(self, amount=100):
+        data = self.company_data
+        company = data['company']
+        company.tax_exigibility = True
+        company.tax_cash_basis_journal_id = self.env['account.journal'].create({
+            'name': 'Cash basis tax', 'code': 'CBQA', 'type': 'general',
+            'company_id': company.id,
+        })
+        transition = data['default_account_tax_purchase'].copy({
+            'name': 'Cash basis transition', 'reconcile': True,
+        })
+        tax = self.env['account.tax'].create({
+            'name': 'Cash basis purchase 16%', 'amount': 16, 'type_tax_use': 'purchase',
+            'company_id': company.id, 'tax_exigibility': 'on_payment',
+            'cash_basis_transition_account_id': transition.id,
+            'invoice_repartition_line_ids': [
+                Command.create({'repartition_type': 'base'}),
+                Command.create({'repartition_type': 'tax',
+                                'account_id': data['default_account_tax_purchase'].id}),
+            ],
+        })
+        return self._bill(invoice_line_ids=[Command.create({
+            'name': 'Taxed supplies', 'price_unit': amount,
+            'account_id': data['default_account_expense'].id,
+            'tax_ids': [Command.set(tax.ids)],
+        })])
+
+    def test_parent_cash_basis_bill_paid_from_branch_with_wizard_context(self):
+        bill = self._cash_basis_bill()
+        cash = self._branch_cash('Cash basis branch', amount=116)
+        liquidity = cash._seek_for_lines()[0]
+        liquidity_values = (liquidity.id, liquidity.balance, liquidity.amount_currency)
+        payment_count = self.env['account.payment'].search_count([])
+        self._wizard(cash, [(bill, 116)]).action_reconcile()
+        self.assertEqual(bill.payment_state, 'paid')
+        self.assertEqual(bill.amount_residual, 0)
+        caba = self.env['account.move'].with_context(cash.env.context).search([
+            ('tax_cash_basis_origin_move_id', '=', bill.id)])
+        self.assertEqual(len(caba), 1)
+        self.assertEqual(caba.state, 'posted')
+        self.assertEqual(caba.company_id, bill.company_id)
+        self.assertFalse(caba.statement_line_id)
+        self.assertEqual(liquidity_values, (liquidity.id, liquidity.balance, liquidity.amount_currency))
+        self.assertEqual(payment_count, self.env['account.payment'].search_count([]))
+        cash.with_context(default_statement_line_id=cash.id).action_witann_undo_vendor_reconciliation()
+        self.assertEqual(bill.amount_residual, 116)
+        self.assertEqual(cash.witann_vendor_reconciliation_state, 'pending')
+        self.assertTrue(caba.reversal_move_ids)
+        self.assertFalse(caba.reversal_move_ids.statement_line_id)
+        self._wizard(cash, [(bill, 116)]).action_reconcile()
+        self.assertEqual(bill.payment_state, 'paid')
+
+    def test_same_company_cash_basis_partial_payment_has_no_statement_link(self):
+        bill, cash = self._cash_basis_bill(), self._cash_out(58)
+        self._wizard(cash, [(bill, 58)]).action_reconcile()
+        caba = self.env['account.move'].search([('tax_cash_basis_origin_move_id', '=', bill.id)])
+        self.assertEqual(len(caba), 1)
+        self.assertEqual(caba.state, 'posted')
+        self.assertFalse(caba.statement_line_id)
+        tax_lines = caba.line_ids.filtered('tax_line_id')
+        self.assertEqual(sum(tax_lines.mapped('balance')), 8)
+        self.assertEqual(bill.amount_residual, 58)
 
     def test_full_payment_reuses_cash_entry_and_keeps_cashier(self):
         bill = self._bill()

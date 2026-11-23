@@ -28,12 +28,17 @@ Desde la versión `19.0.1.1.0` se permiten conciliaciones entre la matriz y sus
 sucursales, o entre sucursales de una misma matriz, usando la jerarquía nativa
 `res.company.root_id`. Esta regla se aplica a cualquier empresa, sin nombres o
 IDs fijos. La salida conserva su sucursal y la factura conserva su empresa.
+La versión `19.0.1.1.1` elimina los valores predeterminados del asistente al
+ejecutar la conciliación y su reversión. Así, los asientos nativos de impuestos
+por pago no heredan una referencia incorrecta a la salida de caja de la sucursal.
 
 ## Contabilidad y trazabilidad
 
 La salida ya acredita caja. El módulo sustituye su contrapartida de suspenso por
 partidas por pagar y las concilia con las facturas mediante `account.move.line.reconcile()`.
-No registra otro retiro ni crea otro pago. Conserva la partida de caja original,
+No registra otro retiro ni crea otro pago. Los impuestos de flujo de efectivo
+generan sus asientos fiscales mediante el mecanismo nativo de Odoo.
+Conserva la partida de caja original,
 importe, fecha, motivo, sesión y contacto original del movimiento (que puede
 identificar al cajero). El proveedor queda en la contrapartida por pagar.
 
