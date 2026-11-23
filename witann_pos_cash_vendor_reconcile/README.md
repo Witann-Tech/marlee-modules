@@ -3,7 +3,9 @@
 Módulo independiente: `witann_pos_cash_vendor_reconcile`. Depende de `point_of_sale`
 y `account`; no requiere los módulos de suscripciones.
 
-Actualizado en staging y producción el 23 de noviembre de 2026, versión `19.0.1.1.1`.
+Staging actualizado a `19.0.1.2.0` el 23 de noviembre de 2026, con reservas para OC.
+Producción conserva `19.0.1.1.1`.
+Ver el [reporte del flujo de OC en staging](tests/STAGING_PURCHASE_2026-11-23.md).
 Ver el [reporte del hotfix de impuestos por pago](tests/CASH_BASIS_HOTFIX_2026-11-23.md),
 el [reporte productivo inicial](tests/PRODUCTION_RESULTS_2026-11-23.md), el
 [reporte de matrices y sucursales en staging](tests/STAGING_BRANCHES_2026-11-23.md)
@@ -148,3 +150,6 @@ valores automáticos mediante el framework nativo de Odoo. No se instaló el mó
 en ninguna base operativa durante esa validación inicial. La versión `19.0.1.1.1`
 amplía la suite a **26 pruebas funcionales**, además de los dos escenarios
 concurrentes; aprobados localmente y con los runtimes de staging y producción.
+En `19.0.1.2.0`, el gate local y el runtime Enterprise de staging aprobaron
+**46 pruebas funcionales y cinco escenarios concurrentes**, incluida la
+publicación simultánea de facturas con una misma reserva de efectivo.
