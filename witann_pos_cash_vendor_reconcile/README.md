@@ -3,8 +3,9 @@
 Módulo independiente: `witann_pos_cash_vendor_reconcile`. Depende de `point_of_sale`
 y `account`; no requiere los módulos de suscripciones.
 
-Desplegado en producción el 23 de noviembre de 2026, versión `19.0.1.1.0`.
-Ver el [reporte productivo](tests/PRODUCTION_RESULTS_2026-11-23.md), el
+Actualizado en staging y producción el 23 de noviembre de 2026, versión `19.0.1.1.1`.
+Ver el [reporte del hotfix de impuestos por pago](tests/CASH_BASIS_HOTFIX_2026-11-23.md),
+el [reporte productivo inicial](tests/PRODUCTION_RESULTS_2026-11-23.md), el
 [reporte de matrices y sucursales en staging](tests/STAGING_BRANCHES_2026-11-23.md)
 y la [validación inicial de 1.0.0](tests/STAGING_RESULTS_2026-11-23.md).
 
@@ -94,11 +95,13 @@ bash tests/run_cash_vendor_isolated.sh
 El script no expone puertos, usa datos ficticios y elimina sus contenedores y red
 al terminar. Imprime la carpeta temporal que contiene los registros completos.
 
-Validado localmente el 23 de noviembre de 2026 con Odoo `19.0-20260817` y
+Validación inicial local del 23 de noviembre de 2026 con Odoo `19.0-20260817` y
 PostgreSQL 16: **19 pruebas funcionales sin fallas y dos escenarios concurrentes
 aprobados**. Los escenarios fuerzan lecturas simultáneas de una misma salida
 contra dos facturas y de dos salidas contra una misma factura; en ambos solo una
 operación se aplica y la otra se rechaza al reintentar con saldos actualizados.
 También se validaron la instalación de las vistas y el formulario con sus
 valores automáticos mediante el framework nativo de Odoo. No se instaló el módulo
-en ninguna base operativa.
+en ninguna base operativa durante esa validación inicial. La versión `19.0.1.1.1`
+amplía la suite a **26 pruebas funcionales**, además de los dos escenarios
+concurrentes; aprobados localmente y con los runtimes de staging y producción.
