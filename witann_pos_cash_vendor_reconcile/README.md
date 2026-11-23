@@ -3,6 +3,9 @@
 Módulo independiente: `witann_pos_cash_vendor_reconcile`. Depende de `point_of_sale`
 y `account`; no requiere los módulos de suscripciones.
 
+Desplegado y probado en staging el 23 de noviembre de 2026, versión
+`19.0.1.0.0`. Ver el [reporte de resultados](tests/STAGING_RESULTS_2026-11-23.md).
+
 ## Uso
 
 1. Instalar el módulo en Odoo 19.
