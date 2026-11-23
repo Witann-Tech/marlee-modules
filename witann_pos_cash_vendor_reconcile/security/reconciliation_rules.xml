@@ -1,0 +1,12 @@
+<odoo>
+    <record id="cash_vendor_reconcile_company_rule" model="ir.rule">
+        <field name="name">Conciliación efectivo POS: empresas activas</field>
+        <field name="model_id" ref="model_witann_pos_cash_vendor_reconcile"/>
+        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+    </record>
+    <record id="cash_vendor_reconcile_line_company_rule" model="ir.rule">
+        <field name="name">Aplicación efectivo POS: empresas activas</field>
+        <field name="model_id" ref="model_witann_pos_cash_vendor_reconcile_line"/>
+        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+    </record>
+</odoo>

@@ -1,0 +1,15 @@
+<odoo>
+    <record id="view_pos_session_form_cash_vendor" model="ir.ui.view">
+        <field name="name">pos.session.form.cash.vendor.reconciliation</field>
+        <field name="model">pos.session</field>
+        <field name="inherit_id" ref="point_of_sale.view_pos_session_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//div[@name='button_box']" position="inside">
+                <button name="action_witann_cash_vendor_reconciliation" type="object"
+                        class="oe_stat_button" icon="fa-money" groups="account.group_account_user">
+                    <div class="o_stat_info"><span class="o_stat_text">Efectivo a proveedores</span></div>
+                </button>
+            </xpath>
+        </field>
+    </record>
+</odoo>

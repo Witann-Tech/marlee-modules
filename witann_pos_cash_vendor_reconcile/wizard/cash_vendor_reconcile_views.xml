@@ -1,0 +1,48 @@
+<odoo>
+    <record id="view_cash_vendor_reconcile_form" model="ir.ui.view">
+        <field name="name">witann.pos.cash.vendor.reconcile.form</field>
+        <field name="model">witann.pos.cash.vendor.reconcile</field>
+        <field name="arch" type="xml">
+            <form string="Conciliar efectivo con proveedor">
+                <div class="alert alert-info" role="alert">
+                    Distribuye el importe completo de esta salida entre facturas del mismo proveedor.
+                    Las facturas pueden recibir pagos parciales; su saldo se actualizará al conciliar.
+                </div>
+                <group>
+                    <group>
+                        <field name="statement_line_id" readonly="1" options="{'no_open': True}"/>
+                        <field name="session_id"/>
+                        <field name="date"/>
+                        <field name="payment_ref"/>
+                    </group>
+                    <group>
+                        <field name="company_id" groups="base.group_multi_company"/>
+                        <field name="currency_id" invisible="1"/>
+                        <field name="partner_id" options="{'no_create': True}"/>
+                        <field name="amount"/>
+                    </group>
+                </group>
+                <field name="line_ids" readonly="not partner_id">
+                    <list editable="bottom">
+                        <field name="company_id" column_invisible="True"/>
+                        <field name="currency_id" column_invisible="True"/>
+                        <field name="bill_id" options="{'no_create': True}"
+                               domain="[('move_type', '=', 'in_invoice'), ('state', '=', 'posted'), ('company_id', '=', parent.company_id), ('currency_id', '=', parent.currency_id), ('commercial_partner_id', '=', parent.partner_id), ('amount_residual', '&gt;', 0)]"/>
+                        <field name="ref"/>
+                        <field name="invoice_date"/>
+                        <field name="residual"/>
+                        <field name="amount" sum="Total a aplicar"/>
+                    </list>
+                </field>
+                <group class="oe_subtotal_footer">
+                    <field name="allocated_amount"/>
+                    <field name="difference" decoration-danger="difference != 0"/>
+                </group>
+                <footer>
+                    <button name="action_reconcile" type="object" string="Conciliar pago en efectivo" class="btn-primary"/>
+                    <button string="Cancelar" special="cancel" class="btn-secondary"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+</odoo>
