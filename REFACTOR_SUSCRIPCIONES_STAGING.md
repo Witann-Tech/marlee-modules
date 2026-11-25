@@ -2,7 +2,110 @@
 
 Registro inicial: 2026-09-28. Rama de trabajo: `staging`.
 
-## Despliegue y pruebas por navegador, 2026-11-25 (en curso)
+## Resultado ejecutivo de staging, 2026-11-25
+
+Codigo funcional desplegado: `19c7e60`, WGS POS `19.0.1.6.23`, instalada y
+disponible verificadas en Aplicaciones. Base WGS `19.0.1.1.62` y Access Control
+`19.0.2.0.88`, sin cambio de version en este trabajo. Main sigue en `7795fd7`.
+Solo staging: no se modificaron produccion, gateway, payroll, importador
+bancario ni outputs/. Los commits de esta seccion posteriores al despliegue
+documentan evidencia; no cambian los assets ni el codigo desplegado.
+
+CloudPepper se opero desde Chrome en staging-portal.spinbike.mx: Update addon
+marlee-modules/staging, reinicio del servicio y upgrade de WGS POS desde Odoo.
+Verificacion final: Previous commit y New commit ambos `19c7e60`. NO se uso
+Rebuild Staging from Production, que reemplaza la base y no corresponde a este
+despliegue de codigo. El 502/conexion perdida durante el reinicio fue transitorio;
+despues se verificaron respuestas y operaciones correctas en las dos sedes.
+
+### Hallazgos resueltos durante la validacion
+
+1. Upgrade en frio: lecturas previas a crear columnas nuevas causaban
+   UndefinedColumn. Campos nuevos con prefetch=False, prueba de esquema anterior
+   y upgrade UI real desde `7795fd7` sobre base local desechable. Commit `c611edc`.
+2. Cargo de cancelacion: el filtro de empresa exacta omitia el impuesto de matriz
+   autorizado para la sucursal; el POS nativo si lo cobraba. Dominio fiscal
+   estandar Odoo y guard del total nativo antes de dejar la linea cobrable.
+   Commit `19c7e60`. El cargo incorrecto se retiro sin pagarlo ni cancelar.
+
+### Matriz comprobada por navegador
+
+Todas las ventas siguientes son ficticias, en staging, con cuatro clientes
+sinteticos QA WGS 20261125. No se usaron clientes reales para cobrar o cancelar.
+Los indicadores activos corresponden a la proyeccion en Odoo, no a reconocimiento
+fisico en SpeedFace. Se recargaron los assets tras el upgrade de version 23.
+
+| Prueba | Resultado observado |
+| --- | --- |
+| Alta mensual 1/diciembre | Cotiza 1/dic/2026-31/dic/2026 |
+| Alta mensual 2/diciembre | Cotiza 2/dic/2026-1/ene/2027, en ED y SM |
+| Venta mensual ED | S03655: 1/nov-30/nov, $799, MENSUALIDAD ED y acceso activo |
+| Renovacion mensual pagada | 1/dic-31/dic por $799; S03655 termina 31/dic, sin dia adicional ni solapamiento |
+| Cancelacion negativa | -1 rechazado con mensaje; no cotizacion/cobro/baja |
+| Volver del dialogo | No cancela ni agrega un cargo |
+| Cargo sin pagar y retirado | S03655 conserva estado/acceso; no se pago el cargo incorrecto detectado |
+| Cargo ED con impuestos | $116 exactos, base $100 e IVA $16; precio/descuento protegidos |
+| Cargo ED antes de pagar | S03655 permanece En progreso con acceso activo |
+| Cargo ED pagado | S03655 Cerrada, sin acceso; fechas de la compra ordinaria conservadas |
+| Reinscribir tras cancelacion | Cambia correctamente a QUINCENA ED; no arrastra el plan mensual |
+| Quincena pagada | 25/nov-9/dic, quince dias inclusivos, $450 y acceso activo |
+| Renovacion de quincena | Cotiza 10/dic-24/dic, quince dias y continuidad al dia siguiente |
+| Cancelacion cero | Confirmacion directa; no agrega cargo ni ticket, deja Cerrada/sin acceso |
+| Anualidad desde diciembre | Cotiza 1/dic/2026-30/nov/2027 |
+| Anualidad pagada | S03656: 25/nov/2026-24/nov/2027, $7200, ANUALIDAD ED y acceso activo |
+| Cambio anual a mensual | Cotiza 25/nov/2027-24/dic/2027 por $799, no otro ano |
+| Cambio pagado diferido | Conserva ANUALIDAD ED actual; muestra TODO INCLUIDO mensual pagado y programado |
+| Cancelar con cambio futuro | Dialogo advierte; al confirmar cierra fuente y retira activacion futura, sin devolucion automatica |
+| Alta mensual SM pagada | S03657: 25/nov-24/dic, $799, MENSUALIDAD SM y acceso activo |
+| Cargo SM con impuestos | $58 exactos, base $50 e IVA $8; activa antes y cerrada despues del pago |
+| Origen multisede | SM muestra ANUALIDAD ED como acceso de otra sede; no ofrece renovar/cancelar ese contrato ajeno |
+| Domiciliado proporcional | S03658: 25/nov-30/nov, $123.81; mantiene meses calendario y plazo a 31/oct/2027 |
+| Domiciliado mes 12 opcional | Permite solo 1+12, total $742.82; no obliga a pagar meses 2-11 |
+| Domiciliado despues del alta | Meses 1 y 12 marcados Pagada; permite adelantar desde mes 2 |
+| Anticipos domiciliados | Paga meses 2 y 3 por $1238.02; quedan Pagada, siguiente cobro 1/feb/2027; no recobra mes 12 |
+| Cancelacion domiciliada | Cierra contrato y acceso, sin generar devolucion; regresion ORM verifica cuotas/pagos intactos |
+| Resincronizacion completa | Sin selector; enumera Puertas 1/2/3 ED y 1/2 del sitio QA autorizado |
+| Resync sin foto | Diagnostico explicito por puerta: falta fotografia valida; no anuncia exito fisico falso |
+| Facturacion | Boton Recibo/Factura sigue deshabilitado en pantalla de pago |
+
+Referencias QA para inspeccion, no para migracion ni reparacion productiva:
+
+- S03655, QA WGS 20261125 Mensual1: tickets 263-3-000147 (alta),
+  263-3-000138 (renovacion), 263-3-000148 (cargo), 263-3-000150 (reinscripcion).
+- S03656, QA WGS 20261125 Anual: 263-3-000149 (alta) y
+  263-3-000152 (cambio mensual futuro), luego cancelacion cero.
+- S03657, QA WGS 20261125 SM Mensual: 267-8-000066 (alta) y
+  267-8-000063 (cargo).
+- S03658, QA WGS 20261125 Domiciliado: 263-3-000151 (1+12),
+  263-3-000153 (meses 2+3), luego cancelacion cero.
+
+### Regresion automatizada y limites
+
+- 305 pruebas ORM Enterprise de los tres addons: cero fallos y cero errores.
+  Pago nativo, impuestos incluidos/excluidos/posicion fiscal/ancestros, reversa
+  transaccional, idempotencia, revision de origen, cancelacion de participantes,
+  cartera y cambios futuros, alcance multiempresa, calendario y ciclo de acceso.
+- 128 pruebas Python de suscripciones, incluida concurrencia PostgreSQL con
+  dos conexiones reales, mas 15 de corte/contratos de codigo: aprobadas.
+- 64 pruebas JavaScript: aprobadas. Total 512 comprobaciones automatizadas,
+  distintas de las 30 filas de la matriz manual anterior.
+- Se uso runtime Odoo 19 con Enterprise y PostgreSQL desechables locales.
+  El Python global de la Mac no tenia dateutil: su intento no es un resultado
+  funcional; se repitio correctamente dentro del runtime con dependencias.
+- Medianoche local, anos bisiestos, crons, carreras y rollback se verifican en
+  las suites, no adelantando el reloj de staging ni ejecutando crons masivos
+  sobre socios reales. No se afirma concurrencia de dos workers por navegador.
+- Impresoras de ambas sedes no disponibles en staging. El aviso aparece despues
+  de guardar el pago; se eligio Continuar, nunca reintentar el cobro. La impresion
+  fisica y la entrega/lectura facial SpeedFace siguen sin validacion de hardware.
+- No se certifica ausencia universal de errores. En la matriz anterior no quedan
+  fallos funcionales abiertos; hardware y escenarios no interactivos mantienen
+  los limites expresos anteriores. Este trabajo NO autoriza merge a main.
+
+Evidencia fuera del repo y fuera de outputs/:
+`/Users/apreza/.codex/visualizations/2026/02/18/019c72fb-fa85-7b22-a4fa-20aa1262c18f/wgs-staging-qa-20261125/`.
+
+## Historial de despliegue y pruebas por navegador, 2026-11-25
 
 - La prueba real del cargo de cancelacion detecto IVA duplicado al usar un
   impuesto de la matriz en una sucursal: el filtro de empresa exacta lo omitia
