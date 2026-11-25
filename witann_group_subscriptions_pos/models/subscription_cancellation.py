@@ -87,6 +87,11 @@ class PosSubscriptionCancellation(models.Model):
         return fingerprint({'source': self._wgs_source_contract(source, include_scheduled=True),
                             'last_cancellation': source.wgs_pos_cancellation_receipt or False})
 
+    def _wgs_cancellation_taxes(self, product, company):
+        # Odoo accounting shares ancestor taxes with branches. Exact company
+        # equality silently drops those taxes while the native POS keeps them.
+        return product.taxes_id.filtered_domain(self.env['account.tax']._check_company_domain(company))
+
     def _wgs_assert_cancellation_context(self, payload):
         session = self.env['pos.session'].sudo().browse(payload['session_id']).exists()
         if (not session or session.state != 'opened' or session.company_id.id != payload['company_id']
@@ -99,7 +104,7 @@ class PosSubscriptionCancellation(models.Model):
         if (not product or not product.active or not product.wgs_cancellation_fee or product.recurring_invoice
                 or product.company_id.id != payload['company_id'] or fpos.id != payload['fiscal_position_id']):
             raise UserError(_('Cambio el servicio de cancelacion. Actualiza la cotizacion.'))
-        taxes = product.taxes_id.filtered_domain([('company_id', '=', payload['company_id'])])
+        taxes = self._wgs_cancellation_taxes(product, session.company_id)
         mapped = fpos.map_tax(taxes) if fpos else taxes
         total = mapped.compute_all(payload['ticket_charge_now'], currency=session.currency_id,
                                    product=product)['total_included']
@@ -130,7 +135,7 @@ class PosSubscriptionCancellation(models.Model):
         if fpos and fpos.company_id != source.company_id:
             raise AccessError(_('La posicion fiscal no corresponde a esta empresa.'))
         product = self._wgs_cancellation_product(source.company_id) if amount else self.env['product.product']
-        taxes = product.taxes_id.filtered_domain([('company_id', '=', source.company_id.id)])
+        taxes = self._wgs_cancellation_taxes(product, source.company_id)
         mapped = fpos.map_tax(taxes) if fpos else taxes
         price = amount
         if mapped:
