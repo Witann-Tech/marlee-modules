@@ -67,18 +67,7 @@ class SaleOrder(models.Model):
     @api.model
     def _wgs_add_access_recovery_detail(self, items, subscriptions):
         by_id = {subscription.id: subscription for subscription in subscriptions}
-        site_ids = set()
-        sites_by_order = {}
         for item in items:
             subscription = by_id[item['subscription_id']]
-            sites_by_order[subscription.id] = set(subscription._wgs_get_access_site_ids())
-            site_ids.update(sites_by_order[subscription.id])
-        devices = self.env['access_control.device'].sudo().search([
-            ('active', '=', True), ('site_id', 'in', sorted(site_ids)),
-        ], order='site_id, id') if site_ids else self.env['access_control.device']
-        for item in items:
-            subscription = by_id[item['subscription_id']]
-            item['resync_devices'] = [{'id': device.id, 'name': '%s - %s' % (device.site_id.name, device.name)}
-                                      for device in devices if device.site_id.id in sites_by_order[subscription.id]]
             request = subscription.wgs_last_access_resync_id
             item['access_recovery'] = request._status_payload() if request else False

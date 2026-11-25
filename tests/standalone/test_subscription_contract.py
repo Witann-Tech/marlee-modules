@@ -53,7 +53,8 @@ def method(file, name):
     node.decorator_list = []
     ns = {'fields': SimpleNamespace(Date=Dates, Datetime=Datetimes), 'UserError': UserError,
           'ValidationError': UserError, '_': lambda value: value,
-          'RULES_VERSION': contract.RULES_VERSION, 'hmac': hmac, 'hashlib': hashlib,
+          'RULES_VERSION': contract.RULES_VERSION, 'CALENDAR_VERSION': contract.CALENDAR_VERSION,
+          'commercial_interval': contract.commercial_interval, 'hmac': hmac, 'hashlib': hashlib,
           'canonical_json': contract.canonical_json, 'fingerprint': contract.fingerprint,
           'validate_period': contract.validate_period, 'validate_commercial_period': contract.validate_commercial_period,
           'json': json, 'timedelta': timedelta, 'period': contract.period, 'relativedelta': relativedelta}
@@ -86,7 +87,7 @@ class ContractTests(unittest.TestCase):
                 return Lines(value) if isinstance(key, slice) else value
 
         source.order_line.filtered.return_value.sorted.return_value = Lines([Mock()])
-        for unit, expected_end in [('day', '2026-11-14'), ('month', '2026-12-14')]:
+        for unit, expected_end in [('day', '2026-11-14'), ('month', '2026-12-13')]:
             with self.subTest(target_unit=unit):
                 plan = SimpleNamespace(
                     _fields={'billing_period_value', 'billing_period_unit'},

@@ -6,7 +6,7 @@ from dateutil.relativedelta import relativedelta
 from odoo import _, fields, models
 from odoo.exceptions import UserError
 
-from ..subscription_contract import period
+from ..subscription_contract import CALENDAR_VERSION, commercial_interval, period
 
 _logger = logging.getLogger(__name__)
 
@@ -328,21 +328,18 @@ class PosOrderPricingMixin(models.Model):
         )
 
     def _wgs_get_sale_period_schedule(self, plan, start_date, *, monthly_cutoff_day=0, previous_end=False):
-        """Calendar for newly quoted sales; historical repair dates stay unchanged."""
+        """New purchases include the start day, ignoring legacy cutoff arguments."""
         start_date = fields.Date.to_date(start_date)
         if not plan or not start_date:
             raise UserError(_('Se requiere inicio y plan para calcular la vigencia contratada.'))
         interval, unit = self._wgs_extract_interval_from_plan(plan)
-        fixed_monthly = self._wgs_uses_fixed_monthly_cutoff(plan)
-        cutoff = (monthly_cutoff_day or start_date.day) if fixed_monthly else 0
         _, end, next_date = period(
-            start_date, interval, unit, monthly_cutoff_day=cutoff,
-            previous_end=previous_end if monthly_cutoff_day and fixed_monthly else None,
+            start_date, interval, unit, calendar_version=CALENDAR_VERSION,
         )
         return {
             'subscription_end_date': end,
             'next_billing_date': next_date,
-            'monthly_cutoff_day': cutoff,
+            'monthly_cutoff_day': 0,
         }
 
     def _wgs_get_period_alignment_field_name(self, plan):
@@ -396,14 +393,11 @@ class PosOrderPricingMixin(models.Model):
         }
 
     def _wgs_get_subscription_renewal_schedule(self, source_order, *, plan, today=False):
-        """Keep the paid-through anchor, but extend using the purchased plan."""
+        """Continue the paid term; the legacy clock argument cannot restart it."""
         source_order.ensure_one()
         if not plan:
             raise UserError(_('No se pudo resolver el plan contratado para calcular la renovación.'))
         plan.ensure_one()
-        today = fields.Date.to_date(today) or self._wgs_get_subscription_business_today_for_pos(
-            company=source_order.company_id,
-        )
         period_end = self._wgs_get_first_date_from_order(
             source_order, ('recurring_next_date', 'next_invoice_date'),
         )
@@ -415,15 +409,14 @@ class PosOrderPricingMixin(models.Model):
             period_end = inclusive_end + timedelta(days=1)
         if not period_end:
             raise UserError(_('La suscripción no tiene una vigencia definida para calcular la renovación.'))
-        monthly_cutoff_day = source_order.wgs_monthly_cutoff_day
         scheduled = self._wgs_pending_package_changes(source_order)
         if scheduled:
             last_snapshot = scheduled[-1].order_id._wgs_get_persisted_subscription_pricing_from_pos_line(scheduled[-1])
             scheduled_next = last_snapshot['subscription_end_date'] + timedelta(days=1)
             if scheduled_next >= period_end:
                 period_end = scheduled_next
-                monthly_cutoff_day = last_snapshot.get('monthly_cutoff_day', 0)
-        renewal_anchor = period_end if period_end and today < period_end else today
+        # Renewals continue the paid term. A new start date belongs to reenrollment.
+        renewal_anchor = period_end
 
         if self._wgs_should_align_plan_to_calendar_month(plan):
             aligned_schedule = self._wgs_get_aligned_monthly_first_period_schedule(renewal_anchor)
@@ -435,15 +428,12 @@ class PosOrderPricingMixin(models.Model):
                 'monthly_cutoff_day': 0,
             }
 
-        schedule = self._wgs_get_sale_period_schedule(
-            plan, renewal_anchor, monthly_cutoff_day=monthly_cutoff_day,
-            previous_end=period_end - timedelta(days=1) if renewal_anchor == period_end else False,
-        )
+        schedule = self._wgs_get_sale_period_schedule(plan, renewal_anchor)
         return {
             **schedule,
             'renewal_anchor': renewal_anchor,
             'period_aligned': False,
-            'previous_end': period_end - timedelta(days=1) if monthly_cutoff_day and renewal_anchor == period_end else False,
+            'previous_end': False,
         }
 
     def _wgs_extract_interval_from_plan(self, plan):
@@ -1130,7 +1120,7 @@ class PosOrderPricingMixin(models.Model):
             price = self._wgs_extract_price_from_pricing(record)
             if price is None:
                 continue
-            interval_value, interval_unit = self._wgs_extract_interval_from_plan(plan)
+            interval_value, interval_unit = commercial_interval(*self._wgs_extract_interval_from_plan(plan))
 
             output.append({
                 'sequence': self._wgs_extract_pricing_sequence(record),
@@ -1149,7 +1139,7 @@ class PosOrderPricingMixin(models.Model):
         price = self._wgs_extract_price_from_pricing(pricing)
         if price is None:
             return False
-        interval_value, interval_unit = self._wgs_extract_interval_from_plan(plan)
+        interval_value, interval_unit = commercial_interval(*self._wgs_extract_interval_from_plan(plan))
         return {
             'sequence': self._wgs_extract_pricing_sequence(pricing),
             'pricing_id': pricing.id,
@@ -1184,7 +1174,7 @@ class PosOrderPricingMixin(models.Model):
             price = self._wgs_extract_price_from_pricing(pricing)
             if price is None:
                 continue
-            interval_value, interval_unit = self._wgs_extract_interval_from_plan(plan)
+            interval_value, interval_unit = commercial_interval(*self._wgs_extract_interval_from_plan(plan))
             output.append({
                 'sequence': self._wgs_extract_pricing_sequence(pricing),
                 'pricing_id': pricing.id,
@@ -1213,7 +1203,7 @@ class PosOrderPricingMixin(models.Model):
         plan = self._wgs_extract_plan_record_from_pricing(pricing)
         if not plan:
             return ''
-        interval_value, interval_unit = self._wgs_extract_interval_from_plan(plan)
+        interval_value, interval_unit = commercial_interval(*self._wgs_extract_interval_from_plan(plan))
         return f'{interval_value} {interval_unit}'
 
     def _wgs_extract_plan_record_from_pricing(self, pricing):

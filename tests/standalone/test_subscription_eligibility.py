@@ -252,7 +252,7 @@ class TrialEligibilityTests(unittest.TestCase):
 
         owner = MagicMock()
         owner.env['product.product'].browse().exists.return_value = Products([
-            SimpleNamespace(id=42, recurring_invoice=True, wgs_free_trial_day=True),
+            SimpleNamespace(id=42, recurring_invoice=True, wgs_free_trial_day=True, wgs_cancellation_fee=False),
         ])
         owner._wgs_to_int.side_effect = lambda value: int(value or 0)
         check = method(OPS, '_wgs_validate_ticket_memberships')

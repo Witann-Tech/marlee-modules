@@ -7,11 +7,13 @@ function isSubscriptionProductTemplate(product) {
     if (!product) {
         return false;
     }
-    if (product.recurring_invoice || product.product_tmpl_id?.recurring_invoice) {
+    if (product.recurring_invoice || product.product_tmpl_id?.recurring_invoice
+        || product.wgs_cancellation_fee || product.product_tmpl_id?.wgs_cancellation_fee) {
         return true;
     }
     const variants = Array.isArray(product.product_variant_ids) ? product.product_variant_ids : [];
-    return variants.some((variant) => variant?.recurring_invoice || variant?.product_tmpl_id?.recurring_invoice);
+    return variants.some((variant) => variant?.recurring_invoice || variant?.product_tmpl_id?.recurring_invoice
+        || variant?.wgs_cancellation_fee || variant?.product_tmpl_id?.wgs_cancellation_fee);
 }
 
 const originalCanBeDisplayed = Object.getOwnPropertyDescriptor(ProductTemplate.prototype, "canBeDisplayed");

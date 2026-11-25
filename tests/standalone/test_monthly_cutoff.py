@@ -44,15 +44,15 @@ def calculator(end=date(2026, 5, 20), cutoff=20, scheduled=()):
 
 
 class MonthlyCutoffTests(unittest.TestCase):
-    def test_new_monthly_ends_on_same_day_and_next_billing_is_exclusive(self):
+    def test_new_monthly_includes_start_day_and_next_billing_is_exclusive(self):
         owner, _ = calculator()
         result = owner._wgs_get_sale_period_schedule(plan(), '2026-04-20')
         self.assertEqual(result, {
-            'subscription_end_date': date(2026, 5, 20),
-            'next_billing_date': date(2026, 5, 21), 'monthly_cutoff_day': 20,
+            'subscription_end_date': date(2026, 5, 19),
+            'next_billing_date': date(2026, 5, 20), 'monthly_cutoff_day': 0,
         })
 
-    def test_every_start_day_recovers_cutoff_for_twelve_renewals_including_leap_year(self):
+    def test_historical_calendar_recovers_cutoff_for_twelve_renewals_including_leap_year(self):
         for year in (2026, 2027, 2028):
             for month in range(1, 13):
                 for day in range(1, calendar.monthrange(year, month)[1] + 1):
@@ -75,7 +75,7 @@ class MonthlyCutoffTests(unittest.TestCase):
             self.assertEqual(result['renewal_anchor'], date(2026, 5, 21))
             self.assertEqual(result['subscription_end_date'], date(2026, 6, 20))
             self.assertEqual(result['next_billing_date'], date(2026, 6, 21))
-            self.assertEqual(result['monthly_cutoff_day'], 20)
+            self.assertEqual(result['monthly_cutoff_day'], 0)
         self.assertEqual(source.end_date, date(2026, 5, 20))
 
     def test_short_month_recovers_original_cutoff(self):
@@ -83,28 +83,28 @@ class MonthlyCutoffTests(unittest.TestCase):
         result = owner._wgs_get_subscription_renewal_schedule(source, plan=plan(), today='2027-02-28')
         self.assertEqual(result['renewal_anchor'], date(2027, 3, 1))
         self.assertEqual(result['subscription_end_date'], date(2027, 3, 31))
-        self.assertEqual(result['monthly_cutoff_day'], 31)
+        self.assertEqual(result['monthly_cutoff_day'], 0)
 
-    def test_late_renewal_starts_today_without_changing_cut_day(self):
+    def test_late_renewal_continues_paid_period_instead_of_reenrolling(self):
         owner, source = calculator()
         result = owner._wgs_get_subscription_renewal_schedule(source, plan=plan(), today='2026-05-25')
-        self.assertEqual(result['renewal_anchor'], date(2026, 5, 25))
+        self.assertEqual(result['renewal_anchor'], date(2026, 5, 21))
         self.assertEqual(result['subscription_end_date'], date(2026, 6, 20))
-        self.assertEqual(result['monthly_cutoff_day'], 20)
+        self.assertEqual(result['monthly_cutoff_day'], 0)
 
     def test_legacy_paid_end_is_untouched_and_next_purchase_starts_new_calendar(self):
         owner, source = calculator(date(2026, 5, 19), 0)
         result = owner._wgs_get_subscription_renewal_schedule(source, plan=plan(), today='2026-05-01')
         self.assertEqual(result['renewal_anchor'], date(2026, 5, 20))
-        self.assertEqual(result['subscription_end_date'], date(2026, 6, 20))
-        self.assertEqual(result['monthly_cutoff_day'], 20)
+        self.assertEqual(result['subscription_end_date'], date(2026, 6, 19))
+        self.assertEqual(result['monthly_cutoff_day'], 0)
         self.assertEqual(source.end_date, date(2026, 5, 19))
         self.assertEqual(source.wgs_monthly_cutoff_day, 0)
 
     def test_future_package_changes_use_last_paid_snapshot_cutoff(self):
         for cutoff, end, expected in (
             (31, date(2027, 4, 30), date(2027, 5, 31)),
-            (0, date(2027, 4, 29), date(2027, 5, 30)),
+            (0, date(2027, 4, 29), date(2027, 5, 29)),
         ):
             pending = SimpleNamespace(order_id=SimpleNamespace(
                 _wgs_get_persisted_subscription_pricing_from_pos_line=lambda line: {
@@ -124,11 +124,11 @@ class MonthlyCutoffTests(unittest.TestCase):
         self.assertEqual(result['next_billing_date'], date(2026, 6, 1))
         self.assertEqual(result['monthly_cutoff_day'], 0)
 
-    def test_other_terms_and_domiciliation_keep_existing_calendar(self):
+    def test_term_calendars_do_not_inherit_monthly_cutoff(self):
         owner, _ = calculator()
         for target, expected in (
             (plan(1, 'day'), date(2026, 4, 20)),
-            (plan(2, 'week'), date(2026, 5, 3)),
+            (plan(2, 'week'), date(2026, 5, 4)),
             (plan(6), date(2026, 10, 19)),
             (plan(1, 'year'), date(2027, 4, 19)),
             (plan(domiciled=True), date(2026, 5, 19)),
@@ -150,9 +150,9 @@ class MonthlyCutoffTests(unittest.TestCase):
         build = method(PRICING, '_wgs_build_product_pricing_snapshot')
         for flow in ('new', 'reenroll'):
             result = build(owner, product, flow=flow, start_date='2026-04-20')
-            self.assertEqual(result['subscription_end_date'], '2026-05-20')
-            self.assertEqual(result['next_billing_date'], '2026-05-21')
-            self.assertEqual(result['monthly_cutoff_day'], 20)
+            self.assertEqual(result['subscription_end_date'], '2026-05-19')
+            self.assertEqual(result['next_billing_date'], '2026-05-20')
+            self.assertEqual(result['monthly_cutoff_day'], 0)
             self.assertEqual(result['charge_now'], 100)
 
     def test_metadata_sets_or_clears_cutoff_only_when_explicit(self):

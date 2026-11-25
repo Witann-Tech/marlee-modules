@@ -73,6 +73,7 @@ class PosOrderLine(models.Model):
             ('upsale', 'Upsale inmediato'),
             ('pending_charge', 'Cobro pendiente'),
             ('cancellation_refund', 'Cancelación con devolución'),
+            ('cancellation_charge', 'Cargo por cancelacion de paquete'),
         ],
         string='Flujo suscripción (POS)',
         default='new',
@@ -1063,6 +1064,11 @@ class PosOrder(models.Model):
                 config, partner_id=partner_id, company_id=company_id,
                 check_source=not applied_line,
             )
+            if not applied_line:
+                self._wgs_validate_cancellation_order_context(
+                    normalized_config, session_id=self._wgs_to_int(options.get('session_id')),
+                    fiscal_position_id=self._wgs_to_int(options.get('fiscal_position_id')) or False,
+                )
             if applied_line:
                 self._wgs_check_applied_config_replay(applied_line, normalized_config)
             normalized.append(normalized_config)
@@ -1985,7 +1991,7 @@ class PosOrder(models.Model):
                 continue
             values = command[2]
             product = self.env['product.product'].browse(self._wgs_to_int(values.get('product_id'))).exists()
-            if not product or not product.recurring_invoice or float(values.get('qty') or 0) <= 0:
+            if not product or not (product.recurring_invoice or product.wgs_cancellation_fee) or float(values.get('qty') or 0) <= 0:
                 continue
             line_uuid = values.get('uuid')
             config = by_uuid.get(line_uuid)
@@ -2010,9 +2016,17 @@ class PosOrder(models.Model):
                 session = existing_order.session_id
             if not partner_id or not session:
                 raise UserError(_('La membresia requiere el titular y la sesion POS antes de cobrar.'))
-            pending_configs.append(self._wgs_normalize_commercial_config(
+            normalized = self._wgs_normalize_commercial_config(
                 config, partner_id=partner_id, company_id=session.company_id.id,
-            ))
+            )
+            self._wgs_validate_cancellation_order_context(
+                normalized, session_id=session.id,
+                fiscal_position_id=(self._wgs_to_int(order.get('fiscal_position_id')) or False)
+                if 'fiscal_position_id' in order else (
+                    existing_order.fiscal_position_id.id if existing_order else session.config_id.default_fiscal_position_id.id
+                ),
+            )
+            pending_configs.append(normalized)
         self._wgs_validate_ticket_memberships(pending_lines, pending_configs)
 
     @api.model
@@ -2092,7 +2106,9 @@ class PosOrder(models.Model):
             return
 
         candidate_lines = self.lines.filtered(
-            lambda line: line.qty > 0 and line.product_id and line.product_id.product_tmpl_id.recurring_invoice
+            lambda line: line.qty > 0 and line.product_id and (
+                line.product_id.recurring_invoice or line.product_id.wgs_cancellation_fee
+            )
         ).sorted(key=lambda line: line.id)
         if not candidate_lines:
             return
@@ -2109,7 +2125,8 @@ class PosOrder(models.Model):
                 config, partner_id=self.partner_id.id, company_id=self.company_id.id,
                 check_source=False,
             )
-            self._wgs_validate_subscription_line_plan_for_pos(target_line.product_id, config)
+            if config.get('flow') != 'cancellation_charge':
+                self._wgs_validate_subscription_line_plan_for_pos(target_line.product_id, config)
             write_values = {}
 
             participant_ids = config.get('participant_ids') or []
@@ -2152,7 +2169,7 @@ class PosOrder(models.Model):
                     write_values['wgs_subscription_start_date'] = start_date
 
             flow_value = str(config.get('flow') or 'new').strip().lower()
-            write_values['wgs_subscription_flow'] = flow_value if flow_value in ('renewal', 'reenroll', 'upsale', 'pending_charge', 'cancellation_refund') else 'new'
+            write_values['wgs_subscription_flow'] = flow_value if flow_value in ('renewal', 'reenroll', 'upsale', 'pending_charge', 'cancellation_refund', 'cancellation_charge') else 'new'
 
             source_subscription_id = self._wgs_to_int(config.get('source_subscription_id'))
             if source_subscription_id > 0:
@@ -2343,7 +2360,7 @@ class PosOrder(models.Model):
                 lambda line: (
                     line.qty > 0
                     and line.product_id
-                    and line.product_id.product_tmpl_id.recurring_invoice
+                    and (line.product_id.recurring_invoice or line.product_id.wgs_cancellation_fee)
                     and not line.wgs_has_subscription_configuration()
                 )
             )
@@ -4387,7 +4404,7 @@ class PosOrder(models.Model):
 
         pos_line_model = self.env['pos.order.line'].sudo()
         candidates = self._wgs_get_pos_lines_linked_to_subscription(source_order).filtered(
-            lambda line: float(line.qty or 0.0) > 0.0
+            lambda line: float(line.qty or 0.0) > 0.0 and line.product_id.recurring_invoice
         ).sorted(key=lambda line: line.id, reverse=True)
         if not candidates:
             return pos_line_model

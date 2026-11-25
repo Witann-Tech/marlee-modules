@@ -8,6 +8,7 @@ from dateutil.relativedelta import relativedelta
 
 
 RULES_VERSION = 1
+CALENDAR_VERSION = 2
 
 
 def canonical_json(value):
@@ -29,12 +30,18 @@ def fingerprint(value):
     return hashlib.sha256(canonical_json(value).encode()).hexdigest()
 
 
-def period(start, interval, unit, *, aligned=False, monthly_cutoff_day=0, previous_end=None):
-    """Return inclusive bounds. Zero cutoff preserves the historical calendar.
+def commercial_interval(interval, unit):
+    """Native two-week plans represent the gym's inclusive 15-day quincena."""
+    return (15, 'day') if (int(interval), unit) == (2, 'week') else (interval, unit)
 
-    A continuing monthly term advances from its previous inclusive end, not
-    its new start. Keeping the original cutoff separately recovers 29/30/31
-    after short months without introducing overlaps or drifting renewals.
+
+def period(start, interval, unit, *, aligned=False, monthly_cutoff_day=0, previous_end=None,
+           calendar_version=1):
+    """Return inclusive bounds using the calendar frozen in a purchase.
+
+    Version 1 replays historical fixed cutoffs without changing paid dates.
+    Version 2 subtracts the included start day from a calendar month/year,
+    and treats native two-week terms as fifteen inclusive days.
     """
     start = date.fromisoformat(start) if isinstance(start, str) else start
     if not isinstance(start, date) or int(interval) < 1:
@@ -42,6 +49,12 @@ def period(start, interval, unit, *, aligned=False, monthly_cutoff_day=0, previo
     units = {'day': 'days', 'week': 'weeks', 'month': 'months', 'year': 'years'}
     if unit not in units:
         raise ValueError('Unsupported billing interval.')
+    if calendar_version not in (1, CALENDAR_VERSION):
+        raise ValueError('Unsupported commercial calendar version.')
+    if calendar_version == CALENDAR_VERSION:
+        if monthly_cutoff_day or previous_end:
+            raise ValueError('The inclusive calendar cannot use a historical monthly cutoff.')
+        interval, unit = commercial_interval(interval, unit)
     if monthly_cutoff_day:
         if aligned or unit != 'month' or int(interval) != 1 or not 1 <= monthly_cutoff_day <= 31:
             raise ValueError('A monthly cutoff requires an unaligned one-month plan and a day from 1 to 31.')
@@ -76,7 +89,7 @@ def validate_commercial_period(pricing):
     terms = pricing.get('period_contract')
     if not terms:
         return
-    if terms.get('version') != 1:
+    if terms.get('version') not in (1, CALENDAR_VERSION):
         raise ValueError('Unsupported commercial calendar contract.')
     if terms['mode'] == 'source_period':
         expected = (terms['start'], terms['end'], terms['next'])
@@ -85,6 +98,7 @@ def validate_commercial_period(pricing):
             terms['start'], terms['interval'], terms['unit'],
             aligned=terms['aligned'], monthly_cutoff_day=terms['cutoff'],
             previous_end=terms['previous_end'] or None,
+            calendar_version=terms['version'],
         )
         expected = (start.isoformat(), end.isoformat(),
                     False if terms['unit'] == 'day' and terms['interval'] == 1 else boundary.isoformat())

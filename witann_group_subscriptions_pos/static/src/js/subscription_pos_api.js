@@ -128,16 +128,23 @@ export function createSubscriptionPosApi(orm, getCompanyId = () => false) {
                 [subscriptionId, participantIds || []]
             );
         },
-        async resyncSubscriptionAccess(subscriptionId, deviceId = false) {
+        async resyncSubscriptionAccess(subscriptionId) {
             return orm.call(
                 "pos.order",
                 "wgs_resync_subscription_access_for_pos",
-                [subscriptionId, deviceId || false],
+                [subscriptionId],
                 quoteContext()
             );
         },
         async fetchAccessRecoveryStatus(subscriptionId) {
             return orm.call("pos.order", "wgs_get_access_recovery_status_for_pos", [subscriptionId], quoteContext());
+        },
+        async preparePackageCancellation(subscriptionId, amount, reason, sessionId, fiscalPositionId = false) {
+            return orm.call("pos.order", "wgs_get_subscription_cancellation_quote_for_pos",
+                [subscriptionId, amount, reason, sessionId, fiscalPositionId], quoteContext());
+        },
+        async cancelPackageWithoutCharge(quote) {
+            return orm.call("pos.order", "wgs_cancel_subscription_without_charge_for_pos", [quote], quoteContext());
         },
     };
 }
