@@ -18,6 +18,9 @@ import {
     waitForNextTick,
 } from "./subscription_ticket";
 import { createSubscriptionPosApi } from "./subscription_pos_api";
+import { PackageCancellationDialog } from "./subscription_cancellation_dialog";
+import { cancelPackageFromPos } from "./subscription_cancellation_controller";
+import { makeAwaitable } from "@point_of_sale/app/utils/make_awaitable_dialog";
 import { buildChargeFromSnapshot, getCurrentPlanChoice } from "./subscription_pricing_snapshot";
 import { isPricingReady } from "./subscription_quote_request";
 import {
@@ -290,6 +293,8 @@ patch(ControlButtons.prototype, {
     setup() {
         super.setup(...arguments);
         this.orm = useService("orm");
+        this.dialog = useService("dialog");
+        this.notification = useService("notification");
         this.subscriptionPosApi = createSubscriptionPosApi(this.orm, () => getCurrentCompanyId(this.pos));
         this._ensureStatusStyles();
         this._wgsPriceLockTimer = window.setInterval(() => {
@@ -450,8 +455,8 @@ patch(ControlButtons.prototype, {
         return this.subscriptionPosApi.saveSubscriptionParticipants(subscriptionId, participantIds || []);
     },
 
-    async _resyncSubscriptionAccess(subscriptionId, deviceId = false) {
-        return this.subscriptionPosApi.resyncSubscriptionAccess(subscriptionId, deviceId);
+    async _resyncSubscriptionAccess(subscriptionId) {
+        return this.subscriptionPosApi.resyncSubscriptionAccess(subscriptionId);
     },
 
     _showSubscriptionsModal(rows) {
@@ -2152,7 +2157,36 @@ patch(ControlButtons.prototype, {
                 openReenrollForm,
                 openUpsaleForm,
                 openParticipantEditForm,
-                fetchResyncAccess: (subscriptionId, deviceId) => this._resyncSubscriptionAccess(subscriptionId, deviceId),
+                fetchResyncAccess: (subscriptionId) => this._resyncSubscriptionAccess(subscriptionId),
+                openPackageCancellation: async (item) => {
+                    const partnerId = modalState.selectedPartnerId;
+                    const isCurrent = () => overlay.isConnected && modalState.selectedPartnerId === partnerId;
+                    return cancelPackageFromPos(this, item, {
+                        api: this.subscriptionPosApi, isCurrent,
+                        showDialog: async (props) => {
+                            const zIndex = overlay.style.zIndex;
+                            overlay.style.zIndex = "1040";
+                            overlay.inert = true;
+                            try { return await makeAwaitable(this.dialog, PackageCancellationDialog, props); }
+                            finally { overlay.style.zIndex = zIndex; overlay.inert = false; }
+                        },
+                        onCancelled: async () => {
+                            clearFeedback();
+                            this.notification.add(_t("Paquete cancelado sin cargo. No se genero un ticket."), { type: "success" });
+                            detailCache.delete(partnerId);
+                            await reloadDirectoryRows(partnerId);
+                            if (isCurrent()) {
+                                modalState.formNotice = _t("Paquete cancelado sin cargo. No se genero un ticket ni una devolucion.");
+                                await loadDetail(partnerId, { force: true });
+                            }
+                        },
+                        onFeeAdded: async () => {
+                            clearFeedback();
+                            modalState.formNotice = _t("Cargo agregado al ticket. El paquete solo se cancelara al pagar; retirar el cargo no cancela el paquete.");
+                            renderDetail(modalState.currentDetail);
+                        },
+                    });
+                },
                 fetchAccessRecoveryStatus: (subscriptionId) => this.subscriptionPosApi.fetchAccessRecoveryStatus(subscriptionId),
                 getResyncAccessState,
                 setResyncAccessLoading,

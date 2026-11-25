@@ -2,6 +2,127 @@
 
 Registro inicial: 2026-09-28. Rama de trabajo: `staging`.
 
+## Cancelar paquete desde POS y resincronizar todas las puertas, 2026-11-25
+
+Version local WGS POS `19.0.1.6.21`, que incluye tambien el calendario
+inclusivo descrito abajo. Pendientes commit/push, build, upgrade y prueba
+por navegador en staging. Main y produccion no se modificaron. No se tocaron
+Payroll, importador bancario, gateway ni outputs/.
+
+### Cancelacion explicita, distinta del reembolso
+
+- Boton Cancelar paquete en la tarjeta de una membresia cancelable de la
+  empresa del POS. Dialogo con importe total (impuestos incluidos), motivo
+  y advertencia sobre todos los participantes y renovaciones futuras.
+- Cargo positivo: servicio no recurrente, separado por empresa, con impuestos
+  de venta configurados y posicion fiscal del ticket. Se agrega una unidad
+  sin descuento, con cotizacion firmada y precio protegido. La membresia
+  permanece sin cambios mientras el ticket sea borrador o se retire el cargo.
+- Al pagar, baja comercial y cobro comparten la transaccion nativa Odoo.
+  Cualquier error comercial revierte el registro del pago y la cancelacion.
+- Cargo cero: confirmacion explicita, sin crear un ticket ni modificar el
+  cliente o productos del ticket actual. Fallos al verificar la proyeccion
+  de acceso revierten esta operacion; no se anuncia exito falso.
+- Se cierra el contrato nativo y, si existe, su cartera domiciliada. Se
+  detiene la activacion de renovaciones pagadas futuras. El dialogo advierte
+  que NO se generan devoluciones automaticas. No se borran pagos ni cuotas,
+  no se reescriben fechas pagadas y no se transfieren cobros entre empresas.
+- Registro auditable en la suscripcion: usuario, fecha, motivo, importe,
+  linea de cargo (si existe), renovaciones detenidas e identificador unico.
+  El cargo no se confunde con el pago de una membresia al buscar reembolsos.
+- Verificacion antes del pago: titular, empresa origen, moneda, sesion,
+  posicion fiscal, impuestos, cantidad, descuento e identidad del contrato.
+  Cambios fiscales del titular durante su carga disparan recotizacion en UI.
+- Reintentos idempotentes. La revision incluye el ultimo recibo de baja:
+  una confirmacion vieja no puede cancelar una reinscripcion posterior aunque
+  repita exactamente paquete, participantes, precio y fechas.
+- Los bloqueos usan exclusivamente el cursor/transaccion de Odoo. No hay
+  commit manual, conexiones externas ni tareas nuevas en segundo plano.
+
+### Puertas autorizadas
+
+- Retirado el selector de equipo de la tarjeta POS. Resincronizar acceso
+  solicita todos los equipos activos de los sitios autorizados del paquete.
+- No se modifico la politica de acceso por membresia ni se conceden puertas
+  ajenas a sus sitios. Se mantiene la consulta del estado por dispositivo.
+- Ya no se consulta el catalogo de puertas al construir cada detalle solo
+  para alimentar ese selector. La API tecnica de recuperacion dirigida se
+  conserva compatible para diagnosticos; el POS normal no envia device_id.
+- No se hicieron consultas de inventario ni pruebas contra equipos reales.
+
+### Validacion
+
+- Corrida final Odoo 19 Enterprise/PostgreSQL 16 local: 303 pruebas ORM,
+  cero fallos y cero errores, con upgrades de los tres modulos aprobados.
+- 128 pruebas standalone de suscripciones, 13 de calendario y 2 de
+  sintaxis/contratos aprobadas; concurrencia en una base wgs_test_* separada.
+- 63 regresiones JavaScript aprobadas, incluyendo confirmacion/cierre del
+  dialogo, cero sin ticket, cargo pendiente, cliente/ticket cambiados,
+  posicion fiscal del titular y ausencia del selector de puertas.
+- Casos ORM: baja con/sin cargo, domiciliado cerrado nativamente pero activo
+  en cartera, cuotas/pagos intactos, renovaciones futuras detenidas, retiro
+  del cargo, rollback, importe manipulado, IVA incluido/excluido y mapeado,
+  empresas independientes, reintento pagado y confirmacion antigua rechazada.
+- Evidencia fuera del repo: /tmp/wgs-cancellation-20261125/.
+- Contenedores, volumenes y red de esta validacion retirados al terminar.
+
+## Calendario inclusivo de nuevas compras, 2026-11-25
+
+Alcance: WGS POS `19.0.1.6.20`, exclusivamente en la rama local staging.
+Sin cambios a main, produccion, pagos, vigencias existentes, Payroll,
+importador bancario, gateway ni outputs/. Pendiente commit/push, build y
+upgrade de WGS POS en staging; no hay despliegue remoto en esta intervencion.
+
+### Regla autorizada
+
+- Mensual normal: inicio + un mes calendario - un dia. Ejemplos:
+  1/dic/2026-31/dic/2026 y 2/dic/2026-1/ene/2027.
+- Quincenal: 15 dias exactos contando el inicio; fin = inicio + 14 dias.
+  Los planes nativos de dos semanas representan esta quincena en WGS; el
+  catalogo POS expone 15 day, no dos semanas. Los semanales no cambian.
+- Anual: inicio + un ano calendario - un dia, tambien si se configura como
+  12 meses. Ejemplo: 1/dic/2026-30/nov/2027. No son 365 dias fijos.
+- Renovar continua al dia siguiente del ultimo fin pagado, considerando
+  tambien las compras futuras ya programadas. Una fecha de inicio nueva
+  corresponde a Reinscribir, no a reiniciar una renovacion tardia.
+- Acceso por fechas: desde las 00:00 del inicio hasta las 23:59:59 del fin,
+  en la zona horaria del negocio. Las restricciones de horario y adeudos
+  mantienen sus reglas independientes.
+- Domiciliados y paquetes alineados al mes calendario conservan su flujo,
+  proporcional y cartera. No se modifican contratos ni cuotas existentes.
+
+### Estructura y compatibilidad
+
+- Calendario comercial version 2 compartido entre cotizacion y validacion
+  de aplicacion; sin calculos de fechas nuevos en JavaScript.
+- Nuevas compras dejan monthly_cutoff_day en cero: ya no se agrega un dia
+  al mensual ni se hereda el corte fijo de la regla anterior.
+- Calendario version 1 sigue disponible exclusivamente para reproducir
+  cotizaciones historicas firmadas. Una compra pagada y programada antes del
+  upgrade conserva sus fechas al activarse; su siguiente compra usa version 2.
+- No hay migracion automatica ni reinterpretacion de fechas ya vendidas.
+- Las herramientas explicitas de reparacion historica conservan su calculo
+  anterior; no forman parte del calculo de nuevas compras.
+
+### Validacion local aislada
+
+- Odoo 19 Enterprise y PostgreSQL 16 desechables, red Docker interna, codigo
+  montado de solo lectura; sin servidores remotos ni SpeedFace reales.
+- Corrida final de tres modulos sobre el codigo definitivo: 283 pruebas ORM
+  sin fallos ni errores, incluida medianoche con ventas mensuales,
+  quincenales y anuales. Upgrade de los tres modulos tambien aprobado.
+- 128 pruebas standalone de suscripciones, 13 de calendario/corte historico
+  y 2 de sintaxis/contratos aprobadas. Concurrencia PostgreSQL ejecutada sobre
+  otra base wgs_test_* desechable, sin omisiones.
+- 53 regresiones JavaScript aprobadas. Matriz de calendario verifica todos
+  los dias de inicio de 2026-2028 y renovaciones consecutivas, incluidos
+  meses cortos, cambio de ano y bisiestos.
+- Se actualizaron expectativas de fechas de pruebas existentes, incluida
+  la transicion mensual-domiciliado: al empezar el 15/oct en lugar del 16,
+  el proporcional correcto es 17/31 mas ultimo mes, no 16/31.
+- Evidencia fuera del repo: /tmp/wgs-calendar-20261125/.
+- Contenedores, volumenes y red desechables retirados al terminar.
+
 ## Liberacion de recuperacion dirigida: produccion, 2026-11-17
 
 Autorizacion: promover WGS y gateway a main, desplegar y validar una sola

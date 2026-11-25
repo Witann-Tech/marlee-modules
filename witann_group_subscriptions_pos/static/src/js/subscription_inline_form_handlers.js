@@ -204,6 +204,7 @@ function buildSubscriptionInlineActionHandlers({
     openReenrollForm,
     openUpsaleForm,
     openParticipantEditForm,
+    openPackageCancellation,
     fetchResyncAccess,
     fetchAccessRecoveryStatus,
     getResyncAccessState,
@@ -231,6 +232,23 @@ function buildSubscriptionInlineActionHandlers({
     _t,
 }) {
     const handlers = {
+        "cancel-package": async ({ actionButton }) => {
+            if (state.packageCancellationBusy) { return; }
+            const partnerId = state.selectedPartnerId;
+            state.packageCancellationBusy = true;
+            actionButton.disabled = true;
+            try {
+                await openPackageCancellation(getCurrentSubscriptionItem(actionButton));
+            } catch (error) {
+                if (state.selectedPartnerId === partnerId) {
+                    state.formError = error?.data?.message || error?.message || _t("No se pudo cancelar el paquete.");
+                    renderDetail(state.currentDetail);
+                }
+            } finally {
+                state.packageCancellationBusy = false;
+                actionButton.disabled = false;
+            }
+        },
         "open-renewal": async ({ actionButton }) => {
             await openRenewalForm(getCurrentSubscriptionItem(actionButton));
         },
@@ -257,10 +275,9 @@ function buildSubscriptionInlineActionHandlers({
             if (typeof setResyncAccessLoading === "function") {
                 setResyncAccessLoading(subscriptionId, true);
             }
-            const deviceId = Number(actionButton.closest(".wgs-subscription-card")?.querySelector('[data-role="resync-device"]')?.value || 0);
             renderDetail(state.currentDetail);
             try {
-                const result = await fetchResyncAccess(subscriptionId, deviceId || false);
+                const result = await fetchResyncAccess(subscriptionId);
                 if (typeof startResyncAccessCooldown === "function") {
                     startResyncAccessCooldown(subscriptionId, Number(result && result.cooldown_seconds ? result.cooldown_seconds : 60));
                 }

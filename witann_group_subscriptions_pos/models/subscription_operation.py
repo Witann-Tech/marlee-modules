@@ -16,7 +16,10 @@ from odoo import _, api, fields, models
 from odoo.exceptions import UserError
 from odoo.fields import Domain
 
-from ..subscription_contract import RULES_VERSION, canonical_json, fingerprint, validate_commercial_period, validate_period
+from ..subscription_contract import (
+    CALENDAR_VERSION, RULES_VERSION, canonical_json, fingerprint,
+    validate_commercial_period, validate_period,
+)
 
 
 _logger = logging.getLogger(__name__)
@@ -27,7 +30,7 @@ class SubscriptionPosProduct(models.Model):
 
     @api.model
     def _load_pos_data_fields(self, config):
-        return list(dict.fromkeys(super()._load_pos_data_fields(config) + ['recurring_invoice']))
+        return list(dict.fromkeys(super()._load_pos_data_fields(config) + ['recurring_invoice', 'wgs_cancellation_fee']))
 
 
 class PosSubscriptionOperationLine(models.Model):
@@ -116,27 +119,20 @@ class PosSubscriptionOperation(models.Model):
         if request['flow'] == 'upsale':
             schedule = self._wgs_get_upsale_schedule_from_source(source)
             return {
-                'version': 1, 'mode': 'source_period',
+                'version': CALENDAR_VERSION, 'mode': 'source_period',
                 'start': fields.Date.to_string(schedule['subscription_start_date']),
                 'end': fields.Date.to_string(schedule['subscription_end_date']),
                 'next': fields.Date.to_string(schedule['next_billing_date']) or False,
             }
-        cutoff, previous_end = 0, False
         aligned = self._wgs_should_align_plan_to_calendar_month(plan)
         if request['flow'] == 'renewal':
             schedule = self._wgs_get_subscription_renewal_schedule(source, plan=plan)
             if start != schedule['renewal_anchor']:
                 raise UserError(_('El inicio de renovacion no corresponde al periodo ya pagado.'))
-            cutoff = schedule['monthly_cutoff_day']
-            # The renewal calculator records whether the anchor continues a
-            # paid period; late renewals must not invent a previous end.
-            previous_end = (schedule.get('previous_end') or False) if cutoff else False
-        elif self._wgs_uses_fixed_monthly_cutoff(plan):
-            cutoff = start.day
         return {
-            'version': 1, 'mode': 'term', 'start': start.isoformat(),
+            'version': CALENDAR_VERSION, 'mode': 'term', 'start': start.isoformat(),
             'interval': interval, 'unit': unit, 'aligned': aligned,
-            'cutoff': cutoff, 'previous_end': fields.Date.to_string(previous_end) or False,
+            'cutoff': 0, 'previous_end': False,
         }
 
     def _wgs_seal_pricing_payload(self, pricing, request):
@@ -279,6 +275,10 @@ class PosSubscriptionOperation(models.Model):
     def _wgs_normalize_commercial_config(self, config, *, partner_id, company_id, check_source=True):
         """Resolve browser metadata to the exact backend quote before payment."""
         config = dict(config)
+        if config.get('flow') == 'cancellation_charge':
+            return self._wgs_normalize_cancellation_config(
+                config, partner_id=partner_id, company_id=company_id, check_source=check_source,
+            )
         if config.get('flow') in ('pending_charge', 'cancellation_refund'):
             return config
         snapshot = config.get('pricing_snapshot') or {}
@@ -328,6 +328,7 @@ class PosSubscriptionOperation(models.Model):
             self._wgs_to_int(line.get('product_id')) for line in lines
         ]).exists()
         recurring_ids = set(products.filtered('recurring_invoice').ids)
+        recurring_ids.update(products.filtered('wgs_cancellation_fee').ids)
         trial_ids = set(products.filtered(lambda product: product.wgs_free_trial_day).ids)
         seen_sources = set()
         purchases = []
@@ -347,6 +348,10 @@ class PosSubscriptionOperation(models.Model):
             if abs(float(config.get('quantity') or 1) - float(line['qty'])) > 0.00001:
                 raise UserError(_('Cambio la cantidad del paquete. Actualiza la cotizacion antes de cobrar.'))
             pricing = config.get('pricing_snapshot') or {}
+            if config.get('flow') == 'cancellation_charge':
+                currency = self.env['res.currency'].browse(pricing['currency_id'])
+                if currency.compare_amounts(float(line.get('price_unit') or 0), pricing['ticket_charge_now']) or float(line.get('discount') or 0):
+                    raise UserError(_('No cambies el precio ni apliques descuentos al cargo de cancelacion.'))
             if abs(float(line.get('price_unit') or 0) - float(pricing.get('ticket_charge_now') or 0)) > 0.01:
                 raise UserError(_('El precio del ticket difiere de la cotizacion de membresia.'))
             if abs(float(line.get('discount') or 0) - float(config.get('discount_percent') or 0)) > 0.00001:
@@ -465,7 +470,9 @@ class PosSubscriptionOperation(models.Model):
         for order in self.sudo().sorted('id'):
             if order.state not in ('paid', 'done', 'invoiced'):
                 continue
-            lines = order.lines.filtered(lambda line: line.qty and line.product_id.recurring_invoice)
+            lines = order.lines.filtered(lambda line: line.qty and (
+                line.product_id.recurring_invoice or (line.qty > 0 and line.wgs_subscription_flow == 'cancellation_charge')
+            ))
             if not lines:
                 continue
             sources = order._wgs_lock_operation_records(lines)
@@ -492,7 +499,7 @@ class PosSubscriptionOperation(models.Model):
                 scoped_order = order.with_context(wgs_defer_access_sync=True)
                 scoped_line = line.with_env(scoped_order.env)
                 before = order._wgs_source_revision(line.wgs_subscription_source_id)
-                if line.qty > 0 and line.wgs_subscription_flow != 'pending_charge':
+                if line.qty > 0 and line.wgs_subscription_flow not in ('pending_charge', 'cancellation_charge'):
                     snapshot = json.loads(line.wgs_pricing_snapshot_json or '{}')
                     payload = order._wgs_verify_commercial_quote(
                         snapshot, product_id=line.product_id.id, partner_id=order.partner_id.id,
@@ -544,6 +551,8 @@ class PosSubscriptionOperation(models.Model):
         """
         self.ensure_one()
         line.ensure_one()
+        if line.wgs_subscription_flow == 'cancellation_charge':
+            return self._wgs_apply_paid_package_cancellation(line)
         if activation and (
             line.qty <= 0 or line.wgs_subscription_flow != 'renewal'
             or line.wgs_application_state not in ('scheduled', 'review')

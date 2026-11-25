@@ -53,9 +53,9 @@ function fixture(overrides = {}) {
     const actionButton = {dataset:{subscriptionId:'9'}, closest:()=>({querySelector:()=>({value:'4'})})};
     return {state,calls,loading,handlers,actionButton};
 }
-test('recover targets the chosen terminal and never claims hardware success', async () => {
+test('recover always includes all authorized terminals and never claims hardware success', async () => {
     const f = fixture(); await f.handlers['resync-access']({actionButton:f.actionButton});
-    assert.deepEqual(f.calls[0], ['recover',9,4]);
+    assert.deepEqual(f.calls[0], ['recover',9]);
     assert.match(f.state.formNotice, /aun no confirma acceso fisico/);
     assert.deepEqual(f.loading, [[9,true],[9,false]]);
 });
@@ -77,8 +77,8 @@ test('a late recovery response does not overwrite another customer', async () =>
 });
 test('resync and status RPCs preserve the selected POS company', async () => {
     const calls=[]; const api=context.createSubscriptionPosApi({call:async(...args)=>calls.push(args)},()=>10);
-    await api.resyncSubscriptionAccess(9,4); await api.fetchAccessRecoveryStatus(9);
+    await api.resyncSubscriptionAccess(9); await api.fetchAccessRecoveryStatus(9);
     assert.equal(calls[0][1],'wgs_resync_subscription_access_for_pos');
-    assert.deepEqual(JSON.parse(JSON.stringify(calls[0][2])),[9,4]);
+    assert.deepEqual(JSON.parse(JSON.stringify(calls[0][2])),[9]);
     assert.deepEqual(JSON.parse(JSON.stringify(calls[1][3])),{context:{allowed_company_ids:[10]}});
 });

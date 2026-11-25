@@ -32,7 +32,7 @@ class IntegralCommercialTests(unittest.TestCase):
         with self.assertRaises(UserError):
             method(OPS, '_wgs_seal_pricing_payload')(owner, pricing, request)
         owner._wgs_quote_signature.assert_not_called()
-        pricing.update(subscription_end_date='2026-11-14', next_billing_date='2026-11-15')
+        pricing.update(subscription_end_date='2026-11-13', next_billing_date='2026-11-14', monthly_cutoff_day=0)
         result = method(OPS, '_wgs_seal_pricing_payload')(owner, pricing, request)
         self.assertEqual(result['period_contract']['interval'], 1)
         self.assertEqual(result['commercial_quote']['payload']['pricing']['period_contract'], result['period_contract'])
@@ -92,18 +92,20 @@ class IntegralCommercialTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 contract.validate_commercial_period(pricing)
 
-    def test_renewal_contract_continues_31_cutoff_after_short_month(self):
+    def test_new_renewal_contract_does_not_inherit_historical_cutoff(self):
         owner, source = calculator(date(2027, 2, 28), 31)
         owner._wgs_get_subscription_business_today_for_pos = lambda **kw: date(2027, 2, 28)
         schedule = owner._wgs_get_subscription_renewal_schedule(source, plan=plan())
         pricing = dict(subscription_start_date=str(schedule['renewal_anchor']),
                        subscription_end_date=str(schedule['subscription_end_date']),
-                       next_billing_date=str(schedule['next_billing_date']), monthly_cutoff_day=31)
+                       next_billing_date=str(schedule['next_billing_date']), monthly_cutoff_day=0)
         pricing['period_contract'] = method(OPS, '_wgs_build_period_contract')(
             owner, pricing, {'source_order': source, 'flow': 'renewal'}, plan(),
         )
         contract.validate_commercial_period(pricing)
-        self.assertEqual(pricing['period_contract']['previous_end'], '2027-02-28')
+        self.assertFalse(pricing['period_contract']['previous_end'])
+        self.assertEqual(pricing['period_contract']['version'], 2)
+        self.assertEqual(pricing['subscription_end_date'], '2027-03-31')
 
     def test_paid_future_participants_are_independent_of_current_participants(self):
         owner, source, line, values = recovery_fixture()

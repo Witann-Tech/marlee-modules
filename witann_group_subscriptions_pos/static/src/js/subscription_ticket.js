@@ -175,7 +175,8 @@ export async function ensurePartnerLoadedInPos(source, partnerId, fetchPartnerRe
 
 export async function resolveSubscriptionOrderPartner(pos, order, configs) {
     const ids = new Set(configs.map((config) =>
-        Number(config.pricing_snapshot?.commercial_quote?.payload?.partner_id || 0)
+        Number(config.pricing_snapshot?.commercial_quote?.payload?.partner_id
+            || config.pricing_snapshot?.cancellation_quote?.payload?.partner_id || 0)
     ));
     if (ids.size !== 1 || ids.has(0)) {
         throw new Error("Las membresias del ticket requieren un mismo titular cotizado.");

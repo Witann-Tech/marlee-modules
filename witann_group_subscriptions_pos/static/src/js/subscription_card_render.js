@@ -85,10 +85,7 @@ function renderSubscriptionCard({
                     ${item.can_upsale ? "" : "disabled"}
                 >${escapeHtml(_t("Cambiar Plan"))}</button>
                 ${participantActionHtml}
-                <select class="wgs-input" data-role="resync-device" aria-label="${escapeHtml(_t("Equipo para recuperar acceso"))}">
-                    <option value="0">${escapeHtml(_t("Todos los equipos autorizados"))}</option>
-                    ${(item.resync_devices || []).map((device) => `<option value="${escapeHtml(String(device.id))}">${escapeHtml(device.name)}</option>`).join("")}
-                </select>
+                ${item.can_cancel ? `<button type="button" class="wgs-action-btn text-danger" data-action="cancel-package" data-subscription-id="${escapeHtml(String(item.subscription_id || 0))}">${escapeHtml(_t("Cancelar paquete"))}</button>` : ""}
                 <button
                     type="button"
                     class="wgs-action-btn${resyncClass}"

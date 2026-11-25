@@ -21,7 +21,7 @@ export async function stageSubscriptionConfigsForOrder(orm, order, pos) {
     }
     const configs = collectSubscriptionConfigsFromOrder(order).filter((config) => config.flow !== "cancellation_refund");
     const hasMembership = getOrderLines(order).some((line) =>
-        getLineQty(line) > 0 && line.product_id?.recurring_invoice
+        getLineQty(line) > 0 && (line.product_id?.recurring_invoice || line.product_id?.wgs_cancellation_fee)
     );
     if (!configs.length && !hasMembership) {
         return { ok: true, skipped: true };
@@ -45,6 +45,8 @@ export async function stageSubscriptionConfigsForOrder(orm, order, pos) {
     for (const orderId of orderIds) {
         lastResult = await orm.call("pos.order", "wgs_stage_subscription_config_for_uuid", [orderId, configs, {
             partner_id: getPartnerIdFromOrder(order), company_id: getCurrentCompanyId(pos), lines,
+            session_id: pos?.session?.id || order?.session_id?.id || false,
+            fiscal_position_id: order?.fiscal_position_id?.id || false,
         }]);
         if (!lastResult || !lastResult.ok) {
             return lastResult || { ok: false, reason: "unknown" };
