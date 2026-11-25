@@ -2,6 +2,28 @@
 
 Registro inicial: 2026-09-28. Rama de trabajo: `staging`.
 
+## Despliegue y pruebas por navegador, 2026-11-25 (en curso)
+
+- Commit funcional `befe7e7`, enviado a origin/staging. Main permanece en
+  `7795fd7`. Solo se incluyeron WGS POS, sus pruebas y esta bitacora.
+- CloudPepper: Update addon del repositorio marlee-modules/staging, de
+  `355fce7` a `befe7e7`, sin actualizar Enterprise ni reconstruir la base.
+  Rebuild Staging es destructivo (reemplaza la base desde produccion) y NO
+  se ejecuto. El servicio de staging reinicio con el codigo nuevo.
+- El primer upgrade desde Aplicaciones detecto un caso no cubierto por la
+  instalacion limpia: la precarga nativa de res.company intentaba leer el
+  campo nuevo antes de crear su columna. No se hicieron ALTER manuales en
+  staging ni cambios a pagos/suscripciones para resolverlo.
+- WGS POS `19.0.1.6.22`: los tres campos nuevos de cancelacion usan
+  prefetch=False, permitiendo las lecturas nativas anteriores al upgrade.
+  Son datos leidos explicitamente por el nuevo flujo, no en cada lectura
+  general de empresa/producto/suscripcion. No cambia la logica comercial.
+- Prueba local real: instalar codigo anterior `7795fd7` en una base nueva,
+  arrancar con codigo nuevo sin -u y ejecutar button_immediate_upgrade.
+  Resultado COLD_UI_UPGRADE_OK. Se agrego tambien una regresion ORM que
+  simula las tres columnas aun ausentes y revierte todo al terminar.
+- Evidencia local del upgrade: /tmp/wgs-upgrade-20261125/.
+
 ## Cancelar paquete desde POS y resincronizar todas las puertas, 2026-11-25
 
 Version local WGS POS `19.0.1.6.21`, que incluye tambien el calendario

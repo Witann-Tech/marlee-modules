@@ -17,19 +17,21 @@ CANCELLATION_FLOW = 'cancellation_charge'
 class ResCompany(models.Model):
     _inherit = 'res.company'
 
-    wgs_cancellation_product_id = fields.Many2one('product.product', copy=False, readonly=True, check_company=True)
+    wgs_cancellation_product_id = fields.Many2one(
+        'product.product', copy=False, readonly=True, check_company=True, prefetch=False,
+    )
 
 
 class ProductTemplate(models.Model):
     _inherit = 'product.template'
 
-    wgs_cancellation_fee = fields.Boolean(copy=False, readonly=True)
+    wgs_cancellation_fee = fields.Boolean(copy=False, readonly=True, prefetch=False)
 
 
 class SaleOrder(models.Model):
     _inherit = 'sale.order'
 
-    wgs_pos_cancellation_receipt = fields.Json(copy=False, readonly=True)
+    wgs_pos_cancellation_receipt = fields.Json(copy=False, readonly=True, prefetch=False)
 
     def _wgs_can_cancel_for_pos(self):
         self.ensure_one()

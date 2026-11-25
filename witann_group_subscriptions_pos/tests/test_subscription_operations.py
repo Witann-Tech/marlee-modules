@@ -1849,3 +1849,23 @@ class TestSubscriptionOperations(CommonPosTest):
         fee = self._pay_cancellation(source, origin, quote)
         self.assertEqual(fee.amount_total, 108)
         self.assertEqual(fee.amount_tax, 8)
+
+    def test_bootstrap_prefetch_can_read_native_records_before_new_columns_exist(self):
+        class RollbackSchemaProbe(Exception):
+            pass
+
+        _origin, source = self._paid(self.solo, self.month)
+        self.env.flush_all()
+        with self.assertRaises(RollbackSchemaProbe), self.env.cr.savepoint():
+            # Model code is loaded before button_immediate_upgrade creates new
+            # columns. Native company reads must still reach that upgrade.
+            self.env.cr.execute('ALTER TABLE res_company DROP COLUMN wgs_cancellation_product_id')
+            self.env.cr.execute('ALTER TABLE product_template DROP COLUMN wgs_cancellation_fee')
+            self.env.cr.execute('ALTER TABLE sale_order DROP COLUMN wgs_pos_cancellation_receipt')
+            self.env.invalidate_all(flush=False)
+            company_partner = self.env.company.partner_id
+            self.assertTrue(company_partner)
+            self.assertEqual(company_partner.lang, self.env['res.partner'].browse(company_partner.id).lang)
+            self.assertTrue(self.solo.recurring_invoice)
+            self.assertEqual(source.partner_id, self.holder)
+            raise RollbackSchemaProbe()
