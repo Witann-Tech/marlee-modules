@@ -50,5 +50,12 @@ export async function cancelPackageFromPos(source, item, { api, showDialog, isCu
         quantity: 1, lineUnitPrice: quote.ticket_charge_now, discount: 0, merge: false, metadata,
     });
     if (!result?.line) { throw new Error("No se pudo agregar el cargo. El paquete no se cancelo."); }
+    const total = Number(result.line.priceIncl ?? result.line.get_price_with_tax?.());
+    const rounding = Number(order.currency_id?.rounding || 0.01);
+    if (!Number.isFinite(total) || Math.abs(total - quote.amount_total) >= rounding / 2) {
+        // Never leave an incorrectly taxed fee available for checkout.
+        result.line.delete();
+        throw new Error("El total del cargo no coincide con la cotizacion. Actualiza el POS antes de cobrar. El paquete no se cancelo.");
+    }
     if (isCurrent()) { await onFeeAdded(); }
 }

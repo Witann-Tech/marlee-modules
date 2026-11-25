@@ -22,7 +22,7 @@ function fixture({amount = 25, reply = true} = {}) {
         collectSubscriptionConfigsFromOrder: () => control.configs,
         resolveSubscriptionOrderPartner: async (_source, _order, configs) => calls.push(['partner', configs[0].partner_id]),
         ensureProductLoadedInPos: async () => ({id: 90}),
-        addConfiguredProductLineToOrder: async (...args) => {calls.push(['line', args[3]]); return {line:{id: 1}};},
+        addConfiguredProductLineToOrder: async (...args) => {calls.push(['line', args[3]]); return {line:{id: 1, priceIncl: amount, delete:()=>calls.push(['removed'])}};},
     });
     load(context, 'subscription_cancellation_controller.js');
     const quote = {product_id: 90, amount_total: amount, ticket_charge_now: amount, partner_id: 8, fiscal_position_id: 3,
@@ -90,6 +90,16 @@ test('failed fee insertion leaves the contract active and shows no success', asy
     f.context.addConfiguredProductLineToOrder = async () => ({line:null});
     await assert.rejects(f.run(), /no se cancelo/);
     assert.equal(f.calls.some(call=>call[0]==='added' || call[0]==='zero'),false);
+});
+test('native tax drift removes the fee before it can be charged', async () => {
+    for (const total of [134.56, undefined]) {
+        const f = fixture({amount:116});
+        f.context.addConfiguredProductLineToOrder = async () => ({line:{priceIncl:total,
+            delete:()=>f.calls.push(['removed'])}});
+        await assert.rejects(f.run(), /total del cargo no coincide/);
+        assert.equal(f.calls.at(-1)[0], 'removed');
+        assert.equal(f.calls.some(call=>call[0]==='added' || call[0]==='zero'),false);
+    }
 });
 test('dialog rejects invalid amounts and requires an explicit confirmation for zero', () => {
     const context = vm.createContext({Component:class {}, Dialog:class {}, useState:x=>x, xml:s=>s.join(''), _t:x=>x});

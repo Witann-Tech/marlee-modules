@@ -1728,6 +1728,23 @@ class TestSubscriptionOperations(CommonPosTest):
                 source.id, 0, '', origin.session_id.id,
             )
 
+    def test_cancellation_tax_scope_keeps_ancestor_taxes_for_branches(self):
+        tax = create_tax(self.env, {'name': 'Ancestor fee IVA', 'amount': 16, 'amount_type': 'percent',
+                                   'type_tax_use': 'sale', 'price_include_override': 'tax_excluded',
+                                   'company_id': self.env.company.id})
+        branch = self.env['res.company'].sudo().create({
+            'name': 'Cancellation branch', 'parent_id': self.env.company.id,
+        })
+        self.env.company.sudo().account_sale_tax_id = tax
+        product = self.Pos._wgs_cancellation_product(branch)
+        # Model the standard branch product using its parent's accounting tax.
+        product.sudo().taxes_id = [Command.set(tax.ids)]
+        taxes = self.Pos._wgs_cancellation_taxes(product, branch)
+        self.assertEqual(taxes, tax)
+        self.assertEqual(taxes.compute_all(100, currency=branch.currency_id)['total_included'], 116)
+        independent = self.env['res.company'].sudo().create({'name': 'Independent fee scope'})
+        self.assertFalse(self.Pos._wgs_cancellation_taxes(product, independent))
+
     def test_old_zero_fee_request_cannot_cancel_a_later_reenrollment(self):
         origin, source = self._paid(self.solo, self.month)
         quote = self._cancellation_quote(source, origin, 0)

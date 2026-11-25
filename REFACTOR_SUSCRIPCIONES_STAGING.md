@@ -4,6 +4,19 @@ Registro inicial: 2026-09-28. Rama de trabajo: `staging`.
 
 ## Despliegue y pruebas por navegador, 2026-11-25 (en curso)
 
+- La prueba real del cargo de cancelacion detecto IVA duplicado al usar un
+  impuesto de la matriz en una sucursal: el filtro de empresa exacta lo omitia
+  en la cotizacion, pero el POS nativo lo incluia en el ticket. Version POS
+  `19.0.1.6.23`: dominio fiscal estandar de Odoo (ancestros autorizados, nunca
+  empresas independientes) y comprobacion del total nativo antes de dejar el
+  cargo disponible para cobro. Sin cambios de impuestos/configuracion contable.
+- Regresiones locales de esa correccion: 305 pruebas ORM Enterprise, cero
+  fallos/errores, y 64 JavaScript aprobadas. Base PostgreSQL desechable; la
+  evidencia por navegador de la version 23 se registra al terminar la matriz.
+- Navegador antes del ajuste fiscal: alta mensual 1/dic-31/dic y 2/dic-1/ene
+  correctas; venta QA S03655 1/nov-30/nov aplicada con acceso; renovacion cotizada
+  1/dic-31/dic. Cargo incorrecto detectado, retirado sin pagar y sin cancelar.
+
 - Commit funcional `befe7e7`, enviado a origin/staging. Main permanece en
   `7795fd7`. Solo se incluyeron WGS POS, sus pruebas y esta bitacora.
 - CloudPepper: Update addon del repositorio marlee-modules/staging, de
