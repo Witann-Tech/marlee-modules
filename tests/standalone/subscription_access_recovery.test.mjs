@@ -71,6 +71,14 @@ test('checking status does not enqueue another recovery or payment', async () =>
     assert.equal(f.calls.filter(row=>row[0]==='recover').length,0);
     assert.equal(f.actionButton.disabled,false);
 });
+for (const [action, rpc] of [['resync-access', 'fetchResyncAccess'], ['check-resync-access', 'fetchAccessRecoveryStatus']]) {
+    test(`${action} exposes the actionable RPC message instead of the generic server error`, async () => {
+        const f = fixture({[rpc]: async () => {throw {message:'Odoo Server Error', data:{message:'Gateway no disponible; intenta de nuevo.'}};}});
+        await f.handlers[action]({actionButton:f.actionButton});
+        assert.equal(f.state.formError, 'Gateway no disponible; intenta de nuevo.');
+        assert.equal(f.state.formNotice, undefined);
+    });
+}
 test('a late recovery response does not overwrite another customer', async () => {
     let resolve;
     const pending = new Promise(done=>{resolve=done;});

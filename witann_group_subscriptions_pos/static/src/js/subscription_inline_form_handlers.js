@@ -290,7 +290,7 @@ function buildSubscriptionInlineActionHandlers({
             } catch (error) {
                 console.error("Error al resincronizar acceso desde POS", error);
                 if (state.selectedPartnerId === partnerId) {
-                    state.formError = (error && error.message) ? error.message : _t("No se pudo resincronizar el acceso de esta suscripción.");
+                    state.formError = error?.data?.message || error?.message || _t("No se pudo resincronizar el acceso de esta suscripción.");
                     renderDetail(state.currentDetail);
                 }
             } finally {
@@ -314,7 +314,7 @@ function buildSubscriptionInlineActionHandlers({
                 await loadDetail(state.selectedPartnerId, { force: true });
             } catch (error) {
                 if (state.selectedPartnerId === partnerId) {
-                    state.formError = error?.message || _t("No se pudo consultar la confirmacion de los equipos.");
+                    state.formError = error?.data?.message || error?.message || _t("No se pudo consultar la confirmacion de los equipos.");
                     renderDetail(state.currentDetail);
                 }
             } finally {
