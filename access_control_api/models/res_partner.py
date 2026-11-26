@@ -102,6 +102,16 @@ class ResPartner(models.Model):
         try:
             raw = base64.b64decode(normalized, validate=True)
             with Image.open(io.BytesIO(raw)) as img:
+                if img.format == "JPEG" and not raw.endswith(b"\xff\xd9"):
+                    raise ValueError("JPEG sin marcador de fin; no se acepta una fotografia truncada.")
+                # A canonical JPEG is already device-ready. Re-encoding it on
+                # each recovery would change both its pixels and authorization hash.
+                img.load()
+                if (img.format == "JPEG" and img.size == (480, 640) and img.mode == "RGB"
+                        and len(raw) <= 500 * 1024 and not img.getexif()
+                        and all(marker == "APP0" and value.startswith(b"JFIF\x00")
+                                for marker, value in getattr(img, "applist", []))):
+                    return normalized
                 img = ImageOps.exif_transpose(img)
                 if img.mode not in ("RGB", "L"):
                     img = img.convert("RGBA")

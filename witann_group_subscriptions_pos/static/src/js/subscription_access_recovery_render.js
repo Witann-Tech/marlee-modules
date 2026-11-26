@@ -18,6 +18,7 @@ export function renderAccessRecovery(recovery, escapeHtml, _t) {
     const feedbackClass = hasFailure ? "wgs-inline-error" : "wgs-inline-notice";
     return `<div class="${feedbackClass}" data-role="access-recovery-status">
         <strong>${escapeHtml(_t("Recuperacion de acceso"))}</strong>
+        ${recovery.protocol_version === 2 ? `<p>${escapeHtml(_t("La espera en cola no consume el plazo de ejecucion de los comandos. El acceso conserva su vigencia original."))}</p>` : ""}
         ${rows.map((row) => `<p>${escapeHtml(row.name || "")} · ${escapeHtml(row.device_name || "")}: ${escapeHtml(labels[row.state] || _t("Pendiente"))}${row.error ? ` · ${escapeHtml(row.error)}` : ""}</p>`).join("")}
         ${!rows.length ? `<p>${escapeHtml(_t("Sin destinos preparados. Verifica el acceso autorizado y los equipos."))}</p>` : ""}
         ${rows.some((row) => row.state === "confirmed") ? `<p>${escapeHtml(_t("Confirmacion de comandos; el reconocimiento facial se verifica al pasar por el equipo."))}</p>` : ""}

@@ -2710,3 +2710,34 @@ despliegue; no restaurar una base antigua perdiendo cobros reales.
 La reparacion masiva por inferencia queda deshabilitada. La API dirigida requiere
 plan, inicio historico y digest de la propuesta; una aprobacion queda invalidada
 si cambia la suscripcion o el pago. No se ejecuto ninguna reparacion de datos.
+
+## 2026-11-26 - Fotos estables y recuperacion multiple, solo staging
+
+- Access API `19.0.2.0.89`, WGS POS `19.0.1.6.27`; base WGS sin cambio
+  (`19.0.1.1.63`). Gateway staging `0.2.2`, desarrollado en copia aislada.
+- Causa: recomprimir por puerta alteraba la foto y las huellas ya selladas. Se
+  normaliza una vez por persona antes de crear los destinos; JPEG canonico
+  sin metadatos se conserva byte a byte. Se rechazan JPEG truncados, incluso
+  cuando Pillow se ejecuta en modo tolerante. Se eliminan EXIF/ICC/comentarios.
+- Protocolo v2 negociado con endpoint autenticado: ventana de cola acotada a
+  45 minutos y ejecucion maxima de 10 minutos desde admision al presupuesto
+  de fotos del gateway. Ambos quedan limitados por el fin local de vigencia.
+  El v1 conserva su contrato anterior; respuestas invalidas no degradan a v1.
+- No se aumenta el presupuesto de fotos ni se saltan confirmaciones. Un destino
+  requiere cuatro IDs distintos con ACK Return=0 del serial correcto. Reenvio
+  y reinicio conservan IDs y vencimiento originales. Una autorizacion revocada
+  invalida tanto envio como consulta; confirmaciones historicas son inmutables.
+- El aplazamiento por capacidad se vuelve elegible al siguiente ciclo sin
+  consumir intentos de error ni perder ciclos por desfase de milisegundos.
+- Locks con orden comercial: participantes, suscripcion y personas; cursor y
+  transaccion normales de Odoo, sin conexiones adicionales persistentes.
+- Regresiones locales: Odoo 19 Enterprise desechable, 339 pruebas, 0 fallos y
+  0 errores; JavaScript 73/73; gateway Go 136/136 con `-race`. Incluyen 9
+  personas por 3 puertas, 108 comandos, presupuesto 5 fotos/ciclo, esperas
+  virtuales de hasta 40 minutos, metadatos, fotos truncadas, medianoche,
+  suspension, horario inactivo, reinicio, idempotencia y compatibilidad v1.
+- Validacion web pendiente al registrar esta entrada. Solo fixtures nuevos QA,
+  gateway staging filtrado a sitio QA y ACK iClock simulados. No equivale a
+  reconocimiento facial ni paso fisico por un SpeedFace.
+- Main, produccion, pagos reales, vigencias reales, payroll, importador bancario
+  y `outputs/` fuera de alcance y sin cambios.

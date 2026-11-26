@@ -912,14 +912,47 @@ class TestFaceSyncDelta(TransactionCase):
         result = self.Partner._prepare_biometric_face_b64("esto-no-es-una-imagen", log_context="test_invalid")
         self.assertFalse(result)
 
+    def test_canonical_detailed_jpeg_is_byte_stable_across_twenty_normalizations(self):
+        image = Image.new('RGB', (600, 800))
+        image.putdata([((x*17+y*13)%256, (x*3+y*31)%256, (x*29+y*7)%256)
+                       for y in range(800) for x in range(600)])
+        source = io.BytesIO()
+        image.save(source, format='PNG')
+        canonical = self.Partner._prepare_biometric_face_b64(base64.b64encode(source.getvalue()).decode())
+        self.assertTrue(canonical)
+        for _ in range(20):
+            self.assertEqual(self.Partner._prepare_biometric_face_b64(canonical), canonical)
+
+    def test_jpeg_metadata_is_removed_once_and_never_preserved_by_canonical_shortcut(self):
+        image = Image.new('RGB', (480, 640), (35, 70, 140))
+        exif = Image.Exif()
+        exif[0x010F] = 'Synthetic QA metadata'
+        exif[0x0112] = 1
+        source = io.BytesIO()
+        image.save(source, format='JPEG', exif=exif)
+        encoded = base64.b64encode(source.getvalue()).decode()
+        canonical = self.Partner._prepare_biometric_face_b64(encoded)
+        self.assertNotEqual(encoded, canonical)
+        with Image.open(io.BytesIO(base64.b64decode(canonical))) as result:
+            self.assertFalse(result.getexif())
+        self.assertEqual(self.Partner._prepare_biometric_face_b64(canonical), canonical)
+
+    def test_truncated_canonical_sized_jpeg_cannot_skip_full_validation(self):
+        image = Image.new('RGB', (480, 640), (35, 70, 140))
+        source = io.BytesIO()
+        image.save(source, format='JPEG')
+        encoded = base64.b64encode(source.getvalue()[:-100]).decode()
+        self.assertFalse(self.Partner._prepare_biometric_face_b64(encoded))
+
     def test_too_large_processed_image_is_rejected(self):
         original_save = res_partner_module.Image.Image.save
+        source = self._make_image_b64()
 
         def oversized_save(image_self, output, format=None, quality=None, optimize=None, **kwargs):
             output.write(b"x" * (600 * 1024))
 
         with patch.object(res_partner_module.Image.Image, "save", oversized_save):
-            result = self.Partner._prepare_biometric_face_b64(self._make_image_b64(), log_context="test_large")
+            result = self.Partner._prepare_biometric_face_b64(source, log_context="test_large")
 
         self.assertFalse(result)
         self.assertIsNotNone(original_save)

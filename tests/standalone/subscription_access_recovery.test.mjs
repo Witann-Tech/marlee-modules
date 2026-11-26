@@ -29,6 +29,12 @@ test('confirmed status and actionable errors render safely', () => {
     assert.match(html, /Falta foto &lt;img&gt;/);
     assert.doesNotMatch(html, /<script>/);
 });
+test('v2 explains bounded queue waiting without claiming confirmation or extending membership', () => {
+    const html = context.renderAccessRecovery({protocol_version:2, targets:[{state:'sent'}]}, escape, translate);
+    assert.match(html,/espera en cola no consume/);
+    assert.match(html,/vigencia original/);
+    assert.doesNotMatch(html,/Confirmada por el equipo/);
+});
 test('rejected, expired, superseded and empty results never use a green success notice', () => {
     for (const targets of [[], ...['failed', 'expired', 'superseded'].map(state => [{state}]),
         [{state:'confirmed'}, {state:'failed'}]]) {

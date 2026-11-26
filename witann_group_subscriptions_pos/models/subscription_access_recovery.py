@@ -1,5 +1,9 @@
 """POS access recovery orchestration, separate from commercial operations."""
 
+from datetime import datetime, time, timedelta
+
+import pytz
+
 from odoo import _, api, fields, models
 from odoo.exceptions import AccessError, UserError
 
@@ -21,8 +25,13 @@ class SaleOrder(models.Model):
     @api.model
     def _wgs_request_access_recovery(self, subscription_id, device_id=False):
         subscription = self._wgs_access_recovery_subscription(subscription_id)
+        partner_ids = sorted(subscription._wgs_get_access_related_partner_ids())
+        if partner_ids:
+            self.env.cr.execute('SELECT id FROM res_partner WHERE id = ANY(%s) ORDER BY id FOR UPDATE', [partner_ids])
         self.env.cr.execute('SELECT id FROM sale_order WHERE id = %s FOR UPDATE', [subscription.id])
-        subscription.invalidate_recordset(['wgs_last_access_resync_id'])
+        subscription.invalidate_recordset()
+        if sorted(subscription._wgs_get_access_related_partner_ids()) != partner_ids:
+            raise UserError(_('Los participantes cambiaron; vuelve a abrir la recuperacion de acceso.'))
         previous = subscription.wgs_last_access_resync_id
         now = fields.Datetime.now()
         if previous and (now - previous.create_date).total_seconds() < self._WGS_POS_ACCESS_RESYNC_COOLDOWN_SECONDS:
@@ -49,8 +58,15 @@ class SaleOrder(models.Model):
         ])
         if not people:
             raise UserError(_('La membresia no tiene acceso vigente habilitado. La recuperacion no autoriza accesos vencidos o bloqueados.'))
+        end = subscription._wgs_get_subscription_access_period()['valid_until']
+        authorization_expires_at = False
+        if end:
+            local_midnight = subscription._wgs_get_subscription_business_timezone().localize(
+                datetime.combine(end + timedelta(days=1), time.min))
+            authorization_expires_at = local_midnight.astimezone(pytz.UTC).replace(tzinfo=None)
         request = self.env['access_control.resync_request'].sudo()._queue_for_people(
             people, devices, subscription.company_id, self.env.user,
+            authorization_expires_at=authorization_expires_at,
         )
         subscription.write({'wgs_last_access_resync_id': request.id})
         return {'ok': True, 'subscription_id': subscription.id,

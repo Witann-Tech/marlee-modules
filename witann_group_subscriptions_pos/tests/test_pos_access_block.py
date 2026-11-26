@@ -1,10 +1,11 @@
 import base64
 import io
 import json
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from unittest.mock import patch
 
 from dateutil.relativedelta import relativedelta
+import pytz
 
 from odoo import Command
 from odoo.exceptions import AccessError, UserError
@@ -13,6 +14,9 @@ from odoo.tests.common import TransactionCase
 
 class TestPosAccessBlock(TransactionCase):
     def _access_recovery_fixture(self, with_photo=True):
+        protocol = patch.object(type(self.env['access_control.resync_request']), '_gateway_recovery_protocol', return_value=2)
+        protocol.start()
+        self.addCleanup(protocol.stop)
         if with_photo:
             from PIL import Image
             image = io.BytesIO()
@@ -30,12 +34,15 @@ class TestPosAccessBlock(TransactionCase):
         order, devices = self._access_recovery_fixture()
         commercial = ['plan_id', 'start_date', 'end_date', 'next_invoice_date', 'participant_ids', 'order_line', 'amount_total']
         before = order.read(commercial)
+        before[0]['participant_ids'].sort()
         people = self.env['access_control.person'].search([('partner_id', 'in', [self.owner.id, self.participant.id]), ('active', '=', True)])
         identities = people.read(['partner_id', 'global_user_id'])
         pos_count = self.env['pos.order'].search_count([])
         result = self.env['pos.order'].wgs_resync_subscription_access_for_pos(order.id, devices[1].id)
         self.assertTrue(result['ok'])
-        self.assertEqual(before, order.read(commercial))
+        after = order.read(commercial)
+        after[0]['participant_ids'].sort()
+        self.assertEqual(before, after)
         self.assertEqual(identities, people.read(['partner_id', 'global_user_id']))
         self.assertEqual(pos_count, self.env['pos.order'].search_count([]))
         request = order.wgs_last_access_resync_id
@@ -52,6 +59,17 @@ class TestPosAccessBlock(TransactionCase):
         with self.assertRaises(UserError), self.env.cr.savepoint():
             self.env['pos.order'].wgs_resync_subscription_access_for_pos(order.id, devices[0].id)
         self.assertEqual(count, self.env['access_control.resync_target'].sudo().search_count([]))
+
+    def test_access_recovery_is_capped_at_the_local_end_of_membership(self):
+        order, devices = self._access_recovery_fixture()
+        today = order._wgs_get_subscription_business_today()
+        order.write({'end_date': today, 'next_invoice_date': today + timedelta(days=1)})
+        cutoff = order._wgs_get_subscription_business_timezone().localize(
+            datetime.combine(today + timedelta(days=1), time.min)).astimezone(pytz.UTC).replace(tzinfo=None)
+        with patch('odoo.addons.access_control_api.models.access_resync.fields.Datetime.now',
+                   return_value=cutoff - timedelta(minutes=4)):
+            self.env['pos.order'].wgs_resync_subscription_access_for_pos(order.id, devices[0].id)
+        self.assertEqual(order.wgs_last_access_resync_id.expires_at, cutoff)
 
     def test_access_recovery_rejects_an_unrelated_site_before_queueing(self):
         order, _devices = self._access_recovery_fixture()
