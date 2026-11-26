@@ -78,7 +78,7 @@ patch(PaymentScreen.prototype, {
         return false;
     },
 
-    async validateOrder() {
+    async wgsPreparePayment() {
         const order = getOrderFromPaymentScreen(this);
         clearInvoiceFlag(order);
         try {
@@ -88,11 +88,28 @@ patch(PaymentScreen.prototype, {
             }
             if (result && result.ok === false) {
                 window.alert(_t("No se pudo preparar la configuracion de suscripcion para esta venta. Actualiza el modulo y vuelve a intentar."));
-                return;
+                return false;
             }
         } catch (error) {
             console.error("Error al preparar configuracion de suscripcion antes del cobro POS", error);
             window.alert(error?.data?.message || error?.message || _t("No se pudo preparar la configuracion de suscripcion antes del cobro."));
+            return false;
+        }
+        return true;
+    },
+
+    async sendPaymentRequest(line) {
+        // Native terminals can charge before validateOrder runs. Check the same
+        // server contract before requesting money, not just before saving it.
+        const order = getOrderFromPaymentScreen(this);
+        if (line.pos_order_id !== order || !(await this.wgsPreparePayment())) {
+            return false;
+        }
+        return super.sendPaymentRequest(...arguments);
+    },
+
+    async validateOrder() {
+        if (!(await this.wgsPreparePayment())) {
             return;
         }
         return super.validateOrder(...arguments);

@@ -2,6 +2,72 @@
 
 Registro inicial: 2026-09-28. Rama de trabajo: `staging`.
 
+## Ciclo diario, cierre y devoluciones: 2026-11-26
+
+Alcance exclusivo staging. Base WGS 19.0.1.1.63 y WGS POS 19.0.1.6.24;
+Access Control conserva 19.0.2.0.88. Sin cambios en main, produccion,
+gateway, payroll, importador bancario u outputs/.
+
+### Correccion comercial
+
+- El diario termina comercialmente al comenzar el dia posterior a su ultimo
+  dia inclusivo. La politica compartida de directorio/checkout y el cron usan
+  ese mismo limite, aunque auto_close_limit sea cero. Cero conserva su significado
+  de no cerrar automaticamente para los planes ordinarios. No se modifica el
+  catalogo ni se recalculan compras historicas.
+- Se conserva el horario local Mexico y el acceso durante todo el ultimo dia.
+  Los diarios vencidos permiten Reinscribir, no Renovar ni cobrar una cancelacion
+  de un paquete ya terminado. La reinscripcion utiliza el plan y tarifa destino.
+- Caso adicional: mensual vencido dentro de gracia -> pase diario corresponde
+  explicitamente a reinscripcion. El servidor firma ese flujo y la interfaz cambia
+  titulo, fecha, aviso y accion a Reinscribir antes de agregar al ticket. Un cliente
+  antiguo que insista en mandar renewal no puede aplicar una firma reenroll.
+  Si el mensual sigue vigente, el diario sigue siendo un cambio futuro pagado.
+- Los cambios futuros pagados siguen activandose antes del cierre. Un fallo
+  temporal no permite cerrar su origen ni reactivar una cancelacion manual.
+- Los candidatos al cron se filtran por plazo y gracia antes de LIMIT: se
+  excluyen planes sin cierre, contratos en gracia e inicios futuros. Se conserva
+  el caso heredado next=end inclusivo y los pagos futuros pendientes protegidos.
+- Los pases diarios cotizados en otro dia deben recotizarse antes de cobrar;
+  las retransmisiones de ventas aplicadas mantienen sus recibos y fechas.
+  La validacion se ejecuta tambien antes de pedir el cobro a un terminal nativo,
+  no solo al validar el ticket. No se simularon terminales bancarios externos.
+- Las devoluciones ordinarias se realizan desde la compra mas reciente de la
+  misma suscripcion. Una compra posterior no devuelta bloquea la devolucion de
+  un ticket anterior antes del cobro/devolucion nativa; asi no cancela otro ciclo
+  vigente. Se mantienen devoluciones totales y proteccion contra repeticion.
+  Domiciliados siguen revirtiendo exclusivamente las cuotas del cobro original.
+- Un cargo de cancelacion puede terminar en la sesion de rescate nativa del
+  mismo POS si la original ya cerro. Se conservan empresa, moneda, impuestos,
+  posicion fiscal y firma; otra caja o un origen aun abierto no son equivalentes.
+
+### Pruebas automatizadas
+
+Primera iteracion: se detectaron dos errores de permisos en preparacion/consulta
+de fixtures y expectativas antiguas de cancelacion/reembolso; se corrigieron los
+fixtures y se actualizaron las expectativas para probar la nueva proteccion.
+Se repitio la suite completa, no solo las pruebas nuevas.
+
+- ORM Odoo 19 Enterprise, los tres addons, PostgreSQL local desechable:
+  **321 pruebas, cero fallos y cero errores**.
+- Python independiente: **133 pruebas aprobadas**, incluida concurrencia de
+  asignacion de identidad con conexiones PostgreSQL reales, sin omisiones.
+- Calendario/corte y contratos estaticos del codigo: **15 aprobadas**.
+- JavaScript: **69 aprobadas**, incluidos preflight anterior al terminal y
+  presentacion/firma de reinscripcion para el destino diario.
+- Matriz diaria parametrizada sobre los **1096 dias de 2026-2028**, tres valores
+  de gracia y regresos tras 1/2/7/30/365 dias. Matriz ORM con planes semanales,
+  quincenales, mensuales, trimestrales, semestrales y anuales; medianoche Mexico;
+  recibos repetidos; cambio futuro y fallo temporal; convivencia con otra
+  membresia e identidad persistente; devolucion antigua frente a nueva compra.
+- Lote ORM: **201 contratos sin cierre + 201 contratos en gracia** no impiden
+  seleccionar y cerrar el siguiente contrato exigible con limit=1.
+
+Evidencia local: /tmp/wgs-lifecycle-20261126/. Las pruebas ORM no se ejecutaron
+contra la base operativa de staging. El runtime local usa la imagen odoo:19.0 y
+el checkout Enterprise local disponible; no se afirma identidad binaria con el
+build CloudPepper. Despliegue y verificaciones web se registran a continuacion.
+
 ## Resultado ejecutivo de staging, 2026-11-25
 
 Codigo funcional desplegado: `19c7e60`, WGS POS `19.0.1.6.23`, instalada y
