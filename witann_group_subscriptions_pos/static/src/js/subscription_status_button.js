@@ -110,6 +110,7 @@ import { renderRenewalForm as buildRenewalFormHtml } from "./subscription_renewa
 import { renderUpsaleForm as buildUpsaleFormHtml } from "./subscription_upsale_render";
 import {
     clearDirectorySelectionState,
+    reconcileDirectorySelectionState,
     clearModalFeedback,
     resetDetailInlineForms,
     resetForSelectedPartner,
@@ -1864,12 +1865,14 @@ patch(ControlButtons.prototype, {
             prevPageButton.disabled = directoryLoading || directoryPageOffset <= 0;
             nextPageButton.disabled = directoryLoading || !directoryHasNextPage;
 
+            reconcileDirectorySelectionState(modalState, filtered, {
+                clearDirectorySelection, resetForPartnerSelection,
+            });
             if (!filtered.length) {
                 const emptyMessage = directoryLoading && !rows.length
                     ? _t("Cargando clientes...")
                     : _t("No hay resultados para el filtro actual.");
                 tbody.innerHTML = `<tr><td colspan="7">${emptyMessage}</td></tr>`;
-                clearDirectorySelection();
                 renderDetailEmpty(
                     directoryLoading && !rows.length ? _t("Cargando directorio") : _t("Sin resultados"),
                     directoryLoading && !rows.length
@@ -1877,12 +1880,6 @@ patch(ControlButtons.prototype, {
                         : _t("Ajusta los filtros para volver a cargar clientes en el directorio.")
                 );
                 return;
-            }
-
-            const filteredIds = filtered.map((row) => row.id);
-            if (!selectedPartnerId || !filteredIds.includes(selectedPartnerId)) {
-                selectedPartnerId = filtered[0].id;
-                resetForPartnerSelection();
             }
 
             tbody.innerHTML = renderDirectoryRows({
@@ -1895,7 +1892,9 @@ patch(ControlButtons.prototype, {
                 _t,
             });
 
-            loadDetail(selectedPartnerId);
+            if (formMode !== "new_partner") {
+                loadDetail(selectedPartnerId);
+            }
         };
 
         const renderPreservingFocus = () => {
