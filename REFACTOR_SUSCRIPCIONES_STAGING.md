@@ -4,7 +4,7 @@ Registro inicial: 2026-09-28. Rama de trabajo: `staging`.
 
 ## Ciclo diario, cierre y devoluciones: 2026-11-26
 
-Alcance exclusivo staging. Base WGS 19.0.1.1.63 y WGS POS 19.0.1.6.25;
+Alcance exclusivo staging. Base WGS 19.0.1.1.63 y WGS POS 19.0.1.6.26;
 Access Control conserva 19.0.2.0.88. Sin cambios en main, produccion,
 gateway, payroll, importador bancario u outputs/.
 
@@ -40,6 +40,13 @@ gateway, payroll, importador bancario u outputs/.
 - Un cargo de cancelacion puede terminar en la sesion de rescate nativa del
   mismo POS si la original ya cerro. Se conservan empresa, moneda, impuestos,
   posicion fiscal y firma; otra caja o un origen aun abierto no son equivalentes.
+  Se comprueba toda la cadena: preflight, validacion previa a _process_order,
+  rescate nativo, persistencia, aplicacion comercial y reintento idempotente.
+- Una compra aceptada versiona transaccionalmente la fila de su contrato sin
+  cambiar write_date ni datos comerciales. La barrera queda fuera del savepoint
+  de acceso: un cierre con snapshot Repeatable Read anterior debe reintentarse
+  aunque falle esa proyeccion. No se agrega commit, cursor ni conexion al runtime;
+  las retransmisiones ya aplicadas no vuelven a versionar el contrato.
 
 ### Pruebas automatizadas
 
@@ -49,9 +56,10 @@ fixtures y se actualizaron las expectativas para probar la nueva proteccion.
 Se repitio la suite completa, no solo las pruebas nuevas.
 
 - ORM Odoo 19 Enterprise, los tres addons, PostgreSQL local desechable:
-  **321 pruebas, cero fallos y cero errores**.
-- Python independiente: **133 pruebas aprobadas**, incluida concurrencia de
-  asignacion de identidad con conexiones PostgreSQL reales, sin omisiones.
+  **324 pruebas, cero fallos y cero errores**.
+- Python independiente: **135 pruebas aprobadas**, incluida concurrencia de
+  asignacion de identidad y pago frente a cierre con conexiones PostgreSQL
+  reales, sin omisiones. Se verifica rollback de acceso y de pago rechazado.
 - Calendario/corte y contratos estaticos del codigo: **15 aprobadas**.
 - JavaScript: **72 aprobadas**, incluidos preflight anterior al terminal y
   presentacion/firma de reinscripcion para el destino diario.
@@ -75,6 +83,46 @@ de seleccion a una funcion comprobable que conserva un alta independiente en
 curso, sin cambiar la navegacion explicita entre socios. Tres regresiones JS
 verifican directorio vacio/cargando, cambio de primera fila, conservacion de
 captura/camara/feedback y retorno a navegacion normal tras cancelar.
+
+### Validacion web realizada en las dos sucursales
+
+Clientes sinteticos exclusivos: QA WGS 20261126 SM Diario (9517),
+QA WGS 20261126 ED Apps (9518) y QA WGS 20261126 ED Gracia (9519).
+Se usaron pagos ficticios de staging, nunca terminales bancarios. No se cargaron
+fotografias, CURP, telefono ni correo de personas reales.
+
+| Escenario web | Resultado observado |
+| --- | --- |
+| Alta rapida durante carga inicial / desde filtro vacio | Tras la segunda iteracion, crea el cliente y conserva el formulario |
+| SM DAY PASS historico 20/nov | S03659, Cerrada, sin acceso, ofrece Reinscribir y no Renovar |
+| SM regreso tras seis dias | Reinscribe 26/nov-26/nov; acceso activo; DIA SM; una persona |
+| Devolver primera compra mientras existe otra posterior no devuelta | Rechazo antes del pago; el borrador QA se retiro sin devolucion |
+| Devolver ultima compra SM | Devolucion total -99.99; contrato anterior cancelado y sin acceso |
+| Reinscribir contrato nativamente cancelado a Horario Especial | Nueva S03662; MENSUALIDAD SM; 26/nov-25/dic; 399.01; acceso activo |
+| Devolver la compra historica restante despues de crear S03662 | Permite devolver -99.99 al estar revertida la posterior; S03662 conserva plan, fechas y acceso |
+| ED WELLHUB historico 19/nov | S03660, Cerrada; no se confunde precio cero con prueba gratis |
+| ED WELLHUB regreso tras una semana | Reinscribe 26/nov-26/nov por cero; acceso activo |
+| ED Wellhub vigente a TotalPass | Cotiza 27/nov-27/nov; al pagar conserva Wellhub actual y muestra TotalPass futuro pagado |
+| Cancelar sin cargo con futuro pagado | Dialogo advierte; cierra origen y cancela la activacion futura, sin devolver ni borrar el recibo |
+| Reinscribir a TotalPass | Aplica 26/nov-26/nov; una persona activa; sin cambio futuro pendiente |
+| ED mensual historico con descuento autorizado 100% | S03661; 25/oct-24/nov; dentro de gracia, ofrece Renovar |
+| Renovar ese mensual | Cotiza 25/nov-24/dic por 799; no hereda el descuento |
+| Cambiar ese mensual vencido a DAY PASS | Formulario cambia visiblemente a Reinscribir con aviso y fecha 26/nov; 99.99 sin descuento heredado |
+| Cobrar el DAY PASS anterior | DIA ED; 26/nov-26/nov; acceso activo, no arrastra MENSUALIDAD ED |
+| Resincronizacion | Enumera cinco puertas de los sitios autorizados; sin selector; falta de foto explicita, sin confirmar acceso fisico |
+| Facturacion en Pago y Ordenes | Recibo/Factura continua deshabilitado |
+
+La comprobacion API final fue solo lectura sobre esos tres clientes: once
+recibos aplicados/cancelados segun corresponda y una sola person por socio,
+incluyendo archivadas. Identidades observadas 5221/512, 5222/974 y 5223/978
+(person/ID global); no se unificaron ni alteraron socios reales.
+
+Se observaron avisos nativos de impresora no disponible y 502 transitorio al
+reiniciar staging. Se descartaron los avisos sin cambiar configuracion de
+perifericos; las ventas y devoluciones se verificaron en backend. No se confirma
+reconocimiento fisico SpeedFace, impresion fisica ni autorizacion bancaria real.
+La matriz parametrizada y las carreras concurrentes se ejecutaron localmente;
+no se altero el reloj ni se cerraron sesiones operativas de staging para simularlas.
 
 ## Resultado ejecutivo de staging, 2026-11-25
 

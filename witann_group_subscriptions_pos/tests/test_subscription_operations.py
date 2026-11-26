@@ -2134,3 +2134,63 @@ class TestSubscriptionOperations(CommonPosTest):
         payment, _same = self._paid(self.daily, self.day, 'renewal', source)
         self.assertEqual(payment.lines.wgs_application_state, 'scheduled')
         self.assertEqual(source.plan_id, self.month)
+
+    def test_historical_refund_after_latest_refund_does_not_close_new_contract_for_same_customer(self):
+        initial, old = self._paid(self.daily, self.day)
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 9, 21, 12)):
+            latest, _same = self._paid(self.daily, self.day, 'reenroll', old, start='2026-09-21')
+            self._full_refund(latest)
+            _monthly, current = self._paid(self.solo, self.month, 'reenroll', old, start='2026-09-21')
+            self.assertNotEqual(old, current)
+            revision = self.Pos._wgs_source_revision(current)
+            person = self.env['access_control.person'].with_context(active_test=False).search([
+                ('partner_id', '=', self.holder.id),
+            ])
+            identity = person.global_user_id
+            self._full_refund(initial)
+            self.assertEqual(self.Pos._wgs_source_revision(current), revision)
+            self.assertEqual(current._classify_subscription_access_state_for_pos(), 'enabled')
+            self.assertEqual(current.plan_id, self.month)
+            self.assertTrue(person.active)
+            self.assertEqual(person.global_user_id, identity)
+
+    def test_native_checkout_rescues_paid_cancellation_after_original_session_closes(self):
+        origin, source = self._paid(self.solo, self.month)
+        quote = self._cancellation_quote(source, origin)
+        rescued = self.env['pos.session']
+
+        def close_before_native_checkout(payload):
+            nonlocal rescued
+            old = self.env['pos.session'].sudo().browse(payload['session_id'])
+            old.state = 'closed'
+            rescued = self.env['pos.session'].sudo().create({'config_id': old.config_id.id})
+            rescued.state = 'opened'
+
+        fee = self._pay_cancellation(source, origin, quote, mutate=close_before_native_checkout)
+        self.assertEqual(fee.state, 'paid')
+        self.assertEqual(fee.session_id, rescued)
+        self.assertEqual(fee.amount_total, quote['amount_total'])
+        self.assertEqual(fee.lines.wgs_application_state, 'applied')
+        self.assertEqual(source._wgs_get_subscription_state_category(), 'closed')
+        receipt = fee.lines.wgs_application_receipt
+        fee._wgs_sync_subscription_sales()
+        self.assertEqual(fee.lines.wgs_application_receipt, receipt)
+
+    def test_paid_change_versions_source_before_failed_access_projection_but_not_on_replay(self):
+        _initial, source = self._paid(self.daily, self.day)
+        original = type(self.Pos)._wgs_version_commercial_sources
+        calls = []
+
+        def version(order, sources):
+            calls.append(sources.ids)
+            return original(order, sources)
+
+        with patch.object(type(self.Pos), '_wgs_version_commercial_sources', version), patch.object(
+            type(source), '_wgs_sync_access_control_people', side_effect=UserError('QA projection failed'),
+        ):
+            payment, _same = self._paid(self.solo, self.month, 'renewal', source)
+            self.assertEqual(calls, [source.ids])
+            self.assertEqual(payment.lines.wgs_application_state, 'scheduled')
+            self.assertTrue(payment.wgs_access_sync_pending)
+            payment._wgs_sync_subscription_sales()
+            self.assertEqual(calls, [source.ids])
