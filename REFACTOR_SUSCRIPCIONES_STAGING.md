@@ -2713,7 +2713,7 @@ si cambia la suscripcion o el pago. No se ejecuto ninguna reparacion de datos.
 
 ## 2026-11-26 - Fotos estables y recuperacion multiple, solo staging
 
-- Access API `19.0.2.0.89`, WGS POS `19.0.1.6.27`; base WGS sin cambio
+- Access API `19.0.2.0.89`, WGS POS `19.0.1.6.28`; base WGS sin cambio
   (`19.0.1.1.63`). Gateway staging `0.2.2`, desarrollado en copia aislada.
 - Causa: recomprimir por puerta alteraba la foto y las huellas ya selladas. Se
   normaliza una vez por persona antes de crear los destinos; JPEG canonico
@@ -2731,13 +2731,42 @@ si cambia la suscripcion o el pago. No se ejecuto ninguna reparacion de datos.
   consumir intentos de error ni perder ciclos por desfase de milisegundos.
 - Locks con orden comercial: participantes, suscripcion y personas; cursor y
   transaccion normales de Odoo, sin conexiones adicionales persistentes.
-- Regresiones locales: Odoo 19 Enterprise desechable, 339 pruebas, 0 fallos y
-  0 errores; JavaScript 73/73; gateway Go 136/136 con `-race`. Incluyen 9
+- Regresiones locales finales: Odoo 19 Enterprise desechable, 341 pruebas,
+  0 fallos y 0 errores; JavaScript 75/75; gateway Go 136/136 con `-race`;
+  Python standalone 135/135 (incluidas carreras PostgreSQL) y contratos de
+  codigo/plazos/administradores 17/17. Incluyen 9
   personas por 3 puertas, 108 comandos, presupuesto 5 fotos/ciclo, esperas
   virtuales de hasta 40 minutos, metadatos, fotos truncadas, medianoche,
   suspension, horario inactivo, reinicio, idempotencia y compatibilidad v1.
-- Validacion web pendiente al registrar esta entrada. Solo fixtures nuevos QA,
-  gateway staging filtrado a sitio QA y ACK iClock simulados. No equivale a
-  reconocimiento facial ni paso fisico por un SpeedFace.
+- Validacion web completada en Chrome contra staging: dos lotes consecutivos
+  de 27 destinos, 108 ACKs Return=0 cada uno. Solicitudes 11 y 13; contrato
+  sintetico `S03663`, 9 participantes, sitio `QA-WGS-RESYNC-V2-20261126`,
+  dispositivos ficticios `QA-V2-20261126-DOOR-1`, `-2` y `-3`.
+- Con 107/108 ACKs se observaron 26 confirmados y un destino entregado pero
+  pendiente; solo al liberar el ultimo ACK aparecieron 27/27 confirmados.
+  Segundo lote: 27 confirmados, 0 pendientes, 0 fallidos visibles en el POS.
+- Se comprobaron bloqueo de doble solicitud, consulta sin nuevo envio, error
+  explicito de foto faltante en los tres destinos de `S03664`, caida temporal
+  del gateway sin solicitud incompleta y persistencia de 108 ACKs al reiniciar.
+  Los errores RPC ahora muestran el mensaje util de Odoo y no solo el generico
+  "Odoo Server Error", con dos regresiones JS especificas.
+- Comparacion antes/despues: iguales hashes de las 9 fotos, identidades/PINs,
+  plan, inicio, fin, siguiente factura, participantes, lineas, importe y numero
+  de tickets POS. No se realizaron ventas ni pagos para estas pruebas.
+- Ejemplo de plazo observado en primer lote (UTC): creacion 18:34:26,
+  limite global 19:19:27; vencimientos de ejecucion 18:44:45 a 18:46:25,
+  correspondientes a admisiones en diferentes ciclos y no a la creacion.
+- Build/upgrade via CloudPepper y Apps de staging; versiones instaladas
+  verificadas por navegador. Codigo funcional WGS `72cc33e` + `e47d771`;
+  gateway `3b2bb91`, binario SHA-256
+  `73e120b3a2dc12dc60b21751926d40ceaa0a0c300fbdd620a0d228e2d74f854f`.
+- Preparacion QA: se corrigio propietario del directorio nuevo de estado
+  (adms, modo 0700). El error inicial fue de ese entorno; no se oculto ni se
+  conto como prueba aprobada. Presupuesto 5 fotos/ciclo conservado. Ciclo
+  acelerado de 20 s durante pruebas, restaurado a los 60 s originales al final;
+  sitio, puertos, binario y archivos de estado de staging siguen aislados.
+- Solo fotos sinteticas y ACK iClock simulados. No equivale a reconocimiento
+  facial ni paso fisico por un SpeedFace; esa validacion de hardware queda
+  pendiente de una autorizacion posterior, no se intenta desde staging.
 - Main, produccion, pagos reales, vigencias reales, payroll, importador bancario
   y `outputs/` fuera de alcance y sin cambios.

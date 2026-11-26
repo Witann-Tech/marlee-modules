@@ -157,6 +157,34 @@ class TestAccessRecovery(TransactionCase):
                 authorization_expires_at=fields.Datetime.now()-timedelta(seconds=1))
         self.assertEqual(self.Request.search_count([]), count)
 
+    def test_capability_timeout_closes_session_without_creating_a_request(self):
+        self.protocol_patch.stop()
+        count = self.Request.search_count([])
+        with patch('odoo.addons.access_control_api.models.access_resync.requests.Session') as session:
+            session.return_value.__enter__.return_value.get.side_effect = requests.Timeout('QA timeout')
+            with self.assertRaises(ValidationError):
+                self._queue()
+            session.return_value.__exit__.assert_called_once()
+        self.assertEqual(self.Request.search_count([]), count)
+
+    def test_destination_limit_counts_authorized_pairs_not_the_cartesian_product(self):
+        other_site = self.env['access_control.site'].create({'name': 'Other recovery QA', 'code': 'OTHER-RECOVERY-QA'})
+        partner = self.partner.copy({'name': 'Other recovery participant'})
+        person = self.env['access_control.person'].create({
+            'partner_id': partner.id, 'active': True, 'site_ids': [(6, 0, other_site.ids)]})
+        devices = self.env['access_control.device'].create([
+            {'name': 'LIMIT-%s-%s' % (site.id, n), 'device_serial': 'LIMIT-%s-%s' % (site.id, n), 'site_id': site.id}
+            for site in (self.site, other_site) for n in range(16)])
+        request = self.Request._queue_for_people(self.person | person, devices, self.env.company, self.env.user)
+        self.assertEqual(len(request.target_ids), 32)
+        self.assertTrue(all(t.device_id.site_id in t.person_id.site_ids for t in request.target_ids))
+        extra = self.env['access_control.device'].create({
+            'name': 'Over limit', 'device_serial': 'OVER-LIMIT', 'site_id': self.site.id})
+        count = self.Request.search_count([])
+        with self.assertRaises(ValidationError):
+            self.Request._queue_for_people(self.person | person, devices | extra, self.env.company, self.env.user)
+        self.assertEqual(self.Request.search_count([]), count)
+
     def test_confirmation_is_historical_evidence_after_later_suspension(self):
         request = self._queue(self.devices[0])
         target = request.target_ids
