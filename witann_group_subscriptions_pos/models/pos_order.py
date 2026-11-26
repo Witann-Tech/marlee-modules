@@ -1063,6 +1063,7 @@ class PosOrder(models.Model):
             normalized_config = self._wgs_normalize_commercial_config(
                 config, partner_id=partner_id, company_id=company_id,
                 check_source=not applied_line,
+                actual_session_id=self._wgs_to_int(options.get('session_id')),
             )
             if not applied_line:
                 self._wgs_validate_cancellation_order_context(
@@ -2020,8 +2021,14 @@ class PosOrder(models.Model):
                 session = existing_order.session_id
             if not partner_id or not session:
                 raise UserError(_('La membresia requiere el titular y la sesion POS antes de cobrar.'))
+            if session.state in ('closing_control', 'closed'):
+                # Use core's read-only resolver, just as _process_order will.
+                # Validate the effective same-register session before money is
+                # persisted, not a session core is about to replace.
+                session = self._get_valid_session(order)
             normalized = self._wgs_normalize_commercial_config(
                 config, partner_id=partner_id, company_id=session.company_id.id,
+                actual_session_id=session.id,
             )
             self._wgs_validate_cancellation_order_context(
                 normalized, session_id=session.id,

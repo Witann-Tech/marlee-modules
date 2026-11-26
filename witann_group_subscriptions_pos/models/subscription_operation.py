@@ -291,12 +291,13 @@ class PosSubscriptionOperation(models.Model):
             )
         return True
 
-    def _wgs_normalize_commercial_config(self, config, *, partner_id, company_id, check_source=True):
+    def _wgs_normalize_commercial_config(self, config, *, partner_id, company_id, check_source=True, actual_session_id=False):
         """Resolve browser metadata to the exact backend quote before payment."""
         config = dict(config)
         if config.get('flow') == 'cancellation_charge':
             return self._wgs_normalize_cancellation_config(
                 config, partner_id=partner_id, company_id=company_id, check_source=check_source,
+                actual_session_id=actual_session_id,
             )
         if config.get('flow') in ('pending_charge', 'cancellation_refund'):
             return config
@@ -437,6 +438,21 @@ class PosSubscriptionOperation(models.Model):
         lines.invalidate_recordset()
         return sources
 
+    def _wgs_version_commercial_sources(self, sources):
+        """Serialize accepted purchases against a cron's older RR snapshot.
+
+        A scheduled purchase may change only POS lines. Version its locked
+        source independently of the access savepoint, so a concurrent close
+        must retry even when device/profile projection fails. No audit value or
+        commercial field changes, and Odoo still owns commit/rollback.
+        """
+        if sources:
+            sources.flush_recordset()
+            self.env.cr.execute(
+                'UPDATE sale_order SET write_date = write_date WHERE id = ANY(%s)',
+                [sources.ids],
+            )
+
     def _wgs_finalize_paid_access(self, sources, affected):
         """Failure of an access projection must not ask the cashier to charge twice."""
         self.ensure_one()
@@ -560,6 +576,7 @@ class PosSubscriptionOperation(models.Model):
                 sources |= result.with_env(order.env)
                 changed = True
             if changed:
+                order._wgs_version_commercial_sources(sources)
                 order._wgs_finalize_paid_access(sources, affected)
 
     def _wgs_apply_subscription_operation(self, line, *, activation=False):

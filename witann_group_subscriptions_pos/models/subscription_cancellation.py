@@ -184,11 +184,12 @@ class PosSubscriptionCancellation(models.Model):
             self._wgs_assert_cancellation_context(payload, actual_session_id=actual_session_id)
         return payload, source
 
-    def _wgs_normalize_cancellation_config(self, config, *, partner_id, company_id, check_source=True):
+    def _wgs_normalize_cancellation_config(self, config, *, partner_id, company_id, check_source=True, actual_session_id=False):
         payload, _source = self._wgs_verify_cancellation_quote(
             config.get('pricing_snapshot') or {}, partner_id=partner_id, company_id=company_id,
             product_id=self._wgs_to_int(config.get('product_id')),
             subscription_id=self._wgs_to_int(config.get('source_subscription_id')), check_source=check_source,
+            actual_session_id=actual_session_id,
         )
         if (payload['amount_total'] <= 0 or float(config.get('quantity') or 0) != 1
                 or float(config.get('discount_percent') or 0)):
@@ -201,8 +202,9 @@ class PosSubscriptionCancellation(models.Model):
         if config.get('flow') != CANCELLATION_FLOW:
             return
         payload = config['pricing_snapshot']
-        if payload['session_id'] != session_id or payload['fiscal_position_id'] != fiscal_position_id:
+        if not session_id or payload['fiscal_position_id'] != fiscal_position_id:
             raise UserError(_('Cambio la sesion o la posicion fiscal. Cotiza nuevamente el cargo antes de cobrar.'))
+        self._wgs_assert_cancellation_context(payload, actual_session_id=session_id)
 
     def _wgs_complete_package_cancellation(self, source, payload, *, line=False):
         """Preserve money and paid dates; stop entitlement and future activation."""
