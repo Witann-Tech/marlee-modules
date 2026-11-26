@@ -469,6 +469,10 @@ class SaleOrder(models.Model):
         plan = self._wgs_get_subscription_plan_from_line(primary_recurring_line)
         if not plan and 'plan_id' in self._fields and self.plan_id:
             plan = self.plan_id
+        # Daily passes have no grace or invoice scheduler. Their next boundary
+        # closes the commercial term even when native auto_close_limit is zero.
+        if plan and plan.wgs_single_day_plan:
+            return due_date
         auto_close_days = self._wgs_get_subscription_plan_auto_close_days(plan)
         if auto_close_days <= 0:
             return False
@@ -532,10 +536,10 @@ class SaleOrder(models.Model):
 
     @api.model
     def _wgs_get_subscription_auto_close_candidate_domain(self, today):
-        """Select only orders that can possibly reach their close deadline today.
+        """Select expired commercial terms before applying the cron batch limit.
 
-        The final deadline remains intentionally validated per order because the
-        grace period belongs to the recurring plan and can differ by product.
+        Daily passes close at their exclusive boundary; other plans retain their
+        configured grace. Per-record validation still guards the actual mutation.
         """
         domain = Domain([
             ('state', 'in', ['sale', 'done']),
@@ -554,23 +558,45 @@ class SaleOrder(models.Model):
                 # The domiciliation ledger may remain operational while the
                 # native header is closed, but that header needs no second close.
                 domain &= Domain('subscription_state', 'not in', terminal_state_values)
+        started, missing_start = self._wgs_get_resolved_date_candidate_domain(
+            self._WGS_SUBSCRIPTION_START_DATE_FIELDS, '<=', today,
+        )
+        if started is not None:
+            domain &= started | missing_start
 
-        next_date_domain, missing_next_date_domain = self._wgs_get_resolved_date_candidate_domain(
-            self._WGS_SUBSCRIPTION_NEXT_INVOICE_DATE_FIELDS,
-            '<=',
-            today,
-        )
-        start_date_domain, _unused_missing_start_date_domain = self._wgs_get_resolved_date_candidate_domain(
-            self._WGS_SUBSCRIPTION_START_DATE_FIELDS,
-            '<=',
-            today,
-        )
-        date_domains = [domain for domain in [next_date_domain] if domain is not None]
-        if missing_next_date_domain is not None and start_date_domain is not None:
-            date_domains.append(missing_next_date_domain & start_date_domain)
-        if date_domains:
-            domain &= self._wgs_combine_or_domains(date_domains)
-        return domain
+        # Filter by the actual deadline BEFORE LIMIT. Otherwise disabled plans
+        # or contracts still in grace can occupy the same batch forever.
+        plans = self.env['sale.subscription.plan'].sudo().with_context(active_test=False).search([
+            '|', ('wgs_single_day_plan', '=', True), ('auto_close_limit', '>', 0),
+        ])
+        groups = {}
+        for plan in plans:
+            days = 0 if plan.wgs_single_day_plan else self._wgs_get_subscription_plan_auto_close_days(plan)
+            groups.setdefault(days, []).append(plan.id)
+        deadlines = []
+        for days, plan_ids in groups.items():
+            boundary = today - timedelta(days=days)
+            next_due, missing_next = self._wgs_get_resolved_date_candidate_domain(
+                self._WGS_SUBSCRIPTION_NEXT_INVOICE_DATE_FIELDS, '<=', boundary,
+            )
+            next_at_boundary, _ = self._wgs_get_resolved_date_candidate_domain(
+                self._WGS_SUBSCRIPTION_NEXT_INVOICE_DATE_FIELDS, '=', boundary,
+            )
+            end_at_boundary, _ = self._wgs_get_resolved_date_candidate_domain(
+                self._WGS_SUBSCRIPTION_END_DATE_FIELDS, '=', boundary,
+            )
+            if next_due is not None and next_at_boundary is not None and end_at_boundary is not None:
+                # Legacy next=end is an inclusive end, not an exclusive due day.
+                next_due &= ~(next_at_boundary & end_at_boundary)
+            end_due, _missing_end = self._wgs_get_resolved_date_candidate_domain(
+                self._WGS_SUBSCRIPTION_END_DATE_FIELDS, '<', boundary,
+            )
+            dates = [next_due] if next_due is not None else []
+            if missing_next is not None and end_due is not None:
+                dates.append(missing_next & end_due)
+            if dates:
+                deadlines.append(Domain('plan_id', 'in', plan_ids) & self._wgs_combine_or_domains(dates))
+        return domain & (self._wgs_combine_or_domains(deadlines) if deadlines else Domain.FALSE)
 
     @api.model
     def _wgs_get_subscription_state_category_from_value(self, value):
@@ -623,15 +649,17 @@ class SaleOrder(models.Model):
 
     def _wgs_is_due_for_subscription_auto_close(self, today=False):
         self.ensure_one()
+        today = fields.Date.to_date(today) or self._wgs_get_subscription_business_today(company=self.company_id)
+        start = self._wgs_get_subscription_access_period()['start_date']
+        if start and start > today:
+            return False
         contract = self.wgs_domiciliation_contract_id
         if contract and contract.state == 'active':
-            business_today = fields.Date.to_date(today) or self._wgs_get_subscription_business_today(company=self.company_id)
-            if business_today <= contract.term_end_date:
+            if today <= contract.term_end_date:
                 return False
         if self._wgs_get_subscription_state_category() in ('cancel', 'closed', 'draft', 'upsell'):
             return False
         close_deadline = self._wgs_get_subscription_auto_close_deadline_from_order(today=today)
-        today = fields.Date.to_date(today) or self._wgs_get_subscription_business_today(company=self.company_id)
         return bool(close_deadline and today >= close_deadline)
 
     def _wgs_close_subscription_for_auto_close(self, today=False):

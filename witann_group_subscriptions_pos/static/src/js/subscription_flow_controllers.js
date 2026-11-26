@@ -458,7 +458,20 @@ function applyPricingPayloadToReenrollForm(state, payload, preferredPlan, {
     state.renewalForm.pricingSnapshot = snapshot;
 }
 
-function applyPricingPayloadToRenewalForm(state, payload) {
+function applyPricingPayloadToRenewalForm(state, payload, { _t = (text) => text } = {}) {
+    if (payload?.flow === "reenroll") {
+        state.formMode = "reenroll";
+        state.formNotice = _t("La membresia anterior ya vencio. El pase diario se contratara como reinscripcion desde la fecha indicada, no como renovacion de dias pasados.");
+        Object.assign(state.renewalForm, {
+            isReenroll: true, title: _t("Reinscribir suscripción"),
+            submitLabel: _t("Agregar reinscripción al ticket"),
+            startDate: payload.subscription_start_date,
+            participantIds: getOwnerOnlyParticipantIds(state.renewalForm.holderPartnerId),
+        });
+        resetDiscountAuthorization(state.renewalForm);
+        applyPricingPayloadToReenrollForm(state, payload, null, {_t});
+        return;
+    }
     state.renewalForm.pricingSnapshot = buildPricingSnapshotFromCharge(payload, {
         flow: "renewal",
         sourceSubscriptionId: state.renewalForm.subscriptionId,
@@ -719,7 +732,7 @@ async function applySelectedRenewalProduct(state, productId, {
             ...state.renewalForm,
             loading: false,
         };
-        applyPricingPayloadToRenewalForm(state, payload);
+        applyPricingPayloadToRenewalForm(state, payload, {_t});
     } catch (error) {
         if (!request.isCurrent()) {
             return;

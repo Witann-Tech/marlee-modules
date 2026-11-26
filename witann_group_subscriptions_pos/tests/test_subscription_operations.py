@@ -377,6 +377,9 @@ class TestSubscriptionOperations(CommonPosTest):
         _renewal, result = self._paid(self.solo, self.month, 'renewal', target)
         self.assertEqual(result, target)
         self.assertEqual(self.Pos._wgs_source_revision(source), before)
+        with self.assertRaisesRegex(UserError, 'compra posterior'):
+            self.Pos._wgs_validate_full_membership_refund(payment.lines, -1, payment.lines.price_unit, 0)
+        self._full_refund(_renewal)
         refund, _unused = self.create_backend_pos_order({
             'order_data': {'partner_id': self.member.id, 'state': 'paid'},
             'line_data': [{
@@ -1886,3 +1889,248 @@ class TestSubscriptionOperations(CommonPosTest):
             self.assertTrue(self.solo.recurring_invoice)
             self.assertEqual(source.partner_id, self.holder)
             raise RollbackSchemaProbe()
+
+    def test_daily_expiry_reenrolls_without_waiting_for_cron_after_any_absence(self):
+        self.day.auto_close_limit = 0
+        for gap in (1, 2, 7, 30, 365):
+            with self.subTest(gap=gap):
+                self.holder = self.env['res.partner'].create({'name': 'Daily gap %s' % gap})
+                initial, source = self._paid(self.daily, self.day)
+                before = source.end_date
+                now = datetime(2026, 9, 15, 12) + timedelta(days=gap)
+                with patch.object(fields.Datetime, 'now', return_value=now):
+                    self.assertEqual(source.subscription_state, '3_progress')
+                    item = source._wgs_subscription_operation_policy_for_pos()
+                    self.assertEqual(item['state_key'], 'closed')
+                    self.assertTrue(item['can_reenroll'])
+                    self.assertFalse(item['can_renew'])
+                    self.assertFalse(source._wgs_can_cancel_for_pos())
+                    with self.assertRaises(UserError):
+                        self._quote(self.daily, self.day, 'renewal', source)
+                    payment, result = self._paid(self.daily, self.day, 'reenroll', source, start=now.date().isoformat())
+                    self.assertEqual(result, source)
+                    self.assertEqual(source.start_date, now.date())
+                    self.assertEqual(source.end_date, now.date())
+                    self.assertFalse(source.next_invoice_date)
+                    self.assertEqual(source._classify_subscription_access_state_for_pos(), 'enabled')
+                    initial._wgs_sync_subscription_sales()
+                    payment._wgs_sync_subscription_sales()
+                    self.assertEqual(source.end_date, now.date())
+                self.assertEqual(initial.lines.wgs_subscription_end_date, before)
+
+    def test_daily_policy_and_physical_close_agree_at_mexico_midnight(self):
+        self.day.auto_close_limit = 3  # A daily pass never inherits ordinary grace.
+        _initial, source = self._paid(self.daily, self.day)
+        period = source._wgs_get_subscription_access_period()
+        for now, closed in ((datetime(2026, 9, 16, 5, 59, 59), False),
+                            (datetime(2026, 9, 16, 6), True)):
+            with self.subTest(now=now), patch.object(fields.Datetime, 'now', return_value=now):
+                policy = source._wgs_subscription_operation_policy_for_pos()
+                self.assertEqual(policy['can_reenroll'], closed)
+                self.assertEqual(policy['can_renew'], not closed)
+                self.assertEqual(source._wgs_is_due_for_subscription_auto_close(), closed)
+                domain = source._wgs_get_subscription_auto_close_candidate_domain(now.date())
+                if not closed:
+                    domain = source._wgs_get_subscription_auto_close_candidate_domain(period['valid_until'])
+                self.assertEqual(bool(source.filtered_domain(domain)), closed)
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 9, 16, 6)):
+            self.env['sale.order']._cron_wgs_close_overdue_subscriptions(limit=1)
+        self.assertEqual(source._wgs_get_subscription_state_category(), 'closed')
+        self.assertEqual(source._wgs_get_subscription_access_period(), period)
+
+    def test_daily_return_uses_each_target_plan_and_not_the_old_daily_interval(self):
+        for interval, unit, expected in ((1, 'week', '2026-09-27'), (2, 'week', '2026-10-05'),
+                                         (1, 'month', '2026-10-20'), (3, 'month', '2026-12-20'),
+                                         (6, 'month', '2027-03-20'), (1, 'year', '2027-09-20')):
+            with self.subTest(interval=interval, unit=unit):
+                self.holder = self.env['res.partner'].create({'name': 'Daily return target'})
+                _initial, source = self._paid(self.daily, self.day)
+                plan = self.month.copy({'billing_period_value': interval, 'billing_period_unit': unit})
+                product = self._product('Daily return purchased term', plan, 100)
+                with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 9, 21, 12)):
+                    payment, result = self._paid(product, plan, 'reenroll', source, start='2026-09-21')
+                self.assertEqual(result.plan_id, plan)
+                self.assertEqual(result.end_date, fields.Date.to_date(expected))
+                self.assertEqual(payment.lines.wgs_application_state, 'applied')
+
+    def test_daily_paid_future_change_activates_before_either_cron_closes_source(self):
+        for cron in ('_cron_wgs_close_overdue_subscriptions', '_cron_wgs_sync_subscription_access_control'):
+            with self.subTest(cron=cron):
+                self.holder = self.env['res.partner'].create({'name': 'Daily future change ' + cron})
+                _initial, source = self._paid(self.daily, self.day)
+                payment, _same = self._paid(self.pair, self.month, 'renewal', source,
+                                           participants=(self.holder | self.member).ids)
+                self.assertEqual(payment.lines.wgs_application_state, 'scheduled')
+                self.assertEqual(source.plan_id, self.day)
+                with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 9, 16, 12)):
+                    getattr(self.env['sale.order'], cron)()
+                self.assertEqual(payment.lines.wgs_application_state, 'applied')
+                self.assertEqual(source.plan_id, self.month)
+                self.assertEqual(source.end_date, fields.Date.to_date('2026-10-15'))
+                self.assertEqual(source._wgs_get_subscription_state_category(), 'progress')
+                self.assertIn(self.member, source.participant_ids)
+
+    def test_daily_paid_change_is_not_closed_even_when_activation_temporarily_fails(self):
+        _initial, source = self._paid(self.daily, self.day)
+        payment, _same = self._paid(self.solo, self.month, 'renewal', source)
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 9, 16, 12)):
+            with patch.object(type(self.Pos), '_wgs_activate_package_change', return_value=False):
+                self.env['sale.order']._cron_wgs_close_overdue_subscriptions()
+            self.assertEqual(source._wgs_get_subscription_state_category(), 'progress')
+            self.assertEqual(payment.lines.wgs_application_state, 'scheduled')
+            self.Pos._wgs_apply_due_package_changes()
+        self.assertEqual(payment.lines.wgs_application_state, 'applied')
+
+    def test_daily_stale_quote_is_rejected_before_payment_and_applied_replay_survives(self):
+        initial, source = self._paid(self.daily, self.day)
+        quote = self._quote(self.daily, self.day, 'renewal', source)
+        payload = quote['commercial_quote']['payload']
+        self.assertEqual(payload['pricing']['checkout_business_date'], '2026-09-15')
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 9, 16, 12)):
+            with self.assertRaisesRegex(UserError, 'Cambio el dia'):
+                self.Pos._wgs_validate_operation_source(payload)
+            initial._wgs_sync_subscription_sales()
+        self.assertEqual(source.end_date, fields.Date.to_date('2026-09-15'))
+        self.assertEqual(initial.lines.wgs_application_state, 'applied')
+
+    def test_legacy_daily_quote_cannot_sell_an_already_expired_day(self):
+        quote = self._quote(self.daily, self.day)
+        payload = deepcopy(quote['commercial_quote']['payload'])
+        payload['pricing'].pop('checkout_business_date')
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 9, 16, 12)):
+            with self.assertRaisesRegex(UserError, 'Cambio el dia'):
+                self.Pos._wgs_validate_operation_source(payload)
+
+    def test_closure_candidates_match_deadlines_and_preserve_disabled_ordinary_plans(self):
+        _initial, source = self._paid(self.solo, self.month)
+        tomorrow = fields.Date.to_date('2026-10-15')
+        for daily, grace, today, expected in (
+            (False, 0, '2026-11-20', False),
+            (False, 3, '2026-10-17', False), (False, 3, '2026-10-18', True),
+            (True, 0, '2026-10-14', False), (True, 0, '2026-10-15', True),
+            (True, 10, '2026-10-15', True),
+        ):
+            with self.subTest(daily=daily, grace=grace, today=today):
+                self.month.write({'wgs_single_day_plan': daily, 'auto_close_limit': grace})
+                day = fields.Date.to_date(today)
+                domain = source._wgs_get_subscription_auto_close_candidate_domain(day)
+                self.assertEqual(bool(source.filtered_domain(domain)), expected)
+                self.assertEqual(source._wgs_is_due_for_subscription_auto_close(today=day), expected)
+                self.assertEqual(source.next_invoice_date, tomorrow)
+
+    def test_legacy_inclusive_next_date_does_not_close_on_its_last_day(self):
+        _initial, source = self._paid(self.daily, self.day)
+        source.next_invoice_date = source.end_date
+        for day, expected in (('2026-09-15', False), ('2026-09-16', True)):
+            today = fields.Date.to_date(day)
+            domain = source._wgs_get_subscription_auto_close_candidate_domain(today)
+            self.assertEqual(bool(source.filtered_domain(domain)), expected)
+            self.assertEqual(source._wgs_is_due_for_subscription_auto_close(today=today), expected)
+
+    def test_closure_batch_progresses_past_more_than_two_hundred_disabled_contracts(self):
+        self.month.auto_close_limit = 0
+        _initial, source = self._paid(self.solo, self.month)
+        values = source.copy_data()[0]
+        values.update(state='sale', subscription_state='3_progress',
+                      start_date='2026-01-01', wgs_effective_start_date='2026-01-01',
+                      end_date='2026-01-31', next_invoice_date='2026-02-01')
+        self.env['sale.order'].sudo().with_context(wgs_defer_access_sync=True).create([deepcopy(values) for _ in range(201)])
+        grace_plan = self.month.copy({'auto_close_limit': 3})
+        values.update(plan_id=grace_plan.id, start_date='2026-10-01', wgs_effective_start_date='2026-10-01',
+                      end_date='2026-10-14', next_invoice_date='2026-10-15')
+        self.env['sale.order'].sudo().with_context(wgs_defer_access_sync=True).create([deepcopy(values) for _ in range(201)])
+        _daily, due = self._paid(self.daily, self.day, 'renewal', source)
+        # The paid daily change is future; activate it before measuring closing.
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 10, 16, 12)):
+            self.Pos._wgs_apply_due_package_changes()
+            candidates = self.env['sale.order'].sudo().search(
+                source._wgs_get_subscription_auto_close_candidate_domain(fields.Date.to_date('2026-10-16')),
+                order='id', limit=1,
+            )
+            self.assertEqual(candidates, due)
+            self.assertEqual(self.env['sale.order']._cron_wgs_close_overdue_subscriptions(limit=1), 1)
+        self.assertEqual(due._wgs_get_subscription_state_category(), 'closed')
+
+    def test_old_daily_refund_cannot_cancel_later_reenrollment_from_native_pos(self):
+        initial, source = self._paid(self.daily, self.day)
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 9, 21, 12)):
+            payment, _same = self._paid(self.daily, self.day, 'reenroll', source, start='2026-09-21')
+            with self.assertRaisesRegex(UserError, 'compra posterior'):
+                self.Pos.wgs_validate_subscription_refunds_for_pos([{
+                    'original_line_id': initial.lines.id, 'qty': -1,
+                    'price_unit': initial.lines.price_unit, 'discount': 0,
+                }])
+            with self.assertRaisesRegex(UserError, 'compra posterior'), self.env.cr.savepoint():
+                self._full_refund(initial)
+            self.assertEqual(source._classify_subscription_access_state_for_pos(), 'enabled')
+            self._full_refund(payment)
+            self._full_refund(initial)
+
+    def test_later_independent_contract_does_not_block_original_refund(self):
+        initial, source = self._paid(self.daily, self.day)
+        # A separately owned sale is not a later cycle of this sale.order.
+        self.holder = self.env['res.partner'].create({'name': 'Independent refund member'})
+        self._paid(self.daily, self.day)
+        self.holder = source.partner_id
+        self._full_refund(initial)
+        self.assertEqual(source.state, 'cancel')
+
+    def test_rescued_cancellation_session_requires_same_config_and_closed_origin(self):
+        origin, source = self._paid(self.solo, self.month)
+        quote = self._cancellation_quote(source, origin, 0)
+        payload = quote['cancellation_quote']['payload']
+        old_session = origin.session_id
+        old_session.state = 'closed'
+        rescue = self.env['pos.session'].create({'config_id': old_session.config_id.id})
+        rescue.state = 'opened'
+        self.Pos._wgs_assert_cancellation_context(payload, actual_session_id=rescue.id)
+        with self.assertRaises(UserError):
+            self.Pos._wgs_assert_cancellation_context(payload)
+        old_session.state = 'opened'
+        with self.assertRaises(UserError):
+            self.Pos._wgs_assert_cancellation_context(payload, actual_session_id=rescue.id)
+
+    def test_expired_daily_does_not_disable_another_valid_membership_or_replace_person(self):
+        _initial, source = self._paid(self.daily, self.day)
+        people = self.env['access_control.person'].with_context(active_test=False)
+        person = people.search([('partner_id', '=', self.holder.id)], limit=1)
+        identity = person.global_user_id
+        # A separate subscription can legitimately contribute another entitlement.
+        other = source.with_context(wgs_defer_access_sync=True).copy({
+            'start_date': '2026-09-16', 'wgs_effective_start_date': '2026-09-16',
+            'end_date': '2026-09-16', 'next_invoice_date': False,
+            'state': 'sale', 'subscription_state': '3_progress',
+        })
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 9, 16, 12)):
+            self.env['sale.order']._cron_wgs_close_overdue_subscriptions()
+        self.assertEqual(source._wgs_get_subscription_state_category(), 'closed')
+        self.assertEqual(other._wgs_get_subscription_state_category(), 'progress')
+        self.assertTrue(person.active)
+        self.assertEqual(person.global_user_id, identity)
+        self.assertEqual(people.search([('partner_id', '=', self.holder.id)]), person)
+
+    def test_expired_monthly_to_daily_is_explicit_reenrollment_not_a_backdated_renewal(self):
+        self.month.auto_close_limit = 3
+        _initial, source = self._paid(self.solo, self.month)
+        with patch.object(fields.Datetime, 'now', return_value=datetime(2026, 10, 16, 12)):
+            self.assertTrue(source._wgs_subscription_operation_policy_for_pos()['can_renew'])
+            quote = self._quote(self.daily, self.day, 'renewal', source, start=False)
+            self.assertEqual(quote['flow'], 'reenroll')
+            self.assertEqual(quote['commercial_quote']['payload']['flow'], 'reenroll')
+            self.assertEqual(quote['subscription_start_date'], '2026-10-16')
+            self.assertEqual(quote['subscription_end_date'], '2026-10-16')
+            payment, result = self._paid(self.daily, self.day, 'reenroll', source, start='2026-10-16')
+            self.assertEqual(result.plan_id, self.day)
+            self.assertEqual(result.end_date, fields.Date.to_date('2026-10-16'))
+            self.assertEqual(result._classify_subscription_access_state_for_pos(), 'enabled')
+            self.assertEqual(payment.lines.wgs_application_state, 'applied')
+
+    def test_current_monthly_to_daily_still_schedules_after_the_paid_month(self):
+        _initial, source = self._paid(self.solo, self.month)
+        quote = self._quote(self.daily, self.day, 'renewal', source)
+        self.assertEqual(quote['flow'], 'renewal')
+        self.assertEqual(quote['subscription_start_date'], '2026-10-15')
+        self.assertEqual(quote['subscription_end_date'], '2026-10-15')
+        payment, _same = self._paid(self.daily, self.day, 'renewal', source)
+        self.assertEqual(payment.lines.wgs_application_state, 'scheduled')
+        self.assertEqual(source.plan_id, self.month)

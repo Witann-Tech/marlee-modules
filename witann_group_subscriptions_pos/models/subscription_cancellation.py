@@ -37,8 +37,8 @@ class SaleOrder(models.Model):
         self.ensure_one()
         return self.state in ('sale', 'done') and (
             self.wgs_domiciliation_contract_id.state == 'active'
-            or self._wgs_get_subscription_state_category() not in ('closed', 'cancel')
             or bool(self.env['pos.order']._wgs_pending_package_changes(self))
+            or self._wgs_subscription_operation_policy_for_pos()['state_key'] not in ('closed', 'cancel', 'draft', 'upsell')
         )
 
     def _build_pos_subscription_status_item(self, today):
@@ -92,9 +92,14 @@ class PosSubscriptionCancellation(models.Model):
         # equality silently drops those taxes while the native POS keeps them.
         return product.taxes_id.filtered_domain(self.env['account.tax']._check_company_domain(company))
 
-    def _wgs_assert_cancellation_context(self, payload):
-        session = self.env['pos.session'].sudo().browse(payload['session_id']).exists()
-        if (not session or session.state != 'opened' or session.company_id.id != payload['company_id']
+    def _wgs_assert_cancellation_context(self, payload, *, actual_session_id=False):
+        sessions = self.env['pos.session'].sudo()
+        original = sessions.browse(payload['session_id']).exists()
+        session = sessions.browse(actual_session_id).exists() if actual_session_id else original
+        rescued = original and session != original
+        if (not original or not session or session.state != 'opened'
+                or (rescued and (original.state not in ('closing_control', 'closed') or session.config_id != original.config_id))
+                or session.company_id.id != payload['company_id']
                 or session.currency_id.id != payload['currency_id']):
             raise UserError(_('Cambio la sesion del POS. Cotiza nuevamente la cancelacion.'))
         if not payload['amount_total']:
@@ -161,7 +166,7 @@ class PosSubscriptionCancellation(models.Model):
         return {**payload, 'cancellation_quote': {'payload': payload, 'signature': self._wgs_quote_signature(payload)}}
 
     def _wgs_verify_cancellation_quote(self, snapshot, *, partner_id, company_id, subscription_id,
-                                       product_id=False, check_source=True):
+                                       product_id=False, check_source=True, actual_session_id=False):
         quote = snapshot.get('cancellation_quote') or {}
         payload = quote.get('payload') or {}
         signature = quote.get('signature')
@@ -176,7 +181,7 @@ class PosSubscriptionCancellation(models.Model):
                              or payload['source_revision'] != self._wgs_cancellation_revision(source)):
             raise UserError(_('El paquete cambio desde la cotizacion. Actualiza la cancelacion antes de cobrar.'))
         if check_source:
-            self._wgs_assert_cancellation_context(payload)
+            self._wgs_assert_cancellation_context(payload, actual_session_id=actual_session_id)
         return payload, source
 
     def _wgs_normalize_cancellation_config(self, config, *, partner_id, company_id, check_source=True):
@@ -253,11 +258,12 @@ class PosSubscriptionCancellation(models.Model):
             json.loads(line.wgs_pricing_snapshot_json or '{}'),
             partner_id=self.partner_id.id, company_id=self.company_id.id, product_id=line.product_id.id,
             subscription_id=line.wgs_subscription_source_id.id,
+            actual_session_id=self.session_id.id,
         )
         if (self.state not in ('paid', 'done', 'invoiced') or payload['amount_total'] <= 0
                 or line.qty != 1 or line.discount or self.currency_id.compare_amounts(line.price_unit, payload['ticket_charge_now'])
                 or self.currency_id.compare_amounts(line.price_subtotal_incl, payload['amount_total'])
-                or self.session_id.id != payload['session_id'] or self.fiscal_position_id.id != payload['fiscal_position_id']
+                or self.fiscal_position_id.id != payload['fiscal_position_id']
                 or sorted(line.tax_ids.ids) != sorted(payload['tax_ids'])
                 or sorted(line.tax_ids_after_fiscal_position.ids) != sorted(payload['mapped_tax_ids'])):
             raise UserError(_('El cargo pagado no coincide con la cancelacion cotizada. No se aplico la cancelacion.'))

@@ -1342,6 +1342,10 @@ class PosOrder(models.Model):
             source_order = self._wgs_browse_source_subscription_for_pos(source_subscription_id)
             if source_order:
                 self._wgs_settle_due_source_changes(source_order)
+                if (normalized_flow == 'renewal' and product and self._wgs_product_has_single_day_term(product)
+                        and source_order._wgs_subscription_operation_policy_for_pos()['can_renew']
+                        and source_order._wgs_subscription_operation_policy_for_pos(single_day_target=True)['can_reenroll']):
+                    normalized_flow = 'reenroll'
 
         if normalized_flow == 'new':
             if not product:
@@ -1392,7 +1396,7 @@ class PosOrder(models.Model):
                 raise UserError(_('La suscripción origen no existe.'))
             if not self._wgs_order_has_subscription_signal(source_order):
                 raise UserError(_('La orden origen no corresponde a una suscripción válida.'))
-            if not self._wgs_is_subscription_order_closed_for_reenroll(source_order):
+            if not self._wgs_is_subscription_order_closed_for_reenroll(source_order, product=product):
                 raise UserError(_('La suscripción origen no está cerrada ni cancelada para reinscripción.'))
             if not product:
                 raise UserError(_('Selecciona el paquete para la reinscripción.'))
@@ -2780,7 +2784,7 @@ class PosOrder(models.Model):
             raise UserError(_('No se encontró la suscripción origen para aplicar la reinscripción en POS.'))
         if not self._wgs_order_has_subscription_signal(source_order):
             raise UserError(_('La orden origen no corresponde a una suscripción válida para reinscripción.'))
-        if not self._wgs_is_subscription_order_closed_for_reenroll(source_order):
+        if not self._wgs_is_subscription_order_closed_for_reenroll(source_order, product=line.product_id):
             raise UserError(_('La suscripción origen no está cerrada/cancelada para reinscripción.'))
 
         holder_partner = self.partner_id or source_order.partner_id
@@ -3951,7 +3955,9 @@ class PosOrder(models.Model):
     def _wgs_is_subscription_order_renewable_for_pos(self, sale_order):
         return sale_order._wgs_subscription_operation_policy_for_pos()['can_renew']
 
-    def _wgs_is_subscription_order_closed_for_reenroll(self, sale_order):
+    def _wgs_is_subscription_order_closed_for_reenroll(self, sale_order, product=False):
+        if product and self._wgs_product_has_single_day_term(product):
+            return sale_order._wgs_subscription_operation_policy_for_pos(single_day_target=True)['can_reenroll']
         return sale_order._wgs_subscription_operation_policy_for_pos()['can_reenroll']
 
     def _wgs_subscription_order_has_product(self, sale_order, product):

@@ -37,6 +37,9 @@ class PosSubscriptionOperationLine(models.Model):
     _inherit = 'pos.order.line'
 
     wgs_free_trial_curp = fields.Char(copy=False, readonly=True)
+    wgs_refund_origin_line_ids = fields.One2many(
+        'pos.order.line', 'wgs_subscription_refund_origin_line_id', readonly=True,
+    )
     _wgs_free_trial_curp_unique = models.Constraint(
         'UNIQUE(wgs_free_trial_curp)',
         'Esta CURP ya utilizo el dia de prueba gratis. Solo se permite una vez en la vida.',
@@ -168,6 +171,9 @@ class PosSubscriptionOperation(models.Model):
         if payload['pricing']['single_day_term'] and not pricing.get('domiciliation'):
             # Daily passes expire by end_date; they must not generate native invoices.
             payload['pricing']['next_billing_date'] = False
+            payload['pricing']['checkout_business_date'] = str(
+                self._wgs_get_subscription_business_today_for_pos(company=company)
+            )
         if not pricing.get('domiciliation'):
             try:
                 payload['pricing']['period_contract'] = self._wgs_build_period_contract(pricing, request, plan)
@@ -197,6 +203,18 @@ class PosSubscriptionOperation(models.Model):
         return payload
 
     def _wgs_validate_operation_source(self, payload):
+        pricing = payload.get('pricing') or {}
+        if pricing.get('single_day_term') and not pricing.get('domiciliation'):
+            today = self._wgs_get_subscription_business_today_for_pos(
+                company=self.env['res.company'].browse(payload['company_id']),
+            )
+            quoted_day = fields.Date.to_date(pricing.get('checkout_business_date'))
+            valid_until = fields.Date.to_date(pricing.get('subscription_end_date'))
+            if (quoted_day and quoted_day != today) or (not quoted_day and valid_until and valid_until < today):
+                raise UserError(_(
+                    'Cambio el dia desde la cotizacion del pase diario. '
+                    'Abre nuevamente la operacion antes de cobrar; no repitas una venta ya registrada.'
+                ))
         source = self.env['sale.order'].browse(payload.get('source_subscription_id') or []).exists()
         if payload.get('source_subscription_id') and (
             not source or self._wgs_source_revision(source, include_scheduled=True) != payload.get('source_revision')
@@ -255,6 +273,7 @@ class PosSubscriptionOperation(models.Model):
         ], limit=1)
         if previous:
             raise UserError(_('Esta compra de membresia ya tiene un reembolso registrado.'))
+        self._wgs_assert_membership_refund_order(original)
 
     @api.model
     def wgs_validate_subscription_refunds_for_pos(self, refunds):

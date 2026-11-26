@@ -15,7 +15,7 @@ function screenFixture({ member = true, refund = false, failure = false, refused
             pricing_snapshot: {commercial_quote: {payload: {partner_id: 8}}} }] : [],
         lines: [{ uuid: 'line-uuid', product_id: { id: 20, recurring_invoice: member }, qty: refund ? -1 : 1, price_unit: 619, discount: 0 }],
     };
-    const stats = { validated: 0, setup: 0 };
+    const stats = { validated: 0, setup: 0, terminals: 0 };
     class PaymentScreen {}
     const context = vm.createContext({
         PaymentScreen, console: { error() {} }, document: {}, window: { alert(message) { alerts.push(message); } },
@@ -24,6 +24,7 @@ function screenFixture({ member = true, refund = false, failure = false, refused
             Object.setPrototypeOf(extension, {
                 setup() { stats.setup++; },
                 validateOrder(...args) { stats.validated++; stats.args = args; return 'validated'; },
+                sendPaymentRequest(line) { stats.terminals++; stats.terminalLine = line; return 'terminal'; },
             });
             Object.assign(PaymentScreen.prototype, extension);
         },
@@ -82,6 +83,38 @@ test('ordinary product sales still validate without subscription RPCs', async ()
     assert.equal(calls.length, 0);
     assert.equal(stats.validated, 1);
     assert.equal(order.to_invoice, false);
+});
+
+test('terminal requests stage the signed membership before native charging', async () => {
+    const { screen, order, calls, stats } = screenFixture();
+    const line = {pos_order_id: order};
+    assert.equal(await screen.sendPaymentRequest(line), 'terminal');
+    assert.equal(calls.length, 1);
+    assert.equal(stats.terminals, 1);
+    assert.equal(stats.terminalLine, line);
+});
+
+test('invalid membership or refund never reaches the payment terminal', async () => {
+    for (const options of [{failure: true}, {refused: true}, {refund: true, failure: true}]) {
+        const {screen, order, stats, alerts} = screenFixture(options);
+        assert.equal(await screen.sendPaymentRequest({pos_order_id: order}), false);
+        assert.equal(stats.terminals, 0);
+        assert.equal(alerts.length, 1);
+    }
+});
+
+test('terminal refuses a payment line from another ticket', async () => {
+    const {screen, calls, stats} = screenFixture();
+    assert.equal(await screen.sendPaymentRequest({pos_order_id: {uuid: 'other'}}), false);
+    assert.equal(calls.length, 0);
+    assert.equal(stats.terminals, 0);
+});
+
+test('ordinary terminal payment remains native without membership RPC', async () => {
+    const {screen, order, calls, stats} = screenFixture({member: false});
+    assert.equal(await screen.sendPaymentRequest({pos_order_id: order}), 'terminal');
+    assert.equal(calls.length, 0);
+    assert.equal(stats.terminals, 1);
 });
 
 test('failed or refused preflight never calls native payment', async () => {

@@ -2582,7 +2582,7 @@ class SaleOrder(models.Model):
             return True
         return False
 
-    def _wgs_subscription_operation_policy_for_pos(self, today=False, replacement_status=None):
+    def _wgs_subscription_operation_policy_for_pos(self, today=False, replacement_status=None, *, single_day_target=False):
         """Read-only policy shared by directory, quotes and paid handlers.
 
         Grace expiration is a commercial fact even before its cron has changed
@@ -2608,6 +2608,10 @@ class SaleOrder(models.Model):
         state_key, label = self._get_native_subscription_state_info_for_pos()
         access_state = self._classify_subscription_access_state_for_pos(today=today)
         deadline = self._wgs_get_subscription_auto_close_deadline_from_order(today=today)
+        if single_day_target and period['next_invoice_date']:
+            # A daily target cannot pay back ordinary grace days. Once the
+            # source expires, that purchase is explicitly a reenrollment.
+            deadline = period['next_invoice_date']
         reason = _('La suscripcion no esta en progreso.')
         if replacement:
             state_key, label = 'closed', _('Cerrada')
@@ -2624,7 +2628,7 @@ class SaleOrder(models.Model):
             if deadline and today >= deadline:
                 state_key, label = 'closed', _('Cerrada')
                 access_state = False
-                reason = _('La suscripcion supero los dias de gracia y debe reinscribirse.')
+                reason = _('La suscripcion termino su plazo de renovacion y debe reinscribirse.')
             elif period['next_invoice_date'] and period['next_invoice_date'] <= today:
                 state_key, label = 'renew', _('Por renovar')
                 access_state = False

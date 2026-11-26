@@ -74,6 +74,27 @@ test('renewing into domiciliation preserves its initial installment quote', asyn
     assert.deepEqual(JSON.parse(JSON.stringify(state[key].pricingSnapshot.domiciliation.selected_installment_sequences)), [1,12]);
     assert.equal(state[key].pricingSnapshot.ticket_charge_now, 105);
 });
+
+test('expired ordinary to daily presents and persists an explicit reenrollment', async () => {
+    const [state, key] = stateFor('renewal');
+    const response = quote(2);
+    response.pricing.flow = 'reenroll';
+    response.pricing.subscription_start_date = '2026-11-26';
+    response.pricing.subscription_end_date = '2026-11-26';
+    response.pricing.commercial_quote.payload.flow = 'reenroll';
+    state[key].authorizedDiscount = {percent: 50};
+    await context.applySelectedRenewalProduct(state, 2, {
+        _t:value => value, renderDetail() {}, fetchSubscriptionQuote:async () => response,
+    });
+    assert.equal(state.formMode, 'reenroll');
+    assert.equal(state[key].isReenroll, true);
+    assert.equal(state[key].startDate, '2026-11-26');
+    assert.equal(state[key].pricingSnapshot.flow, 'reenroll');
+    assert.equal(state[key].pricingSnapshot.commercial_quote.payload.flow, 'reenroll');
+    assert.equal(state[key].authorizedDiscount, null);
+    assert.match(state.formNotice, /no como renovacion de dias pasados/);
+    assert.match(state[key].title, /Reinscribir/);
+});
 test('pricing readiness rejects absent/unsigned/loading quotes but accepts a signed zero price', () => {
     assert.equal(context.isPricingReady(null), false);
     assert.equal(context.isPricingReady({loading:false, pricingSnapshot:null}), false);
