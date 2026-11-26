@@ -111,11 +111,38 @@ fotografias, CURP, telefono ni correo de personas reales.
 | Cobrar el DAY PASS anterior | DIA ED; 26/nov-26/nov; acceso activo, no arrastra MENSUALIDAD ED |
 | Resincronizacion | Enumera cinco puertas de los sitios autorizados; sin selector; falta de foto explicita, sin confirmar acceso fisico |
 | Facturacion en Pago y Ordenes | Recibo/Factura continua deshabilitado |
+| Cargo de cancelacion con version final 1.6.26 | S03661 conserva acceso al agregar el cargo; ticket 263-3-000161 por 11.60 (base 10 + IVA 1.60); solo despues del pago queda Cerrada/sin acceso, conservando 26/nov-26/nov |
 
-La comprobacion API final fue solo lectura sobre esos tres clientes: once
+La comprobacion API previa al ultimo cargo fue solo lectura sobre esos tres clientes: once
 recibos aplicados/cancelados segun corresponda y una sola person por socio,
 incluyendo archivadas. Identidades observadas 5221/512, 5222/974 y 5223/978
 (person/ID global); no se unificaron ni alteraron socios reales.
+
+### Cierre del despliegue y evidencia
+
+- Commits funcionales exclusivos de WGS: `8ba27c2`, `698ea02` y `b6214ca`.
+  Se enviaron a origin/staging. Codigo final desplegado: `b6214ca`.
+- CloudPepper: Update del addon en staging, reinicio y upgrade exclusivo de
+  WGS POS. No se reconstruyo staging desde la base de produccion.
+- Aplicaciones verificadas por navegador despues del upgrade: WGS base
+  instalada/disponible **19.0.1.1.63**; WGS POS **19.0.1.6.26**;
+  Access Control **19.0.2.0.88**. No se actualizaron otros addons.
+- Doce recibos ficticios completados en este ciclo web, incluido el ultimo
+  cargo de cancelacion. S03661 termina cerrada por esa cancelacion explicita;
+  S03660 conserva el diario TotalPass y S03662 el mensual Horario Especial.
+  La prueba del cargo no constituye devolucion del pase diario original.
+- Resultado automatizado final: **546 pruebas aprobadas** (324 ORM + 135
+  Python + 15 calendario/contratos de codigo + 72 JavaScript). Los 1096 dias
+  parametrizados son datos de la matriz, no pruebas adicionales a ese total.
+- Logs conservados fuera del repo: `orm-final-26.log`, `python-final.log` y
+  `javascript.log` en `/private/tmp/wgs-lifecycle-20261126/`.
+- Sin fallos funcionales abiertos en la matriz ejecutada. Las carreras usan
+  dos conexiones PostgreSQL reales y ORM desechable; no equivalen a una prueba
+  end-to-end de dos workers HTTP del servidor operativo.
+- Main y origin/main permanecen en `ac7319e7fd44f1c65fa0fe1bb79e87a6d45bea42`.
+  No se repararon los 13 contratos historicos reportados ni se escribio en
+  produccion. No se modificaron payroll, importador bancario, gateway u outputs/.
+  El cierre documental no cambia el codigo funcional desplegado.
 
 Se observaron avisos nativos de impresora no disponible y 502 transitorio al
 reiniciar staging. Se descartaron los avisos sin cambiar configuracion de
