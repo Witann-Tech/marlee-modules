@@ -58,10 +58,25 @@ function clearDirectorySelectionState(state, {
     state.partnerEditForm = null;
 }
 
+function reconcileDirectorySelectionState(state, rows, { clearDirectorySelection, resetForPartnerSelection }) {
+    // A new customer is not owned by the selected directory row. Background
+    // results must not discard that draft (or its feedback/camera state).
+    if (state.formMode === "new_partner" && state.newPartnerForm) {
+        return;
+    }
+    if (!rows.length) {
+        clearDirectorySelection();
+    } else if (!rows.some((row) => row.id === state.selectedPartnerId)) {
+        state.selectedPartnerId = rows[0].id;
+        resetForPartnerSelection();
+    }
+}
+
 export {
     clearDirectorySelectionState,
     clearModalFeedback,
     resetDetailInlineForms,
     resetForSelectedPartner,
     resetListPartnerFormState,
+    reconcileDirectorySelectionState,
 };

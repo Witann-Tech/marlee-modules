@@ -4,7 +4,7 @@ Registro inicial: 2026-09-28. Rama de trabajo: `staging`.
 
 ## Ciclo diario, cierre y devoluciones: 2026-11-26
 
-Alcance exclusivo staging. Base WGS 19.0.1.1.63 y WGS POS 19.0.1.6.24;
+Alcance exclusivo staging. Base WGS 19.0.1.1.63 y WGS POS 19.0.1.6.25;
 Access Control conserva 19.0.2.0.88. Sin cambios en main, produccion,
 gateway, payroll, importador bancario u outputs/.
 
@@ -53,7 +53,7 @@ Se repitio la suite completa, no solo las pruebas nuevas.
 - Python independiente: **133 pruebas aprobadas**, incluida concurrencia de
   asignacion de identidad con conexiones PostgreSQL reales, sin omisiones.
 - Calendario/corte y contratos estaticos del codigo: **15 aprobadas**.
-- JavaScript: **69 aprobadas**, incluidos preflight anterior al terminal y
+- JavaScript: **72 aprobadas**, incluidos preflight anterior al terminal y
   presentacion/firma de reinscripcion para el destino diario.
 - Matriz diaria parametrizada sobre los **1096 dias de 2026-2028**, tres valores
   de gracia y regresos tras 1/2/7/30/365 dias. Matriz ORM con planes semanales,
@@ -67,6 +67,14 @@ Evidencia local: /tmp/wgs-lifecycle-20261126/. Las pruebas ORM no se ejecutaron
 contra la base operativa de staging. El runtime local usa la imagen odoo:19.0 y
 el checkout Enterprise local disponible; no se afirma identidad binaria con el
 build CloudPepper. Despliegue y verificaciones web se registran a continuacion.
+
+Hallazgo adicional de navegador: al abrir Nuevo cliente con filtro sin resultados
+o durante la carga inicial, render() dibujaba el formulario y despues borraba su
+estado por la seleccion automatica del directorio. Se extrajo la reconciliacion
+de seleccion a una funcion comprobable que conserva un alta independiente en
+curso, sin cambiar la navegacion explicita entre socios. Tres regresiones JS
+verifican directorio vacio/cargando, cambio de primera fila, conservacion de
+captura/camara/feedback y retorno a navegacion normal tras cancelar.
 
 ## Resultado ejecutivo de staging, 2026-11-25
 
